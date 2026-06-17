@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from . import contract, orchestrator, state
+from . import contract, orchestrator, state, tui
 
 DEFAULT_CONFIG = "config/runner.yaml"
 
@@ -104,6 +104,57 @@ def cmd_migrate(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_menu(args: argparse.Namespace) -> int:
+    """Interactive menu (arrow-key when on a TTY, numbered fallback otherwise).
+
+    The menu only *collects inputs* and dispatches to the existing commands, so every halt gate and
+    red-line stop still applies — a "Run" launched here goes through the same orchestrator.
+    """
+    actions = [
+        ("Run four-stage loop", "drive a project through requirement→structure→implement→acceptance"),
+        ("Migrate contract", "validating contract upgrade (re-read all docs first)"),
+        ("Status", "show the per-project lock + run state"),
+        ("Help", "show command-line help"),
+        ("Exit", "quit"),
+    ]
+    while True:
+        idx = tui.select("ai-sdlc-runner — what would you like to do?", actions)
+        if idx is None:
+            return 0
+        choice = actions[idx][0]
+        if choice == "Exit":
+            return 0
+        if choice == "Help":
+            build_parser().print_help()
+            continue
+        if choice == "Status":
+            project = tui.prompt("Project path")
+            if project:
+                cmd_status(argparse.Namespace(project=project))
+            continue
+        if choice == "Migrate contract":
+            project = tui.prompt("Project path")
+            to = tui.prompt("Target contract version", "")
+            if project and to:
+                cmd_migrate(argparse.Namespace(project=project, to=to))
+            continue
+        if choice == "Run four-stage loop":
+            project = tui.prompt("Project path")
+            if not project:
+                continue
+            risk = tui.prompt("Risk (low/medium/high)", "medium") or "medium"
+            cmd_run(argparse.Namespace(
+                project=project,
+                config=args.config,
+                skill_path=args.skill_path,
+                contract_version=None,
+                risk=risk if risk in ("low", "medium", "high") else "medium",
+                resume=False,
+            ))
+            continue
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     lock = contract.read_lock(args.project)
     st = state.load(args.project)
@@ -126,7 +177,12 @@ def cmd_status(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="runner", description="External orchestrator for the ai-sdlc skill.")
     p.add_argument("--config", default=DEFAULT_CONFIG, help=f"path to runner.yaml (default {DEFAULT_CONFIG})")
-    sub = p.add_subparsers(dest="command", required=True)
+    # Not required: bare `runner` (no subcommand) opens the interactive menu.
+    sub = p.add_subparsers(dest="command", required=False)
+
+    pmenu = sub.add_parser("menu", help="interactive menu (arrow-key selectable list)")
+    pmenu.add_argument("--skill-path", default=None, help="override skill_path (e.g. a local skill cache)")
+    pmenu.set_defaults(func=cmd_menu)
 
     pr = sub.add_parser("run", help="drive the four-stage loop for a project")
     pr.add_argument("project", help="path to the governed project directory")
@@ -148,7 +204,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional["list[str]"] = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if getattr(args, "command", None) is None:
+        # Bare `runner` → interactive menu (with config; skill_path defaults to config's value).
+        return cmd_menu(argparse.Namespace(config=args.config, skill_path=None))
     return args.func(args)
 
 

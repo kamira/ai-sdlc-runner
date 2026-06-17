@@ -22,6 +22,8 @@ than silent drift.
 ## Usage
 
 ```bash
+runner                                    # no subcommand → interactive menu (arrow-key list)
+runner menu                               # the same interactive menu, explicitly
 runner run <project>                      # drive the four-stage loop for a governed project
 runner migrate <project> --to <version>   # validating contract upgrade (re-read all docs first)
 runner status <project>                   # show the per-project lock + run state
@@ -29,6 +31,12 @@ runner status <project>                   # show the per-project lock + run stat
 
 Options for `run`: `--contract-version` (defaults to config), `--skill-path` (override, e.g. a local
 skill cache for offline verification), `--risk {low,medium,high}`, `--resume`.
+
+The **interactive menu** uses an arrow-key selectable list (stdlib `curses`; ↑/↓ + Enter, `q` to
+cancel) and falls back to a numbered prompt when not on a TTY (pipes/CI) or when `curses` is
+unavailable — no third-party dependency. It only collects a choice and dispatches to the commands
+above, so every halt gate and red-line stop still applies. Set `AI_SDLC_NO_CURSES=1` to force the
+numbered fallback.
 
 ## How it works
 
@@ -84,6 +92,8 @@ pip install -e .                   # 選用:.[yaml] 裝 PyYAML、.[test] 裝 pyt
 ## 用法
 
 ```bash
+runner                                    # 不帶子指令 → 互動選單(方向鍵清單)
+runner menu                               # 顯式進入同一個互動選單
 runner run <project>                      # 對受治理專案驅動四階段迴圈
 runner migrate <project> --to <version>   # 驗證式契約升版(先全部重讀 docs)
 runner status <project>                   # 顯示該專案的版本鎖與執行狀態
@@ -91,6 +101,10 @@ runner status <project>                   # 顯示該專案的版本鎖與執行
 
 `run` 的選項:`--contract-version`(預設取 config)、`--skill-path`(覆寫,如指向本地 skill 快取做離線
 驗證)、`--risk {low,medium,high}`、`--resume`。
+
+**互動選單**採方向鍵可選清單(stdlib `curses`;↑/↓ + Enter,`q` 取消);在非 TTY(pipe/CI)或無
+`curses` 時自動退化為數字選單——零第三方依賴。選單只負責收集選擇、再分派給上述指令,因此所有停點與
+紅線停下依然生效。設 `AI_SDLC_NO_CURSES=1` 可強制使用數字選單。
 
 ## 運作方式
 

@@ -15,6 +15,9 @@ Answers: FR-1..FR-14. Key components, their contracts, and design trade-offs.
 | `gates.check_cross_repo_drift` | Query cross-repo drift | subprocess `cross_repo_check.py`; branch on exit code |
 | `state.save/load` | Checkpoint persistence | `state.json`: stage, completed items, per-agent product metrics |
 | `orchestrator.run` | Four-stage loop | sequential stages; per-stage gate; shallow fan-out; checkpoint per boundary |
+| `tui.select` | Interactive menu | `(title, options, input_fn=input) -> Optional[int]`; curses arrow-key menu, numbered fallback when non-TTY/`AI_SDLC_NO_CURSES` |
+| `tui._parse_choice` | Parse a numbered answer | `(raw, n) -> Optional[int]`; 1-based → 0-based; `q`/empty/out-of-range → None (pure, unit-tested) |
+| `cli.cmd_menu` | Menu loop | dispatches the chosen action to existing `cmd_run`/`cmd_migrate`/`cmd_status`; no governance logic of its own |
 
 ## Interface / API contracts
 - **Lock file** `<project>/.sdlc-lock.json`: `{contract_major, contract_minor, contract_version, first_run, runner}`. Gate compares `(major, minor)`; `contract_version` is record-only.
@@ -33,6 +36,7 @@ Answers: FR-1..FR-14. Key components, their contracts, and design trade-offs.
 | Conservative fan-out (≤3/≤4) | use platform max (5) **vs** cap lower | Deliberately save tokens; runtime caps live in config, probed at startup (§1.5, §1.7) |
 | V1 tools exclude `Agent` | discipline **vs** tool-layer lock | Mechanically prevents "fix-while-verifying" and re-spawning (§1.6) |
 | Stdlib-only (PyYAML optional) | hard YAML dep **vs** tiny built-in reader | Keeps the runner a thin, low-dependency driver |
+| Interactive menu via stdlib `curses` | third-party TUI **vs** stdlib curses + numbered fallback | Zero new dependency; degrades gracefully off-TTY (CHG-20260617-02) |
 
 ## Patterns adopted
 - **Adapter / facade over the skill**: `gates` and `agents` adapt the skill's scripts and docs into typed Python results; the runner never owns the policy.
