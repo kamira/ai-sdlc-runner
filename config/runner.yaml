@@ -1,0 +1,18 @@
+# ai-sdlc-runner configuration
+# The contract surface is the *skill's stable output*, not Claude Code's current
+# runtime behavior. Runtime limits (nesting/concurrency) live here and are
+# probed at startup; if the platform changes, change this file — never the contract.
+
+# Contract version the runner expects (major.minor is locked per project).
+# This is the *expected* version; the *actual* version is detected at runtime by
+# reading the skill's SKILL.md frontmatter (contract.read_skill_version).
+contract_version: "1.0.0"
+
+# Path to the ai-sdlc skill. Normally the pinned git submodule at ./ai-skills;
+# may be overridden (e.g. to a local skill cache) for offline verification.
+skill_path: "./ai-skills/skills/ai-sdlc"
+
+# Shallow fan-out limits. Platform may support more; kept conservative on purpose
+# to save tokens. Probed at startup; run is degraded/halted if unmet.
+concurrency_max: 4        # subscription sweet spot 3-5
+nesting_depth_max: 3      # platform supports 5; deliberately conservative

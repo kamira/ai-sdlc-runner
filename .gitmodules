@@ -1,0 +1,11 @@
+[submodule "ai-skills"]
+	path = ai-skills
+	url = https://github.com/kamira/ai-skills.git
+	# Pinned to tag v1.0.0 — NEVER track main (main drifts and breaks the contract lock).
+	# One-time wire-up (run by whoever provides ai-skills):
+	#   git submodule add https://github.com/kamira/ai-skills.git ai-skills
+	#   cd ai-skills && git checkout v1.0.0 && cd ..
+	#   git add .gitmodules ai-skills && git commit -m "pin ai-skills @ v1.0.0"
+	# The runner detects the actual contract version by reading the skill's
+	# SKILL.md frontmatter (contract.read_skill_version), so a missing/incorrect
+	# tag surfaces as a contract-version mismatch rather than silent drift.
