@@ -25,6 +25,8 @@ than silent drift.
 runner                                    # no subcommand → interactive menu (arrow-key list)
 runner menu                               # the same interactive menu, explicitly
 runner run <project>                      # drive the four-stage loop for a governed project
+runner run <project> --dashboard          # ...with the live multi-panel dashboard
+runner dashboard <project>                # open the dashboard over a project's saved state
 runner migrate <project> --to <version>   # validating contract upgrade (re-read all docs first)
 runner status <project>                   # show the per-project lock + run state
 ```
@@ -37,6 +39,14 @@ cancel) and falls back to a numbered prompt when not on a TTY (pipes/CI) or when
 unavailable — no third-party dependency. It only collects a choice and dispatches to the commands
 above, so every halt gate and red-line stop still applies. Set `AI_SDLC_NO_CURSES=1` to force the
 numbered fallback.
+
+The **dashboard** (`run --dashboard` for live, `runner dashboard <project>` for a saved-state
+snapshot) shows four panels: **狀態/Status** (git branch + dirty, stage progress, current stage +
+contract lock), **執行日誌/Execution log** (stage transitions + gate AUTO/HALT), **檢驗結果/Verification**
+(acceptance reports + latest V1 result), and **agent 行為日誌/Agent log**. The agent log is consolidated
+in one panel by default and can be switched to tabbed-per-agent (`--agent-view tabbed`, or `t` in the
+curses viewer, or the menu). It is read-only — a run launched from the dashboard still halts at the
+red-line gate.
 
 ## How it works
 
@@ -95,6 +105,8 @@ pip install -e .                   # 選用:.[yaml] 裝 PyYAML、.[test] 裝 pyt
 runner                                    # 不帶子指令 → 互動選單(方向鍵清單)
 runner menu                               # 顯式進入同一個互動選單
 runner run <project>                      # 對受治理專案驅動四階段迴圈
+runner run <project> --dashboard          # ...同時開啟即時多面板儀表板
+runner dashboard <project>                # 對專案已存的狀態開啟儀表板
 runner migrate <project> --to <version>   # 驗證式契約升版(先全部重讀 docs)
 runner status <project>                   # 顯示該專案的版本鎖與執行狀態
 ```
@@ -105,6 +117,12 @@ runner status <project>                   # 顯示該專案的版本鎖與執行
 **互動選單**採方向鍵可選清單(stdlib `curses`;↑/↓ + Enter,`q` 取消);在非 TTY(pipe/CI)或無
 `curses` 時自動退化為數字選單——零第三方依賴。選單只負責收集選擇、再分派給上述指令,因此所有停點與
 紅線停下依然生效。設 `AI_SDLC_NO_CURSES=1` 可強制使用數字選單。
+
+**儀表板**(`run --dashboard` 即時、`runner dashboard <project>` 讀已存狀態快照)有四個面板:
+**狀態/Status**(git 分支 + dirty、階段進度、目前階段 + 契約鎖)、**執行日誌/Execution log**(階段轉換 +
+停點 AUTO/HALT)、**檢驗結果/Verification**(驗收報告 + 最新 V1 結果)、**agent 行為日誌/Agent log**。
+agent 日誌預設統整在同一面板,可切換成分頁分 agent(`--agent-view tabbed`,或 curses 視圖中按 `t`,或從
+選單)。儀表板為唯讀——從儀表板啟動的 run 一樣會在紅線停點停下。
 
 ## 運作方式
 

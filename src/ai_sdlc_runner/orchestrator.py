@@ -23,8 +23,10 @@ from . import agents, contract, gates, state
 # Injected callables -------------------------------------------------------------------
 # agent_executor(spec) -> dict : actually run an agent (platform-bound at runtime).
 # approver(decision)    -> bool: a human decision at a HALT gate (True = approved to continue).
+# on_event(event: dict)        : optional observer for the dashboard; never affects control flow.
 AgentExecutor = Callable[[agents.AgentSpec], dict]
 Approver = Callable[[gates.Decision], bool]
+EventSink = Callable[[dict], None]
 
 
 @dataclass
@@ -49,6 +51,16 @@ def _stub_executor(spec: agents.AgentSpec) -> dict:
     return {"role": spec.role, "tools": spec.tools, "scope": spec.scope, "stub": True}
 
 
+def _emit(sink: Optional[EventSink], **event) -> None:
+    """Emit a dashboard event if a sink is attached (best-effort; never breaks the run)."""
+    if sink is None:
+        return
+    try:
+        sink(event)
+    except Exception:
+        pass
+
+
 def probe_runtime_caps(config: dict) -> RuntimeCaps:
     """Confirm the configured fan-out caps at startup (build-guide §1.7, §4).
 
@@ -71,6 +83,7 @@ def _gate(
     approver: Optional[Approver],
     action: Optional[str] = None,
     autonomy: Optional[str] = None,
+    sink: Optional[EventSink] = None,
 ) -> bool:
     """Run one halt gate by calling the skill. Returns True to continue, False to stop.
 
@@ -79,6 +92,7 @@ def _gate(
     """
     decision = gates.check_halt(skill_path, gate, risk, action=action, autonomy=autonomy)
     report.decisions.append(decision)
+    _emit(sink, type="gate", gate=gate, risk=risk, result=decision.result, reason=decision.reason)
     if not decision.is_halt:
         return True
     if approver is not None and approver(decision):
@@ -86,6 +100,7 @@ def _gate(
     report.status = "halted_for_approval"
     report.halted_at = gate
     report.detail = decision.reason
+    _emit(sink, type="halt", gate=gate, reason=decision.reason)
     return False
 
 
@@ -101,6 +116,7 @@ def run(
     approver: Optional[Approver] = None,
     chg_autonomy: Optional[str] = None,
     delivery_action: str = "release",
+    on_event: Optional[EventSink] = None,
 ) -> RunReport:
     """Drive the four stages for ``project_dir``.
 
@@ -113,7 +129,18 @@ def run(
       delivery                            → gate ``before_merge_or_release`` (red lines always halt)
     """
     report = RunReport()
-    execu = agent_executor or _stub_executor
+    sink = on_event
+    base_execu = agent_executor or _stub_executor
+
+    def execu(spec: agents.AgentSpec) -> dict:
+        """Run an agent, emitting dispatch + result events for the dashboard's agent log."""
+        _emit(sink, type="agent", role=spec.role, phase="dispatch", scope=spec.scope)
+        result = base_execu(spec)
+        ev = {"type": "agent", "role": spec.role, "phase": "result", "scope": spec.scope}
+        if isinstance(result, dict) and "passed" in result:
+            ev["passed"] = bool(result["passed"])
+        _emit(sink, **ev)
+        return result
 
     # 0. Contract lock gate ------------------------------------------------------------
     try:
@@ -133,26 +160,31 @@ def run(
 
     # 1. Requirement analysis ----------------------------------------------------------
     if "requirement_analysis" in todo:
+        _emit(sink, type="stage", stage="requirement_analysis")
         spec = agents.spawn(skill_path, "A1", scope="docs/ only", task="produce docs/ai-guideline.md")
         out = execu(spec)
-        if not _gate(report, skill_path, "requirement_confirmed", risk, approver):
+        if not _gate(report, skill_path, "requirement_confirmed", risk, approver, sink=sink):
             return report
         state.checkpoint(project_dir, st, "requirement_analysis", {"A1": out})
+        _emit(sink, type="checkpoint", stage="requirement_analysis")
         report.stages_run.append("requirement_analysis")
 
     # 2. Structure design --------------------------------------------------------------
     if "structure_design" in todo:
+        _emit(sink, type="stage", stage="structure_design")
         spec = agents.spawn(skill_path, "A1", scope="docs/structure", task="produce docs/structure/*.md")
         out = execu(spec)
-        if not _gate(report, skill_path, "structure_confirmed", risk, approver):
+        if not _gate(report, skill_path, "structure_confirmed", risk, approver, sink=sink):
             return report
         state.checkpoint(project_dir, st, "structure_design", {"A1_structure": out})
+        _emit(sink, type="checkpoint", stage="structure_design")
         report.stages_run.append("structure_design")
 
     # 3. Implement (lead implementer + shallow fan-out) --------------------------------
     if "implement" in todo:
+        _emit(sink, type="stage", stage="implement")
         # before_implement gate, honoring an optional CHG autonomy override (tighten-only).
-        if not _gate(report, skill_path, "before_implement", risk, approver, autonomy=chg_autonomy):
+        if not _gate(report, skill_path, "before_implement", risk, approver, autonomy=chg_autonomy, sink=sink):
             return report
         lead = agents.spawn(skill_path, "I1", scope="src/", task="implement per the modification guide")
         execu(lead)
@@ -165,10 +197,12 @@ def run(
             if i >= caps.nesting_depth_max:
                 break  # respect the conservative depth cap
         state.checkpoint(project_dir, st, "implement", {"I1": lead.role, "subs": len(sub_results)})
+        _emit(sink, type="checkpoint", stage="implement")
         report.stages_run.append("implement")
 
     # 4. Acceptance (independent V1; read-only; no Agent) ------------------------------
     if "acceptance" in todo:
+        _emit(sink, type="stage", stage="acceptance")
         v1 = agents.spawn(skill_path, "V1", scope="read-only on code; write docs/acceptance",
                           task="multi-scenario acceptance; produce docs/acceptance/ACC-*.md")
         # Invariant re-checked here as defense in depth (agents.spawn also enforces it).
@@ -178,14 +212,17 @@ def run(
         passed = bool(result.get("passed", True))  # stub passes by default
         if not passed:
             # Failure routes back through modification governance via the acceptance_failed gate.
-            if not _gate(report, skill_path, "acceptance_failed", risk, approver):
+            if not _gate(report, skill_path, "acceptance_failed", risk, approver, sink=sink):
                 return report
         state.checkpoint(project_dir, st, "acceptance", {"V1": result})
+        _emit(sink, type="checkpoint", stage="acceptance")
         report.stages_run.append("acceptance")
 
     # Delivery: red lines always halt (deploy/release/migration/...) -------------------
-    if not _gate(report, skill_path, "before_merge_or_release", "high", approver, action=delivery_action):
+    if not _gate(report, skill_path, "before_merge_or_release", "high", approver,
+                 action=delivery_action, sink=sink):
         return report
 
     report.status = "completed"
+    _emit(sink, type="done")
     return report

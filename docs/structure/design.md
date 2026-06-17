@@ -18,6 +18,9 @@ Answers: FR-1..FR-14. Key components, their contracts, and design trade-offs.
 | `tui.select` | Interactive menu | `(title, options, input_fn=input) -> Optional[int]`; curses arrow-key menu, numbered fallback when non-TTY/`AI_SDLC_NO_CURSES` |
 | `tui._parse_choice` | Parse a numbered answer | `(raw, n) -> Optional[int]`; 1-based → 0-based; `q`/empty/out-of-range → None (pure, unit-tested) |
 | `cli.cmd_menu` | Menu loop | dispatches the chosen action to existing `cmd_run`/`cmd_migrate`/`cmd_status`; no governance logic of its own |
+| `orchestrator.run(on_event=…)` | Event emission | optional `on_event(dict)` sink; emits `stage`/`gate`/`agent`/`checkpoint`/`halt`/`done`; never affects control flow |
+| `dashboard.DashboardModel` | Panel data | `add(event)` / `from_saved(project)`; `status_panel`/`exec_log_panel`/`verify_panel`/`agent_panel(view)` |
+| `dashboard.render_snapshot` | Text render | `(model, agent_view, width) -> str`; CJK display-width aware borders; used off-TTY/tests; `view()` adds a curses viewer (t = toggle, q = quit) |
 
 ## Interface / API contracts
 - **Lock file** `<project>/.sdlc-lock.json`: `{contract_major, contract_minor, contract_version, first_run, runner}`. Gate compares `(major, minor)`; `contract_version` is record-only.
@@ -37,6 +40,8 @@ Answers: FR-1..FR-14. Key components, their contracts, and design trade-offs.
 | V1 tools exclude `Agent` | discipline **vs** tool-layer lock | Mechanically prevents "fix-while-verifying" and re-spawning (§1.6) |
 | Stdlib-only (PyYAML optional) | hard YAML dep **vs** tiny built-in reader | Keeps the runner a thin, low-dependency driver |
 | Interactive menu via stdlib `curses` | third-party TUI **vs** stdlib curses + numbered fallback | Zero new dependency; degrades gracefully off-TTY (CHG-20260617-02) |
+| Dashboard as terminal curses | HTML report **vs** curses TUI | Screenshot was a layout preview, not an HTML target; curses keeps it stdlib-only (CHG-20260617-03) |
+| Dashboard coupling via `on_event` | dashboard reads orchestrator **vs** orchestrator pushes events | Optional callback keeps orchestrator decoupled & backward-compatible; dashboard is read-only (CHG-20260617-03) |
 
 ## Patterns adopted
 - **Adapter / facade over the skill**: `gates` and `agents` adapt the skill's scripts and docs into typed Python results; the runner never owns the policy.

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from . import contract, orchestrator, state, tui
+from . import contract, dashboard, orchestrator, state, tui
 
 DEFAULT_CONFIG = "config/runner.yaml"
 
@@ -64,6 +64,22 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     # In a real run the executor/approver are platform-bound; --dry-run uses stubs and
     # an approver that never auto-approves, so red-line gates correctly stop.
+    # With --dashboard, collect events into a model and stream a one-line feed as they arrive.
+    use_dash = getattr(args, "dashboard", False)
+    model = dashboard.DashboardModel(project_dir=str(args.project)) if use_dash else None
+
+    def on_event(ev: dict) -> None:
+        model.add(ev)
+        # Lightweight live feed (the full panel view is rendered after the run / at halt).
+        t = ev.get("type")
+        if t == "stage":
+            print(f"▶ {ev.get('stage')}")
+        elif t == "gate":
+            print(f"  gate {ev.get('gate')} -> {ev.get('result')}")
+        elif t == "agent":
+            if ev.get("phase") == "dispatch":
+                print(f"    · agent {ev.get('role')} dispatched")
+
     report = orchestrator.run(
         args.project,
         skill_path=skill_path,
@@ -73,7 +89,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         resume=args.resume,
         agent_executor=None,           # stub executor (dry-run friendly)
         approver=None,                 # no auto-approval; HALT gates stop the run
+        on_event=on_event if use_dash else None,
     )
+
+    if model is not None:
+        print()
+        dashboard.view(model, getattr(args, "agent_view", dashboard.AGENT_VIEW_MERGED))
+        print()
 
     print(f"status: {report.status}")
     print(f"contract: {report.contract_version}")
@@ -112,6 +134,7 @@ def cmd_menu(args: argparse.Namespace) -> int:
     """
     actions = [
         ("Run four-stage loop", "drive a project through requirement→structure→implement→acceptance"),
+        ("Dashboard", "open the multi-panel dashboard for a project (status/log/verify/agents)"),
         ("Migrate contract", "validating contract upgrade (re-read all docs first)"),
         ("Status", "show the per-project lock + run state"),
         ("Help", "show command-line help"),
@@ -138,11 +161,19 @@ def cmd_menu(args: argparse.Namespace) -> int:
             if project and to:
                 cmd_migrate(argparse.Namespace(project=project, to=to))
             continue
+        if choice == "Dashboard":
+            project = tui.prompt("Project path")
+            if project:
+                view = _ask_agent_view()
+                cmd_dashboard(argparse.Namespace(project=project, agent_view=view))
+            continue
         if choice == "Run four-stage loop":
             project = tui.prompt("Project path")
             if not project:
                 continue
             risk = tui.prompt("Risk (low/medium/high)", "medium") or "medium"
+            want_dash = (tui.prompt("Show dashboard? (y/N)", "N") or "N").lower().startswith("y")
+            view = _ask_agent_view() if want_dash else dashboard.AGENT_VIEW_MERGED
             cmd_run(argparse.Namespace(
                 project=project,
                 config=args.config,
@@ -150,8 +181,27 @@ def cmd_menu(args: argparse.Namespace) -> int:
                 contract_version=None,
                 risk=risk if risk in ("low", "medium", "high") else "medium",
                 resume=False,
+                dashboard=want_dash,
+                agent_view=view,
             ))
             continue
+    return 0
+
+
+def _ask_agent_view() -> str:
+    """Menu choice: consolidate agent logs in one panel (default) or tabbed per agent."""
+    options = [
+        ("Consolidated (one panel)", "all agents interleaved in one chronological log"),
+        ("Tabbed (per agent)", "group the log by agent (A1/I1/I1.x/V1)"),
+    ]
+    idx = tui.select("Agent log layout?", options)
+    return dashboard.AGENT_VIEW_TABBED if idx == 1 else dashboard.AGENT_VIEW_MERGED
+
+
+def cmd_dashboard(args: argparse.Namespace) -> int:
+    """Render the multi-panel dashboard for a project from its saved state/ACC/git."""
+    model = dashboard.DashboardModel.from_saved(args.project)
+    dashboard.view(model, getattr(args, "agent_view", dashboard.AGENT_VIEW_MERGED))
     return 0
 
 
@@ -190,7 +240,18 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--skill-path", default=None, help="override skill_path (e.g. a local skill cache)")
     pr.add_argument("--risk", default="medium", choices=["low", "medium", "high"], help="overall change risk")
     pr.add_argument("--resume", action="store_true", help="continue from the last checkpoint")
+    pr.add_argument("--dashboard", action="store_true", help="show the multi-panel dashboard while running")
+    pr.add_argument("--agent-view", default=dashboard.AGENT_VIEW_MERGED,
+                    choices=[dashboard.AGENT_VIEW_MERGED, dashboard.AGENT_VIEW_TABBED],
+                    help="agent log layout: merged (default) or tabbed per agent")
     pr.set_defaults(func=cmd_run)
+
+    pd = sub.add_parser("dashboard", help="open the multi-panel dashboard for a project")
+    pd.add_argument("project", help="path to the governed project directory")
+    pd.add_argument("--agent-view", default=dashboard.AGENT_VIEW_MERGED,
+                    choices=[dashboard.AGENT_VIEW_MERGED, dashboard.AGENT_VIEW_TABBED],
+                    help="agent log layout: merged (default) or tabbed per agent")
+    pd.set_defaults(func=cmd_dashboard)
 
     pm = sub.add_parser("migrate", help="validating contract upgrade for a project")
     pm.add_argument("project", help="path to the governed project directory")

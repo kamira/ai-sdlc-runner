@@ -17,8 +17,9 @@ ai-sdlc-runner/
 │   ├── agents.py              # parse role table, spawn by role (tools/permissions)
 │   ├── gates.py               # call skill's halt_gate.py / cross_repo_check.py
 │   ├── state.py               # checkpoint / resume (state.json)
-│   ├── orchestrator.py        # main loop: four stages sequential + shallow fan-out
-│   └── tui.py                 # interactive menu (stdlib curses + numbered fallback); CHG-02
+│   ├── orchestrator.py        # main loop: four stages sequential + shallow fan-out (emits events)
+│   ├── tui.py                 # interactive menu (stdlib curses + numbered fallback); CHG-02
+│   └── dashboard.py           # multi-panel view (status/log/verify/agents); curses + snapshot; CHG-03
 ├── config/
 │   └── runner.yaml            # contract version, skill path, concurrency/depth limits
 ├── docs/
