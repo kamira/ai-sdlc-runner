@@ -9,7 +9,7 @@ Answers: FR-1..FR-14. Describes layers, responsibilities, and one-way dependenci
 | `tui` | Interactive menu helper: arrow-key list (stdlib curses) with numbered fallback; collects a choice only | (stdlib only) |
 | `dashboard` | Multi-panel view (狀態/執行日誌/檢驗結果/agent log); consumes orchestrator events + reads state/ACC/git; curses viewer + text snapshot | `contract`, `state` (read), git (stdlib only) |
 | `orchestrator` | Drive the four stages sequentially; per-stage halt gate; shallow fan-out in implement; checkpoint at each boundary | `contract`, `gates`, `agents`, `state` |
-| `contract` | Read skill version (from file), compute major.minor key, resolve/write per-project lock, validating migrate | (reads skill SKILL.md) |
+| `contract` | Read skill version (from file), compute major.minor key, resolve/write per-project lock, validating migrate, **detect updates** at the local skill location | (reads skill SKILL.md + git tags) |
 | `agents` | Parse the skill's role table; spawn agents with role-scoped tool allowlists | (reads skill agent-hierarchy.md) |
 | `gates` | Subprocess-call the skill's `halt_gate.py` / `cross_repo_check.py`; branch on exit code | (calls skill scripts) |
 | `state` | Load/save `state.json`; support `--resume` | — |
@@ -18,7 +18,8 @@ Answers: FR-1..FR-14. Describes layers, responsibilities, and one-way dependenci
 ## Main flows
 1. **`runner run <project>`**: load config → `contract.resolve_contract` (lock gate; mismatch → tell user to migrate) → probe runtime caps → `state` load (`--resume`) → orchestrator runs stage 1..4, each calling `gates.check_halt`; implement stage spawns shallow I1.x; acceptance spawns independent V1 → checkpoint per stage → `before_merge_or_release` gate before delivery.
 2. **`runner migrate <project> --to <ver>`**: `contract.migrate` re-reads ALL docs/CHG/ACC/structure under the new contract; all parse → write new lock; any fail → print incompatibility list, keep old lock.
-3. **`runner status <project>`**: read `.sdlc-lock.json` + `state.json`; report locked contract, current stage, completed items.
+3. **`runner status <project>`**: read `.sdlc-lock.json` + `state.json`; report locked contract, current stage, completed items, and a best-effort skill-update line.
+6. **`runner check [project]`**: `contract.detect_update` reads the local skill version (`skill_path`) and compares it to the project lock (or config-expected); classifies patch (auto) / minor / major (→ migrate) / older, and reports any newer version tag in the skill's git repo. Read-only; never auto-migrates.
 
 4. **`runner` (no subcommand) or `runner menu`**: `tui.select` shows an arrow-key list (curses) or a
    numbered fallback; the chosen action prompts for project/version/risk and dispatches to the

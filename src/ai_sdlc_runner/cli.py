@@ -135,6 +135,7 @@ def cmd_menu(args: argparse.Namespace) -> int:
     actions = [
         ("Run four-stage loop", "drive a project through requirement→structure→implement→acceptance"),
         ("Dashboard", "open the multi-panel dashboard for a project (status/log/verify/agents)"),
+        ("Check skill updates", "detect whether the local skill location is newer than the lock"),
         ("Migrate contract", "validating contract upgrade (re-read all docs first)"),
         ("Status", "show the per-project lock + run state"),
         ("Help", "show command-line help"),
@@ -165,7 +166,13 @@ def cmd_menu(args: argparse.Namespace) -> int:
             project = tui.prompt("Project path")
             if project:
                 view = _ask_agent_view()
-                cmd_dashboard(argparse.Namespace(project=project, agent_view=view))
+                cmd_dashboard(argparse.Namespace(project=project, agent_view=view,
+                                                 config=args.config, skill_path=args.skill_path))
+            continue
+        if choice == "Check skill updates":
+            project = tui.prompt("Project path (blank = compare to config-expected)", "")
+            cmd_check(argparse.Namespace(project=project or None, config=args.config,
+                                         skill_path=args.skill_path))
             continue
         if choice == "Run four-stage loop":
             project = tui.prompt("Project path")
@@ -200,9 +207,31 @@ def _ask_agent_view() -> str:
 
 def cmd_dashboard(args: argparse.Namespace) -> int:
     """Render the multi-panel dashboard for a project from its saved state/ACC/git."""
-    model = dashboard.DashboardModel.from_saved(args.project)
+    skill_path = None
+    try:
+        config = load_config(args.config)
+        skill_path = _resolve_skill_path(config, getattr(args, "skill_path", None))
+        expected = config.get("contract_version")
+    except (FileNotFoundError, OSError):
+        expected = None
+    model = dashboard.DashboardModel.from_saved(args.project, skill_path=skill_path, expected=expected)
     dashboard.view(model, getattr(args, "agent_view", dashboard.AGENT_VIEW_MERGED))
     return 0
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    """Detect whether the local skill location has an update relative to the project lock / expected."""
+    config = load_config(args.config)
+    skill_path = _resolve_skill_path(config, args.skill_path)
+    expected = config.get("contract_version")
+    info = contract.detect_update(skill_path, expected=expected, project_dir=args.project)
+    print(f"local skill:   {info.local}")
+    print(f"baseline:      {info.baseline or '(none)'}"
+          + (f"   [project lock]" if args.project else "   [config expected]"))
+    if info.latest_tag:
+        print(f"newest tag:    v{info.latest_tag}")
+    print(f"status:        {info.kind} — {info.message}")
+    return 20 if info.needs_migrate else 0
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -217,6 +246,16 @@ def cmd_status(args: argparse.Namespace) -> int:
         print("  no run state.")
     else:
         print(f"  stage: {st.stage}; completed: {', '.join(st.completed) or '(none)'}")
+    # Best-effort skill-update line (skipped silently if the skill location can't be read).
+    try:
+        config = load_config(getattr(args, "config", DEFAULT_CONFIG))
+        skill_path = _resolve_skill_path(config, getattr(args, "skill_path", None))
+        info = contract.detect_update(skill_path, expected=config.get("contract_version"),
+                                      project_dir=args.project)
+        print(f"  skill: local {info.local} vs baseline {info.baseline or '?'} → {info.kind}"
+              + ("  (run migrate)" if info.needs_migrate else ""))
+    except Exception:
+        pass
     return 0
 
 
@@ -248,6 +287,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     pd = sub.add_parser("dashboard", help="open the multi-panel dashboard for a project")
     pd.add_argument("project", help="path to the governed project directory")
+    pd.add_argument("--skill-path", default=None, help="override skill_path (enables the skill-update line)")
     pd.add_argument("--agent-view", default=dashboard.AGENT_VIEW_MERGED,
                     choices=[dashboard.AGENT_VIEW_MERGED, dashboard.AGENT_VIEW_TABBED],
                     help="agent log layout: merged (default) or tabbed per agent")
@@ -260,7 +300,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     ps = sub.add_parser("status", help="show lock + run state for a project")
     ps.add_argument("project", help="path to the governed project directory")
+    ps.add_argument("--skill-path", default=None, help="override skill_path")
     ps.set_defaults(func=cmd_status)
+
+    pc = sub.add_parser("check", help="detect whether the local skill has an update for a project")
+    pc.add_argument("project", nargs="?", default=None, help="project dir (compare to its lock); omit to compare to config-expected")
+    pc.add_argument("--skill-path", default=None, help="override skill_path (the local skill location to check)")
+    pc.set_defaults(func=cmd_check)
     return p
 
 

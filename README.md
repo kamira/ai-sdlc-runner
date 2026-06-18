@@ -27,6 +27,7 @@ runner menu                               # the same interactive menu, explicitl
 runner run <project>                      # drive the four-stage loop for a governed project
 runner run <project> --dashboard          # ...with the live multi-panel dashboard
 runner dashboard <project>                # open the dashboard over a project's saved state
+runner check [project]                    # detect whether the local skill has an update
 runner migrate <project> --to <version>   # validating contract upgrade (re-read all docs first)
 runner status <project>                   # show the per-project lock + run state
 ```
@@ -47,6 +48,13 @@ contract lock), **執行日誌/Execution log** (stage transitions + gate AUTO/HA
 in one panel by default and can be switched to tabbed-per-agent (`--agent-view tabbed`, or `t` in the
 curses viewer, or the menu). It is read-only — a run launched from the dashboard still halts at the
 red-line gate.
+
+**Skill update detection.** `runner check [project]` reads the version at the local skill location
+(`skill_path`, overridable with `--skill-path`) and compares it to the project's lock (or the
+config-expected version): a **patch** difference passes freely, a **minor/major** difference reports
+that you should run `migrate` (exit 20), and it also surfaces any newer version tag found in the
+skill's git repo (e.g. `ai-sdlc-v1.1.0`). The same line appears in `status` and the dashboard Status
+panel. Detection is read-only — it never auto-migrates; the validating `migrate` stays explicit.
 
 ## How it works
 
@@ -107,6 +115,7 @@ runner menu                               # 顯式進入同一個互動選單
 runner run <project>                      # 對受治理專案驅動四階段迴圈
 runner run <project> --dashboard          # ...同時開啟即時多面板儀表板
 runner dashboard <project>                # 對專案已存的狀態開啟儀表板
+runner check [project]                    # 偵測本地 skill 位置是否有更新
 runner migrate <project> --to <version>   # 驗證式契約升版(先全部重讀 docs)
 runner status <project>                   # 顯示該專案的版本鎖與執行狀態
 ```
@@ -123,6 +132,11 @@ runner status <project>                   # 顯示該專案的版本鎖與執行
 停點 AUTO/HALT)、**檢驗結果/Verification**(驗收報告 + 最新 V1 結果)、**agent 行為日誌/Agent log**。
 agent 日誌預設統整在同一面板,可切換成分頁分 agent(`--agent-view tabbed`,或 curses 視圖中按 `t`,或從
 選單)。儀表板為唯讀——從儀表板啟動的 run 一樣會在紅線停點停下。
+
+**Skill 更新偵測。** `runner check [project]` 讀取本地 skill 位置(`skill_path`,可用 `--skill-path` 覆寫)
+的版本,與該專案的鎖(或 config 預期版本)比對:**patch** 差異自由放行;**minor/major** 差異會提示你執行
+`migrate`(exit 20);並會回報 skill git repo 內有無更新的版本 tag(如 `ai-sdlc-v1.1.0`)。同一行也會出現在
+`status` 與儀表板的狀態面板。偵測為唯讀——絕不自動 migrate,驗證式 `migrate` 仍須顯式執行。
 
 ## 運作方式
 

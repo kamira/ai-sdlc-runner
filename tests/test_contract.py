@@ -139,3 +139,61 @@ def test_v1_spawn_excludes_agent():
     from ai_sdlc_runner import agents
     spec = agents.spawn(_SKILL_CACHE, "V1", scope="read-only", task="verify")
     assert "Agent" not in spec.tools
+
+
+# --------------------------------------------------------------------------------------
+# Update detection (CHG-20260617-04)
+# --------------------------------------------------------------------------------------
+
+def _fake_skill(dir_path: Path, version: str) -> Path:
+    dir_path.mkdir(parents=True, exist_ok=True)
+    (dir_path / "SKILL.md").write_text(
+        f"---\nname: ai-sdlc\nmetadata:\n  version: {version}\n---\n# skill\n"
+    )
+    return dir_path
+
+
+@pytest.mark.parametrize("local,baseline,kind,migrate", [
+    ("1.1.0", "1.0.0", "minor", True),
+    ("1.0.7", "1.0.0", "patch", False),
+    ("2.0.0", "1.0.0", "major", True),
+    ("1.0.0", "1.0.0", "up_to_date", False),
+    ("1.0.0", "1.1.0", "older", False),
+])
+def test_detect_update_kinds(tmp_path, local, baseline, kind, migrate):
+    skill = _fake_skill(tmp_path / "skill", local)
+    info = contract.detect_update(skill, expected=baseline)
+    assert info.kind == kind
+    assert info.needs_migrate is migrate
+    assert info.local == local and info.baseline == baseline
+
+
+def test_detect_update_uses_project_lock(tmp_path):
+    skill = _fake_skill(tmp_path / "skill", "1.1.0")
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    contract.resolve_contract(proj, "1.0.0")          # lock at 1.0.0
+    info = contract.detect_update(skill, expected="9.9.9", project_dir=proj)
+    # The project lock (1.0.0) wins over the `expected` fallback.
+    assert info.baseline == "1.0.0" and info.kind == "minor" and info.needs_migrate is True
+
+
+def test_detect_update_unknown_without_baseline(tmp_path):
+    skill = _fake_skill(tmp_path / "skill", "1.0.0")
+    info = contract.detect_update(skill)
+    assert info.kind == "unknown" and info.needs_migrate is False
+
+
+def test_available_version_tags_parses_skill_scoped(tmp_path):
+    import subprocess
+    skill = _fake_skill(tmp_path / "skill", "1.1.0")
+    repo = tmp_path / "skill"
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+           "GIT_COMMITTER_EMAIL": "t@t", "PATH": os.environ.get("PATH", "")}
+    subprocess.run(["git", "init", "-q"], cwd=repo, env=env, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, env=env, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, env=env, check=True)
+    subprocess.run(["git", "tag", "ai-sdlc-v1.0.0"], cwd=repo, env=env, check=True)
+    subprocess.run(["git", "tag", "ai-sdlc-v1.1.0"], cwd=repo, env=env, check=True)
+    tags = contract.available_version_tags(repo)
+    assert tags[0] == "1.1.0" and "1.0.0" in tags        # newest first, prefix stripped

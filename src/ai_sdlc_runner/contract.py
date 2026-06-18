@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Tuple
 
 LOCK_FILENAME = ".sdlc-lock.json"
 
@@ -224,3 +225,114 @@ def migrate(project_dir: str | Path, to_version: str) -> MigrateResult:
 
     write_lock(project_dir, to_version)
     return MigrateResult(True, to_version, [], checked)
+
+
+# --------------------------------------------------------------------------------------
+# Update detection — is the local skill location newer than what we're locked/expected at?
+# --------------------------------------------------------------------------------------
+
+# Matches version tags like "v1.2.3" or skill-scoped "ai-sdlc-v1.2.3".
+_TAG_VERSION = re.compile(r"v(\d+)\.(\d+)\.(\d+)$")
+
+
+def _semver(version: str) -> Tuple[int, int, int]:
+    parts = version.strip().split(".")
+    if len(parts) < 3 or not all(p.isdigit() for p in parts[:3]):
+        raise ContractError(f"invalid version string: {version!r}")
+    return int(parts[0]), int(parts[1]), int(parts[2])
+
+
+def available_version_tags(skill_path: str | Path) -> List[str]:
+    """Best-effort: list semantic-version tags in the skill's git repo, newest first.
+
+    Returns ``"X.Y.Z"`` strings (tag prefixes like ``ai-sdlc-v`` stripped). Empty if the location is
+    not a git repo or git is unavailable — detection then relies on the checked-out SKILL.md alone.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(skill_path), "tag"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
+    versions: List[Tuple[int, int, int]] = []
+    for line in proc.stdout.splitlines():
+        m = _TAG_VERSION.search(line.strip())
+        if m:
+            versions.append((int(m.group(1)), int(m.group(2)), int(m.group(3))))
+    versions.sort(reverse=True)
+    return [f"{a}.{b}.{c}" for a, b, c in versions]
+
+
+@dataclass
+class UpdateInfo:
+    """Result of comparing the local skill version to a baseline (project lock or expected).
+
+    ``kind`` is one of: ``up_to_date``, ``patch`` (auto-OK), ``minor``/``major`` (needs migrate),
+    ``older`` (local skill is behind the lock), or ``unknown`` (no baseline to compare).
+    ``needs_migrate`` is True only for ``minor``/``major``.
+    """
+
+    local: str
+    baseline: Optional[str]
+    kind: str
+    needs_migrate: bool
+    latest_tag: Optional[str] = None
+    message: str = ""
+
+
+def detect_update(
+    skill_path: str | Path,
+    expected: Optional[str] = None,
+    project_dir: Optional[str | Path] = None,
+) -> UpdateInfo:
+    """Detect whether the local skill location is newer than the project's lock / expected version.
+
+    Baseline precedence: the project lock (if ``project_dir`` has one) → ``expected`` → none. The
+    local version is read from the skill's ``SKILL.md`` (the same stable output the contract targets);
+    git version tags are reported as an additional "newer available" signal but never auto-applied.
+    """
+    local = read_skill_version(skill_path)
+    tags = available_version_tags(skill_path)
+    latest_tag = tags[0] if tags else None
+
+    baseline: Optional[str] = None
+    if project_dir is not None:
+        lock = read_lock(project_dir)
+        if lock:
+            baseline = lock["contract_version"]
+    if baseline is None:
+        baseline = expected
+
+    if baseline is None:
+        return UpdateInfo(local, None, "unknown", False, latest_tag,
+                          f"local skill {local}; no baseline to compare (pass a project or expected version).")
+
+    lmaj, lmin, lpat = _semver(local)
+    bmaj, bmin, bpat = _semver(baseline)
+
+    if (lmaj, lmin, lpat) == (bmaj, bmin, bpat):
+        kind, migrate = "up_to_date", False
+        msg = f"up to date (skill {local} == baseline {baseline})."
+    elif (lmaj, lmin) == (bmaj, bmin):
+        kind, migrate = "patch", False
+        msg = f"patch update available ({baseline} → {local}); passes freely, no migrate needed."
+    elif lmaj == bmaj and lmin > bmin:
+        kind, migrate = "minor", True
+        msg = f"MINOR update available ({baseline} → {local}); run `migrate` (validating upgrade)."
+    elif lmaj > bmaj:
+        kind, migrate = "major", True
+        msg = f"MAJOR update available ({baseline} → {local}); run `migrate` (validating upgrade)."
+    else:
+        kind, migrate = "older", False
+        msg = f"local skill {local} is OLDER than the lock {baseline}; check the pinned submodule."
+
+    if latest_tag and latest_tag != local:
+        try:
+            if _semver(latest_tag) > _semver(local):
+                msg += f" (newer tag in skill repo: v{latest_tag}, not checked out.)"
+        except ContractError:
+            pass
+    return UpdateInfo(local, baseline, kind, migrate, latest_tag, msg)

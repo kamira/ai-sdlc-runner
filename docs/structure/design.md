@@ -9,6 +9,8 @@ Answers: FR-1..FR-14. Key components, their contracts, and design trade-offs.
 | `contract.contract_key` | Reduce to lock key | `("1.2.3") -> (1, 2)` (ignores patch) |
 | `contract.resolve_contract` | Per-project lock resolution | `(project_dir, requested) -> str`; first run writes lock; mismatched (major,minor) → raise `MigrateRequired`; same/None → continue |
 | `contract.migrate` | Validating upgrade | `(project_dir, to_version) -> MigrateResult`; re-read all docs; all parse → raise lock; else list incompatibilities, keep lock |
+| `contract.detect_update` | Update detection | `(skill_path, expected=None, project_dir=None) -> UpdateInfo{local, baseline, kind, needs_migrate, latest_tag}`; baseline = project lock else expected; read-only |
+| `contract.available_version_tags` | Newer-tag signal | `(skill_path) -> list[str]` newest first; parses `ai-sdlc-vX.Y.Z`/`vX.Y.Z` git tags; `[]` if not a repo |
 | `agents.parse_role_table` | Parse role allowlist table | `(skill_path) -> {role: {tools, can_spawn, writable, scope}}` |
 | `agents.spawn` | Start a role-scoped agent | `(role, scope, task) -> AgentSpec`; V1 tools exclude `Agent`; prompt loads skill + role/scope |
 | `gates.check_halt` | Query halt contract | `(gate, risk, action=None, autonomy=None) -> Decision`; subprocess `halt_gate.py`; exit 0=AUTO,10=HALT,else error |

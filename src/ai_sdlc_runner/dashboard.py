@@ -47,15 +47,18 @@ class DashboardModel:
 
     project_dir: str
     events: List[dict] = field(default_factory=list)
+    skill_path: Optional[str] = None   # when known, the Status panel shows a skill-update line
+    expected: Optional[str] = None      # config-expected contract version (fallback baseline)
 
     # ---- ingestion -------------------------------------------------------------------
     def add(self, event: dict) -> None:
         self.events.append(dict(event))
 
     @classmethod
-    def from_saved(cls, project_dir: str | Path) -> "DashboardModel":
+    def from_saved(cls, project_dir: str | Path, skill_path: Optional[str] = None,
+                   expected: Optional[str] = None) -> "DashboardModel":
         """Build a model for a post-hoc view (no live events) — `runner dashboard <project>`."""
-        return cls(project_dir=str(project_dir))
+        return cls(project_dir=str(project_dir), skill_path=skill_path, expected=expected)
 
     # ---- panels ----------------------------------------------------------------------
     def status_panel(self) -> List[str]:
@@ -83,6 +86,16 @@ class DashboardModel:
                          f"(rec {lock['contract_version']})")
         else:
             lines.append("contract: (no lock yet)")
+
+        # Skill-update line (only when a skill location is known; best-effort).
+        if self.skill_path:
+            try:
+                info = contract.detect_update(self.skill_path, expected=self.expected,
+                                              project_dir=self.project_dir)
+                flag = " ⚠ migrate" if info.needs_migrate else ""
+                lines.append(f"skill:    local {info.local} vs {info.baseline or '?'} → {info.kind}{flag}")
+            except Exception:
+                pass
         return lines
 
     def exec_log_panel(self) -> List[str]:
