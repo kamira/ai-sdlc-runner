@@ -23,7 +23,8 @@ ai-sdlc-runner/
 │   ├── orchestrator.py        # main loop: four stages sequential + shallow fan-out (emits events)
 │   ├── tui.py                 # interactive menu (stdlib curses + numbered fallback); CHG-02
 │   ├── dashboard.py           # multi-panel view (status/log/verify/agents); curses + snapshot; CHG-03
-│   └── skillstore.py          # offline multi-version skill store resolver (by project lock); CHG-05
+│   ├── skillstore.py          # offline multi-version skill store resolver (by project lock); CHG-05
+│   └── executors.py           # pluggable agent backends: stub | command(subscription) | api; CHG-06
 ├── config/
 │   └── runner.yaml            # contract version, skill path, concurrency/depth limits
 ├── docs/

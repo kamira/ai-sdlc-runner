@@ -21,3 +21,21 @@ skill_path: "./ai-skills/skills/ai-sdlc"
 # to save tokens. Probed at startup; run is degraded/halted if unmet.
 concurrency_max: 4        # subscription sweet spot 3-5
 nesting_depth_max: 3      # platform supports 5; deliberately conservative
+
+# Agent-execution backend (runtime concern, not the contract). Platform-agnostic:
+# run via an HTTP API or a subscription/CLI agent. Default `stub` = offline/dry-run.
+# Secrets (API keys) are read from the named ENVIRONMENT VARIABLE, never stored here.
+executor:
+  backend: stub                 # stub | command | api  (override per-run with --backend)
+  # command: any local CLI agent (e.g. a logged-in subscription tool)
+  command:
+    argv: ["claude", "-p"]      # base command; the agent prompt is added per `prompt_via`
+    prompt_via: stdin           # stdin | arg
+    timeout: 600
+  # api: any HTTP endpoint; provider adapter shapes the request/response
+  api:
+    provider: generic           # anthropic | openai | generic
+    base_url: ""                # e.g. https://api.anthropic.com/v1/messages
+    model: ""                   # e.g. a model name your platform exposes
+    api_key_env: "AI_SDLC_API_KEY"   # name of the env var holding the key
+    timeout: 120

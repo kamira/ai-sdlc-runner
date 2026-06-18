@@ -13,6 +13,9 @@ Answers: FR-1..FR-14. Key components, their contracts, and design trade-offs.
 | `contract.available_version_tags` | Newer-tag signal | `(skill_path) -> list[str]` newest first; parses `ai-sdlc-vX.Y.Z`/`vX.Y.Z` git tags; `[]` if not a repo |
 | `skillstore.store_versions` / `resolve_path` | Offline store | list versions (newest first); resolve by exact version or major.minor (highest patch) or latest |
 | `skillstore.detect` | Store update | compare newest store version to project lock/expected (reuses `contract.detect_update`) |
+| `executors.from_config` | Backend factory | `(config, override_backend) -> Executor`; stub/command/api; defaults to stub |
+| `executors.build_request` / `parse_response` | API adapters | pure `(provider, …) -> (url, headers, body)` / `(provider, raw) -> str` for anthropic/openai/generic |
+| `Executor.run` | Agent call | `(AgentSpec) -> dict`; command via subprocess, api via urllib; key from env |
 | `agents.parse_role_table` | Parse role allowlist table | `(skill_path) -> {role: {tools, can_spawn, writable, scope}}` |
 | `agents.spawn` | Start a role-scoped agent | `(role, scope, task) -> AgentSpec`; V1 tools exclude `Agent`; prompt loads skill + role/scope |
 | `gates.check_halt` | Query halt contract | `(gate, risk, action=None, autonomy=None) -> Decision`; subprocess `halt_gate.py`; exit 0=AUTO,10=HALT,else error |
@@ -38,6 +41,8 @@ Answers: FR-1..FR-14. Key components, their contracts, and design trade-offs.
 | Detect version from file vs git tag | file (SKILL.md) **vs** git tag | User chose file detection: a missing/wrong tag surfaces as a contract-version mismatch instead of silent drift; works without git plumbing |
 | Offline local store, vendored into runner | submodule (online) **vs** local store | User override (CHG-05): run fully offline with v1.0.0 + v1.1.0 on hand; submodule kept as optional fallback. **Deliberately relaxes §1.2/§7 (reference-not-copy)** — recorded in CHG-05 and the Guideline |
 | Version selected by project lock | config-fixed **vs** lock-driven | Each project uses the store version matching its lock; migrate switches it automatically |
+| Platform-agnostic execution backend | one vendor **vs** stub/command/api | Runtime concern (§1.7), config-driven; run via API or a subscription CLI without locking to a platform (CHG-06) |
+| API client | requests/httpx **vs** stdlib urllib | Keeps zero-dependency; keys from env, never config |
 | Reference skill via submodule | submodule **vs** copy/vendor | One-way dependency + no drift; copying is explicitly forbidden (§7) |
 | Call scripts vs re-implement | subprocess **vs** re-code matrix | Skill is the single source of truth; re-coding causes divergence (§1.3, §7) |
 | Lock major.minor, patch-permissive | lock full version **vs** major.minor | Patches (typo/bug/wording) shouldn't force migrate; interface changes (minor) should re-read (§5) |

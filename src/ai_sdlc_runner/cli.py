@@ -6,11 +6,12 @@ zero hard dependencies), then dispatches to the orchestrator / contract layer.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Optional
 
-from . import contract, dashboard, orchestrator, skillstore, state, tui
+from . import contract, dashboard, executors, orchestrator, skillstore, state, tui
 
 DEFAULT_CONFIG = "config/runner.yaml"
 
@@ -33,20 +34,49 @@ def load_config(path: str | Path) -> dict:
         return _mini_yaml(text)
 
 
+def _scalar(val: str):
+    """Parse a YAML scalar: int, inline JSON list/dict, or quoted/plain string."""
+    val = val.strip()
+    if not val:
+        return None
+    if val[0] in "[{":
+        try:
+            return json.loads(val)
+        except json.JSONDecodeError:
+            return val
+    if val.lstrip("-").isdigit():
+        return int(val)
+    return val.strip("'\"")
+
+
 def _mini_yaml(text: str) -> dict:
-    """Minimal parser for the flat ``key: value`` shape of runner.yaml (no nesting)."""
-    out: dict = {}
+    """Minimal indentation-aware YAML reader: scalars, inline JSON lists, and nested maps.
+
+    Enough for runner.yaml (a few levels of nested ``key: value`` + inline ``[...]`` lists). Used only
+    when PyYAML is not installed; PyYAML is preferred when available.
+    """
+    root: dict = {}
+    # Stack of (indent, container) to attach children by indentation.
+    stack: list = [(-1, root)]
     for raw in text.splitlines():
-        line = raw.split("#", 1)[0].strip()
-        if not line or ":" not in line:
+        no_comment = raw.split("#", 1)[0].rstrip()
+        if not no_comment.strip():
             continue
-        key, val = line.split(":", 1)
-        key, val = key.strip(), val.strip().strip("'\"")
-        if val.lstrip("-").isdigit():
-            out[key] = int(val)
+        indent = len(no_comment) - len(no_comment.lstrip())
+        key, sep, val = no_comment.strip().partition(":")
+        if not sep:
+            continue
+        key = key.strip()
+        while stack and indent <= stack[-1][0]:
+            stack.pop()
+        parent = stack[-1][1]
+        if val.strip() == "":
+            child: dict = {}
+            parent[key] = child
+            stack.append((indent, child))
         else:
-            out[key] = val
-    return out
+            parent[key] = _scalar(val)
+    return root
 
 
 def _resolve_skill_path(config: dict, override: Optional[str], project_dir: Optional[str] = None) -> str:
@@ -129,6 +159,16 @@ def cmd_run(args: argparse.Namespace) -> int:
             if ev.get("phase") == "dispatch":
                 print(f"    · agent {ev.get('role')} dispatched")
 
+    # Build the platform-agnostic execution backend (stub | command/subscription | api).
+    backend = getattr(args, "backend", None)
+    try:
+        executor = executors.from_config(config, override_backend=backend)
+    except executors.ExecutorError as exc:
+        print(f"executor config error: {exc}")
+        return 2
+    # The stub keeps the orchestrator's internal path (and existing output) identical.
+    agent_executor = None if getattr(executor, "backend", "stub") == "stub" else executor.run
+
     report = orchestrator.run(
         args.project,
         skill_path=skill_path,
@@ -136,7 +176,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         requested_version=requested,
         risk=args.risk,
         resume=args.resume,
-        agent_executor=None,           # stub executor (dry-run friendly)
+        agent_executor=agent_executor,
         approver=None,                 # no auto-approval; HALT gates stop the run
         on_event=on_event if use_dash else None,
     )
@@ -239,6 +279,7 @@ def cmd_menu(args: argparse.Namespace) -> int:
                 resume=False,
                 dashboard=want_dash,
                 agent_view=view,
+                backend=None,
             ))
             continue
     return 0
@@ -334,6 +375,8 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--skill-path", default=None, help="override skill_path (e.g. a local skill cache)")
     pr.add_argument("--risk", default="medium", choices=["low", "medium", "high"], help="overall change risk")
     pr.add_argument("--resume", action="store_true", help="continue from the last checkpoint")
+    pr.add_argument("--backend", default=None, choices=[executors.BACKEND_STUB, executors.BACKEND_COMMAND, executors.BACKEND_API],
+                    help="agent execution backend (overrides config): stub | command | api")
     pr.add_argument("--dashboard", action="store_true", help="show the multi-panel dashboard while running")
     pr.add_argument("--agent-view", default=dashboard.AGENT_VIEW_MERGED,
                     choices=[dashboard.AGENT_VIEW_MERGED, dashboard.AGENT_VIEW_TABBED],

@@ -54,6 +54,24 @@ in one panel by default and can be switched to tabbed-per-agent (`--agent-view t
 curses viewer, or the menu). It is read-only — a run launched from the dashboard still halts at the
 red-line gate.
 
+**Execution backend (any AI platform).** The agent-execution backend is a runtime concern, not the
+contract — so the runner is **not tied to any AI platform**. Choose per run with `--backend` or in
+`config/runner.yaml`'s `executor` block:
+
+- `stub` (default) — no-op, offline/dry-run.
+- `command` — run any local CLI / **subscription** agent (e.g. a logged-in tool); the prompt is passed
+  via stdin or as an argument: `executor.command.argv: ["claude", "-p"]`, `prompt_via: stdin|arg`.
+- `api` — call an **HTTP API**: `executor.api.{provider: anthropic|openai|generic, base_url, model,
+  api_key_env}`. The API key is read from the named **environment variable**, never stored in config.
+
+```bash
+runner run <project> --backend command     # drive agents via a subscription/CLI agent
+runner run <project> --backend api         # drive agents via an HTTP API (key from env)
+```
+
+The backend only runs agent work — **halt gates and red-line stops apply identically** whichever
+backend you pick. Uses only the standard library (`urllib`/`subprocess`); no extra dependency.
+
 **Skill update detection.** `runner check [project]` reads the version at the local skill location
 (`skill_path`, overridable with `--skill-path`) and compares it to the project's lock (or the
 config-expected version): a **patch** difference passes freely, a **minor/major** difference reports
@@ -140,6 +158,22 @@ runner status <project>                   # 顯示該專案的版本鎖與執行
 停點 AUTO/HALT)、**檢驗結果/Verification**(驗收報告 + 最新 V1 結果)、**agent 行為日誌/Agent log**。
 agent 日誌預設統整在同一面板,可切換成分頁分 agent(`--agent-view tabbed`,或 curses 視圖中按 `t`,或從
 選單)。儀表板為唯讀——從儀表板啟動的 run 一樣會在紅線停點停下。
+
+**執行後端(不限任何 AI 平台)。** agent 執行後端屬於 runtime、不屬契約——所以 runner **不綁任何 AI 平台**。
+可用 `--backend` 或 `config/runner.yaml` 的 `executor` 區塊選擇:
+
+- `stub`(預設)——無動作,離線/dry-run。
+- `command`——走任何本地 CLI /**訂閱**型 agent(例如已登入的工具);prompt 以 stdin 或參數傳入:
+  `executor.command.argv: ["claude", "-p"]`、`prompt_via: stdin|arg`。
+- `api`——呼叫 **HTTP API**:`executor.api.{provider: anthropic|openai|generic, base_url, model,
+  api_key_env}`。API 金鑰從指定的**環境變數**讀取,**絕不**寫進 config。
+
+```bash
+runner run <專案> --backend command     # 用訂閱/CLI agent 驅動
+runner run <專案> --backend api         # 用 HTTP API 驅動(金鑰取自環境變數)
+```
+
+後端只負責跑 agent——**停點與紅線停下不論用哪個後端都一樣生效**。僅用標準庫(`urllib`/`subprocess`),無額外依賴。
 
 **Skill 更新偵測。** `runner check [project]` 讀取本地 skill 位置(`skill_path`,可用 `--skill-path` 覆寫)
 的版本,與該專案的鎖(或 config 預期版本)比對:**patch** 差異自由放行;**minor/major** 差異會提示你執行
