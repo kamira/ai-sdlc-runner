@@ -104,6 +104,12 @@ panel. Detection is read-only — it never auto-migrates; the validating `migrat
 > **The skill without the runner is still a pure skill.** Installing the runner adds an external
 > driver; it does not modify or depend back on the skill.
 
+## Architecture
+
+For a full architecture & feature overview (module map, the four-stage loop, version lock, offline
+skill store, execution backends, guardrails, change history, and handover/extension notes), see
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
 ## Governance
 
 This repo is itself governed by ai-sdlc (dogfooding). See `docs/ai-guideline.md`,
