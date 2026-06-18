@@ -9,3 +9,6 @@
 	# The runner detects the actual contract version by reading the skill's
 	# SKILL.md frontmatter (contract.read_skill_version), so a missing/incorrect
 	# tag surfaces as a contract-version mismatch rather than silent drift.
+	# OPTIONAL FALLBACK ONLY (CHG-20260617-05): the primary skill source is the local
+	# offline store at ./skills (v1.0.0, v1.1.0). This submodule is NOT pulled by default
+	# and is kept only as an online fallback; the runner never fetches it automatically.

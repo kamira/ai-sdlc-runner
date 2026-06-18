@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "_doc": "角色 → 該載入的 references 子集(機器可讀)。roles 給每個角色的『基本載入集』;situational 給依偵測(見 SKILL 的 detect→load)額外追加的 references。外部協調器/agent 啟動某角色時,讀本檔得到要載哪幾份,而非靠散文推斷。由 scripts/role_loadout.py 讀取。所有名稱對應 references/<name>.md(+ .zh-tw.md)。",
+  "roles": {
+    "orchestrator":     ["agent-hierarchy", "agent-worklog", "autonomy", "doc-integrity"],
+    "analyst":          ["requirement-analysis", "structure-design", "doc-integrity"],
+    "lead-implementer": ["modification-guide", "structure-design", "agent-hierarchy", "agent-worklog", "doc-integrity"],
+    "sub-implementer":  ["modification-guide", "agent-worklog"],
+    "verifier":         ["acceptance-verification", "independent-acceptance", "doc-integrity"],
+    "integrator":       ["independent-acceptance", "cross-agent", "doc-integrity"],
+    "reviewer":         ["doc-integrity", "independent-acceptance"]
+  },
+  "situational": {
+    "multi_repo":           ["cross-repo"],
+    "parallel_or_handoff":  ["cross-agent"],
+    "autonomous_run":       ["autonomy"],
+    "cicd":                 ["ci-cd"]
+  },
+  "aliases": {
+    "A1": "analyst",
+    "I1": "lead-implementer",
+    "I1.x": "sub-implementer",
+    "V1": "verifier",
+    "parent": "orchestrator"
+  }
+}

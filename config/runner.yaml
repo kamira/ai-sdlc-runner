@@ -8,8 +8,13 @@
 # reading the skill's SKILL.md frontmatter (contract.read_skill_version).
 contract_version: "1.0.0"
 
-# Path to the ai-sdlc skill. Normally the pinned git submodule at ./ai-skills;
-# may be overridden (e.g. to a local skill cache) for offline verification.
+# Primary skill source: a local, offline, multi-version store (CHG-20260617-05).
+# Each subdir (v1.0.0, v1.1.0, ...) is a full skill root. The runner auto-selects the
+# version matching a project's lock major.minor; first run uses contract_version.
+skill_store: "./skills"
+
+# Fallback skill path, used only when skill_store has no suitable version and no
+# --skill-path override is given. Normally the optional git submodule (default not pulled).
 skill_path: "./ai-skills/skills/ai-sdlc"
 
 # Shallow fan-out limits. Platform may support more; kept conservative on purpose

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from . import contract, dashboard, orchestrator, state, tui
+from . import contract, dashboard, orchestrator, skillstore, state, tui
 
 DEFAULT_CONFIG = "config/runner.yaml"
 
@@ -49,24 +49,73 @@ def _mini_yaml(text: str) -> dict:
     return out
 
 
-def _resolve_skill_path(config: dict, override: Optional[str]) -> str:
-    return override or config.get("skill_path", "./ai-skills/skills/ai-sdlc")
+def _resolve_skill_path(config: dict, override: Optional[str], project_dir: Optional[str] = None) -> str:
+    """Resolve the concrete skill path (CHG-20260617-05).
+
+    Precedence: explicit ``--skill-path`` override → local store version matching the project lock
+    major.minor (or config-expected on first run, else the latest in the store) → the fallback
+    ``skill_path`` (optional submodule). Offline throughout — the store is local.
+    """
+    if override:
+        return override
+    store = config.get("skill_store")
+    if store:
+        # Prefer the version a project is locked to; else the config-expected; else the latest.
+        lock = contract.read_lock(project_dir) if project_dir else None
+        if lock:
+            p = skillstore.resolve_path(store, major=lock["contract_major"], minor=lock["contract_minor"])
+            if p:
+                return p
+        expected = config.get("contract_version")
+        if expected:
+            try:
+                emaj, emin = contract.contract_key(expected)
+                p = skillstore.resolve_path(store, major=emaj, minor=emin)
+                if p:
+                    return p
+            except contract.ContractError:
+                pass
+        p = skillstore.resolve_path(store)  # latest available
+        if p:
+            return p
+    return config.get("skill_path", "./ai-skills/skills/ai-sdlc")
 
 
 # --------------------------------------------------------------------------------------
 # Subcommands
 # --------------------------------------------------------------------------------------
 
+def _skill_update_line(config: dict, project: Optional[str]) -> Optional[str]:
+    """One-line skill-update summary (store-aware). Returns None if nothing can be determined."""
+    try:
+        store = config.get("skill_store")
+        expected = config.get("contract_version")
+        info = None
+        if store and skillstore.store_versions(store):
+            info = skillstore.detect(store, project_dir=project, expected=expected)
+        else:
+            skill_path = _resolve_skill_path(config, None, project)
+            info = contract.detect_update(skill_path, expected=expected, project_dir=project)
+        if info is None:
+            return None
+        flag = " ⚠ migrate" if info.needs_migrate else ""
+        return f"skill:    newest {info.local} vs {info.baseline or '?'} → {info.kind}{flag}"
+    except Exception:
+        return None
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     config = load_config(args.config)
-    skill_path = _resolve_skill_path(config, args.skill_path)
+    skill_path = _resolve_skill_path(config, args.skill_path, args.project)
     requested = args.contract_version or config.get("contract_version")
 
     # In a real run the executor/approver are platform-bound; --dry-run uses stubs and
     # an approver that never auto-approves, so red-line gates correctly stop.
     # With --dashboard, collect events into a model and stream a one-line feed as they arrive.
     use_dash = getattr(args, "dashboard", False)
-    model = dashboard.DashboardModel(project_dir=str(args.project)) if use_dash else None
+    model = (dashboard.DashboardModel(project_dir=str(args.project),
+                                      skill_line=_skill_update_line(config, args.project))
+             if use_dash else None)
 
     def on_event(ev: dict) -> None:
         model.add(ev)
@@ -207,29 +256,37 @@ def _ask_agent_view() -> str:
 
 def cmd_dashboard(args: argparse.Namespace) -> int:
     """Render the multi-panel dashboard for a project from its saved state/ACC/git."""
-    skill_path = None
+    skill_line = None
     try:
         config = load_config(args.config)
-        skill_path = _resolve_skill_path(config, getattr(args, "skill_path", None))
-        expected = config.get("contract_version")
+        skill_line = _skill_update_line(config, args.project)
     except (FileNotFoundError, OSError):
-        expected = None
-    model = dashboard.DashboardModel.from_saved(args.project, skill_path=skill_path, expected=expected)
+        pass
+    model = dashboard.DashboardModel.from_saved(args.project, skill_line=skill_line)
     dashboard.view(model, getattr(args, "agent_view", dashboard.AGENT_VIEW_MERGED))
     return 0
 
 
 def cmd_check(args: argparse.Namespace) -> int:
-    """Detect whether the local skill location has an update relative to the project lock / expected."""
+    """Detect whether the local skill store/location has an update relative to the lock / expected."""
     config = load_config(args.config)
-    skill_path = _resolve_skill_path(config, args.skill_path)
     expected = config.get("contract_version")
-    info = contract.detect_update(skill_path, expected=expected, project_dir=args.project)
-    print(f"local skill:   {info.local}")
+    store = config.get("skill_store")
+    versions = skillstore.store_versions(store) if store else []
+    if versions:
+        print(f"skill store:   {store}")
+        print(f"versions:      {', '.join(versions)}")
+        info = skillstore.detect(store, project_dir=args.project, expected=expected)
+    else:
+        skill_path = _resolve_skill_path(config, args.skill_path, args.project)
+        print(f"skill path:    {skill_path}")
+        info = contract.detect_update(skill_path, expected=expected, project_dir=args.project)
+    if info is None:
+        print("status:        no skill versions found.")
+        return 1
+    print(f"newest:        {info.local}")
     print(f"baseline:      {info.baseline or '(none)'}"
-          + (f"   [project lock]" if args.project else "   [config expected]"))
-    if info.latest_tag:
-        print(f"newest tag:    v{info.latest_tag}")
+          + ("   [project lock]" if args.project else "   [config expected]"))
     print(f"status:        {info.kind} — {info.message}")
     return 20 if info.needs_migrate else 0
 
@@ -246,14 +303,12 @@ def cmd_status(args: argparse.Namespace) -> int:
         print("  no run state.")
     else:
         print(f"  stage: {st.stage}; completed: {', '.join(st.completed) or '(none)'}")
-    # Best-effort skill-update line (skipped silently if the skill location can't be read).
+    # Best-effort skill-update line (store-aware; skipped silently if undeterminable).
     try:
         config = load_config(getattr(args, "config", DEFAULT_CONFIG))
-        skill_path = _resolve_skill_path(config, getattr(args, "skill_path", None))
-        info = contract.detect_update(skill_path, expected=config.get("contract_version"),
-                                      project_dir=args.project)
-        print(f"  skill: local {info.local} vs baseline {info.baseline or '?'} → {info.kind}"
-              + ("  (run migrate)" if info.needs_migrate else ""))
+        line = _skill_update_line(config, args.project)
+        if line:
+            print("  " + line.replace("skill:    ", "skill: "))
     except Exception:
         pass
     return 0

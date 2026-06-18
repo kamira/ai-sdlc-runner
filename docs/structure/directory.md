@@ -9,7 +9,10 @@ ai-sdlc-runner/
 ├── .gitignore                 # Python
 ├── .gitmodules                # declares the ai-skills submodule (pinned to tag v1.0.0)
 ├── pyproject.toml             # deps & entry point (runner = ai_sdlc_runner.cli:main)
-├── ai-skills/                 # git submodule, pinned tag v1.0.0 (read-only reference; provided by user)
+├── skills/                    # PRIMARY offline skill store (CHG-05): v1.0.0/, v1.1.0/ (vendored verbatim)
+│   ├── v1.0.0/                 #   full skill root (SKILL.md, references/, scripts/, assets/)
+│   └── v1.1.0/                 #   + role catalog (role_loadout.py, role_refs.json)
+├── ai-skills/                 # OPTIONAL git submodule fallback (not pulled by default); pinned ai-sdlc-v1.0.0
 ├── src/ai_sdlc_runner/
 │   ├── __init__.py
 │   ├── cli.py                 # entry: run / migrate / status subcommands
@@ -19,7 +22,8 @@ ai-sdlc-runner/
 │   ├── state.py               # checkpoint / resume (state.json)
 │   ├── orchestrator.py        # main loop: four stages sequential + shallow fan-out (emits events)
 │   ├── tui.py                 # interactive menu (stdlib curses + numbered fallback); CHG-02
-│   └── dashboard.py           # multi-panel view (status/log/verify/agents); curses + snapshot; CHG-03
+│   ├── dashboard.py           # multi-panel view (status/log/verify/agents); curses + snapshot; CHG-03
+│   └── skillstore.py          # offline multi-version skill store resolver (by project lock); CHG-05
 ├── config/
 │   └── runner.yaml            # contract version, skill path, concurrency/depth limits
 ├── docs/

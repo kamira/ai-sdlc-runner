@@ -11,6 +11,7 @@ Answers: FR-1..FR-14. Describes layers, responsibilities, and one-way dependenci
 | `orchestrator` | Drive the four stages sequentially; per-stage halt gate; shallow fan-out in implement; checkpoint at each boundary | `contract`, `gates`, `agents`, `state` |
 | `contract` | Read skill version (from file), compute major.minor key, resolve/write per-project lock, validating migrate, **detect updates** at the local skill location | (reads skill SKILL.md + git tags) |
 | `agents` | Parse the skill's role table; spawn agents with role-scoped tool allowlists | (reads skill agent-hierarchy.md) |
+| `skillstore` | Resolve the skill from the local offline store (`skills/v*`) by project lock; list/detect versions | `contract` (reads store SKILL.md) |
 | `gates` | Subprocess-call the skill's `halt_gate.py` / `cross_repo_check.py`; branch on exit code | (calls skill scripts) |
 | `state` | Load/save `state.json`; support `--resume` | — |
 | `config (runner.yaml)` | Hold runtime-variable limits & skill path | — |
@@ -19,7 +20,14 @@ Answers: FR-1..FR-14. Describes layers, responsibilities, and one-way dependenci
 1. **`runner run <project>`**: load config → `contract.resolve_contract` (lock gate; mismatch → tell user to migrate) → probe runtime caps → `state` load (`--resume`) → orchestrator runs stage 1..4, each calling `gates.check_halt`; implement stage spawns shallow I1.x; acceptance spawns independent V1 → checkpoint per stage → `before_merge_or_release` gate before delivery.
 2. **`runner migrate <project> --to <ver>`**: `contract.migrate` re-reads ALL docs/CHG/ACC/structure under the new contract; all parse → write new lock; any fail → print incompatibility list, keep old lock.
 3. **`runner status <project>`**: read `.sdlc-lock.json` + `state.json`; report locked contract, current stage, completed items, and a best-effort skill-update line.
-6. **`runner check [project]`**: `contract.detect_update` reads the local skill version (`skill_path`) and compares it to the project lock (or config-expected); classifies patch (auto) / minor / major (→ migrate) / older, and reports any newer version tag in the skill's git repo. Read-only; never auto-migrates.
+6. **`runner check [project]`**: store-aware — lists the offline store versions and compares the newest to the project lock (or config-expected); classifies patch (auto) / minor / major (→ migrate) / older. Read-only; never auto-migrates.
+
+### Skill resolution (CHG-05)
+The skill source is resolved **offline** in this order: explicit `--skill-path` → the local store
+(`skill_store`) version matching the project lock major.minor (or config-expected on first run, else
+the latest) → the fallback `skill_path` (the optional, not-pulled-by-default submodule). After a
+`migrate` raises the lock, the next run auto-selects the new version directory. The runner never
+fetches the skill online.
 
 4. **`runner` (no subcommand) or `runner menu`**: `tui.select` shows an arrow-key list (curses) or a
    numbered fallback; the chosen action prompts for project/version/risk and dispatches to the

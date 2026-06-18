@@ -76,7 +76,8 @@ locks down the V1 verifier's tool layer. This repo is itself governed by ai-sdlc
 
 ## 6. Constraints & Assumptions
 
-- Constraints: reference (not copy) the skill via submodule pinned to tag `v1.0.0`; never track `main`; never re-implement skill logic; never auto-run red-line actions.
+- Constraints: never re-implement skill logic; never track `main`; never auto-run red-line actions.
+- **Override (CHG-20260617-05, user-approved):** the original "reference-not-copy via submodule" constraint (§1.2/§7) is **deliberately relaxed** — the skill is now vendored into a local offline store (`skills/v1.0.0`, `skills/v1.1.0`) as the primary source, so the runner runs fully offline. Mitigations: versions are extracted verbatim from the ai-skills git tags (offline `git archive`, no fork), the submodule is retained as an optional fallback, governance logic is still read from the store's own scripts/refs (not duplicated), and `runner check` flags newer versions. The runner never fetches the skill online.
 - Assumptions: the user provides the `ai-skills` submodule; the actual contract version is detected by reading SKILL.md; for offline verification the runner may point `skill_path` at a local skill cache (e.g. via `--skill-path`).
 - Open items: the canonical `ai-skills` repo URL and the existence of tag `v1.0.0` are the user's responsibility (build-guide §0); a missing/incorrect tag surfaces as a contract-version mismatch rather than silent drift.
 
@@ -92,7 +93,7 @@ locks down the V1 verifier's tool layer. This repo is itself governed by ai-sdlc
 
 ## 8. AI Development Conventions
 
-- **Reference, never copy**: all governance truth (halt matrix, role definitions, CHG/ACC fields) is read from the skill or obtained by calling its scripts. The runner contains no duplicated copy.
+- **Read, don't re-implement**: all governance truth (halt matrix, role definitions, CHG/ACC fields) is read from the skill or obtained by calling its scripts. The runner contains no duplicated *logic*. (Note: per the CHG-05 override, the skill *files* are now vendored into a local offline store rather than referenced via submodule; the no-duplicated-logic principle still holds.)
 - **Calls, not re-implementations**: halt decisions via `subprocess` to `halt_gate.py`; cross-repo drift via `cross_repo_check.py`; roles by parsing `references/agent-hierarchy.md`.
 - **Contract targets the skill's stable output**, not Claude Code's current runtime. Nesting depth / concurrency live in `config/runner.yaml`, probed at startup; if the platform changes, change the runner, not the contract.
 - **Version lock is major.minor, patch-permissive**; version changes go through a validating `migrate` (re-read everything; upgrade only if all parse).

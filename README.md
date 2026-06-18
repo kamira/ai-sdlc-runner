@@ -10,14 +10,19 @@ the runner depends on the skill; the skill never depends on the runner.
 ```bash
 git clone https://github.com/kamira/ai-sdlc-runner.git
 cd ai-sdlc-runner
-git submodule update --init        # pulls ai-skills pinned at tag v1.0.0 (NOT main)
 pip install -e .                   # optional: .[yaml] for PyYAML, .[test] for pytest
 ```
 
-The `ai-skills` submodule is **pinned to tag `v1.0.0`** and must never track `main` (main drifts and
-breaks the contract lock). The runner detects the *actual* contract version by reading the skill's
-`SKILL.md` frontmatter, so a missing/incorrect tag surfaces as a contract-version mismatch rather
-than silent drift.
+**Offline by default.** The skill is vendored into a local store at `skills/` (`skills/v1.0.0`,
+`skills/v1.1.0`), and that is the primary source — the runner never fetches the skill online. It
+auto-selects the store version matching each project's lock (major.minor); after a `migrate` raises
+the lock, the next run uses the new version automatically. `runner check` lists the store versions and
+flags when a newer one is available.
+
+> The `ai-skills` git submodule (`.gitmodules`) is kept **only as an optional fallback** and is *not*
+> pulled by default. To use it instead of the store, run `git submodule update --init` and point
+> `skill_path`/`--skill-path` at it. The runner detects the actual contract version by reading the
+> skill's `SKILL.md` frontmatter either way.
 
 ## Usage
 
@@ -99,13 +104,16 @@ This repo is itself governed by ai-sdlc (dogfooding). See `docs/ai-guideline.md`
 ```bash
 git clone https://github.com/kamira/ai-sdlc-runner.git
 cd ai-sdlc-runner
-git submodule update --init        # 取得釘在 tag v1.0.0 的 ai-skills(非 main)
 pip install -e .                   # 選用:.[yaml] 裝 PyYAML、.[test] 裝 pytest
 ```
 
-`ai-skills` submodule **釘在 tag `v1.0.0`**,絕不可追 `main`(main 會漂、使契約鎖失效)。runner 透過
-讀取 skill 的 `SKILL.md` frontmatter 來偵測**實際**契約版本,因此缺漏或錯誤的 tag 會以「契約版本不符」
-浮現,而非悄悄漂移。
+**預設離線。** skill 已內置成本地 store(`skills/v1.0.0`、`skills/v1.1.0`),這是主要來源——runner
+**絕不從線上抓** skill。它會依每個專案的鎖(major.minor)自動選對應版本;`migrate` 升鎖後,下一次 run
+自動改用新版本。`runner check` 會列出 store 內版本並提示有無更新。
+
+> `ai-skills` git submodule(`.gitmodules`)**僅保留為選用 fallback**,預設**不**拉取。若要改用它,
+> 執行 `git submodule update --init` 並把 `skill_path`/`--skill-path` 指過去即可。兩種來源 runner 都以
+> 讀 `SKILL.md` frontmatter 偵測實際契約版本。
 
 ## 用法
 

@@ -47,18 +47,16 @@ class DashboardModel:
 
     project_dir: str
     events: List[dict] = field(default_factory=list)
-    skill_path: Optional[str] = None   # when known, the Status panel shows a skill-update line
-    expected: Optional[str] = None      # config-expected contract version (fallback baseline)
+    skill_line: Optional[str] = None   # precomputed skill-update line (store-aware), set by the CLI
 
     # ---- ingestion -------------------------------------------------------------------
     def add(self, event: dict) -> None:
         self.events.append(dict(event))
 
     @classmethod
-    def from_saved(cls, project_dir: str | Path, skill_path: Optional[str] = None,
-                   expected: Optional[str] = None) -> "DashboardModel":
+    def from_saved(cls, project_dir: str | Path, skill_line: Optional[str] = None) -> "DashboardModel":
         """Build a model for a post-hoc view (no live events) — `runner dashboard <project>`."""
-        return cls(project_dir=str(project_dir), skill_path=skill_path, expected=expected)
+        return cls(project_dir=str(project_dir), skill_line=skill_line)
 
     # ---- panels ----------------------------------------------------------------------
     def status_panel(self) -> List[str]:
@@ -87,15 +85,9 @@ class DashboardModel:
         else:
             lines.append("contract: (no lock yet)")
 
-        # Skill-update line (only when a skill location is known; best-effort).
-        if self.skill_path:
-            try:
-                info = contract.detect_update(self.skill_path, expected=self.expected,
-                                              project_dir=self.project_dir)
-                flag = " ⚠ migrate" if info.needs_migrate else ""
-                lines.append(f"skill:    local {info.local} vs {info.baseline or '?'} → {info.kind}{flag}")
-            except Exception:
-                pass
+        # Skill-update line, precomputed by the CLI (store-aware); shown when provided.
+        if self.skill_line:
+            lines.append(self.skill_line)
         return lines
 
     def exec_log_panel(self) -> List[str]:
