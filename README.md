@@ -29,6 +29,8 @@ flags when a newer one is available.
 ```bash
 runner                                    # no subcommand → interactive menu (arrow-key list)
 runner menu                               # the same interactive menu, explicitly
+runner workspace --authority <main> --repo <p2> --repo <p3>   # register multi-project workspace
+runner analyze <main>                     # structure analysis across the workspace (before the loop)
 runner run <project>                      # drive the four-stage loop for a governed project
 runner run <project> --dashboard          # ...with the live multi-panel dashboard
 runner dashboard <project>                # open the dashboard over a project's saved state
@@ -53,6 +55,20 @@ contract lock), **執行日誌/Execution log** (stage transitions + gate AUTO/HA
 in one panel by default and can be switched to tabbed-per-agent (`--agent-view tabbed`, or `t` in the
 curses viewer, or the menu). It is read-only — a run launched from the dashboard still halts at the
 red-line gate.
+
+**Multi-project workspace (cross-repo).** Register one or more projects and designate the **main
+(authority)** project, run a structure analysis, then run the loop:
+
+```bash
+runner workspace --authority ./main --repo ./svc-a --repo ./svc-b   # or interactive: runner workspace
+runner analyze ./main         # scan each repo, scaffold docs/structure/*, wire authority contract + pointers
+runner run ./main             # cross-repo consistency gate (drift → HALT) → four-stage loop
+```
+
+The main project is the **authority** (holds the shared contract `docs/contracts/VERSION` + Guideline);
+each consumer keeps a `docs/authority.md` pointer pinned to that version. Before the loop, `runner run`
+calls the skill's `cross_repo_check.py` — a consumer behind the authority contract **halts** the run.
+Agents run inside their target repo (working directory). Single-project use needs none of this.
 
 **Execution backend (any AI platform).** The agent-execution backend is a runtime concern, not the
 contract — so the runner is **not tied to any AI platform**. Choose per run with `--backend` or in
@@ -164,6 +180,18 @@ runner status <project>                   # 顯示該專案的版本鎖與執行
 停點 AUTO/HALT)、**檢驗結果/Verification**(驗收報告 + 最新 V1 結果)、**agent 行為日誌/Agent log**。
 agent 日誌預設統整在同一面板,可切換成分頁分 agent(`--agent-view tabbed`,或 curses 視圖中按 `t`,或從
 選單)。儀表板為唯讀——從儀表板啟動的 run 一樣會在紅線停點停下。
+
+**多專案 workspace(跨 repo)。** 註冊一個或多個專案、指定**主專案(authority)**,先做結構分析,再跑迴圈:
+
+```bash
+runner workspace --authority ./main --repo ./svc-a --repo ./svc-b   # 或互動式:runner workspace
+runner analyze ./main         # 掃描各 repo、scaffold docs/structure/*、建立 authority 契約與指標
+runner run ./main             # 跨 repo 一致性閘(漂移→停)→ 四階段迴圈
+```
+
+主專案是 **authority**(持有共享契約 `docs/contracts/VERSION` + Guideline);每個消費 repo 放 `docs/authority.md`
+指標並釘住該版本。跑迴圈前,`runner run` 會呼叫 skill 的 `cross_repo_check.py`——有消費 repo 落後於 authority
+契約就**停下**。各 agent 在自己的目標 repo 目錄內執行。單專案不需這些。
 
 **執行後端(不限任何 AI 平台)。** agent 執行後端屬於 runtime、不屬契約——所以 runner **不綁任何 AI 平台**。
 可用 `--backend` 或 `config/runner.yaml` 的 `executor` 區塊選擇:

@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 
 class RoleError(Exception):
@@ -38,6 +38,7 @@ class AgentSpec:
     writable: bool
     scope: str
     prompt: str
+    workdir: "Optional[str]" = None   # the project/repo dir the agent operates in (CLI cwd)
 
 
 _TICK = "✓"
@@ -138,11 +139,13 @@ def _resolve_role(role: str, table: Dict[str, RoleSpec]) -> RoleSpec:
     raise RoleError(f"unknown role {role!r}; known: {sorted(table)}")
 
 
-def spawn(skill_path: str | Path, role: str, scope: str, task: str) -> AgentSpec:
+def spawn(skill_path: str | Path, role: str, scope: str, task: str,
+          workdir: Optional[str] = None) -> AgentSpec:
     """Build the launch spec for an agent of ``role`` with its role-scoped tools allowlist.
 
-    The prompt always carries "load the ai-sdlc skill + your role & scope". Enforces the §1.6
-    invariant: a ``V1`` spec must never include the ``Agent`` tool.
+    The prompt always carries "load the ai-sdlc skill + your role & scope"; when ``workdir`` is set
+    (the target project/repo), it is named in the prompt and carried on the spec so the executor runs
+    the agent there. Enforces the §1.6 invariant: a ``V1`` spec must never include the ``Agent`` tool.
     """
     table = parse_role_table(skill_path)
     spec = _resolve_role(role, table)
@@ -153,8 +156,10 @@ def spawn(skill_path: str | Path, role: str, scope: str, task: str) -> AgentSpec
     if role == "V1" and "Agent" in tools:
         raise RoleError("invariant violated: V1 must not receive the `Agent` tool")
 
+    workdir_line = f"Project (working dir): {workdir}\n" if workdir else ""
     prompt = (
         f"Load the ai-sdlc skill. You are agent {role}.\n"
+        f"{workdir_line}"
         f"Role scope: {scope or spec.scope}\n"
         f"Task: {task}\n"
         f"Stay within your remit; do not exceed your granted scope."
@@ -166,4 +171,5 @@ def spawn(skill_path: str | Path, role: str, scope: str, task: str) -> AgentSpec
         writable=spec.writable,
         scope=scope or spec.scope,
         prompt=prompt,
+        workdir=workdir,
     )

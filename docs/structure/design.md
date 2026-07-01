@@ -15,7 +15,9 @@ Answers: FR-1..FR-14. Key components, their contracts, and design trade-offs.
 | `skillstore.detect` | Store update | compare newest store version to project lock/expected (reuses `contract.detect_update`) |
 | `executors.from_config` | Backend factory | `(config, override_backend) -> Executor`; stub/command/api; defaults to stub |
 | `executors.build_request` / `parse_response` | API adapters | pure `(provider, …) -> (url, headers, body)` / `(provider, raw) -> str` for anthropic/openai/generic |
-| `Executor.run` | Agent call | `(AgentSpec) -> dict`; command via subprocess, api via urllib; key from env |
+| `Executor.run` | Agent call | `(AgentSpec) -> dict`; command via subprocess (in `spec.workdir`), api via urllib; key from env |
+| `workspace.Workspace` | Multi-project model | `authority` + `consumers`; `save`/`load` (`.sdlc-workspace.json` at authority); `validate`; `manifest()` for cross_repo_check |
+| `structure_scan.analyze_workspace` | Structure pass | scan + scaffold four structures; multi → authority `docs/contracts/VERSION` + consumer `docs/authority.md` (`Pinned version: vX`) |
 | `agents.parse_role_table` | Parse role allowlist table | `(skill_path) -> {role: {tools, can_spawn, writable, scope}}` |
 | `agents.spawn` | Start a role-scoped agent | `(role, scope, task) -> AgentSpec`; V1 tools exclude `Agent`; prompt loads skill + role/scope |
 | `gates.check_halt` | Query halt contract | `(gate, risk, action=None, autonomy=None) -> Decision`; subprocess `halt_gate.py`; exit 0=AUTO,10=HALT,else error |

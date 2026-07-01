@@ -24,7 +24,9 @@ ai-sdlc-runner/
 │   ├── tui.py                 # interactive menu (stdlib curses + numbered fallback); CHG-02
 │   ├── dashboard.py           # multi-panel view (status/log/verify/agents); curses + snapshot; CHG-03
 │   ├── skillstore.py          # offline multi-version skill store resolver (by project lock); CHG-05
-│   └── executors.py           # pluggable agent backends: stub | command(subscription) | api; CHG-06
+│   ├── executors.py           # pluggable agent backends: stub | command(subscription) | api; CHG-06
+│   ├── workspace.py           # multi-project workspace: authority(main) + consumers, persisted; CHG-08
+│   └── structure_scan.py      # structure analysis: scan + scaffold 4 structures + authority/pointers; CHG-08
 ├── config/
 │   └── runner.yaml            # contract version, skill path, concurrency/depth limits
 ├── docs/

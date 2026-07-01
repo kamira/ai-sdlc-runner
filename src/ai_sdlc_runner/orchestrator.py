@@ -161,7 +161,8 @@ def run(
     # 1. Requirement analysis ----------------------------------------------------------
     if "requirement_analysis" in todo:
         _emit(sink, type="stage", stage="requirement_analysis")
-        spec = agents.spawn(skill_path, "A1", scope="docs/ only", task="produce docs/ai-guideline.md")
+        spec = agents.spawn(skill_path, "A1", scope="docs/ only", task="produce docs/ai-guideline.md",
+                            workdir=str(project_dir))
         out = execu(spec)
         if not _gate(report, skill_path, "requirement_confirmed", risk, approver, sink=sink):
             return report
@@ -172,7 +173,8 @@ def run(
     # 2. Structure design --------------------------------------------------------------
     if "structure_design" in todo:
         _emit(sink, type="stage", stage="structure_design")
-        spec = agents.spawn(skill_path, "A1", scope="docs/structure", task="produce docs/structure/*.md")
+        spec = agents.spawn(skill_path, "A1", scope="docs/structure", task="produce docs/structure/*.md",
+                            workdir=str(project_dir))
         out = execu(spec)
         if not _gate(report, skill_path, "structure_confirmed", risk, approver, sink=sink):
             return report
@@ -186,13 +188,15 @@ def run(
         # before_implement gate, honoring an optional CHG autonomy override (tighten-only).
         if not _gate(report, skill_path, "before_implement", risk, approver, autonomy=chg_autonomy, sink=sink):
             return report
-        lead = agents.spawn(skill_path, "I1", scope="src/", task="implement per the modification guide")
+        lead = agents.spawn(skill_path, "I1", scope="src/", task="implement per the modification guide",
+                            workdir=str(project_dir))
         execu(lead)
         caps = report.caps
         # Shallow fan-out: at most `concurrency_max` sub-implementers, depth capped by nesting_max.
         sub_results = []
         for i in range(1, caps.concurrency_max + 1):
-            sub = agents.spawn(skill_path, f"I1.{i}", scope=f"src/ module {i}", task=f"implement module {i}")
+            sub = agents.spawn(skill_path, f"I1.{i}", scope=f"src/ module {i}", task=f"implement module {i}",
+                               workdir=str(project_dir))
             sub_results.append(execu(sub))
             if i >= caps.nesting_depth_max:
                 break  # respect the conservative depth cap
@@ -204,7 +208,8 @@ def run(
     if "acceptance" in todo:
         _emit(sink, type="stage", stage="acceptance")
         v1 = agents.spawn(skill_path, "V1", scope="read-only on code; write docs/acceptance",
-                          task="multi-scenario acceptance; produce docs/acceptance/ACC-*.md")
+                          task="multi-scenario acceptance; produce docs/acceptance/ACC-*.md",
+                          workdir=str(project_dir))
         # Invariant re-checked here as defense in depth (agents.spawn also enforces it).
         if "Agent" in v1.tools:
             raise agents.RoleError("V1 spawned with Agent tool — invariant violated")

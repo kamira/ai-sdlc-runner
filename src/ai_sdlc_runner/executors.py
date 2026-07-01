@@ -72,9 +72,11 @@ class CommandExecutor:
         else:
             stdin_data = spec.prompt
         run_env = {**os.environ, **self.env}
+        # Run the agent in its target project directory when one was assigned (multi-project mode).
+        cwd = spec.workdir if getattr(spec, "workdir", None) else None
         try:
             proc = subprocess.run(cmd, input=stdin_data, capture_output=True, text=True,
-                                  timeout=self.timeout, env=run_env)
+                                  timeout=self.timeout, env=run_env, cwd=cwd)
         except (OSError, subprocess.SubprocessError) as exc:
             raise ExecutorError(f"command backend failed to launch {cmd!r}: {exc}") from exc
         return {"role": spec.role, "backend": self.backend, "returncode": proc.returncode,

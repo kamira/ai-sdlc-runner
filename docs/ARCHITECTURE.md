@@ -24,7 +24,9 @@ skill's scripts.
 | `agents.py` | Parses the skill's "Role startup spec" table; spawns role-scoped agents. Invariant: **V1 never receives the `Agent` tool**. |
 | `state.py` | Checkpoint/resume (`state.json`); stage order. |
 | `skillstore.py` | Offline multi-version skill store resolver (`skills/v*`), selecting the version that matches a project's lock. |
-| `executors.py` | Pluggable, platform-agnostic agent backends: `stub` / `command` (subscription/CLI) / `api` (HTTP). |
+| `executors.py` | Pluggable, platform-agnostic agent backends: `stub` / `command` (subscription/CLI) / `api` (HTTP). Runs each agent in its target repo (`workdir`). |
+| `workspace.py` | Multi-project workspace: an authority (main) + consumer repos, persisted at the authority. |
+| `structure_scan.py` | Structure-analysis pass: scan each repo, scaffold the four structures, wire the authority contract + consumer pointers. |
 | `tui.py` | Interactive arrow-key menu (stdlib curses) with a numbered fallback. |
 | `dashboard.py` | Multi-panel execution view (Status / Execution log / Verification / Agent log); curses live + text snapshot. |
 
@@ -46,6 +48,17 @@ delivery                          → gate before_merge_or_release  (red lines A
 Each stage boundary is a checkpoint **and** a halt-point, which is what gives crash-resume and
 human-at-the-boundary gating for free. The role chain is `A1` (analysis) → `I1` (lead implementer, may
 spawn `I1.x`) → `V1` (independent verifier; read-only; no `Agent` tool).
+
+## 3a. Multi-project workspace & cross-repo (CHG-08)
+
+For a system spanning several repos the flow is: **register** a workspace (`runner workspace`) — one or
+more project paths, with the **main project designated as the authority** — then **analyze**
+(`runner analyze`) to scan each repo and scaffold the four structures, and (for multi-project) set up
+the authority's shared contract (`docs/contracts/VERSION`) + each consumer's `docs/authority.md`
+pointer. `runner run <authority>` then verifies cross-repo consistency with the skill's
+`cross_repo_check.py` (**a lagging consumer → HALT**) before driving the four-stage loop, and each
+agent runs inside its target repo (`workdir`). This mirrors the skill's cross-repo model (authority
+source + local view + pointer + XCHG). Single-project use needs none of this and is the default.
 
 ## 4. Version lock & migrate
 

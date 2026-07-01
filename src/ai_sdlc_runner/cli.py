@@ -11,7 +11,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from . import contract, dashboard, executors, orchestrator, skillstore, state, tui
+from . import (contract, dashboard, executors, gates, orchestrator, skillstore,
+               state, structure_scan, tui, workspace)
 
 DEFAULT_CONFIG = "config/runner.yaml"
 
@@ -139,6 +140,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     skill_path = _resolve_skill_path(config, args.skill_path, args.project)
     requested = args.contract_version or config.get("contract_version")
 
+    # Multi-project (cross-repo) mode: if the target is an authority with a saved workspace,
+    # verify cross-repo consistency first (drift → halt), then run the loop on the authority.
+    ws = workspace.load(args.project)
+    if ws is not None and ws.is_multi:
+        print(f"workspace: authority {ws.authority} + {len(ws.consumers)} consumer(s)")
+        code = _cross_repo_gate(config, ws, args.project)
+        if code is not None:
+            return code
+
     # In a real run the executor/approver are platform-bound; --dry-run uses stubs and
     # an approver that never auto-approves, so red-line gates correctly stop.
     # With --dashboard, collect events into a model and stream a one-line feed as they arrive.
@@ -222,6 +232,8 @@ def cmd_menu(args: argparse.Namespace) -> int:
     red-line stop still applies — a "Run" launched here goes through the same orchestrator.
     """
     actions = [
+        ("Set up workspace", "register projects; pick the main (authority) project"),
+        ("Analyze structure", "structure analysis across the workspace (before the loop)"),
         ("Run four-stage loop", "drive a project through requirement→structure→implement→acceptance"),
         ("Dashboard", "open the multi-panel dashboard for a project (status/log/verify/agents)"),
         ("Check skill updates", "detect whether the local skill location is newer than the lock"),
@@ -250,6 +262,14 @@ def cmd_menu(args: argparse.Namespace) -> int:
             to = tui.prompt("Target contract version", "")
             if project and to:
                 cmd_migrate(argparse.Namespace(project=project, to=to))
+            continue
+        if choice == "Set up workspace":
+            cmd_workspace(argparse.Namespace(authority=None, repo=None, name=None))
+            continue
+        if choice == "Analyze structure":
+            authority = tui.prompt("Authority (main) project path")
+            if authority:
+                cmd_analyze(argparse.Namespace(authority=authority, repo=None, config=args.config))
             continue
         if choice == "Dashboard":
             project = tui.prompt("Project path")
@@ -332,6 +352,85 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 20 if info.needs_migrate else 0
 
 
+def cmd_workspace(args: argparse.Namespace) -> int:
+    """Register a multi-project workspace: an authority (main) + consumer repos; persist the manifest.
+
+    Non-interactive with `--authority`/`--repo`; otherwise prompts to add projects and pick the main.
+    """
+    authority = args.authority
+    repos = list(args.repo or [])
+    if not authority:
+        authority = tui.prompt("Main (authority) project path")
+        if not authority:
+            print("no authority project given.")
+            return 2
+        while True:
+            more = tui.prompt("Add a consumer repo path (blank to finish)", "")
+            if not more:
+                break
+            repos.append(more)
+    try:
+        ws = workspace.build(authority, repos, name=args.name or "workspace")
+        path = ws.save()
+    except workspace.WorkspaceError as exc:
+        print(f"workspace error: {exc}")
+        return 2
+    print(f"workspace saved: {path}")
+    print(f"  authority (main): {ws.authority}")
+    for c in ws.consumers:
+        print(f"  consumer:         {c}")
+    if not ws.is_multi:
+        print("  (single-project workspace)")
+    return 0
+
+
+def cmd_analyze(args: argparse.Namespace) -> int:
+    """Structure-analysis pass across the workspace, before the AI-SDLC loop.
+
+    Scans + scaffolds four structures per project; for multi-project, sets up the authority contract
+    and each consumer's pointer (the skill's cross-repo model).
+    """
+    config = load_config(args.config)
+    ws = workspace.load(args.authority)
+    if ws is None:
+        # No saved workspace at this path → treat it as a single-project authority.
+        try:
+            ws = workspace.build(args.authority, args.repo or [])
+        except workspace.WorkspaceError as exc:
+            print(f"workspace error: {exc}")
+            return 2
+    version = config.get("contract_version", "1.0.0")
+    result = structure_scan.analyze_workspace(ws, version)
+    print(f"analyzed {len(result.scanned)} project(s):")
+    for p in result.scanned:
+        print(f"  scanned: {p}")
+    print(f"scaffolded {len(result.scaffolded)} structure doc(s)")
+    if ws.is_multi:
+        print(f"authority contract: {ws.authority}/docs/contracts/VERSION = {result.authority_version}")
+        for ptr in result.pointers:
+            print(f"  pointer: {ptr}")
+    print("next: `runner run <authority>` to drive the four-stage loop.")
+    return 0
+
+
+def _cross_repo_gate(config: dict, ws: "workspace.Workspace", project: str) -> Optional[int]:
+    """Run the skill's cross_repo_check as a gate for a multi-project workspace.
+
+    Returns an exit code to stop the run on drift, or None to continue.
+    """
+    if not ws.is_multi:
+        return None
+    skill_path = _resolve_skill_path(config, None, project)
+    decision = gates.check_cross_repo_drift(skill_path, ws.authority, ws.consumers)
+    if decision.is_halt:
+        print("cross-repo drift detected — halting (a consumer is behind the authority contract):")
+        print("  " + (decision.reason or "").replace("\n", "\n  "))
+        print("Bring the lagging repo(s) up to the authority version, then re-run.")
+        return 10
+    print("cross-repo check: consistent.")
+    return None
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     lock = contract.read_lock(args.project)
     st = state.load(args.project)
@@ -400,6 +499,17 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("project", help="path to the governed project directory")
     ps.add_argument("--skill-path", default=None, help="override skill_path")
     ps.set_defaults(func=cmd_status)
+
+    pw = sub.add_parser("workspace", help="register a multi-project workspace (authority + consumers)")
+    pw.add_argument("--authority", default=None, help="main/authority project path")
+    pw.add_argument("--repo", action="append", default=None, help="consumer repo path (repeatable)")
+    pw.add_argument("--name", default=None, help="workspace name")
+    pw.set_defaults(func=cmd_workspace)
+
+    pa = sub.add_parser("analyze", help="structure analysis across a workspace (before the loop)")
+    pa.add_argument("authority", help="authority project path (with a saved workspace, or single project)")
+    pa.add_argument("--repo", action="append", default=None, help="consumer repo path (if no saved workspace)")
+    pa.set_defaults(func=cmd_analyze)
 
     pc = sub.add_parser("check", help="detect whether the local skill has an update for a project")
     pc.add_argument("project", nargs="?", default=None, help="project dir (compare to its lock); omit to compare to config-expected")
