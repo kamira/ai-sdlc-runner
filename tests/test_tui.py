@@ -67,3 +67,72 @@ def test_select_uses_fallback_when_forced(monkeypatch):
 def test_prompt_default_and_value():
     assert tui.prompt("Project", "x", input_fn=lambda _p: "") == "x"
     assert tui.prompt("Project", "x", input_fn=lambda _p: "abc") == "abc"
+
+
+# --------------------------------------------------------------------------------------
+# Pure option-cycle core (CHG-20260703-03 step 1) — no curses import needed to test it.
+# --------------------------------------------------------------------------------------
+
+KEY_UP, KEY_K = 259, ord("k")     # stand-ins for curses.KEY_UP / ord("k")
+KEY_DOWN, KEY_J = 258, ord("j")   # stand-ins for curses.KEY_DOWN / ord("j")
+
+
+def test_cycle_index_down_wraps():
+    assert tui.cycle_index(0, 3, KEY_DOWN, key_down=(KEY_DOWN, KEY_J)) == 1
+    assert tui.cycle_index(2, 3, KEY_DOWN, key_down=(KEY_DOWN, KEY_J)) == 0  # wraps past the end
+
+
+def test_cycle_index_up_wraps():
+    assert tui.cycle_index(1, 3, KEY_UP, key_up=(KEY_UP, KEY_K)) == 0
+    assert tui.cycle_index(0, 3, KEY_UP, key_up=(KEY_UP, KEY_K)) == 2  # wraps before the start
+
+
+def test_cycle_index_vim_keys():
+    assert tui.cycle_index(0, 3, KEY_J, key_down=(KEY_DOWN, KEY_J)) == 1
+    assert tui.cycle_index(1, 3, KEY_K, key_up=(KEY_UP, KEY_K)) == 0
+
+
+def test_cycle_index_unrecognized_key_is_noop():
+    assert tui.cycle_index(1, 3, ord("z"), key_up=(KEY_UP,), key_down=(KEY_DOWN,)) == 1
+
+
+def test_cycle_index_zero_options_is_noop():
+    assert tui.cycle_index(0, 0, KEY_DOWN, key_down=(KEY_DOWN,)) == 0
+
+
+class _FakeScreen:
+    """A minimal stand-in for a curses `stdscr`, driven by a scripted key sequence."""
+
+    def __init__(self, keys):
+        self._keys = list(keys)
+
+    def erase(self):
+        pass
+
+    def addstr(self, *a, **k):
+        pass
+
+    def refresh(self):
+        pass
+
+    def getch(self):
+        return self._keys.pop(0)
+
+
+def test_curses_select_on_uses_embeddable_core(monkeypatch):
+    """`_curses_select_on` draws on a passed-in stdscr (no nested `curses.wrapper`) and drives
+    selection via the same `cycle_index` core — simulated here with a fake stdscr. `curses.COLS` is
+    normally set by `initscr()`/`wrapper()`; stub it since this test never starts a real session."""
+    curses = pytest.importorskip("curses")
+    monkeypatch.setattr(curses, "COLS", 80, raising=False)
+    # down, down, enter -> index 2 (wraps within 3 options: 0 -> 1 -> 2)
+    screen = _FakeScreen([curses.KEY_DOWN, curses.KEY_DOWN, 10])
+    idx = tui._curses_select_on(screen, "pick:", OPTIONS)
+    assert idx == 2
+
+
+def test_curses_select_on_cancel_returns_none(monkeypatch):
+    curses = pytest.importorskip("curses")
+    monkeypatch.setattr(curses, "COLS", 80, raising=False)
+    screen = _FakeScreen([ord("q")])
+    assert tui._curses_select_on(screen, "pick:", OPTIONS) is None

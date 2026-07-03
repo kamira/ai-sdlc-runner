@@ -5,9 +5,9 @@ Answers: FR-1..FR-14. Describes layers, responsibilities, and one-way dependenci
 ## Layers / modules
 | Layer/Module | Responsibility | Depends on |
 |--------------|----------------|------------|
-| `cli` | Parse `run`/`migrate`/`status`/`menu`; bare `runner` opens the menu; load config; dispatch | `contract`, `orchestrator`, `state`, `tui` |
-| `tui` | Interactive menu helper: arrow-key list (stdlib curses) with numbered fallback; collects a choice only | (stdlib only) |
-| `dashboard` | Multi-panel view (狀態/執行日誌/檢驗結果/agent log); consumes orchestrator events + reads state/ACC/git; curses viewer + text snapshot | `contract`, `state` (read), git (stdlib only) |
+| `cli` | Parse `run`/`migrate`/`status`/`menu`/…; bare `runner` on a TTY opens the resident dashboard (off-TTY: the menu); `runner <project>` pre-opens it; load config; dispatch | `contract`, `orchestrator`, `state`, `tui`, `dashboard` |
+| `tui` | Interactive menu helper: arrow-key list (stdlib curses) with numbered fallback; collects a choice only. Also exposes an embeddable selector (`_curses_select_on`, drawn on a caller-owned `stdscr`) and a pure option-cycle core (`cycle_index`) for reuse inside another curses screen | (stdlib only) |
+| `dashboard` | Multi-panel view (狀態/執行日誌/檢驗結果/agent log); consumes orchestrator events + reads state/ACC/git; curses viewer + text snapshot (read-only, unchanged). Also: the **resident interactive console** (`ResidentApp`/`run_resident`, CHG-20260703-03) — a persistent, always-on control console with a 2-col bounded-height layout, a command parser (`/open`, `/run`, plain-text task, …), and an interactive halt-gate approver (arrow-key `[Approve/Reject]` via `tui`'s embeddable selector) | `contract`, `state` (read), `orchestrator` (drives runs via its existing `approver`/`on_event` hooks), `tui` (embeddable selector), git (stdlib only) |
 | `orchestrator` | Drive the four stages sequentially; per-stage halt gate; shallow fan-out in implement; checkpoint at each boundary | `contract`, `gates`, `agents`, `state` |
 | `executors` | Pluggable agent backend (stub / command-subscription / api); runs an `AgentSpec` (honoring `workdir`), returns output | (stdlib `urllib`, `subprocess`); injected into `orchestrator` |
 | `workspace` | Multi-project workspace: an authority (main) + consumer repos; persisted at the authority; validate/save/load | (stdlib) |
@@ -66,10 +66,35 @@ fetches the skill online.
    panels (狀態 = branch + progress + status; 執行日誌; 檢驗結果; agent log, merged or tabbed). Read-only:
    the dashboard cannot alter the run; a dashboard-driven run still halts at the red-line gate.
 
+### Resident interactive dashboard (CHG-20260703-03)
+6. **bare `runner` on a TTY, or `runner <project>`**: `dashboard.run_resident` opens a **persistent**
+   control console — empty start (no project, empty panels), never exits except on `/quit`. Its input
+   box is parsed by the pure `dashboard.parse_command` (`/open <path>` sets the *current project*;
+   plain text or `/run [text]` starts a run on it, recording the text into the exec feed; `/status`,
+   `/check`, `/menu`/F2, `/help`, `/quit`). The input box reads **wide characters** — any language,
+   incl. CJK — via `stdscr.get_wch()` (locale set once with `locale.setlocale(LC_ALL, "")`) routed
+   through the pure `dashboard.apply_key` helper, rather than the old byte-at-a-time `getch()` path
+   (CHG-20260703-04). Frames are built by the pure `dashboard.render_layout`: a
+   2-col bounded-height layout — Status | Verification always fully present on the top row; Execution
+   log | Agent log on the bottom row, each truncated to its last N lines (N derived from terminal
+   height) so the top row is never pushed off. A run started from the input box calls the **same**
+   `orchestrator.run` as every other entry point, passing an `on_event` sink that feeds the model (live
+   redraw) and an interactive `approver`: at a HALT gate the console presents `[Approve / Reject]`
+   (arrow-key, via `tui`'s embeddable `_curses_select_on` drawn on the app's own screen — never a
+   nested `tui.select()`/`curses.wrapper`) and blocks for the human answer, mapped to a boolean by the
+   pure `dashboard.approve_decision` (an unresolved/cancelled answer maps to reject, never to an
+   implicit approve). Single-threaded by design: the run is driven synchronously from the app. v1's
+   Q/A scope is intentionally limited to (a) task/requirement input and (b) HALT-gate approve/reject.
+   Off-TTY (pipes/CI/`AI_SDLC_NO_CURSES`), bare `runner` is unchanged (the existing menu / numbered
+   fallback) — no subcommand's behavior changes, and the read-only `dashboard`/`run --dashboard` paths
+   above are untouched.
+
 ## Dependency direction
 One-directional: `cli → {orchestrator, tui, dashboard}`; `orchestrator → {contract, gates, agents, state}`;
-`dashboard → {contract, state}` (read-only) + git. `tui`/`dashboard` add no third-party dependency. The
-orchestrator emits events to `dashboard` via an optional callback — `dashboard` never calls back into the
-orchestrator's control flow. The runner depends on the skill; **the skill never depends on the runner**.
-No module re-implements another's logic; governance truth flows from the skill outward (read/call),
-never duplicated inward.
+`dashboard → {contract, state}` (read-only) + git + `orchestrator` (the resident app drives runs via its
+existing `approver`/`on_event` hooks) + `tui` (its embeddable selector, not `tui.select()`). `tui`/
+`dashboard` add no third-party dependency. The orchestrator emits events to `dashboard` via an optional
+callback — `dashboard` never calls back into the orchestrator's control flow, and the resident app
+supplies no new governance: halt decisions still come from `gates`/`halt_gate.py` unchanged. The runner
+depends on the skill; **the skill never depends on the runner**. No module re-implements another's
+logic; governance truth flows from the skill outward (read/call), never duplicated inward.

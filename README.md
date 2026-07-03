@@ -28,13 +28,14 @@ flags when a newer one is available.
 ## Usage
 
 ```bash
-runner                                    # no subcommand → interactive menu (arrow-key list)
-runner menu                               # the same interactive menu, explicitly
+runner                                    # on a TTY: the resident interactive dashboard (default)
+runner <project>                          # ...pre-opened on <project> (same resident dashboard)
+runner menu                               # the classic interactive menu, explicitly
 runner workspace --authority <main> --repo <p2> --repo <p3>   # register multi-project workspace
 runner analyze <main>                     # structure analysis across the workspace (before the loop)
 runner run <project>                      # drive the four-stage loop for a governed project
-runner run <project> --dashboard          # ...with the live multi-panel dashboard
-runner dashboard <project>                # open the dashboard over a project's saved state
+runner run <project> --dashboard          # ...with the live multi-panel dashboard (one-shot)
+runner dashboard <project>                # open the dashboard over a project's saved state (snapshot)
 runner check [project]                    # detect whether the local skill has an update
 runner migrate <project> --to <version>   # validating contract upgrade (re-read all docs first)
 runner status <project>                   # show the per-project lock + run state
@@ -43,19 +44,49 @@ runner status <project>                   # show the per-project lock + run stat
 Options for `run`: `--contract-version` (defaults to config), `--skill-path` (override, e.g. a local
 skill cache for offline verification), `--risk {low,medium,high}`, `--resume`.
 
-The **interactive menu** uses an arrow-key selectable list (stdlib `curses`; ↑/↓ + Enter, `q` to
-cancel) and falls back to a numbered prompt when not on a TTY (pipes/CI) or when `curses` is
-unavailable — no third-party dependency. It only collects a choice and dispatches to the commands
-above, so every halt gate and red-line stop still applies. Set `AI_SDLC_NO_CURSES=1` to force the
-numbered fallback.
+### Resident interactive dashboard (default entry point, CHG-20260703-03)
 
-The **dashboard** (`run --dashboard` for live, `runner dashboard <project>` for a saved-state
-snapshot) shows four panels: **狀態/Status** (git branch + dirty, stage progress, current stage +
-contract lock), **執行日誌/Execution log** (stage transitions + gate AUTO/HALT), **檢驗結果/Verification**
-(acceptance reports + latest V1 result), and **agent 行為日誌/Agent log**. The agent log is consolidated
-in one panel by default and can be switched to tabbed-per-agent (`--agent-view tabbed`, or `t` in the
-curses viewer, or the menu). It is read-only — a run launched from the dashboard still halts at the
-red-line gate.
+On a real TTY, bare `runner` (or `runner <project>` to pre-open one) launches straight into a
+**persistent, always-on control console** — it starts empty (no project, empty panels) and never
+exits on its own; `/quit` is the only way out. Off-TTY (pipes/CI/scripting, or `AI_SDLC_NO_CURSES=1`)
+bare `runner` keeps the previous behavior unchanged: the classic interactive menu (arrow-key list, or
+its numbered fallback). All subcommands above are unaffected either way.
+
+Layout: **狀態/Status** and **檢驗結果/Verification** on the top row (always fully visible), **執行日誌
+/Execution log** and **agent 行為日誌/Agent log** on the bottom row as **two bounded-height columns**
+(each truncated to its last N lines, N scaling with terminal height, so the top row is never pushed
+off), and a **bottom input box** for everything else:
+
+- `/open <path>` — set the **current project** (shown in Status); it's the target of tasks/`/run`/
+  approvals until you `/open` a different one.
+- Plain text (no leading `/`) — start a run on the current project, recording the text as the
+  requirement in the execution log. `/run [text]` does the same, explicitly.
+- `/status`, `/check`, `/menu` (also **F2**), `/help`, `/quit`.
+- With no current project, a task or `/run` shows a clear `no project; use /open <path>` line instead
+  of doing nothing silently.
+- The input box accepts **any language** (UTF-8, incl. CJK) — it reads whole characters via
+  `get_wch()` rather than one byte at a time, so typing Chinese/Japanese/Korean etc. works correctly
+  (CHG-20260703-04).
+- Per-keystroke redraws do **zero** `git`/disk I/O: the Status and Verification panels are cache-backed
+  and only recompute on real events — app start, `/open`, and after a run completes (CHG-20260703-05).
+
+**Halt-gate approvals are interactive and arrow-key selectable.** When a run reaches a HALT gate, the
+console presents `[Approve / Reject]` — ↑/↓ + Enter (or y/n) — and blocks for a human answer via the
+orchestrator's existing `approver` hook. **Red-line gates always require an explicit human Approve —
+there is no auto-approve path**, exactly as with every other entry point. Runs use the **stub backend**
+by default (offline) and execute **single-threaded**: the UI redraws as events stream in and blocks
+while waiting for an approval — a real, slow backend would block the console too (a documented v1
+limitation; threading is a follow-up). v1's Q/A scope is intentionally just (a) task/requirement input
+and (b) HALT-gate approve/reject — free-form agent Q&A is a later change.
+
+The **read-only paths are unchanged**: `runner run --dashboard` (live, one-shot) and `runner dashboard
+<project>` (saved-state snapshot) still show the original four-panel vertical layout and exit when you
+press `q` — they did not become resident. Both views show the same four panels: **狀態/Status** (git
+branch + dirty, stage progress, current stage + contract lock), **執行日誌/Execution log** (stage
+transitions + gate AUTO/HALT), **檢驗結果/Verification** (acceptance reports + latest V1 result), and
+**agent 行為日誌/Agent log** — consolidated by default, switchable to tabbed-per-agent (`--agent-view
+tabbed`, or `t` in the one-shot curses viewer, or the menu). All of it is read-only — a run launched
+from either the resident console or the classic menu still halts at every gate exactly the same way.
 
 **Multi-project workspace (cross-repo).** Register one or more projects and designate the **main
 (authority)** project, run a structure analysis, then run the loop:
@@ -179,11 +210,12 @@ CHG-20260703-01)。它會依每個專案的鎖(major.minor)自動選對應版本
 ## 用法
 
 ```bash
-runner                                    # 不帶子指令 → 互動選單(方向鍵清單)
-runner menu                               # 顯式進入同一個互動選單
+runner                                    # 在 TTY 上:直接進入常駐互動儀表板(預設)
+runner <project>                          # ...並預先開啟 <project>(同一個常駐儀表板)
+runner menu                               # 顯式進入經典互動選單
 runner run <project>                      # 對受治理專案驅動四階段迴圈
-runner run <project> --dashboard          # ...同時開啟即時多面板儀表板
-runner dashboard <project>                # 對專案已存的狀態開啟儀表板
+runner run <project> --dashboard          # ...同時開啟即時多面板儀表板(一次性)
+runner dashboard <project>                # 對專案已存的狀態開啟儀表板(快照)
 runner check [project]                    # 偵測本地 skill 位置是否有更新
 runner migrate <project> --to <version>   # 驗證式契約升版(先全部重讀 docs)
 runner status <project>                   # 顯示該專案的版本鎖與執行狀態
@@ -192,15 +224,40 @@ runner status <project>                   # 顯示該專案的版本鎖與執行
 `run` 的選項:`--contract-version`(預設取 config)、`--skill-path`(覆寫,如指向本地 skill 快取做離線
 驗證)、`--risk {low,medium,high}`、`--resume`。
 
-**互動選單**採方向鍵可選清單(stdlib `curses`;↑/↓ + Enter,`q` 取消);在非 TTY(pipe/CI)或無
-`curses` 時自動退化為數字選單——零第三方依賴。選單只負責收集選擇、再分派給上述指令,因此所有停點與
-紅線停下依然生效。設 `AI_SDLC_NO_CURSES=1` 可強制使用數字選單。
+### 常駐互動儀表板(預設進入點,CHG-20260703-03)
 
-**儀表板**(`run --dashboard` 即時、`runner dashboard <project>` 讀已存狀態快照)有四個面板:
-**狀態/Status**(git 分支 + dirty、階段進度、目前階段 + 契約鎖)、**執行日誌/Execution log**(階段轉換 +
-停點 AUTO/HALT)、**檢驗結果/Verification**(驗收報告 + 最新 V1 結果)、**agent 行為日誌/Agent log**。
-agent 日誌預設統整在同一面板,可切換成分頁分 agent(`--agent-view tabbed`,或 curses 視圖中按 `t`,或從
-選單)。儀表板為唯讀——從儀表板啟動的 run 一樣會在紅線停點停下。
+在真正的 TTY 上,不帶參數的 `runner`(或 `runner <project>` 預先開啟)會直接進入**常駐、持續運作的
+控制台**——空狀態啟動(無專案、面板皆空),且永不自行結束;只有 `/quit` 能離開。非 TTY(pipe/CI/
+腳本,或設定 `AI_SDLC_NO_CURSES=1`)時,不帶參數的 `runner` 行為維持不變:仍是經典互動選單(方向鍵
+清單,或其數字選單退化版)。上述所有子指令皆不受影響。
+
+版面配置:**狀態/Status** 與 **檢驗結果/Verification** 在上排(永遠完整可見),**執行日誌/Execution
+log** 與 **agent 行為日誌/Agent log** 在下排、以**兩欄、高度有界**方式呈現(各自截斷只顯示最後 N
+行,N 隨終端高度調整,確保上排永不被擠出畫面外),底部則是**輸入框**,可用來:
+
+- `/open <path>` ——設定**目前專案**(顯示於狀態面板);在你 `/open` 別的專案之前,任務/`/run`/核准
+  都以它為對象。
+- 純文字(不帶開頭 `/`)——對目前專案啟動一次 run,並把該文字記錄成執行日誌裡的需求。`/run [文字]`
+  效果相同,只是更明確。
+- `/status`、`/check`、`/menu`(也可按 **F2**)、`/help`、`/quit`。
+- 尚無目前專案時,輸入任務或 `/run` 會清楚顯示 `no project; use /open <path>`,而不是靜默無反應。
+- 每次按鍵重繪皆**零** `git`/磁碟 I/O:狀態與檢驗結果面板皆有快取,只在真實事件(啟動、`/open`、
+  run 結束後)才重新計算(CHG-20260703-05)。
+
+**停點核准為互動式、方向鍵可選。** 當 run 抵達 HALT 停點,控制台會呈現 `[Approve / Reject]`——
+↑/↓ + Enter(或 y/n)——並透過既有的 orchestrator `approver` 掛勾阻塞等待人類作答。**紅線停點永遠
+需要人類明確按下 Approve——沒有自動核准的路徑**,與其他任何進入點完全一致。Run 預設使用 **stub
+後端**(離線),且**單執行緒**運作:事件即時串流時 UI 會重繪,等待核准時則會阻塞——真正、較慢的
+後端一樣會讓控制台阻塞(這是記錄在案的 v1 限制;多執行緒是後續改動)。v1 的問答範圍刻意只涵蓋
+(a) 任務/需求輸入與 (b) HALT 停點核准/拒絕——自由形式的 agent 問答留待未來的改動。
+
+**唯讀路徑維持不變**:`runner run --dashboard`(即時、一次性)與 `runner dashboard <project>`
+(已存狀態快照)仍顯示原本的四面板直式版面,按 `q` 即結束——它們**沒有**變成常駐。兩種檢視都顯示
+同樣四個面板:**狀態/Status**(git 分支 + dirty、階段進度、目前階段 + 契約鎖)、**執行日誌/Execution
+log**(階段轉換 + 停點 AUTO/HALT)、**檢驗結果/Verification**(驗收報告 + 最新 V1 結果)、**agent
+行為日誌/Agent log**——預設統整在同一面板,可切換成分頁分 agent(`--agent-view tabbed`,或一次性
+curses 視圖中按 `t`,或從選單)。全部皆為唯讀——不論從常駐控制台或經典選單啟動 run,停點行為完全
+一致。
 
 **多專案 workspace(跨 repo)。** 註冊一個或多個專案、指定**主專案(authority)**,先做結構分析,再跑迴圈:
 

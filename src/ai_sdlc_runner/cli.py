@@ -518,13 +518,58 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+# Known subcommand names — used only to distinguish `runner <project>` (bare, pre-opening the
+# resident app) from `runner <subcommand> ...` before handing off to the real argparse subparsers.
+SUBCOMMANDS = ("menu", "run", "dashboard", "migrate", "status", "workspace", "analyze", "check")
+
+
 def main(argv: Optional["list[str]"] = None) -> int:
+    raw = list(argv if argv is not None else sys.argv[1:])
+
+    # `runner <project>` (a single non-flag token that isn't a known subcommand) pre-opens the
+    # resident app on that project — a convenience alias, not a new subcommand; every existing
+    # subcommand still takes precedence (a project literally named "run" would need `./run`).
+    non_flags = [a for a in raw if not a.startswith("-")]
+    project_preopen = None
+    if raw and len(non_flags) == 1 and non_flags[0] not in SUBCOMMANDS:
+        pre_parser = argparse.ArgumentParser(prog="runner", add_help=False)
+        pre_parser.add_argument("--config", default=DEFAULT_CONFIG)
+        pre_parser.add_argument("project")
+        try:
+            pre_args, _unknown = pre_parser.parse_known_args(raw)
+        except SystemExit:
+            pre_args = None
+        if pre_args is not None:
+            if _resident_available():
+                return dashboard.run_resident(project=pre_args.project,
+                                               config=_safe_load_config(pre_args.config))
+            # Off-TTY: same as bare `runner` off-TTY — the interactive menu / its numbered fallback,
+            # ignoring the convenience project arg rather than erroring (subcommands unaffected).
+            return cmd_menu(argparse.Namespace(config=pre_args.config, skill_path=None))
+
     parser = build_parser()
     args = parser.parse_args(argv)
     if getattr(args, "command", None) is None:
-        # Bare `runner` → interactive menu (with config; skill_path defaults to config's value).
+        if _resident_available():
+            # Bare `runner` on a TTY → the resident app (empty start; `runner <project>` handled above).
+            return dashboard.run_resident(project=None, config=_safe_load_config(args.config))
+        # Off-TTY (pipes/CI/AI_SDLC_NO_CURSES) → unchanged: interactive menu / its numbered fallback.
         return cmd_menu(argparse.Namespace(config=args.config, skill_path=None))
     return args.func(args)
+
+
+def _resident_available() -> bool:
+    """True only when the resident app should take over bare `runner` (a real TTY)."""
+    return dashboard._want_resident_curses()
+
+
+def _safe_load_config(path: str) -> dict:
+    """Best-effort config load for the resident app entry point — a missing/invalid config should not
+    prevent the empty-start dashboard from opening; it just runs with an empty config dict."""
+    try:
+        return load_config(path)
+    except (FileNotFoundError, OSError):
+        return {}
 
 
 if __name__ == "__main__":
