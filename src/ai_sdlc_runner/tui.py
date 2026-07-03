@@ -73,8 +73,62 @@ def _numbered_select(
     return _parse_choice(raw, len(options))
 
 
+def cycle_index(idx: int, n: int, key: int, *, key_up: Sequence[int] = (), key_down: Sequence[int] = ()) -> int:
+    """Pure option-cycle core: given the current index, option count, and a curses key code, return
+    the next index (wrapping). ``key_up``/``key_down`` are the extra key codes (e.g. ``curses.KEY_UP``,
+    ``ord("k")``) recognized as "move up"/"move down" — kept out of this function so it needs no
+    curses import and is directly unit-testable. Unrecognized keys leave ``idx`` unchanged."""
+    if n <= 0:
+        return idx
+    if key in key_up:
+        return (idx - 1) % n
+    if key in key_down:
+        return (idx + 1) % n
+    return idx
+
+
+def _curses_select_on(stdscr, title: str, options: Sequence[Option]) -> Optional[int]:
+    """Arrow-key menu drawn on an **already-initialized** ``stdscr`` (no nested ``curses.wrapper``).
+
+    ↑/↓ (or k/j) to move, Enter to choose, q/Esc to cancel. This is the embeddable core reused by
+    ``_curses_select`` (its own wrapper) and by callers — such as the resident dashboard — that already
+    own the curses screen and must not open a second nested session.
+    """
+    import curses
+
+    idx = 0
+    n = len(options)
+    key_up = (curses.KEY_UP, ord("k"))
+    key_down = (curses.KEY_DOWN, ord("j"))
+    while True:
+        stdscr.erase()
+        stdscr.addstr(0, 0, title)
+        stdscr.addstr(1, 0, "↑/↓ move · Enter select · q cancel")
+        for i, (label, desc) in enumerate(options):
+            marker = "›" if i == idx else " "
+            line = f"{marker} {label}"
+            attr = curses.A_REVERSE if i == idx else curses.A_NORMAL
+            try:
+                stdscr.addstr(3 + i, 0, line, attr)
+                if desc and i == idx:
+                    stdscr.addstr(3 + n + 1, 0, desc[: max(0, curses.COLS - 1)], curses.A_DIM)
+            except curses.error:
+                pass
+        stdscr.refresh()
+        key = stdscr.getch()
+        if key in (curses.KEY_ENTER, 10, 13):
+            return idx
+        elif key in (27, ord("q")):  # Esc / q
+            return None
+        else:
+            idx = cycle_index(idx, n, key, key_up=key_up, key_down=key_down)
+
+
 def _curses_select(title: str, options: Sequence[Option]) -> Optional[int]:
-    """Arrow-key menu via stdlib curses. ↑/↓ (or k/j) to move, Enter to choose, q/Esc to cancel."""
+    """Arrow-key menu via stdlib curses, in its own ``curses.wrapper`` session.
+
+    ↑/↓ (or k/j) to move, Enter to choose, q/Esc to cancel.
+    """
     import curses
 
     def _run(stdscr) -> Optional[int]:
@@ -84,32 +138,7 @@ def _curses_select(title: str, options: Sequence[Option]) -> Optional[int]:
             curses.init_pair(1, curses.COLOR_CYAN, -1)
         except Exception:
             pass
-        idx = 0
-        n = len(options)
-        while True:
-            stdscr.erase()
-            stdscr.addstr(0, 0, title)
-            stdscr.addstr(1, 0, "↑/↓ move · Enter select · q cancel")
-            for i, (label, desc) in enumerate(options):
-                marker = "›" if i == idx else " "
-                line = f"{marker} {label}"
-                attr = curses.A_REVERSE if i == idx else curses.A_NORMAL
-                try:
-                    stdscr.addstr(3 + i, 0, line, attr)
-                    if desc and i == idx:
-                        stdscr.addstr(3 + n + 1, 0, desc[: max(0, curses.COLS - 1)], curses.A_DIM)
-                except curses.error:
-                    pass
-            stdscr.refresh()
-            key = stdscr.getch()
-            if key in (curses.KEY_UP, ord("k")):
-                idx = (idx - 1) % n
-            elif key in (curses.KEY_DOWN, ord("j")):
-                idx = (idx + 1) % n
-            elif key in (curses.KEY_ENTER, 10, 13):
-                return idx
-            elif key in (27, ord("q")):  # Esc / q
-                return None
+        return _curses_select_on(stdscr, title, options)
 
     return curses.wrapper(_run)
 

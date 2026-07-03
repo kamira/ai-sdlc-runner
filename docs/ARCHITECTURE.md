@@ -27,8 +27,8 @@ skill's scripts.
 | `executors.py` | Pluggable, platform-agnostic agent backends: `stub` / `command` (subscription/CLI) / `api` (HTTP). Runs each agent in its target repo (`workdir`). |
 | `workspace.py` | Multi-project workspace: an authority (main) + consumer repos, persisted at the authority. |
 | `structure_scan.py` | Structure-analysis pass: scan each repo, scaffold the four structures, wire the authority contract + consumer pointers. |
-| `tui.py` | Interactive arrow-key menu (stdlib curses) with a numbered fallback. |
-| `dashboard.py` | Multi-panel execution view (Status / Execution log / Verification / Agent log); curses live + text snapshot. |
+| `tui.py` | Interactive arrow-key menu (stdlib curses) with a numbered fallback; exposes an embeddable arrow-key selector (`_curses_select_on`) and a pure option-cycle core (`cycle_index`) for reuse inside an existing curses screen (e.g. the resident dashboard). |
+| `dashboard.py` | Multi-panel execution view (Status / Execution log / Verification / Agent log); curses live + text snapshot. Also: the resident interactive console (`ResidentApp`/`run_resident`) — a persistent, always-on control console with a 2-col bounded-height layout, a command parser, and an interactive halt-gate approver, built from pure/headless-testable functions (`parse_command`, `render_layout`, `approve_decision`). |
 
 Dependency direction: `cli → {orchestrator, tui, dashboard, skillstore, executors}`;
 `orchestrator → {contract, gates, agents, state}` + an injected `executor`. Everything is standard
@@ -116,11 +116,46 @@ executor:
 
 ## 7. Interfaces
 
-- **CLI**: `runner run|dashboard|check|migrate|status|menu`; `run` flags `--contract-version`,
-  `--skill-path`, `--risk`, `--resume`, `--dashboard`, `--agent-view`, `--backend`.
-- **Menu** (`runner` / `runner menu`): arrow-key list (curses) or numbered fallback.
-- **Dashboard** (`run --dashboard` live, `runner dashboard <project>` snapshot): four panels; agent log
-  consolidated by default, togglable to tabbed (`--agent-view tabbed` / `t` in the viewer).
+- **CLI**: `runner run|dashboard|check|migrate|status|menu|workspace|analyze`; `run` flags
+  `--contract-version`, `--skill-path`, `--risk`, `--resume`, `--dashboard`, `--agent-view`, `--backend`.
+- **Menu** (`runner menu`, or bare `runner` off-TTY): arrow-key list (curses) or numbered fallback.
+- **Resident interactive dashboard** (bare `runner` on a TTY, or `runner <project>` to pre-open —
+  CHG-20260703-03): the **default entry point** on a real terminal. A persistent control console that
+  never exits on its own (`/quit` only); empty start (no project, empty panels). Layout: Status |
+  Verification on the top row (always fully present), Execution log | Agent log on the bottom row as
+  **two bounded-height columns** (each truncated to its last N lines, N scaling with terminal height,
+  so the top row is never pushed off), and a bottom **input box**. The input box accepts:
+  - `/open <path>` — sets the *current project* (shown in Status); tasks/`/run`/approvals target it.
+  - plain text (no leading `/`) — starts a run on the current project, recording the text as the
+    requirement in the exec log; `/run [text]` is the explicit form.
+  - `/status`, `/check`, `/menu` (also **F2**), `/help`, `/quit`.
+  - the input box accepts **any language** (UTF-8, incl. CJK): the loop reads whole characters via
+    `stdscr.get_wch()` (locale set once via `locale.setlocale(LC_ALL, "")`) routed through the pure
+    `apply_key` helper, instead of the old one-byte-at-a-time `getch()` path (CHG-20260703-04).
+  - answers to a HALT-gate approval are **arrow-key selectable** (`[Approve / Reject]`, ↑/↓ + Enter,
+    or y/n), via the same embeddable selector `tui` exposes for use inside an existing curses screen
+    (`tui._curses_select_on`) — the resident app does not call `tui.select()` itself, since that opens
+    its own nested `curses.wrapper` session.
+  - v1 Q/A scope is intentionally limited to (a) task/requirement input and (b) HALT-gate
+    approve/reject; free-form agent Q&A is a later change.
+  - runs are **single-threaded**: `orchestrator.run`'s `on_event` updates the model and the loop
+    redraws; its `approver` blocks synchronously for the human answer. A slow real backend would block
+    the console too — an accepted, documented v1 limitation (threading is a follow-up).
+  - **no governance logic lives here**: halt decisions still come from `gates`/`halt_gate.py`
+    unchanged; red-line gates always require an explicit human Approve (never auto-approved); the
+    resident app only supplies the human `approver` and an `on_event` sink to the same `orchestrator.run`
+    every other entry point uses.
+  - off-TTY (pipes/CI/`AI_SDLC_NO_CURSES=1`), bare `runner` is **unchanged**: the classic menu / its
+    numbered fallback. No subcommand's behavior changes.
+  - the resident redraw is **cache-backed** (CHG-20260703-05): `DashboardModel.status_panel()`/
+    `verify_panel()` memoize their `git`/disk work and only recompute via `refresh()`, called on app
+    start, `/open` (`ResidentState.open_project`), and after a run (`ResidentApp._start_run`) — so
+    per-keystroke redraws do zero subprocess/disk I/O; `exec_log_panel`/`agent_panel` stay uncached
+    (live in-memory events). The read-only snapshot path is unaffected (cold cache computes once).
+- **Dashboard, read-only** (`run --dashboard` live one-shot, `runner dashboard <project>` snapshot):
+  unchanged — four panels in a vertical layout; agent log consolidated by default, togglable to tabbed
+  (`--agent-view tabbed` / `t` in the viewer); exits on `q`. Distinct from, and untouched by, the
+  resident app above.
 
 ## 8. Inviolable guardrails (and the one recorded exception)
 
@@ -137,9 +172,11 @@ explicit, bounded, and logged in the Guideline.
 
 ## 9. Testing
 
-Standard-library `pytest`; **72 tests** covering the version lock + migrate, role-table parsing and the
-V1-excludes-Agent invariant, the menu/dashboard rendering, skill-store resolution, update detection, and
-the executor backends (request building, response parsing, command execution against a local agent). Run:
+Standard-library `pytest`; **130+ tests** covering the version lock + migrate, role-table parsing and
+the V1-excludes-Agent invariant, the menu/dashboard rendering, skill-store resolution, update detection,
+the executor backends (request building, response parsing, command execution against a local agent),
+and the resident dashboard's command parser / 2-col bounded-height layout / approver decision mapping
+(the curses loop itself is not unit-tested — only its pure/headless-testable core is). Run:
 
 ```bash
 pip install -e .[test]
@@ -160,6 +197,8 @@ python3 -m pytest -q
 | CHG-20260617-07 | This architecture overview | ACC-…-07 |
 | CHG-20260703-01 | Vendor ai-sdlc v1.12.1 into the store; bump `contract_version` default to 1.12.1 | ACC-20260703-01 |
 | CHG-20260703-02 | Executor `extra_args`/`extra_env` passthrough (pure-ai-sdlc isolation recipe) | ACC-20260703-02 |
+| CHG-20260703-03 | Resident interactive dashboard (default entry, command layer, interactive halt-gate approver) | ACC-20260703-03 |
+| CHG-20260703-05 | Cache the resident dashboard's I/O-bound panels; refresh on open/after-run, not per keystroke | ACC-20260703-05 |
 
 ## 11. Handover & extension notes
 
@@ -185,6 +224,12 @@ skill 腳本)。
 per-project 鎖 `major.minor`(patch 放行、跳號走**驗證式 migrate**);skill **離線優先**(本地 store
 `skills/v1.0.0`、`v1.1.0`、`v1.12.1`(v1.12.1 為目前基準/config 預設),依鎖選版;submodule 僅選用 fallback;絕不連網),`runner check` 偵測更新;執行
 後端**不綁平台**(`stub` / `command` 訂閱 CLI / `api` HTTP,金鑰取自環境變數),且後端不影響停點與紅線。
+在真正的 TTY 上,`runner`/`runner <project>` 預設直接進入**常駐互動儀表板**(CHG-20260703-03):空狀態
+啟動、`/quit` 才離開、下排執行/agent 日誌兩欄且高度有界(上排狀態/驗證永遠可見)、底部輸入框支援
+`/open`、純文字任務、`/run`、`/status` 等指令,HALT 停點以方向鍵 `[Approve/Reject]` 呈現——紅線一樣
+永遠需要人類明確核准,治理邏輯完全未動;非 TTY 時舊行為(選單)不變,一次性 `--dashboard`/`dashboard`
+唯讀快照路徑也維持原樣。常駐重繪為**快取支撐**(CHG-20260703-05):狀態/驗證面板只在啟動、`/open`、
+run 結束後才重新計算,每次按鍵重繪皆零 `git`/磁碟 I/O。
 
 唯一刻意放寬的護欄是 §1.2/§7「不複製 skill 進 runner」(為離線 store,CHG-05),已在 Guideline 記錄且有界。
 所有改動皆走 ai-sdlc 治理,留有 `CHG-*` / `ACC-*`;測試 72 筆全綠。
