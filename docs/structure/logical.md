@@ -42,6 +42,13 @@ via stdin or arg), or `api` (HTTP; `anthropic`/`openai`/`generic` adapters; key 
 injects the chosen backend's `run` into `orchestrator.run(agent_executor=…)`. The backend does **not**
 affect gating — halt gates and red-line stops apply identically whichever backend runs the agents.
 
+The `command` backend additionally supports a generic `extra_args`/`extra_env` passthrough
+(CHG-20260703-02): `extra_args` (list) is appended to `argv`, `extra_env` (dict) is merged into the
+subprocess environment on top of what's inherited. Both default empty (no behavior change). This is
+what lets `command` drive a `claude -p` agent constrained to only the ai-sdlc skill via
+`config/pure-ai-sdlc.settings.json`, without the runner hardcoding any Claude-Code-specific flags.
+`api`/`stub` are unaffected — the fields exist only on `CommandExecutor`.
+
 ### Skill resolution (CHG-05)
 The skill source is resolved **offline** in this order: explicit `--skill-path` → the local store
 (`skill_store`) version matching the project lock major.minor (or config-expected on first run, else

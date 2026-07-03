@@ -16,6 +16,7 @@ Answers: FR-1..FR-14. Key components, their contracts, and design trade-offs.
 | `executors.from_config` | Backend factory | `(config, override_backend) -> Executor`; stub/command/api; defaults to stub |
 | `executors.build_request` / `parse_response` | API adapters | pure `(provider, …) -> (url, headers, body)` / `(provider, raw) -> str` for anthropic/openai/generic |
 | `Executor.run` | Agent call | `(AgentSpec) -> dict`; command via subprocess (in `spec.workdir`), api via urllib; key from env |
+| `CommandExecutor.extra_args` / `.extra_env` | Generic passthrough (CHG-20260703-02) | `extra_args: list[str]` appended to `argv`; `extra_env: dict[str,str]` merged into the subprocess env on top of the inherited one; both default empty (no-op); read from `executor.command.{extra_args,extra_env}` in config; `api`/`stub` unaffected |
 | `workspace.Workspace` | Multi-project model | `authority` + `consumers`; `save`/`load` (`.sdlc-workspace.json` at authority); `validate`; `manifest()` for cross_repo_check |
 | `structure_scan.analyze_workspace` | Structure pass | scan + scaffold four structures; multi → authority `docs/contracts/VERSION` + consumer `docs/authority.md` (`Pinned version: vX`) |
 | `agents.parse_role_table` | Parse role allowlist table | `(skill_path) -> {role: {tools, can_spawn, writable, scope}}` |
@@ -41,7 +42,7 @@ Answers: FR-1..FR-14. Key components, their contracts, and design trade-offs.
 | Decision | Options | Rationale |
 |----------|---------|-----------|
 | Detect version from file vs git tag | file (SKILL.md) **vs** git tag | User chose file detection: a missing/wrong tag surfaces as a contract-version mismatch instead of silent drift; works without git plumbing |
-| Offline local store, vendored into runner | submodule (online) **vs** local store | User override (CHG-05): run fully offline with v1.0.0 + v1.1.0 on hand; submodule kept as optional fallback. **Deliberately relaxes §1.2/§7 (reference-not-copy)** — recorded in CHG-05 and the Guideline |
+| Offline local store, vendored into runner | submodule (online) **vs** local store | User override (CHG-05): run fully offline with v1.0.0 + v1.1.0 (+ v1.12.1, CHG-20260703-01, now the config default) on hand; submodule kept as optional fallback. **Deliberately relaxes §1.2/§7 (reference-not-copy)** — recorded in CHG-05 and the Guideline |
 | Version selected by project lock | config-fixed **vs** lock-driven | Each project uses the store version matching its lock; migrate switches it automatically |
 | Platform-agnostic execution backend | one vendor **vs** stub/command/api | Runtime concern (§1.7), config-driven; run via API or a subscription CLI without locking to a platform (CHG-06) |
 | API client | requests/httpx **vs** stdlib urllib | Keeps zero-dependency; keys from env, never config |

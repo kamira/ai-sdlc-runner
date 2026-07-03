@@ -54,24 +54,31 @@ class CommandExecutor:
     ``argv`` is the base command (e.g. ``["claude", "-p"]`` or ``["my-agent"]``). The agent prompt is
     delivered via stdin (``prompt_via="stdin"``) or appended as a final argument (``"arg"``). This is
     deliberately platform-agnostic — it works with any tool that reads a prompt and writes a reply.
+
+    ``extra_args`` and ``extra_env`` are a generic passthrough (CHG-20260703-02): opt-in, default
+    empty, so behavior is byte-for-byte identical to before when unset. They let platform-specific
+    restricting flags/env (e.g. a ``--settings`` file that disables all but the ai-sdlc skill) be
+    injected via config without the runner hardcoding any AI-platform specifics.
     """
 
     argv: List[str]
     prompt_via: str = "stdin"          # "stdin" | "arg"
     timeout: int = 600
     env: Dict[str, str] = field(default_factory=dict)
+    extra_args: List[str] = field(default_factory=list)
+    extra_env: Dict[str, str] = field(default_factory=dict)
     backend: str = BACKEND_COMMAND
 
     def run(self, spec: agents.AgentSpec) -> dict:
         if not self.argv:
             raise ExecutorError("command backend requires a non-empty `argv`")
-        cmd = list(self.argv)
+        cmd = list(self.argv) + list(self.extra_args)
         stdin_data: Optional[str] = None
         if self.prompt_via == "arg":
             cmd.append(spec.prompt)
         else:
             stdin_data = spec.prompt
-        run_env = {**os.environ, **self.env}
+        run_env = {**os.environ, **self.env, **self.extra_env}
         # Run the agent in its target project directory when one was assigned (multi-project mode).
         cwd = spec.workdir if getattr(spec, "workdir", None) else None
         try:
@@ -182,11 +189,16 @@ def from_config(config: dict, override_backend: Optional[str] = None) -> object:
             argv = argv.split()
         if not argv:
             raise ExecutorError("executor.command.argv is required for the `command` backend")
+        extra_args = cmd.get("extra_args")
+        if isinstance(extra_args, str):
+            extra_args = extra_args.split()
         return CommandExecutor(
             argv=list(argv),
             prompt_via=cmd.get("prompt_via", "stdin"),
             timeout=int(cmd.get("timeout", 600)),
             env=cmd.get("env", {}) if isinstance(cmd.get("env"), dict) else {},
+            extra_args=list(extra_args) if extra_args else [],
+            extra_env=cmd.get("extra_env", {}) if isinstance(cmd.get("extra_env"), dict) else {},
         )
     if backend == BACKEND_API:
         api = spec.get("api", {}) if isinstance(spec.get("api"), dict) else {}

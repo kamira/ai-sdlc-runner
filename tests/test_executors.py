@@ -52,6 +52,70 @@ def test_command_executor_empty_argv_errors():
 
 
 # --------------------------------------------------------------------------------------
+# extra_args / extra_env passthrough (CHG-20260703-02)
+# --------------------------------------------------------------------------------------
+
+def test_command_executor_extra_args_appended(tmp_path):
+    # A script that prints argv (minus argv[0]) so we can assert extra_args landed after argv.
+    script = tmp_path / "agent.sh"
+    script.write_text('#!/bin/sh\nfor a in "$@"; do echo "ARG:$a"; done\ncat\n')
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    ex = executors.CommandExecutor(argv=[str(script)], prompt_via="stdin",
+                                    extra_args=["--settings", "config/pure-ai-sdlc.settings.json"])
+    r = ex.run(_spec("BODY"))
+    assert r["returncode"] == 0
+    assert "ARG:--settings" in r["output"]
+    assert "ARG:config/pure-ai-sdlc.settings.json" in r["output"]
+    assert "BODY" in r["output"]
+
+
+def test_command_executor_extra_env_merged(tmp_path, monkeypatch):
+    monkeypatch.setenv("ECC_BASE_VAR", "base")
+    script = tmp_path / "agent.sh"
+    script.write_text('#!/bin/sh\necho "BASE=$ECC_BASE_VAR"\necho "EXTRA=$ECC_EXTRA_VAR"\n')
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    ex = executors.CommandExecutor(argv=[str(script)], extra_env={"ECC_EXTRA_VAR": "injected"})
+    r = ex.run(_spec())
+    assert "BASE=base" in r["output"]          # inherited env still present
+    assert "EXTRA=injected" in r["output"]     # extra_env merged on top
+
+
+def test_command_executor_defaults_empty_extra_fields():
+    ex = executors.CommandExecutor(argv=["echo"])
+    assert ex.extra_args == [] and ex.extra_env == {}
+
+
+def test_from_config_command_reads_extra_args_and_env():
+    cfg = {"executor": {"backend": "command", "command": {
+        "argv": ["claude", "-p"],
+        "extra_args": ["--settings", "config/pure-ai-sdlc.settings.json"],
+        "extra_env": {"FOO": "bar"},
+    }}}
+    ex = executors.from_config(cfg)
+    assert isinstance(ex, executors.CommandExecutor)
+    assert ex.extra_args == ["--settings", "config/pure-ai-sdlc.settings.json"]
+    assert ex.extra_env == {"FOO": "bar"}
+
+
+def test_from_config_command_extra_fields_default_empty():
+    cfg = {"executor": {"backend": "command", "command": {"argv": ["echo"]}}}
+    ex = executors.from_config(cfg)
+    assert ex.extra_args == [] and ex.extra_env == {}
+
+
+def test_stub_executor_unaffected_by_extra_fields():
+    # extra_args/extra_env are command-backend-only concepts; stub ignores config entirely.
+    r = executors.StubExecutor().run(_spec())
+    assert r["backend"] == "stub" and "extra_args" not in r and "extra_env" not in r
+
+
+def test_api_executor_unaffected_by_extra_fields():
+    # ApiExecutor has no extra_args/extra_env fields at all — api backend is untouched by CHG-20260703-02.
+    ex = executors.ApiExecutor(base_url="https://x", model="m")
+    assert not hasattr(ex, "extra_args") and not hasattr(ex, "extra_env")
+
+
+# --------------------------------------------------------------------------------------
 # API request building + response parsing (no network)
 # --------------------------------------------------------------------------------------
 

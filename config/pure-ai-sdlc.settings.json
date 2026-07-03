@@ -1,0 +1,9 @@
+{
+  "disableBundledSkills": true,
+  "enabledPlugins": {
+    "everything-claude-code@everything-claude-code": false,
+    "code-review@claude-plugins-official": false,
+    "feature-dev@claude-plugins-official": false,
+    "claude-code-setup@claude-plugins-official": false
+  }
+}

@@ -74,7 +74,8 @@ Resolution order (all offline): explicit `--skill-path` → the local store `ski
 the project lock major.minor (config-expected on first run, else latest) → the optional `ai-skills`
 submodule fallback (not pulled by default). The runner **never fetches the skill online**. `runner
 check` compares the newest available version to a project's lock and classifies patch (auto) vs
-minor/major (→ migrate). Two versions ship vendored: `skills/v1.0.0`, `skills/v1.1.0`.
+minor/major (→ migrate). Three versions ship vendored: `skills/v1.0.0`, `skills/v1.1.0`,
+`skills/v1.12.1` (the current baseline / config default, CHG-20260703-01).
 
 > **Recorded override (CHG-05):** the build guide's §1.2/§7 ("reference, never copy the skill into the
 > runner") is **deliberately relaxed** with user approval to enable fully-offline operation. Bounded by:
@@ -94,6 +95,24 @@ is not tied to any AI platform. Selected by config (`executor` block) or `--back
 
 The backend runs agent work only — **halt gates and red-line stops apply identically** whichever backend
 is chosen.
+
+**Pure-ai-sdlc isolation (CHG-20260703-02).** The `command` backend accepts a generic passthrough:
+`executor.command.extra_args` (list, appended to `argv`) and `executor.command.extra_env` (dict, merged
+into the subprocess environment on top of the inherited one). Both default to empty — no config change
+means byte-for-byte identical behavior. This is deliberately generic rather than hardcoding any
+Claude-Code-specific skill-disabling flags into the runner (which would break the platform-agnostic
+principle, §1.7) — the restricting flags/env live in config, not code. `api`/`stub` backends are
+unaffected. The shipped recipe for constraining a `claude -p` agent to load only the ai-sdlc skill:
+
+```yaml
+executor:
+  command:
+    argv: ["claude", "-p"]
+    extra_args: ["--settings", "config/pure-ai-sdlc.settings.json"]
+```
+
+`config/pure-ai-sdlc.settings.json` sets `disableBundledSkills: true` and disables the
+`everything-claude-code` / `code-review` / `feature-dev` / `claude-code-setup` plugins.
 
 ## 7. Interfaces
 
@@ -139,6 +158,8 @@ python3 -m pytest -q
 | CHG-20260617-05 | Offline local skill store (override §1.2/§7) | ACC-…-05 |
 | CHG-20260617-06 | Platform-agnostic executor backends | ACC-…-06 |
 | CHG-20260617-07 | This architecture overview | ACC-…-07 |
+| CHG-20260703-01 | Vendor ai-sdlc v1.12.1 into the store; bump `contract_version` default to 1.12.1 | ACC-20260703-01 |
+| CHG-20260703-02 | Executor `extra_args`/`extra_env` passthrough (pure-ai-sdlc isolation recipe) | ACC-20260703-02 |
 
 ## 11. Handover & extension notes
 
@@ -162,7 +183,7 @@ skill 腳本)。
 
 重點:四階段循序、每階段過停點閘並寫 checkpoint;角色鏈 A1→I1(→I1.x)→V1(V1 唯讀、無 `Agent`);版本鎖
 per-project 鎖 `major.minor`(patch 放行、跳號走**驗證式 migrate**);skill **離線優先**(本地 store
-`skills/v1.0.0`、`v1.1.0`,依鎖選版;submodule 僅選用 fallback;絕不連網),`runner check` 偵測更新;執行
+`skills/v1.0.0`、`v1.1.0`、`v1.12.1`(v1.12.1 為目前基準/config 預設),依鎖選版;submodule 僅選用 fallback;絕不連網),`runner check` 偵測更新;執行
 後端**不綁平台**(`stub` / `command` 訂閱 CLI / `api` HTTP,金鑰取自環境變數),且後端不影響停點與紅線。
 
 唯一刻意放寬的護欄是 §1.2/§7「不複製 skill 進 runner」(為離線 store,CHG-05),已在 Guideline 記錄且有界。

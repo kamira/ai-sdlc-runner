@@ -14,7 +14,8 @@ pip install -e .                   # optional: .[yaml] for PyYAML, .[test] for p
 ```
 
 **Offline by default.** The skill is vendored into a local store at `skills/` (`skills/v1.0.0`,
-`skills/v1.1.0`), and that is the primary source — the runner never fetches the skill online. It
+`skills/v1.1.0`, `skills/v1.12.1`), and that is the primary source — the runner never fetches the
+skill online. `skills/v1.12.1` is the current baseline (`contract_version` default, CHG-20260703-01). It
 auto-selects the store version matching each project's lock (major.minor); after a `migrate` raises
 the lock, the next run uses the new version automatically. `runner check` lists the store versions and
 flags when a newer one is available.
@@ -79,6 +80,25 @@ contract — so the runner is **not tied to any AI platform**. Choose per run wi
   via stdin or as an argument: `executor.command.argv: ["claude", "-p"]`, `prompt_via: stdin|arg`.
 - `api` — call an **HTTP API**: `executor.api.{provider: anthropic|openai|generic, base_url, model,
   api_key_env}`. The API key is read from the named **environment variable**, never stored in config.
+
+**Pure-ai-sdlc isolation (CHG-20260703-02).** The `command` backend accepts a generic passthrough —
+`executor.command.extra_args` (list, appended to `argv` verbatim) and `executor.command.extra_env`
+(dict, merged into the subprocess environment on top of what's inherited). Both default to empty, so
+behavior is unchanged unless set. This keeps the runner platform-agnostic — no Claude-Code-specific
+flags are hardcoded — while still letting you constrain a spawned `claude -p` agent to load **only**
+the ai-sdlc skill:
+
+```yaml
+executor:
+  command:
+    argv: ["claude", "-p"]
+    extra_args: ["--settings", "config/pure-ai-sdlc.settings.json"]
+```
+
+`config/pure-ai-sdlc.settings.json` is a ready-made example Claude Code settings file
+(`disableBundledSkills: true` + the `everything-claude-code` / `code-review` / `feature-dev` /
+`claude-code-setup` plugins disabled). `api`/`stub` backends are unaffected — the fields are read only
+by the `command` backend.
 
 ```bash
 runner run <project> --backend command     # drive agents via a subscription/CLI agent
@@ -147,8 +167,9 @@ cd ai-sdlc-runner
 pip install -e .                   # 選用:.[yaml] 裝 PyYAML、.[test] 裝 pytest
 ```
 
-**預設離線。** skill 已內置成本地 store(`skills/v1.0.0`、`skills/v1.1.0`),這是主要來源——runner
-**絕不從線上抓** skill。它會依每個專案的鎖(major.minor)自動選對應版本;`migrate` 升鎖後,下一次 run
+**預設離線。** skill 已內置成本地 store(`skills/v1.0.0`、`skills/v1.1.0`、`skills/v1.12.1`),這是主要
+來源——runner **絕不從線上抓** skill。`skills/v1.12.1` 是目前預設基準(`contract_version` 預設值,
+CHG-20260703-01)。它會依每個專案的鎖(major.minor)自動選對應版本;`migrate` 升鎖後,下一次 run
 自動改用新版本。`runner check` 會列出 store 內版本並提示有無更新。
 
 > `ai-skills` git submodule(`.gitmodules`)**僅保留為選用 fallback**,預設**不**拉取。若要改用它,
@@ -201,6 +222,22 @@ runner run ./main             # 跨 repo 一致性閘(漂移→停)→ 四階段
   `executor.command.argv: ["claude", "-p"]`、`prompt_via: stdin|arg`。
 - `api`——呼叫 **HTTP API**:`executor.api.{provider: anthropic|openai|generic, base_url, model,
   api_key_env}`。API 金鑰從指定的**環境變數**讀取,**絕不**寫進 config。
+
+**純 ai-sdlc 隔離(CHG-20260703-02)。** `command` 後端支援通用透傳——`executor.command.extra_args`
+(list,原樣附加到 `argv` 之後)與 `executor.command.extra_env`(dict,合併進 subprocess 環境變數、疊加在
+繼承的環境之上)。兩者預設皆為空,未設定時行為不變。這讓 runner 維持不綁平台——不在程式碼裡寫死任何
+Claude Code 專屬旗標——同時仍可把產生的 `claude -p` agent 限制為**只**載入 ai-sdlc skill:
+
+```yaml
+executor:
+  command:
+    argv: ["claude", "-p"]
+    extra_args: ["--settings", "config/pure-ai-sdlc.settings.json"]
+```
+
+`config/pure-ai-sdlc.settings.json` 是現成的 Claude Code settings 範例(`disableBundledSkills: true`,
+並停用 `everything-claude-code`、`code-review`、`feature-dev`、`claude-code-setup` 插件)。`api`/`stub`
+後端不受影響——這兩個欄位只有 `command` 後端會讀取。
 
 ```bash
 runner run <專案> --backend command     # 用訂閱/CLI agent 驅動
