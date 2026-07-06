@@ -14,9 +14,9 @@ pip install -e .                   # optional: .[yaml] for PyYAML, .[test] for p
 ```
 
 **Offline by default.** The skill is vendored into a local store at `skills/` (`skills/v1.0.0`,
-`skills/v1.1.0`, `skills/v1.12.1`), and that is the primary source — the runner never fetches the
-skill online. `skills/v1.12.1` is the current baseline (`contract_version` default, CHG-20260703-01). It
-auto-selects the store version matching each project's lock (major.minor); after a `migrate` raises
+`skills/v1.1.0`, `skills/v1.12.1`, `skills/v1.16.0`), and that is the primary source — the runner never
+fetches the skill online. `skills/v1.16.0` is the current baseline (`contract_version` default,
+CHG-20260703-06). It auto-selects the store version matching each project's lock (major.minor); after a `migrate` raises
 the lock, the next run uses the new version automatically. `runner check` lists the store versions and
 flags when a newer one is available.
 
@@ -198,9 +198,9 @@ cd ai-sdlc-runner
 pip install -e .                   # 選用:.[yaml] 裝 PyYAML、.[test] 裝 pytest
 ```
 
-**預設離線。** skill 已內置成本地 store(`skills/v1.0.0`、`skills/v1.1.0`、`skills/v1.12.1`),這是主要
-來源——runner **絕不從線上抓** skill。`skills/v1.12.1` 是目前預設基準(`contract_version` 預設值,
-CHG-20260703-01)。它會依每個專案的鎖(major.minor)自動選對應版本;`migrate` 升鎖後,下一次 run
+**預設離線。** skill 已內置成本地 store(`skills/v1.0.0`、`skills/v1.1.0`、`skills/v1.12.1`、
+`skills/v1.16.0`),這是主要來源——runner **絕不從線上抓** skill。`skills/v1.16.0` 是目前預設基準
+(`contract_version` 預設值,CHG-20260703-06)。它會依每個專案的鎖(major.minor)自動選對應版本;`migrate` 升鎖後,下一次 run
 自動改用新版本。`runner check` 會列出 store 內版本並提示有無更新。
 
 > `ai-skills` git submodule(`.gitmodules`)**僅保留為選用 fallback**,預設**不**拉取。若要改用它,

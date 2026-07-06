@@ -6,12 +6,12 @@
 # Contract version the runner expects (major.minor is locked per project).
 # This is the *expected* version; the *actual* version is detected at runtime by
 # reading the skill's SKILL.md frontmatter (contract.read_skill_version).
-# Bumped to 1.12.1 (CHG-20260703-01) to match the current published skill baseline;
-# existing per-project locks at 1.0/1.1 are unaffected and keep resolving to their store version.
-contract_version: "1.12.1"
+# Bumped to 1.16.0 (CHG-20260703-06) to match the current published skill baseline;
+# existing per-project locks at 1.0/1.1/1.12 are unaffected and keep resolving to their store version.
+contract_version: "1.16.0"
 
 # Primary skill source: a local, offline, multi-version store (CHG-20260617-05).
-# Each subdir (v1.0.0, v1.1.0, v1.12.1, ...) is a full skill root. The runner auto-selects the
+# Each subdir (v1.0.0, v1.1.0, v1.12.1, v1.16.0, ...) is a full skill root. The runner auto-selects the
 # version matching a project's lock major.minor; first run uses contract_version.
 skill_store: "./skills"
 

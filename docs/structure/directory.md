@@ -9,10 +9,11 @@ ai-sdlc-runner/
 ├── .gitignore                 # Python
 ├── .gitmodules                # declares the ai-skills submodule (pinned to tag v1.0.0)
 ├── pyproject.toml             # deps & entry point (runner = ai_sdlc_runner.cli:main)
-├── skills/                    # PRIMARY offline skill store (CHG-05, CHG-20260703-01): v1.0.0/, v1.1.0/, v1.12.1/ (vendored verbatim)
+├── skills/                    # PRIMARY offline skill store (CHG-05, CHG-20260703-01, CHG-20260703-06): v1.0.0/, v1.1.0/, v1.12.1/, v1.16.0/ (vendored verbatim)
 │   ├── v1.0.0/                 #   full skill root (SKILL.md, references/, scripts/, assets/)
 │   ├── v1.1.0/                 #   + role catalog (role_loadout.py, role_refs.json)
-│   └── v1.12.1/                #   current baseline (config default); offline `git archive` @ 605425e
+│   ├── v1.12.1/                #   offline `git archive` @ 605425e
+│   └── v1.16.0/                #   current baseline (config default); offline `git archive` @ b4d6ef3
 ├── ai-skills/                 # OPTIONAL git submodule fallback (not pulled by default); pinned ai-sdlc-v1.0.0
 ├── src/ai_sdlc_runner/
 │   ├── __init__.py

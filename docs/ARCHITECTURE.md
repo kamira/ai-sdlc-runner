@@ -74,8 +74,8 @@ Resolution order (all offline): explicit `--skill-path` → the local store `ski
 the project lock major.minor (config-expected on first run, else latest) → the optional `ai-skills`
 submodule fallback (not pulled by default). The runner **never fetches the skill online**. `runner
 check` compares the newest available version to a project's lock and classifies patch (auto) vs
-minor/major (→ migrate). Three versions ship vendored: `skills/v1.0.0`, `skills/v1.1.0`,
-`skills/v1.12.1` (the current baseline / config default, CHG-20260703-01).
+minor/major (→ migrate). Four versions ship vendored: `skills/v1.0.0`, `skills/v1.1.0`,
+`skills/v1.12.1`, `skills/v1.16.0` (the current baseline / config default, CHG-20260703-06).
 
 > **Recorded override (CHG-05):** the build guide's §1.2/§7 ("reference, never copy the skill into the
 > runner") is **deliberately relaxed** with user approval to enable fully-offline operation. Bounded by:
@@ -199,6 +199,7 @@ python3 -m pytest -q
 | CHG-20260703-02 | Executor `extra_args`/`extra_env` passthrough (pure-ai-sdlc isolation recipe) | ACC-20260703-02 |
 | CHG-20260703-03 | Resident interactive dashboard (default entry, command layer, interactive halt-gate approver) | ACC-20260703-03 |
 | CHG-20260703-05 | Cache the resident dashboard's I/O-bound panels; refresh on open/after-run, not per keystroke | ACC-20260703-05 |
+| CHG-20260703-06 | Vendor ai-sdlc v1.16.0 into the store; bump `contract_version` default to 1.16.0 | ACC-20260703-06 |
 
 ## 11. Handover & extension notes
 
@@ -222,7 +223,7 @@ skill 腳本)。
 
 重點:四階段循序、每階段過停點閘並寫 checkpoint;角色鏈 A1→I1(→I1.x)→V1(V1 唯讀、無 `Agent`);版本鎖
 per-project 鎖 `major.minor`(patch 放行、跳號走**驗證式 migrate**);skill **離線優先**(本地 store
-`skills/v1.0.0`、`v1.1.0`、`v1.12.1`(v1.12.1 為目前基準/config 預設),依鎖選版;submodule 僅選用 fallback;絕不連網),`runner check` 偵測更新;執行
+`skills/v1.0.0`、`v1.1.0`、`v1.12.1`、`v1.16.0`(v1.16.0 為目前基準/config 預設),依鎖選版;submodule 僅選用 fallback;絕不連網),`runner check` 偵測更新;執行
 後端**不綁平台**(`stub` / `command` 訂閱 CLI / `api` HTTP,金鑰取自環境變數),且後端不影響停點與紅線。
 在真正的 TTY 上,`runner`/`runner <project>` 預設直接進入**常駐互動儀表板**(CHG-20260703-03):空狀態
 啟動、`/quit` 才離開、下排執行/agent 日誌兩欄且高度有界(上排狀態/驗證永遠可見)、底部輸入框支援
