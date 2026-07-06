@@ -50,7 +50,7 @@ Answers: FR-1..FR-14. Key components, their contracts, and design trade-offs.
 | Decision | Options | Rationale |
 |----------|---------|-----------|
 | Detect version from file vs git tag | file (SKILL.md) **vs** git tag | User chose file detection: a missing/wrong tag surfaces as a contract-version mismatch instead of silent drift; works without git plumbing |
-| Offline local store, vendored into runner | submodule (online) **vs** local store | User override (CHG-05): run fully offline with v1.0.0 + v1.1.0 (+ v1.12.1, CHG-20260703-01, now the config default) on hand; submodule kept as optional fallback. **Deliberately relaxes §1.2/§7 (reference-not-copy)** — recorded in CHG-05 and the Guideline |
+| Offline local store, vendored into runner | submodule (online) **vs** local store | User override (CHG-05): run fully offline with v1.0.0 + v1.1.0 + v1.12.1 (+ v1.16.0, CHG-20260703-06, now the config default) on hand; submodule kept as optional fallback. **Deliberately relaxes §1.2/§7 (reference-not-copy)** — recorded in CHG-05 and the Guideline |
 | Version selected by project lock | config-fixed **vs** lock-driven | Each project uses the store version matching its lock; migrate switches it automatically |
 | Platform-agnostic execution backend | one vendor **vs** stub/command/api | Runtime concern (§1.7), config-driven; run via API or a subscription CLI without locking to a platform (CHG-06) |
 | API client | requests/httpx **vs** stdlib urllib | Keeps zero-dependency; keys from env, never config |
