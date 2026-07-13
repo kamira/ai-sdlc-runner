@@ -33,13 +33,20 @@ ai-sdlc-runner/
 ├── config/
 │   └── runner.yaml            # contract version, skill path, concurrency/depth limits
 ├── docs/
+│   ├── ARCHITECTURE.md         # handover-oriented architecture & feature overview (non-canonical map; canon lives in the files below)
 │   ├── ai-guideline.md
 │   ├── structure/{directory,logical,design,data}.md
 │   ├── changes/CHG-*.md
 │   ├── acceptance/ACC-*.md
 │   └── knowledge/             # pre-founded knowledge base: knowledge.md (INDEX-first, zero entries at bootstrap) + vocabulary.json (tag registry); CHG-20260706-01
 └── tests/
-    └── test_contract.py       # at least version-lock and migrate decisions
+    ├── conftest.py            # shared pytest fixtures
+    ├── test_contract.py       # version-lock and migrate decisions
+    ├── test_skillstore.py     # offline multi-version skill store resolver; CHG-05
+    ├── test_executors.py      # pluggable agent backends (stub/command/api); CHG-06
+    ├── test_workspace.py      # multi-project workspace authority/consumers; CHG-08
+    ├── test_tui.py            # interactive menu (curses + numbered fallback); CHG-02
+    └── test_dashboard.py      # multi-panel dashboard view; CHG-03
 ```
 
 ## Responsibility per directory
