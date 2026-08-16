@@ -2,7 +2,6 @@
 (CHG-20260617-08)."""
 from __future__ import annotations
 
-import stat
 from pathlib import Path
 
 import pytest
@@ -104,13 +103,10 @@ def test_agent_spec_carries_workdir():
     assert spec.workdir == "/tmp/proj" and "/tmp/proj" in spec.prompt
 
 
-def test_command_executor_runs_in_workdir(tmp_path):
+def test_command_executor_runs_in_workdir(tmp_path, py_stub):
     proj = tmp_path / "proj"
     proj.mkdir()
-    script = tmp_path / "pwd.sh"
-    script.write_text("#!/bin/sh\npwd\n")
-    script.chmod(script.stat().st_mode | stat.S_IEXEC)
-    ex = executors.CommandExecutor(argv=[str(script)])
+    ex = executors.CommandExecutor(argv=py_stub("import os\nprint(os.getcwd())\n", "pwd.py"))
     spec = agents.AgentSpec("I1", ["Read"], False, True, "src", "p", workdir=str(proj))
     r = ex.run(spec)
     assert r["output"].strip() == str(proj)
