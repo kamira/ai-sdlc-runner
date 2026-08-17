@@ -7,7 +7,6 @@ choice of backend does not affect halt gating.
 from __future__ import annotations
 
 import os
-import stat
 
 import pytest
 
@@ -27,21 +26,17 @@ def test_stub_executor():
     assert r["backend"] == "stub" and r["role"] == "A1" and r["stub"] is True
 
 
-def test_command_executor_stdin(tmp_path):
+def test_command_executor_stdin(py_stub):
     # A trivial local "agent" that echoes its stdin — proves any CLI tool can be driven.
-    script = tmp_path / "agent.sh"
-    script.write_text("#!/bin/sh\ncat\n")
-    script.chmod(script.stat().st_mode | stat.S_IEXEC)
-    ex = executors.CommandExecutor(argv=[str(script)], prompt_via="stdin")
+    argv = py_stub("import sys\nsys.stdout.write(sys.stdin.read())\n")
+    ex = executors.CommandExecutor(argv=argv, prompt_via="stdin")
     r = ex.run(_spec("HELLO-123"))
     assert r["backend"] == "command" and r["returncode"] == 0 and "HELLO-123" in r["output"]
 
 
-def test_command_executor_arg(tmp_path):
-    script = tmp_path / "agent.sh"
-    script.write_text('#!/bin/sh\necho "$1"\n')
-    script.chmod(script.stat().st_mode | stat.S_IEXEC)
-    ex = executors.CommandExecutor(argv=[str(script)], prompt_via="arg")
+def test_command_executor_arg(py_stub):
+    argv = py_stub("import sys\nprint(sys.argv[1])\n")
+    ex = executors.CommandExecutor(argv=argv, prompt_via="arg")
     r = ex.run(_spec("ARG-PROMPT"))
     assert "ARG-PROMPT" in r["output"]
 
@@ -55,12 +50,11 @@ def test_command_executor_empty_argv_errors():
 # extra_args / extra_env passthrough (CHG-20260703-02)
 # --------------------------------------------------------------------------------------
 
-def test_command_executor_extra_args_appended(tmp_path):
+def test_command_executor_extra_args_appended(py_stub):
     # A script that prints argv (minus argv[0]) so we can assert extra_args landed after argv.
-    script = tmp_path / "agent.sh"
-    script.write_text('#!/bin/sh\nfor a in "$@"; do echo "ARG:$a"; done\ncat\n')
-    script.chmod(script.stat().st_mode | stat.S_IEXEC)
-    ex = executors.CommandExecutor(argv=[str(script)], prompt_via="stdin",
+    argv = py_stub('import sys\nfor a in sys.argv[1:]:\n    print("ARG:" + a)\n'
+                   'sys.stdout.write(sys.stdin.read())\n')
+    ex = executors.CommandExecutor(argv=argv, prompt_via="stdin",
                                     extra_args=["--settings", "config/pure-ai-sdlc.settings.json"])
     r = ex.run(_spec("BODY"))
     assert r["returncode"] == 0
@@ -69,12 +63,11 @@ def test_command_executor_extra_args_appended(tmp_path):
     assert "BODY" in r["output"]
 
 
-def test_command_executor_extra_env_merged(tmp_path, monkeypatch):
+def test_command_executor_extra_env_merged(py_stub, monkeypatch):
     monkeypatch.setenv("ECC_BASE_VAR", "base")
-    script = tmp_path / "agent.sh"
-    script.write_text('#!/bin/sh\necho "BASE=$ECC_BASE_VAR"\necho "EXTRA=$ECC_EXTRA_VAR"\n')
-    script.chmod(script.stat().st_mode | stat.S_IEXEC)
-    ex = executors.CommandExecutor(argv=[str(script)], extra_env={"ECC_EXTRA_VAR": "injected"})
+    argv = py_stub('import os\nprint("BASE=" + os.environ.get("ECC_BASE_VAR", ""))\n'
+                   'print("EXTRA=" + os.environ.get("ECC_EXTRA_VAR", ""))\n')
+    ex = executors.CommandExecutor(argv=argv, extra_env={"ECC_EXTRA_VAR": "injected"})
     r = ex.run(_spec())
     assert "BASE=base" in r["output"]          # inherited env still present
     assert "EXTRA=injected" in r["output"]     # extra_env merged on top
