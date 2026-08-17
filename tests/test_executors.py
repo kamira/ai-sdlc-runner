@@ -46,6 +46,22 @@ def test_command_executor_empty_argv_errors():
         executors.CommandExecutor(argv=[]).run(_spec())
 
 
+def test_command_executor_launch_failure_raises(tmp_path):
+    # The other half of the failure contract: empty argv is caught by the guard *before*
+    # subprocess.run, this one is caught after it. runner.yaml lets a user point argv at any local
+    # CLI, and the usual misconfiguration is a binary that isn't installed — the raw
+    # FileNotFoundError must not escape the executor abstraction. A path that was never created
+    # fails identically on every platform, so this fixture stays portable by construction
+    # (CHG-20260817-11).
+    missing = tmp_path / "no-such-agent-binary"
+    ex = executors.CommandExecutor(argv=[str(missing)])
+    with pytest.raises(executors.ExecutorError) as exc:
+        ex.run(_spec())
+    # The type alone isn't the contract — the message has to say what failed to start.
+    assert "failed to launch" in str(exc.value)
+    assert "no-such-agent-binary" in str(exc.value)
+
+
 # --------------------------------------------------------------------------------------
 # extra_args / extra_env passthrough (CHG-20260703-02)
 # --------------------------------------------------------------------------------------
