@@ -1,0 +1,75 @@
+# CI for ai-sdlc-runner (CHG-20260817-10).
+#
+# The matrix is the point. The five failures fixed in CHG-20260817-09 were Windows-only and survived
+# four prior CHGs unnoticed; a single-OS pipeline would have been green throughout and caught none of
+# them. Both operating systems, and the declared `requires-python` floor as well as current Python.
+#
+# Deliberately NOT gated on a coverage percentage: measuring the CHG-20260817-09 fix showed
+# executors.py at 86% before and 85% after — the broken tests had been executing the code and dying
+# inside it, so coverage counted the lines while no assertion ever ran. A threshold would have
+# reported that module as well-tested throughout the period it was entirely broken, and would have
+# blocked the fix for lowering the number.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: pytest (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One red cell must never hide the state of the other three.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.9", "3.13"]
+    env:
+      # The skill's scripts emit UTF-8; without these, Windows raises a false-positive encoding error.
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+      # The skill store is vendored in-repo, so the skill-cache tests can actually run instead of
+      # skipping. Unset, 7 tests silently skip.
+      AI_SDLC_SKILL_PATH: skills/v1.16.0
+    steps:
+      # No `submodules:` key on purpose — `ai-skills/` is an OPTIONAL fallback (CHG-20260617-05),
+      # is absent from the tree, and the runner is designed never to need it.
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+
+      # -rs prints skip reasons, so a test that quietly stops running stays visible in the log.
+      - name: Test
+        run: python -m pytest tests/ -q -rs
+
+  doc-integrity:
+    name: doc-integrity (CHG/ACC + structure sync)
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The lint reconciles commits against the ledger, so it needs full history.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # Stdlib-only, vendored in-repo: no install step needed.
+      - name: Governance gate
+        run: python skills/v1.16.0/scripts/doc_integrity_check.py --repo .

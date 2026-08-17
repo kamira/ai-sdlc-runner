@@ -9,6 +9,8 @@ ai-sdlc-runner/
 ├── README.md                  # positioning + "depends on ai-skills contract v1, per-project major.minor lock"
 ├── .gitignore                 # Python
 ├── .gitmodules                # declares the ai-skills submodule (pinned to tag v1.0.0)
+├── .github/
+│   └── workflows/ci.yml       # CI: pytest on {ubuntu,windows} × py{3.9,3.13} + doc-integrity gate; CHG-20260817-10
 ├── pyproject.toml             # deps & entry point (runner = ai_sdlc_runner.cli:main)
 ├── skills/                    # PRIMARY offline skill store (CHG-05, CHG-20260703-01, CHG-20260703-06): v1.0.0/, v1.1.0/, v1.12.1/, v1.16.0/ (vendored verbatim)
 │   ├── v1.0.0/                 #   full skill root (SKILL.md, references/, scripts/, assets/)
@@ -57,6 +59,7 @@ ai-sdlc-runner/
 | `config/` | Runtime-variable settings (limits, paths) | Isolated from the contract |
 | `docs/` | ai-sdlc governance artifacts for this repo | Dogfooding |
 | `tests/` | Unit tests for contract/lock/migrate | pytest |
+| `.github/workflows/` | Mechanical verification of every PR and every push to `main` | Read-only; tests + doc-integrity. Gated on tests passing, **not** on a coverage % — see CHG-20260817-10 |
 
 ## Naming & placement rules
 - One responsibility per module file; no module re-implements skill logic.
