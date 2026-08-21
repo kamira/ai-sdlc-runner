@@ -2,5 +2,6 @@
   "_doc": "tag registry + alias bridge: key = controlled tag, value = aliases in any language (see ai-sdlc references/knowledge, hit mechanism)",
   "governance": ["治理", "gate", "halt", "lint", "CHG", "ACC", "doc-integrity", "process"],
   "contract": ["合約", "lock", "version", "migrate", "skill store", "submodule", ".sdlc-lock"],
-  "dashboard": ["儀表板", "TUI", "curses", "resident", "console", "panel"]
+  "dashboard": ["儀表板", "TUI", "curses", "resident", "console", "panel"],
+  "toolchain": ["工具鏈", "probe", "toolchain_probe", "requirements-dev", "handshake step 0", "dev dependency", "NOT_RUN"]
 }

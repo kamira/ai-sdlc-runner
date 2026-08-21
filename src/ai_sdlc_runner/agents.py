@@ -85,7 +85,7 @@ def parse_role_table(skill_path: str | Path) -> Dict[str, RoleSpec]:
     """
     ref = Path(skill_path) / "references" / "agent-hierarchy.md"
     if not ref.is_file():
-        raise RoleError(f"agent-hierarchy.md not found: {ref} (is the ai-skills submodule wired up?)")
+        raise RoleError(f"agent-hierarchy.md not found: {ref} (is a skill version vendored under ./skills?)")
 
     lines = ref.read_text(encoding="utf-8").splitlines()
 

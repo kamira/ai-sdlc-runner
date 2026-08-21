@@ -1,6 +1,6 @@
 # ai-sdlc-runner
 
-External Python orchestrator that drives the [`ai-sdlc`](https://github.com/kamira/ai-skills) skill's
+External Python orchestrator that drives the [`ai-sdlc`](https://github.com/kamira/skill-ai-sdlc-autopilot) skill's
 semi-autonomous development loop. **The skill stays pure (markdown + zero-dependency gate scripts);
 the runner is an external driver that references — never copies — the skill.** Dependency is one-way:
 the runner depends on the skill; the skill never depends on the runner.
@@ -20,10 +20,13 @@ CHG-20260703-06). It auto-selects the store version matching each project's lock
 the lock, the next run uses the new version automatically. `runner check` lists the store versions and
 flags when a newer one is available.
 
-> The `ai-skills` git submodule (`.gitmodules`) is kept **only as an optional fallback** and is *not*
-> pulled by default. To use it instead of the store, run `git submodule update --init` and point
-> `skill_path`/`--skill-path` at it. The runner detects the actual contract version by reading the
-> skill's `SKILL.md` frontmatter either way.
+> There is **no submodule fallback** any more (CHG-20260822-02). The upstream repo the old
+> `ai-skills` submodule pointed at was archived on 2026-08-04 and succeeded by
+> [`skill-ai-sdlc-autopilot`](https://github.com/kamira/skill-ai-sdlc-autopilot), which also renamed
+> the skill's inner path; the submodule had never been wired up in the first place. The vendored
+> store is the only skill source — to use a checkout outside it, point `--skill-path` at that skill
+> root. The runner detects the actual contract version by reading the skill's `SKILL.md` frontmatter
+> either way.
 
 ## Usage
 
@@ -186,7 +189,7 @@ This repo is itself governed by ai-sdlc (dogfooding). See `docs/ai-guideline.md`
 
 # ai-sdlc-runner（繁體中文）
 
-驅動 [`ai-sdlc`](https://github.com/kamira/ai-skills) skill 半自主開發迴圈的**外部 Python 編排器**。
+驅動 [`ai-sdlc`](https://github.com/kamira/skill-ai-sdlc-autopilot) skill 半自主開發迴圈的**外部 Python 編排器**。
 **skill 維持純淨(markdown + 零依賴 gate 腳本);runner 是外部驅動器,引用 skill 而非複製。**
 依賴為單向:runner 依賴 skill,skill 永不依賴 runner。
 
@@ -203,9 +206,11 @@ pip install -e .                   # 選用:.[yaml] 裝 PyYAML、.[test] 裝 pyt
 (`contract_version` 預設值,CHG-20260703-06)。它會依每個專案的鎖(major.minor)自動選對應版本;`migrate` 升鎖後,下一次 run
 自動改用新版本。`runner check` 會列出 store 內版本並提示有無更新。
 
-> `ai-skills` git submodule(`.gitmodules`)**僅保留為選用 fallback**,預設**不**拉取。若要改用它,
-> 執行 `git submodule update --init` 並把 `skill_path`/`--skill-path` 指過去即可。兩種來源 runner 都以
-> 讀 `SKILL.md` frontmatter 偵測實際契約版本。
+> **已無 submodule fallback**(CHG-20260822-02)。舊 `ai-skills` submodule 指向的上游 repo 已於
+> 2026-08-04 封存,後繼為 [`skill-ai-sdlc-autopilot`](https://github.com/kamira/skill-ai-sdlc-autopilot),
+> 且 skill 內層路徑也一併改名;該 submodule 本來就從未 wire 起來過。vendored store 是唯一 skill 來源
+> ——要用 store 以外的 checkout,把 `--skill-path` 指到那個 skill root 即可。兩種來源 runner 都以讀
+> `SKILL.md` frontmatter 偵測實際契約版本。
 
 ## 用法
 

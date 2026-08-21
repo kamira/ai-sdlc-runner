@@ -37,8 +37,9 @@ jobs:
       # skipping. Unset, 7 tests silently skip.
       AI_SDLC_SKILL_PATH: skills/v1.16.0
     steps:
-      # No `submodules:` key on purpose — `ai-skills/` is an OPTIONAL fallback (CHG-20260617-05),
-      # is absent from the tree, and the runner is designed never to need it.
+      # No `submodules:` key needed — there are none. `.gitmodules` declared an `ai-skills`
+      # submodule that was never wired up; CHG-20260822-02 deleted it (upstream archived 2026-08-04).
+      # The vendored `skills/` store is the only skill source and ships in the checkout.
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5

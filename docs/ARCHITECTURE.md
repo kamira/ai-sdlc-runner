@@ -71,8 +71,10 @@ runner's, and not the project's own product version.
 ## 5. Skill sourcing (offline-first)
 
 Resolution order (all offline): explicit `--skill-path` → the local store `skills/<version>` matching
-the project lock major.minor (config-expected on first run, else latest) → the optional `ai-skills`
-submodule fallback (not pulled by default). The runner **never fetches the skill online**. `runner
+the project lock major.minor (config-expected on first run, else latest) → a vestigial `skill_path`
+fallback that is reached only when the store resolves to nothing, and so cannot resolve either
+(CHG-20260822-02 removed the `ai-skills` submodule; CHG-ii replaces the fallback with a typed error).
+The runner **never fetches the skill online**. `runner
 check` compares the newest available version to a project's lock and classifies patch (auto) vs
 minor/major (→ migrate). Four versions ship vendored: `skills/v1.0.0`, `skills/v1.1.0`,
 `skills/v1.12.1`, `skills/v1.16.0` (the current baseline / config default, CHG-20260703-06).
