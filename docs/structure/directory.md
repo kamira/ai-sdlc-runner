@@ -12,6 +12,7 @@ ai-sdlc-runner/
 ├── .github/
 │   └── workflows/ci.yml       # CI: pytest on {ubuntu,windows} × py{3.9,3.13} + doc-integrity gate; CHG-20260817-10
 ├── pyproject.toml             # deps & entry point (runner = ai_sdlc_runner.cli:main)
+├── requirements-dev.txt       # DERIVED probe-facing view of pyproject's optional-dependencies (bare names only, no ranges) so toolchain_probe.sh can run; CHG-20260822-01
 ├── skills/                    # PRIMARY offline skill store (CHG-05, CHG-20260703-01, CHG-20260703-06): v1.0.0/, v1.1.0/, v1.12.1/, v1.16.0/ (vendored verbatim)
 │   ├── v1.0.0/                 #   full skill root (SKILL.md, references/, scripts/, assets/)
 │   ├── v1.1.0/                 #   + role catalog (role_loadout.py, role_refs.json)
@@ -48,7 +49,8 @@ ai-sdlc-runner/
     ├── test_executors.py      # pluggable agent backends (stub/command/api); CHG-06
     ├── test_workspace.py      # multi-project workspace authority/consumers; CHG-08
     ├── test_tui.py            # interactive menu (curses + numbered fallback); CHG-02
-    └── test_dashboard.py      # multi-panel dashboard view; CHG-03
+    ├── test_dashboard.py      # multi-panel dashboard view; CHG-03
+    └── test_requirements_dev_sync.py  # requirements-dev.txt stays derived from pyproject + probe-readable; CHG-20260822-01
 ```
 
 ## Responsibility per directory

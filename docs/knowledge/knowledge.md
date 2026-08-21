@@ -13,6 +13,7 @@
 | KN-1 | pattern | contract / skill sourcing | `skills/` is the PRIMARY offline store (vendored `git archive` of the published skill's main HEAD, labelled by SKILL.md frontmatter); the `ai-skills/` submodule is an optional fallback, never copied from. | active |
 | KN-2 | pattern | contract / version lock | Per-project `.sdlc-lock.json` locks major.minor; `runner.yaml` `contract_version` is a first-run default only; version bumps never touch existing locks; `migrate` is explicit & validating (patch=auto, minor/major=migrate-required), never silent auto-migrate. | active |
 | KN-3 | pattern | dashboard / TUI | Terminal-only stdlib `curses` with a numbered / non-TTY fallback; the vertical `render_snapshot` path is always preserved; panels are computed on real events and cached (no per-keystroke I/O); red-line gates still require explicit human approval. | active |
+| KN-4 | pattern | toolchain / handshake step 0 | `requirements-dev.txt` is a DERIVED, probe-facing view of `pyproject.toml`'s extras: **bare distribution names only** — the probe returns `NOT_RUN` (not PASS) for version ranges, `-e`/`-r` lines, URLs, extras and markers, so "adding the version floors back" silently disables the gate. | active |
 
 <!-- Append DIR-n (user directives) / KN-n (observed patterns) as anchored sections below and add
      one INDEX row each; register any new tag in vocabulary.json first. -->
@@ -51,3 +52,36 @@ gracefully. The vertical `render_snapshot` path is **always preserved** for snap
 git/disk I/O (the typing-lag fix). Wide/CJK input goes through `get_wch()` with char-level width.
 At a HALT gate the dashboard presents Approve/Reject, but **red lines still require explicit human
 approval** — the presentation layer never relaxes a governance gate.
+
+## KN-4 — The toolchain probe only parses bare names; anything richer silently means "not checked"
+*tags: toolchain · source: CHG-20260822-01 · tier: pattern*
+
+The ai-sdlc entry handshake's step 0 runs `toolchain_probe.sh`, which reads dev dependencies from
+**`requirements-dev.txt` and no other file**. This repo declares them in `pyproject.toml`'s
+`[project.optional-dependencies]`, so before CHG-20260822-01 the gate returned `NOT_RUN` (exit 4) on
+every session — which means *the check did not run*, not *nothing to check*.
+
+`requirements-dev.txt` here is therefore a **derived, probe-facing view**, and `pyproject.toml`
+remains the authority for versions. Two things about it are easy to get wrong, both measured against
+the probe rather than reasoned about:
+
+- **Only bare names reach `PASS`.** Measured: `-e .[yaml,test]` → `NOT_RUN`; `PyYAML>=6.0` →
+  `NOT_RUN` (range specifiers fall to the "existence verified only" branch, and *any* unparsed line
+  forces `NOT_RUN`); `pytest==7.0.0` against a different installed version → `BLOCKED`; bare
+  `PyYAML` / `pytest` → **`PASS`**.
+- **The dangerous edit looks like an improvement.** Restoring the version floors to this file — the
+  natural instinct on reading it — turns the gate back off while making the file *appear* more
+  rigorous. `tests/test_requirements_dev_sync.py` exists for exactly this: it fails on any non-bare
+  line, and on any drift from the pyproject extras. A mutation check confirmed the test and the probe
+  fail together.
+
+Exact `==` pins also reach `PASS` but are rejected here: the dev image is rebuilt every session and
+CI spans py3.9/3.13, so a pin would flip to `BLOCKED` on the next routine upgrade.
+
+**What the green means, narrowly:** the dev dependencies are *installed*. It does not check
+`>=6.0`/`>=7.0` — pip enforces those at install time. Still strictly more than `NOT_RUN`, which
+verified nothing.
+
+**Upstream fix still outstanding:** the probe should read `[project.optional-dependencies]` directly.
+That belongs to the `ai-skills` repo, unreachable from this tree (submodule absent; the vendored
+store tops out at v1.16.0, which predates the probe; KN-1 forbids editing the store).

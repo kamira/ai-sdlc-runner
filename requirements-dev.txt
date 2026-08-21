@@ -1,0 +1,19 @@
+# Probe-facing view of pyproject.toml's [project.optional-dependencies]. DERIVED — not authoritative.
+#
+# Exists so the ai-sdlc entry handshake's toolchain_probe.sh can answer "are the dev dependencies
+# installed?" at all. The probe reads this filename and no other; without it every handshake on this
+# repo returns NOT_RUN (exit 4), which means the check did not run, not that all is well.
+# See CHG-20260822-01.
+#
+# NAMES ONLY, NO VERSION RANGES — this is load-bearing, not tidiness. The probe treats `>=`/`~=`
+# specifiers, `-e`/`-r` options, URLs, extras and environment markers as UNPARSABLE and returns
+# NOT_RUN for any of them. So `PyYAML>=6.0` here would silently switch the toolchain gate back off
+# while looking like an improvement. Version constraints live in pyproject.toml, which is the
+# authority for them and what pip actually enforces at install time.
+#
+# Guarded by tests/test_requirements_dev_sync.py: it fails if these names stop matching the extras
+# in pyproject.toml, and fails if any line stops being a bare distribution name.
+#
+# To install: prefer `pip install -e ".[yaml,test]"` (gets the version floors too).
+PyYAML
+pytest
