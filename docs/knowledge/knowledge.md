@@ -10,7 +10,7 @@
 
 | id | tier | tags/scope | rule (one line) | status |
 |----|------|-----------|-----------------|--------|
-| KN-1 | pattern | contract / skill sourcing | `skills/` is the PRIMARY offline store (vendored `git archive` of the published skill's main HEAD, labelled by SKILL.md frontmatter); the `ai-skills/` submodule is an optional fallback, never copied from. | active |
+| KN-1 | pattern | contract / skill sourcing | `skills/` is the **only** skill source — a vendored `git archive` of the published skill's main HEAD, labelled by SKILL.md frontmatter, never copied from. The `ai-skills/` submodule fallback was deleted in CHG-20260822-02 (upstream archived 2026-08-04, succeeded by `skill-ai-sdlc-autopilot`). | active |
 | KN-2 | pattern | contract / version lock | Per-project `.sdlc-lock.json` locks major.minor; `runner.yaml` `contract_version` is a first-run default only; version bumps never touch existing locks; `migrate` is explicit & validating (patch=auto, minor/major=migrate-required), never silent auto-migrate. | active |
 | KN-3 | pattern | dashboard / TUI | Terminal-only stdlib `curses` with a numbered / non-TTY fallback; the vertical `render_snapshot` path is always preserved; panels are computed on real events and cached (no per-keystroke I/O); red-line gates still require explicit human approval. | active |
 | KN-4 | pattern | toolchain / handshake step 0 | `requirements-dev.txt` is a DERIVED, probe-facing view of `pyproject.toml`'s extras: **bare distribution names only** — the probe returns `NOT_RUN` (not PASS) for version ranges, `-e`/`-r` lines, URLs, extras and markers, so "adding the version floors back" silently disables the gate. | active |
@@ -19,14 +19,20 @@
      one INDEX row each; register any new tag in vocabulary.json first. -->
 
 ## KN-1 — Offline skill-store vendoring pattern
-*tags: contract · source: CHG-20260703-01, CHG-20260703-06 · tier: pattern*
+*tags: contract · source: CHG-20260703-01, CHG-20260703-06, CHG-20260822-02 · tier: pattern*
 
 The runner sources the `ai-sdlc` skill **offline-first**. `skills/<version>/` is the PRIMARY store,
 each version vendored verbatim as an offline `git archive` of the published skill's `main` HEAD and
 labelled by that checkout's SKILL.md frontmatter version (e.g. `v1.12.1` @ `605425e`, `v1.16.0` @
-`b4d6ef3`) — versions without a git tag are still pinned by commit. The `ai-skills/` git submodule is
-an **optional fallback** (not pulled by default) and is treated as read-only reference: the runner
-**never re-implements skill logic and never copies skill markdown into itself** (ai-guideline §7).
+`b4d6ef3`) — versions without a git tag are still pinned by commit. The store is treated as read-only
+reference: the runner **never re-implements skill logic and never copies skill markdown into itself**
+(ai-guideline §7).
+
+**There is no longer a submodule fallback.** `.gitmodules` declared one against `kamira/ai-skills`,
+which was **archived 2026-08-04** and succeeded by `kamira/skill-ai-sdlc-autopilot` (which also
+merged `ai-sdlc` + `ai-sdlc-autopilot` into one skill at v1.18.0, so the inner path changed too).
+The submodule had never been wired up and the directory never existed; CHG-20260822-02 deleted the
+declaration. To use a skill checkout outside the store, pass `--skill-path` at its skill root.
 Adding a store version bumps `runner.yaml`'s `contract_version` default for *new* projects only.
 
 ## KN-2 — Per-project version-lock & migrate semantics

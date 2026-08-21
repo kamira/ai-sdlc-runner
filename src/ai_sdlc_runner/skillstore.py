@@ -6,7 +6,8 @@ in a store and resolves the right one — by a project's lock major.minor when p
 concrete ``skill_path`` for the rest of the runner to read/call.
 
 The store holds verbatim skill snapshots (SKILL.md + references/ + scripts/ + assets/), extracted
-offline from the ai-skills git tags. The runner still reads governance from those files / calls those
+offline from the upstream skill repo (kamira/skill-ai-sdlc-autopilot; formerly kamira/ai-skills,
+archived 2026-08-04). The runner still reads governance from those files / calls those
 scripts — it never duplicates the logic.
 """
 from __future__ import annotations

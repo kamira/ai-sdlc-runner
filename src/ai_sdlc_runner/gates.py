@@ -37,7 +37,7 @@ class Decision:
 def _script(skill_path: str | Path, name: str) -> Path:
     p = Path(skill_path) / "scripts" / name
     if not p.is_file():
-        raise GateError(f"skill script not found: {p} (is the ai-skills submodule wired up?)")
+        raise GateError(f"skill script not found: {p} (is a skill version vendored under ./skills?)")
     return p
 
 

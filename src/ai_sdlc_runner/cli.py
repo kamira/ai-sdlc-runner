@@ -84,8 +84,12 @@ def _resolve_skill_path(config: dict, override: Optional[str], project_dir: Opti
     """Resolve the concrete skill path (CHG-20260617-05).
 
     Precedence: explicit ``--skill-path`` override → local store version matching the project lock
-    major.minor (or config-expected on first run, else the latest in the store) → the fallback
-    ``skill_path`` (optional submodule). Offline throughout — the store is local.
+    major.minor (or config-expected on first run, else the latest in the store) → the vestigial
+    ``skill_path`` fallback. Offline throughout — the store is local.
+
+    That last step is reached only when the store resolves to nothing at all, so it cannot resolve
+    either; it survives only to keep the resulting error legible. CHG-ii replaces it with a typed
+    ``SkillPathError`` (CHG-20260822-02).
     """
     if override:
         return override
@@ -109,7 +113,7 @@ def _resolve_skill_path(config: dict, override: Optional[str], project_dir: Opti
         p = skillstore.resolve_path(store)  # latest available
         if p:
             return p
-    return config.get("skill_path", "./ai-skills/skills/ai-sdlc")
+    return config.get("skill_path", "./skills/v1.16.0")
 
 
 # --------------------------------------------------------------------------------------

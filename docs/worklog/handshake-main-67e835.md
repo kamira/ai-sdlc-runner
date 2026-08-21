@@ -2,8 +2,8 @@
 
 分支/角色/範圍:`claude/ai-sdlc-handshake-67e835`(worktree `.claude/worktrees/ai-sdlc-handshake-67e835`)
 | 角色:A1 / orchestrator(單人進場,完整握手)| RW:全 repo
-現在做:CHG-20260822-01 步驟 4/4 完成(工具鏈探測缺口已修,ACC 已收尾)
-下一步:等使用者決定是否 push + 開 PR(outward,需一次人工確認);之後回填 CI run 編號
+現在做:CHG-20260822-02 步驟 7/7 完成(改名清理,ACC 已收尾);等使用者確認 push
+下一步:(順序 2→1→3,使用者已定)②完成 → ①push + PR + 回填 CI run → ③上游 CHG
 最後更新:2026-08-22(UTC+0)
 
 ## 進場 ack(2026-08-21 15:31 UTC+0)
@@ -54,3 +54,13 @@
   `skill_path` 預設值 `./ai-skills/skills/ai-sdlc` 是**功能性過期**,連子路徑都變了——後繼是
   `skills/ai-sdlc-autopilot/`)。動到 `src/` 屬較高風險層級,不併入本輪低風險 CHG;
   ③探測器 pyproject 支援要在 `skill-ai-sdlc-autopilot` 那邊另開 CHG。
+
+- 2026-08-22 — CHG-20260822-02(改名清理)收尾。審議席 **五輪**才收斂:R1 三項分歧;R2 codex 三項全改判;
+  R3 兩席提的失敗機制都不合本 repo 慣例(慣例是 typed error → print → return 2),改判並一致選
+  S2 分拆;R4 又分歧(V1/V4);R5 fable 改判 V1。定案:刪 `.gitmodules`、fallback 值改
+  `./skills/v1.16.0`、KN-1 就地改、guideline:90 劃除加註。`src/` **零邏輯變動**。
+  161 passed / 2 skipped(未動任何測試),探測仍 PASS,doc-integrity exit 0。
+- 未完成:①push + PR + 回填 CI run(**medium 風險,merge 前需一次人工確認**);
+  ②**CHG-ii 尚未開**——移除重複預設 + 六個呼叫點接 `SkillPathError`;審議席留一個未決點:
+  類別定義在 `cli.py`(codex)還是 `skillstore.py`(fable,避開 cli↔dashboard 循環);
+  ③上游 `skill-ai-sdlc-autopilot` 的 pyproject 探測支援。
