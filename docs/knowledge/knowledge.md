@@ -83,5 +83,8 @@ CI spans py3.9/3.13, so a pin would flip to `BLOCKED` on the next routine upgrad
 verified nothing.
 
 **Upstream fix still outstanding:** the probe should read `[project.optional-dependencies]` directly.
-That belongs to the `ai-skills` repo, unreachable from this tree (submodule absent; the vendored
-store tops out at v1.16.0, which predates the probe; KN-1 forbids editing the store).
+That belongs to **`kamira/skill-ai-sdlc-autopilot`** — successor to `ai-skills`, which was archived
+2026-08-04 — cloned locally as a sibling directory and still carrying the same unfixed probe. It is
+reachable but is a separate governance domain, and a fix there reaches this repo only once a fixed
+skill version is installed or vendored. On this side the workaround stands: the submodule is absent,
+the vendored store tops out at v1.16.0 (predating the probe), and KN-1 forbids editing the store.

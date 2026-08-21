@@ -43,5 +43,14 @@
   `doc_integrity_check.py --repo .` exit 0 → ACC-20260822-01 收尾(Pass,11 項全過)→
   KN-4 入知識庫(tag `toolchain` 先註冊進 vocabulary.json)。
 - 決議方式:fable × codex 交叉共識(首輪即一致,均選 B),再以實測探測結果佐證。
-- 未完成:①push + PR + 回填 CI run(需人工確認的 outward 動作);②探測器本身的 pyproject 支援
-  要回報上游 `ai-skills`(本 tree 構不到)。
+- 2026-08-22 — 使用者指出 `ai-skills` 已分割改名。查證:`kamira/ai-skills` **已封存**(最後 push
+  2026-08-04);使用者說的 `skill-ai-sdlc` 查無此 repo,實際後繼是 **`kamira/skill-ai-sdlc-autopilot`**,
+  且**已 clone 在本機同層目錄**、與遠端同步、內含同一支尚未修正的探測器。
+  → 我今天寫進 CHG/ACC/KN-4 的「上游構不到、無可預期時程」是**當天就錯的敘述**,已就地更正
+  (決議不變,理由更正)。歷史 ledger(2026-06~08 各筆)**不改**——寫下時為真,append-only。
+- 未完成:①push + PR + 回填 CI run(需人工確認的 outward 動作);
+  ②**改名清理另開 CHG**——`.gitmodules` url、`ai-guideline.md`、`directory.md`、KN-1、README、
+  `ARCHITECTURE.md`、`config/runner.yaml`、`src/` 四檔(其中 `cli.py:112` 與 `runner.yaml:20` 的
+  `skill_path` 預設值 `./ai-skills/skills/ai-sdlc` 是**功能性過期**,連子路徑都變了——後繼是
+  `skills/ai-sdlc-autopilot/`)。動到 `src/` 屬較高風險層級,不併入本輪低風險 CHG;
+  ③探測器 pyproject 支援要在 `skill-ai-sdlc-autopilot` 那邊另開 CHG。
