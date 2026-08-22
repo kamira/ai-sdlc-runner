@@ -281,3 +281,11 @@ CI 新增獨立的 `elements` job(不是塞進既有 job 的一個 step),所以�
 
 `pytest tests/` **251 passed, 2 skipped**;doc-integrity **exit 0**;
 `runner elements --repo .` 五版全 `match`(227 / 256 / 347 / 355 / 479 個檔逐位元組相同)。
+
+### task 4 的 CI(6/6,新閘門首次上線)
+
+PR #14 · run 32559369266 —— **6/6 pass**(原本 5 個 job + 新增的 `elements (regeneration gate)`)。
+新 job 8 個 steps、0 失敗,log 逐版印出 227/256/347/355/479 個檔 byte-identical。
+
+值得記一筆:**元素樹是在 Windows 產生、在 ubuntu 驗證的**,跨平台 byte-compare 成立。
+`.gitattributes` 的 `eol=lf` 到此是雙向都驗過了。
