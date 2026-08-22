@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from . import engine, graph, policy, ship, tui, workorder
+from . import engine, graph, policy, settings as settings_mod, ship, tui, workorder
 
 DEFAULT_CONFIG = "config/runner.yaml"
 
@@ -167,6 +167,35 @@ def cmd_policy(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_settings(args: argparse.Namespace) -> int:
+    """Show the settings, or open the screen that edits them.
+
+    The requirement asks for the seat count and the high-risk bypass to be *set in the GUI*, and
+    prints them here as well because a bypass has to be visible to somebody who never opens a menu
+    — in CI, in a log, in a review of what this project is configured to do.
+    """
+    try:
+        current = settings_mod.load(args.settings)
+    except settings_mod.SettingsError as exc:
+        print(f"error: {exc}")
+        return 2
+
+    if args.show:
+        print(current.describe())
+        if current.below_floor():
+            print(f"warning:       running below the review floor of {policy.SEAT_FLOOR}. "
+                  f"Every run records that it did.")
+        return 0
+
+    chosen = settings_mod.edit(current)
+    if chosen is None:
+        print("unchanged")
+        return 0
+    settings_mod.save(chosen, args.settings)
+    print(f"saved {args.settings}: {chosen.describe()}")
+    return 0
+
+
 def effects_provider(plan: dict):
     """The effects each node carries out, from the plan's ``ship`` block — or ``None``.
 
@@ -253,8 +282,17 @@ def cmd_run(args: argparse.Namespace) -> int:
     plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
 
     journal = engine.AskJournal(args.ask_journal) if args.ask_journal else None
-    seats = args.review_seats
-    high_risk = bool(args.high_risk_mode)
+    try:
+        saved = settings_mod.load(args.settings)
+    except settings_mod.SettingsError as exc:
+        print(f"error: {exc}")
+        return 2
+
+    # A flag beats the file. Someone typing `--seats 1` right now is making a decision about this
+    # run; the file is the standing one. Neither is silent: whichever produces a floor crossing, the
+    # run records it.
+    seats = args.review_seats if args.review_seats is not None else saved.review_seats
+    high_risk = bool(args.high_risk_mode) or saved.high_risk_mode
     if seats is not None and seats < policy.SEAT_FLOOR and not high_risk:
         high_risk = tui.confirm_high_risk(seats, policy.SEAT_FLOOR)
         if not high_risk:
@@ -314,6 +352,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="runner",
                                 description="A governed development flow, driven end to end.")
     p.add_argument("--config", default=DEFAULT_CONFIG, help=f"path to runner.yaml (default {DEFAULT_CONFIG})")
+    p.add_argument("--settings", default=settings_mod.DEFAULT_PATH,
+                   help=f"path to the settings file (default {settings_mod.DEFAULT_PATH})")
     sub = p.add_subparsers(dest="command", required=False)
 
     pf = sub.add_parser("flow", help="print the flow this runner drives")
@@ -321,6 +361,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     pp = sub.add_parser("policy", help="print the roles, gates and seats")
     pp.set_defaults(func=cmd_policy)
+
+    ps = sub.add_parser("settings", help="set the review seat count and the high-risk bypass")
+    ps.add_argument("--show", action="store_true",
+                    help="print the current settings instead of opening the screen")
+    ps.set_defaults(func=cmd_settings)
 
     pr = sub.add_parser("run", help="walk the flow for one change")
     pr.add_argument("--plan", default=None, help="JSON plan: node_specs, decisions, risk")

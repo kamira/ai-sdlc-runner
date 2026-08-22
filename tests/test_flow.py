@@ -737,19 +737,32 @@ def test_refusing_is_the_default():
 
 def test_a_node_that_declares_its_work_passes():
     declared = {node.id: [_op("ordinary development work")]
-                for node in graph.NODES if node.role and node.role != "seat"}
+                for node in graph.NODES if node.role}
     cfg = _cfg(undeclared="refuse", confirmed=THROUGH, operations=declared)
     assert engine.walk(cfg, Recorder(), enabled=True).halted_at == "done"
 
 
-def test_a_review_seat_owes_no_declaration():
-    """A seat reads and answers. It is the nodes that may write or execute that owe a declaration."""
-    declared = {node.id: [_op("ordinary development work")]
-                for node in graph.NODES if node.role and node.role != "seat"}
-    cfg = _cfg(undeclared="refuse", confirmed=THROUGH, operations=declared)
+def test_a_review_seat_owes_a_declaration_like_anything_else_that_can_act():
+    """The exemption used to be by role *name*, while `policy.role("seat").can_execute` was True and
+    the work order handed that capability over — so the panel was dispatched with nothing declared,
+    on the reasoning that a reviewer only reads. A reviewer that may execute can do whatever
+    executing can do, and a verifier found the exemption disagreeing with the function's own rule.
+    The criterion is the capability, never the name."""
+    cfg = _cfg(undeclared="refuse", confirmed=THROUGH,
+               operations={node.id: [_op("ordinary development work")]
+                           for node in graph.NODES if node.role and node.role != "seat"})
+    assert engine.walk(cfg, Recorder(), enabled=True).halted_at == "lead_review"
+
+
+def test_a_node_with_no_role_and_no_effects_owes_nothing():
+    """`record_module` runs the runner's own bookkeeping. Nothing is dispatched and nothing is
+    applied, so there is nothing to declare — the check is about acting, not about existing."""
+    cfg = _cfg(undeclared="refuse", confirmed=THROUGH,
+               operations={node.id: [_op("ordinary development work")]
+                           for node in graph.NODES if node.role})
     report = engine.walk(cfg, Recorder(), enabled=True)
     assert report.halted_at == "done"
-    assert any(a.seat for a in report.asks)
+    assert "record_module" in report.visited
 
 
 def test_allowing_an_undeclared_run_is_recorded_as_a_relaxation():
