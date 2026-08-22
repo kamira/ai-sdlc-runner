@@ -43,7 +43,9 @@ ai-sdlc-runner/
 │   ├── workorder.py           # render one node's work order: closed D5 schema, no harness-specific field, self-sufficient; CHG-20260822-04 task 5
 │   ├── graph.py               # the node graph: the skill's shipped flow written as data, pinned to references/autopilot-loop#state-machine; CHG-20260822-04 task 6
 │   ├── effects.py             # ordered effects, each with a probe; nothing already true is re-applied; CHG-20260822-04 task 6 (D6)
-│   └── engine.py              # walk the graph behind an opt-in flag: one session per ask, questions journalled before asking; CHG-20260822-04 task 6
+│   ├── engine.py              # walk the graph behind an opt-in flag: one session per ask, questions journalled before asking; CHG-20260822-04 task 6
+│   ├── probes.py              # postconditions read from the world: git, the forge, the ledger — never a receipt; CHG-20260822-04 task 7
+│   └── ship.py                # the ordered ship sequence (intent → branch → commit → push → PR), each effect probe-paired; CHG-20260822-04 task 7
 ├── config/
 │   └── runner.yaml            # contract version, skill path, concurrency/depth limits
 ├── docs/
@@ -70,7 +72,9 @@ ai-sdlc-runner/
     ├── test_graph.py           # the graph is the shipped flow: phrase pin, loop/branch survive, checkpoint + role coverage; CHG-20260822-04 task 6
     ├── test_effects.py         # probeability is the admission rule; frontier resume; nothing already true is re-applied; CHG-20260822-04 task 6
     ├── test_engine.py          # opt-in flag, hard stops, one session per ask (closed after), question survives a dropped session; CHG-20260822-04 task 6
-    └── test_engine_cli.py      # `run --engine` end to end; the GUI toggle is the only way below the seat floor; CHG-20260822-04 task 6
+    ├── test_engine_cli.py      # `run --engine` end to end; the GUI toggle is the only way below the seat floor; CHG-20260822-04 task 6
+    ├── test_probes.py          # real git repo + real bare remote + a real forge process; unanswerable is never 'absent'; CHG-20260822-04 task 7
+    └── test_kill_resume.py     # a real subprocess killed with os._exit at every boundary; resume runs only what is left; CHG-20260822-04 task 7
 ```
 
 ## Responsibility per directory
