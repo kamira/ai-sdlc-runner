@@ -342,3 +342,23 @@ fable 查證後指出那句在 **`review_seats.json`** 的 `_extending`,而 `rol
 ### task 5 的 CI
 
 PR #15 · run 32560052136 —— **6/6 pass**,逐 job 7–8 steps、0 失敗。
+
+---
+
+## 2026-08-22 — task 5 已 merge(`55b6ca8`);停在 task 6 的確認關卡
+
+分支:`claude/chg-20260822-04-task6`(自 `origin/main` @ `55b6ca8`)
+現在做:**停在確認關卡,尚未動工。`src/` 一行未改。**
+下一步:使用者核可後開 task 6(節點引擎 + 有序 effect 與 probe)。
+
+task 6 為何要新的確認關卡:`Autonomy: high` 對它再次生效——它**取代四階段執行路徑**,
+是本 CHG 風險評為 high 的主因(碰 `orchestrator` 233 行 / `state` 90 行 / `agents` 175 行)。
+
+停在此處要向使用者陳明的三件事:
+1. opt-in flag:旗標翻轉前既有四階段路徑一行不動;翻轉是**更後面的另一個決定**,不在 task 6。
+2. 舊 `state.json` checkpoint 直接失效(設計定案時使用者已核可,無遷移)。
+3. **task 5 的硬邊界會在 task 6 發火**:13 角色只有 4 個能渲染工單,引擎碰到另外 9 個
+   (含審議席)必須硬停。兩席明確要求不得臨場補預設值——那是把已否決的方案從後門放回來。
+   所以 task 6 交出的引擎**流程本來就不完整,這是誠實狀態不是缺陷**。
+
+進度:task 1–5 merged(125 個測試,全套 285 passed);task 8 部分;task 6、7、9 未開工。
