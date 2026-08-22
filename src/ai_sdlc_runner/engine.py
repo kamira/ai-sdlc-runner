@@ -219,6 +219,10 @@ class RunConfig:
     #: than saying something false. ``allow`` exists for dry runs and records itself as a relaxation
     #: — never silently.
     undeclared: str = "refuse"
+    #: Commands the operator vouches for as ordinary. Empty means only repo paths and read-only
+    #: version control are recognised — safe, and it stops a lot, which is the honest default when
+    #: nobody has said what this project's toolchain is.
+    ordinary_commands: Sequence[str] = ()
     #: Continue an interrupted run: skip what the journal already answered, re-ask only what it
     #: does not have. Off by default — a run that silently continues somebody else's because a
     #: directory happened to exist is worse than one that starts over.
@@ -471,22 +475,23 @@ def _permanent_halt(node: graph.Node, cfg: "RunConfig", report: "RunReport") -> 
         # A target this runner cannot place is not evidence of anything, and it is certainly not
         # evidence of safety. It falls under the same setting as a node that declared nothing,
         # because it is the same fact about the world: *we could not verify what this does.*
-        unknown = policy.unverified(operation)
+        unknown = policy.unverified(operation, cfg.ordinary_commands)
         if halt is None and unknown and cfg.undeclared != "allow":
             return (
                 f"{node.id!r} names target(s) this runner does not recognise: {list(unknown)}. "
                 f"They are declared ordinary, and nothing confirmed that — a red-line list finding "
-                f"nothing has said nothing. Name a target it knows, declare the operation's real "
-                f"kind, or pass undeclared='allow' to proceed on the plan's word, which is "
-                f"recorded.")
+                f"nothing has said nothing. Vouch for the command in settings "
+                f"(`ordinary_commands`), declare the operation's real kind, or pass "
+                f"undeclared='allow' to proceed on the plan's word, which is recorded.")
 
-        if halt is None and policy.on_trust(operation):
+        if halt is None and policy.on_trust(operation, cfg.ordinary_commands):
             # Nothing about this was checked except its own prose: it declares `ordinary` and names
             # no targets. Not blocked — forcing every operation to name one buys ceremony, since an
             # empty list is as forgeable as a wrong `kind`. What is unacceptable is the trust being
             # invisible, so it goes in the report where an auditor reads it.
             why = (f"no targets named" if not operation.get("targets")
-                   else f"target(s) not recognised: {list(policy.unverified(operation))}")
+                   else f"target(s) not recognised: "
+                        f"{list(policy.unverified(operation, cfg.ordinary_commands))}")
             report.on_trust.append(
                 f"{node.id}: {operation.get('description', '')!r} was taken on the plan's word — "
                 f"declared ordinary, {why}, nothing verified")

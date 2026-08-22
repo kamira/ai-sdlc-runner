@@ -46,7 +46,7 @@ DEFAULT_PATH = "config/settings.json"
 #: Exactly the keys a settings file may carry. Anything else is refused rather than ignored: a
 #: setting nobody reads looks identical to a setting that works, and the whole point of this file is
 #: that a relaxation is visible.
-FIELDS: Tuple[str, ...] = ("review_seats", "high_risk_mode")
+FIELDS: Tuple[str, ...] = ("review_seats", "high_risk_mode", "ordinary_commands")
 
 
 class SettingsError(Exception):
@@ -61,6 +61,18 @@ class Settings:
     review_seats: Optional[int] = None
     #: Whether the seat floor may be crossed at all. Off unless somebody turned it on.
     high_risk_mode: bool = False
+    #: Commands the operator vouches for as ordinary development work: `python`, `npm`, `docker`.
+    #:
+    #: This runner recognises **danger** (imperfectly, and every addition is safe) and recognises a
+    #: plain repo path (decidably). It does **not** recognise safety in an arbitrary command, and
+    #: two rounds of review proved what guessing costs: one version passed
+    #: `cat /dev/urandom > /dev/sda` as ordinary, and the next stopped 10 of 10 real development
+    #: commands. The operator knows their toolchain; this runner does not.
+    #:
+    #: Vouching is for the **tool**, never the whole command line. `policy._SUSPECT` still refuses
+    #: `npm run release` from an operator who vouched for `npm` — otherwise this is the same
+    #: prefix mistake one level out.
+    ordinary_commands: Tuple[str, ...] = ()
 
     def seats(self) -> int:
         """The seat count a run would actually open.
@@ -87,7 +99,8 @@ class Settings:
         return self.seats() < policy.SEAT_FLOOR
 
     def as_dict(self) -> dict:
-        return {"review_seats": self.review_seats, "high_risk_mode": self.high_risk_mode}
+        return {"review_seats": self.review_seats, "high_risk_mode": self.high_risk_mode,
+                "ordinary_commands": list(self.ordinary_commands)}
 
     def describe(self) -> str:
         seats = self.seats()
@@ -103,6 +116,10 @@ class Settings:
                 line += f" — running {seats} below the floor of {policy.SEAT_FLOOR}"
         else:
             line += "  |  high-risk mode: off"
+        if self.ordinary_commands:
+            line += f"  |  vouched commands: {', '.join(sorted(self.ordinary_commands))}"
+        else:
+            line += "  |  no vouched commands (only repo paths and read-only git are recognised)"
         return line
 
 
@@ -143,7 +160,19 @@ def load(path: str = DEFAULT_PATH) -> Settings:
     if not isinstance(high_risk, bool):
         raise SettingsError(f"{path}: high_risk_mode must be true or false, got {high_risk!r}")
 
-    return Settings(review_seats=seats, high_risk_mode=high_risk)
+    commands = raw.get("ordinary_commands", [])
+    if not isinstance(commands, list) or not all(isinstance(c, str) for c in commands):
+        raise SettingsError(f"{path}: ordinary_commands must be a list of command names, "
+                            f"got {commands!r}")
+    for command in commands:
+        if not command.strip() or len(command.split()) != 1:
+            raise SettingsError(
+                f"{path}: ordinary_commands holds {command!r}. Vouch for the **command**, one word "
+                f"— `npm`, not `npm run build`. A whole command line here would be the prefix "
+                f"mistake this setting exists to avoid.")
+
+    return Settings(review_seats=seats, high_risk_mode=high_risk,
+                    ordinary_commands=tuple(commands))
 
 
 def save(settings: Settings, path: str = DEFAULT_PATH) -> None:

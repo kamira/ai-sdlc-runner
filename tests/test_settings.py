@@ -298,10 +298,38 @@ def test_turning_the_bypass_off_asks_nothing():
 # --------------------------------------------------------------------------------------
 
 def test_settings_cannot_reach_a_gate_verdict_or_a_permanent_halt():
-    """Asserted by enumerating the surface rather than by promising it in prose: the only fields
-    that exist are the two, and `policy` is not passed anything by this module."""
-    assert settings_mod.FIELDS == ("review_seats", "high_risk_mode")
+    """Asserted by enumerating the surface rather than promising it in prose.
+
+    Three fields now: the seat floor, its bypass, and the operator's vouched command list. The third
+    can only ever move a target from `unrecognised` to `ordinary`, and `policy._SUSPECT` still
+    overrides it — vouching for `npm` does not vouch for `npm run release`. None of the three can
+    reach a gate verdict, a permanent halt kind, or the adjudication rule.
+    """
+    assert settings_mod.FIELDS == ("review_seats", "high_risk_mode", "ordinary_commands")
     assert set(settings_mod.Settings().as_dict()) == set(settings_mod.FIELDS)
+
+
+def test_vouching_cannot_turn_a_red_line_ordinary():
+    """The one direction the operator's list must not work in."""
+    for target in ("rm -rf /srv", "git push --force origin main", "kubectl apply -f prod/",
+                   "dd if=/dev/zero of=/dev/sda"):
+        assert policy.recognise(target, ("rm", "git", "kubectl", "dd")) == "red", target
+
+
+def test_a_vouched_command_must_be_one_word():
+    """A whole command line here would be the prefix mistake this setting exists to avoid."""
+    import json as _json
+
+    import pytest as _pytest
+    from pathlib import Path as _Path
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        path = _Path(d) / "settings.json"
+        path.write_text(_json.dumps({"ordinary_commands": ["npm run build"]}), encoding="utf-8")
+        with _pytest.raises(settings_mod.SettingsError) as exc:
+            settings_mod.load(str(path))
+        assert "one word" in str(exc.value)
 
 
 def test_no_settings_value_changes_what_the_policy_says():
