@@ -102,7 +102,11 @@ able only to **add** a stop:
    table" stops, whatever is declared beside it;
 2. **the targets** an operation names — `kubectl apply -f prod/`, `secrets/key.pem`. These are facts
    rather than claims, so they overrule a declaration that says otherwise. A target the runner does
-   **not recognise** is a third case, and it is not the safe one: it stops by default;
+   **not recognise** is a third case, and it is not the safe one: it stops by default. What counts
+   as recognised is small on purpose — a plain repo path, read-only version control, and the
+   commands you vouch for in `runner settings`. A command whose name says nothing about what it does
+   (`python`, `sh`, `rm`, `curl`) cannot be vouched for at all, and vouching covers the tool rather
+   than the command line;
 3. **the declaration** — every operation says which of the six kinds it is, or `ordinary`. An
    operation that declares nothing is refused, not assumed safe;
 4. **the description**, against word lists. The weakest layer by far, and both of its numbers are
@@ -118,7 +122,7 @@ what was already answered.
 
 ## High-risk mode
 
-The review panel has a floor of three seats. A user who needs fewer can turn on high-risk mode and
+The review panel has a floor of 3 seats. A user who needs fewer can turn on high-risk mode and
 open one — and the run report records that the floor was bypassed, at what seat count. Bypassing a
 safeguard silently is the thing being prevented; bypassing it on the record is a decision someone
 made.
@@ -208,7 +212,7 @@ runner run --config runner.yaml --risk medium --seats 3
 
 ## 高風險模式
 
-審議席預設下限三席。需要更少的使用者可以開啟高風險模式並只開一席——而執行報告會記下「下限被規避,實際
+審議席預設下限 3 席。需要更少的使用者可以開啟高風險模式並只開一席——而執行報告會記下「下限被規避,實際
 開了幾席」。要避免的是**無聲**繞過安全機制;留下紀錄地繞過,那是有人做的決定。
 
 兩者都在 `runner settings` 的畫面上設定,存進 `config/settings.json`;`runner settings --show` 不開

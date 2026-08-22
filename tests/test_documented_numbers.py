@@ -30,6 +30,13 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 
+#: Everything a reader would take as current. **Source is included**: a verifier found `policy.py`'s
+#: own docstring still claiming "36 real briefs" precisely because this list stopped at `docs/`, and
+#: a docstring is documentation that happens to live in a file the compiler reads.
+#:
+#: `docs/changes/` and `docs/acceptance/` are deliberately **out**: a change record states what was
+#: true when it was written, and rewriting history to match the present is how a ledger stops being
+#: one. Where such a record was actually wrong, it is corrected in place with a note saying so.
 DOCS = (
     ROOT / "README.md",
     ROOT / "docs" / "ARCHITECTURE.md",
@@ -38,6 +45,11 @@ DOCS = (
     ROOT / "docs" / "structure" / "data.md",
     ROOT / "docs" / "structure" / "directory.md",
     ROOT / "docs" / "structure" / "logical.md",
+    ROOT / "docs" / "knowledge" / "knowledge.md",
+    ROOT / "src" / "ai_sdlc_runner" / "policy.py",
+    ROOT / "src" / "ai_sdlc_runner" / "graph.py",
+    ROOT / "src" / "ai_sdlc_runner" / "engine.py",
+    ROOT / "src" / "ai_sdlc_runner" / "settings.py",
 )
 
 
@@ -129,14 +141,26 @@ def test_the_backstop_catch_rate_the_documents_claim_is_the_measured_one():
                 f"{name} claims {a} of {b}; measured {caught} of {total}"
 
 
+#: Only **present-tense** claims about the corpus. `knowledge.md` records what a measurement *was*
+#: at the time — "19 of 20 briefs were stopped" is history and rewriting it to match today would
+#: turn the knowledge base into a set of statements about the present, which is not what it is for.
+#: The distinction is the phrasing: a current claim says what the check *does*.
+_CURRENT_CORPUS = (
+    r"falsely stops \d+ of (\d+)",
+    r"0 of (\d+) ordinary(?:\s+engineering)? briefs",
+    r"stops on (\d+) real briefs",
+    r"false stops \((\d+) real briefs\)",
+    r"(\d+)\s*句正常開發任務誤擋",
+)
+
+
 def test_the_false_stop_corpus_size_the_documents_claim_is_the_real_one():
     """The one that was wrong two ways at once — 56 in some files, 36 in others, 46 in fact."""
     actual = _false_stop_corpus_size()
     for name, body in _text().items():
-        for claimed in re.findall(r"of\s+(\d+)\s+ordinary(?:\s+engineering)?\s+briefs", body):
-            assert int(claimed) == actual, f"{name} says {claimed} briefs; there are {actual}"
-        for claimed in re.findall(r"(\d+)\s*句正常開發任務", body):
-            assert int(claimed) == actual, f"{name} says {claimed} briefs; there are {actual}"
+        for pattern in _CURRENT_CORPUS:
+            for claimed in re.findall(pattern, body):
+                assert int(claimed) == actual,                     f"{name} says {claimed} briefs; there are {actual}"
 
 
 def test_the_false_stop_rate_the_documents_claim_is_still_true():
@@ -165,11 +189,53 @@ def test_this_check_would_catch_a_drifted_number(tmp_path):
     assert claimed and int(claimed[0]) != len(graph.NODES)
 
 
-def test_the_documents_actually_contain_numbers_to_check():
-    """If the regexes stop matching because a document was reworded, this check silently passes.
-    Named and asserted, because 'nothing matched' reading as 'everything is fine' is the exact
-    defect this repository has now shipped twice."""
+#: Every claim this file knows how to check, with the pattern that finds it. A category that stops
+#: appearing anywhere is a category nobody is checking, so each one is asserted present by name.
+CATEGORIES = {
+    "node count": r"\d+\s+nodes",
+    "gate count": r"\d+\s+gates",
+    "seat floor": r"floor of \d+",
+    "measured ratio": r"\d+\s+of\s+\d+",
+    "false-stop corpus": r"(?:falsely stops \d+ of \d+|0 of \d+ ordinary)",
+}
+
+
+@pytest.mark.parametrize("name,pattern", sorted(CATEGORIES.items()))
+def test_each_category_is_still_stated_somewhere(name, pattern):
+    """The tripwire, per category rather than in aggregate.
+
+    Asking only whether *some* number appears anywhere let a whole category vanish from every file
+    while the guard stayed green — a verifier pointed out that this is "nothing matched = all fine",
+    the exact defect this guard exists to prevent, in the guard itself. Now each category has to be
+    stated somewhere, or this fails and says which one went missing.
+    """
     body = "\n".join(_text().values())
-    assert re.search(r"\d+\s+nodes", body), "no node count found in any document"
-    assert re.search(r"\d+\s+gates", body), "no gate count found in any document"
-    assert re.search(r"\d+\s+of\s+\d+", body), "no measured ratio found in any document"
+    assert re.search(pattern, body), (
+        f"no {name} stated in any document — either it was reworded out of the checkable form, or "
+        f"it is genuinely no longer stated. Either way nothing is verifying it.")
+
+
+def test_the_role_and_seat_counts_match():
+    """Two more figures the documents carry that nothing was recomputing."""
+    from ai_sdlc_runner import policy
+
+    for name, body in _text().items():
+        for claimed in re.findall(r"(\w+)\s+roles\b", body):
+            words = {"five": 5, "four": 4, "six": 6, "three": 3}
+            if claimed.lower() in words:
+                assert words[claimed.lower()] == len(policy.ROLES), \
+                    f"{name} says {claimed} roles; there are {len(policy.ROLES)}"
+        for claimed in re.findall(r"(\w+)\s+review seats\b", body):
+            words = {"four": 4, "three": 3, "five": 5}
+            if claimed.lower() in words:
+                assert words[claimed.lower()] == len(policy.SEATS), \
+                    f"{name} says {claimed} seats; there are {len(policy.SEATS)}"
+
+
+def test_the_asking_node_count_matches():
+    from ai_sdlc_runner import graph
+
+    actual = len(graph.asking_nodes())
+    for name, body in _text().items():
+        for claimed in re.findall(r"(\d+)\s+(?:asking nodes|of them ask|個詢問節點)", body):
+            assert int(claimed) == actual, f"{name} says {claimed}; there are {actual}"

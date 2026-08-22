@@ -82,7 +82,17 @@ Four layers decide, and each may only ever **add** a stop:
    "production deploy" whatever it wrote in `kind`.
 
    Each target lands in one of **three** states: red line, recognised-ordinary, or **unrecognised** —
-   and the third is not the safe one. An earlier version had only two, so "no red-line pattern
+   and the third is not the safe one. What counts as recognised is deliberately small: a plain repo
+   path, read-only version control, and the **commands the operator has vouched for**, because they
+   know their toolchain and this runner does not.
+
+   Two limits on vouching, both learned by having them broken. A command whose name says nothing
+   about what it will do — `python`, `sh`, `rm`, `curl`, `xargs` — **cannot be vouched at all**:
+   vouching for an interpreter is vouching for anything it can be told to do, and
+   `python -c "…unlink()"` was ordinary until it was refused by name. And vouching covers the
+   **tool, not the command line**: `docker volume rm` and `git push origin +main:main` are refused
+   from an operator who vouched for `docker` and `git`. The common case survives through shape —
+   `python -m pytest` is ordinary because *pytest* is vouched. An earlier version had only two, so "no red-line pattern
    matched" was read as "verified safe", and a verifier declared `dd if=/dev/zero of=/dev/sda`
    `ordinary`, named it as a target, and watched the run finish with an empty report. A blacklist
    that recognises nothing has *said* nothing. An unrecognised target stops the run by default, and
@@ -144,7 +154,7 @@ continuing somebody else's is worse than one starting over.
 
 ## 6. The panel
 
-One or many seats, count set by the user above a floor of three. Each is asked separately and is
+One or many seats, count set by the user above a floor of 3. Each is asked separately and is
 blind to the others; their instructions say so explicitly.
 
 Verdicts are **adjudicated, not averaged**: the `conformance` seat has a veto and cannot be outvoted,

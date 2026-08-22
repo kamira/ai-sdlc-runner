@@ -42,7 +42,7 @@ from __future__ import annotations
 import re
 
 from dataclasses import dataclass
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
 AUTO = "auto"
 CONFIRM = "confirm"
@@ -163,7 +163,7 @@ PERMANENT_HALTS: Tuple[str, ...] = tuple(PERMANENT_HALT_KINDS.values())
 #:
 #: So: a phrase belongs here only if it **cannot plausibly describe safe work**. Single common verbs
 #: are the vocabulary of ordinary engineering and are out. Measured after narrowing: **0% false
-#: stops on 36 real briefs, 6 of 18 verifier sentences caught.** Trading two catches on the weakest
+#: stops on 46 real briefs, 6 of 18 verifier sentences caught.** Trading two catches on the weakest
 #: of four layers for twenty-five false stops is not a close call — and the other three layers, the
 #: ones that actually carry the guarantee, are untouched by it.
 #:
@@ -275,23 +275,79 @@ _TARGET_RULES: Dict[str, Tuple[str, ...]] = {
 #: A verifier used exactly that to walk past the previous version.
 _COMPOSED = r"[>|;&`]|\$\(|(^|[\s/])\.\.([\s/]|$)"
 
-#: Tokens that disqualify a target from being ordinary **even when the operator vouched for the
-#: command**. Vouching is for the *tool*; the arguments still get a vote. Otherwise "npm is fine"
-#: silently means "npm run release is fine", which is the prefix mistake one level up — and that is
-#: the mistake this whole section exists to stop making.
-_SUSPECT: Tuple[str, ...] = (
-    r"\bdeploy\b", r"\brelease\b", r"\bpublish\b", r"\buninstall\b", r"\bdown\b",
-    r"\bclear\b", r"\bdrop\b", r"\bdestroy\b", r"\bprune\b", r"\bpurge\b", r"\breset\b",
-    r"--delete\b", r"--force\b", r"--hard\b", r"--no-verify\b",
-    r"(^|\s)-[a-z]*[df](\s|$)", r"\bsudo\b", r"\bchmod\b", r"\bchown\b",
-)
-
 #: A plain path inside the project: no traversal, no metacharacters, no leading slash. **Decidable**,
 #: which is the whole reason it is one of only two things recognised without the operator's help.
 _REPO_PATH = r"^[\w.][\w./+-]*$"
 
 #: Read-only version control. Nothing here can change a file, so it can be built in safely.
 _READ_ONLY = r"^git\s+(status|log|diff|show|blame|remote\s+-v|config\s+--get)\b"
+
+
+#: Commands whose **name says nothing about what will happen**: the argument is the program.
+#:
+#: Vouching for one of these is vouching for anything it can be told to do, which is not a
+#: declaration — it is a blank cheque wearing one. A verifier demonstrated it in one line:
+#: `python -c "__import__('pathlib').Path('customers.db').unlink()"`, ordinary because somebody had
+#: vouched for `python`. `rm important-backups.tar` was ordinary for the same reason.
+#:
+#: These are never `ordinary`, and `settings.load` refuses to accept one in `ordinary_commands` so
+#: the operator finds out while configuring rather than while it matters.
+EXECUTORS: FrozenSet[str] = frozenset({
+    "python", "python3", "py", "node", "deno", "bun", "ruby", "perl", "php", "lua", "rscript",
+    "sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "pwsh", "powershell", "cmd",
+    "eval", "exec", "source", "env", "xargs", "nohup", "timeout", "watch", "ssh", "sudo", "doas",
+    "rm", "rmdir", "mv", "dd", "tee", "install", "chmod", "chown", "chgrp", "ln", "crontab",
+    "curl", "wget", "nc", "ncat", "socat",
+    # Stdlib modules that are themselves execution engines. `python -m os` is as unbounded as
+    # `python -c`, and the module form must not become a way back in.
+    "os", "subprocess", "pty", "code", "pdb", "runpy", "timeit", "shutil",
+    "socketserver", "smtpd", "telnetlib", "ftplib", "webbrowser", "http", "venv",
+})
+
+#: `python -m pytest` is ordinary because **pytest** is a vouched bounded tool — not because anyone
+#: vouched for `python`. The shape carries the meaning, so the common case survives without the
+#: interpreter ever becoming trustworthy.
+_MODULE_FORM = r"^(python3?|py)\s+-m\s+([\w.]+)"
+
+#: Verbs that destroy, stop or publish. Matched **in subcommand position** — a bare word, not a
+#: flag — which is the distinction the previous version missed in both directions at once:
+#:
+#: * `docker volume rm pgdata` and `git remote remove origin` slipped through, because the list was
+#:   built from flags like `--force` and never held the plainest verb there is;
+#: * `cargo build --release` and `docker compose up -d` were stopped, because `release` and `-d`
+#:   were matched anywhere they appeared, including as a flag value.
+#:
+#: A verb in subcommand position is a statement about what the command does. The same letters in a
+#: flag are not.
+_DESTRUCTIVE_VERBS = (
+    "rm", "remove", "delete", "destroy", "drop", "purge", "prune", "clear", "clean", "wipe",
+    "reset", "revoke", "stop", "kill", "down", "uninstall", "erase", "flush", "truncate",
+    "publish", "deploy", "release",
+    # `push` is deliberately absent: an ordinary push is how work ships, and the destructive forms
+    # (`--force`, a `+refspec`) are caught by _DANGEROUS_FORMS. Listing the verb stopped
+    # `git push origin feature/x`, which is the false-positive side of the same coin.
+)
+
+#: Flag and argument forms that are dangerous however they appear. Short and specific: a long list
+#: here is how `cargo build --release` got stopped.
+_DANGEROUS_FORMS = (
+    r"--force\b", r"--delete\b", r"--hard\b", r"--prune\b", r"--no-verify\b",
+    r"\s\+\w+:\w+",                 # a `+refspec`: force-overwrite a remote branch
+    r"\s-[a-z]*[rf]{2}\b",           # -rf and friends
+)
+
+
+def _suspect(text: str) -> bool:
+    """Does this command line carry a destructive verb or a dangerous form?
+
+    Only ever removes `ordinary` status, so an over-match costs one question and an under-match
+    costs the irreversible thing.
+    """
+    for pattern in _DANGEROUS_FORMS:
+        if re.search(pattern, text):
+            return True
+    words = [w for w in text.split() if not w.startswith("-")]
+    return any(w in _DESTRUCTIVE_VERBS for w in words[1:4])
 
 
 def recognise(target: str, vouched: Sequence[str] = ()) -> str:
@@ -331,10 +387,23 @@ def recognise(target: str, vouched: Sequence[str] = ()) -> str:
         return "unrecognised"
     if re.match(_REPO_PATH, text) or re.search(_READ_ONLY, text):
         return "ordinary"
+    vouched_set = {str(v).casefold() for v in vouched}
     first = text.split()[0]
-    if first in {str(v).casefold() for v in vouched}:
-        if any(re.search(pattern, text) for pattern in _SUSPECT):
-            return "unrecognised"
+
+    module = re.match(_MODULE_FORM, text)
+    if module:
+        name = module.group(2).split(".")[0]
+        if name in vouched_set and name not in EXECUTORS and not _suspect(text):
+            return "ordinary"
+        return "unrecognised"
+
+    if first in EXECUTORS:
+        # Never ordinary, vouched or not. The operator may still declare the operation's kind, which
+        # is a statement about *this* piece of work rather than a standing permission for a tool
+        # that can be told to do anything.
+        return "unrecognised"
+
+    if first in vouched_set and not _suspect(text):
         return "ordinary"
     return "unrecognised"
 

@@ -165,6 +165,16 @@ def load(path: str = DEFAULT_PATH) -> Settings:
         raise SettingsError(f"{path}: ordinary_commands must be a list of command names, "
                             f"got {commands!r}")
     for command in commands:
+        if command.strip().casefold() in policy.EXECUTORS:
+            raise SettingsError(
+                f"{path}: {command!r} cannot be vouched for. Its name says nothing about what it "
+                f"will do — the argument is the program, so vouching for it vouches for anything it "
+                f"can be told to do. `python -c '...'` and `python -m pytest` are the same command "
+                f"as far as a name can tell.\n"
+                f"  For an interpreter, vouch for the **tool you run through it**: with `pytest` "
+                f"vouched, `python -m pytest` is recognised.\n"
+                f"  For a one-off, declare the operation's kind on the work itself — a statement "
+                f"about this piece of work rather than a standing permission.")
         if not command.strip() or len(command.split()) != 1:
             raise SettingsError(
                 f"{path}: ordinary_commands holds {command!r}. Vouch for the **command**, one word "
