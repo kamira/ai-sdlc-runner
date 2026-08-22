@@ -152,7 +152,7 @@ PERMANENT_HALTS: Tuple[str, ...] = tuple(PERMANENT_HALT_KINDS.values())
 #:
 #: An earlier version of this file made the word list *the* check and, when two verifiers broke all
 #: six red lines with ordinary English, widened it: single verbs like "delete", "deploy", "publish",
-#: "token", "permission". That bought a measured **8 of 18** on the verifier sentences — and a
+#: "token", "permission". That bought a measured 8 of 18 on the verifier sentences at the time — and a
 #: measured **69% false-stop rate on ordinary engineering work**. "Fix the token parser" was a
 #: secrets change. "Remove all unused imports" was a hard delete. "Add production-grade error
 #: messages" was a production deploy.
@@ -226,6 +226,19 @@ _TARGET_RULES: Dict[str, Tuple[str, ...]] = {
     "delete": (
         r"\brm\s+-[a-z]*[rf]", r"\bdrop\s+(table|database|schema)\b", r"\btruncate\b",
         r"\bdelete\s+from\b",
+        # Every one of these was demonstrated running to completion by a verifier while the
+        # recogniser called it ordinary.
+        r"\bshred\b", r"\bmkfs(\.\w+)?\b", r"\bwipefs\b", r"\bdd\s+.*\bof=",
+        r"\bfind\b.*\s-delete\b", r"\bfind\b.*-exec\s+rm\b", r"\bcp\s+/dev/null\s+\S",
+        r">\s*/dev/(sd|nvme|hd|disk)", r"\brsync\b.*--delete\b",
+        r"\bflushall\b", r"\bflushdb\b",
+        r"\bgit\s+push\s+.*--delete\b", r"\bgit\s+push\s+\S+\s+:\S",
+        r"\bgit\s+branch\s+-[a-z]*d\b", r"\bgit\s+tag\s+-[a-z]*d\b",
+        r"\bgit\s+stash\s+(clear|drop)\b", r"\bgit\s+reflog\s+expire\b",
+        r"\bgit\s+gc\b.*--prune", r"\bgit\s+filter-branch\b",
+        r"\bgit\s+checkout\s+--\s", r"\bgit\s+restore\b", r"\bgit\s+reset\s+--hard\b",
+        r"\bgit\s+update-ref\s+-d\b", r"\bgit\s+clean\s+-[a-z]*[fd]",
+        r"\bkubectl\s+delete\b", r"\bdocker\s+compose\s+down\b.*-v",
         # Both spellings. Matching only `--force` let `git push -f` read as an ordinary push once
         # the allowlist existed — a short flag is the same command, and the pair is the kind of gap
         # that only shows up when someone writes it the other way.
@@ -256,48 +269,57 @@ _TARGET_RULES: Dict[str, Tuple[str, ...]] = {
 }
 
 
-#: Targets this runner **recognises as ordinary**: the commands and paths of everyday development.
-#:
-#: This list is why `derive` finding nothing can mean anything at all. Without it, "no red-line
-#: pattern matched" was being read as "verified safe" — and a verifier proved what that was worth by
-#: declaring `dd if=/dev/zero of=/dev/sda`, `kubectl delete namespace legacy` and
-#: `find /var/data -type f -delete` as `ordinary` and watching all three run to completion with an
-#: empty report. A blacklist that recognises nothing has *said* nothing; treating its silence as
-#: assent is KN-10 again, in the layer built to fix KN-10.
-#:
-#: So a target now lands in one of three states — red line, recognised-ordinary, or **unrecognised**
-#: — and the third is not the safe one.
-_ORDINARY_TARGETS: Tuple[str, ...] = (
-    # version control, minus the history-destroying subcommands (those are in _TARGET_RULES)
-    # `push` is here and `push --force` is not: the red-line rules are consulted first, so the
-    # destructive reading of the same command wins. An ordinary push is how work ships.
-    r"^git\s+(status|diff|log|show|add|commit|checkout|switch|restore|branch|fetch|pull|push|"
-    r"stash|merge|rebase|cherry-pick|tag|remote|worktree|blame|bisect|clean\s+-n|config)\b",
-    r"^gh\s+(pr|issue|run|workflow|repo\s+view|api\s+repos)\b",
-    # test, lint, type-check, format
-    r"^(pytest|tox|nox|unittest)\b", r"^python\s+-m\s+(pytest|unittest|pip|venv|build)\b",
-    r"^(ruff|flake8|pylint|mypy|pyright|black|isort|prettier|eslint|clippy|rustfmt|gofmt|vet)\b",
-    # build and package managers, minus their publish/deploy subcommands
-    r"^(make|cmake|ninja|bazel\s+(build|test))\b",
-    r"^(npm|yarn|pnpm)\s+(install|ci|run|test|build|lint|audit|ls)\b",
-    r"^(cargo|go)\s+(build|test|run|fmt|check|vet|clippy|mod)\b",
-    r"^(pip|poetry|uv|pdm)\s+(install|sync|lock|list|show|compile)\b",
-    r"^docker\s+(build|compose\s+(build|up|config)|images|ps)\b",
-    # reading and moving things about inside a workspace
-    r"^(ls|cat|head|tail|grep|rg|find\s+[^|]*-name|wc|diff|file|stat|which|echo|sed\s+-n)\b",
-    r"^(mkdir|touch|cp|mv)\b",
-    # a plain relative path inside the project: the ordinary case for inputs and outputs
-    r"^[\w.][\w./+-]*$",
+#: Shell composition. Any of these makes a target un-ordinary whatever its prefix looks like,
+#: because composition hides everything after the part a prefix matched: `cat` is harmless and
+#: `cat /dev/urandom > /dev/sda` is not, and the difference is a character the prefix never saw.
+#: A verifier used exactly that to walk past the previous version.
+_COMPOSED = r"[>|;&`]|\$\(|(^|[\s/])\.\.([\s/]|$)"
+
+#: Tokens that disqualify a target from being ordinary **even when the operator vouched for the
+#: command**. Vouching is for the *tool*; the arguments still get a vote. Otherwise "npm is fine"
+#: silently means "npm run release is fine", which is the prefix mistake one level up — and that is
+#: the mistake this whole section exists to stop making.
+_SUSPECT: Tuple[str, ...] = (
+    r"\bdeploy\b", r"\brelease\b", r"\bpublish\b", r"\buninstall\b", r"\bdown\b",
+    r"\bclear\b", r"\bdrop\b", r"\bdestroy\b", r"\bprune\b", r"\bpurge\b", r"\breset\b",
+    r"--delete\b", r"--force\b", r"--hard\b", r"--no-verify\b",
+    r"(^|\s)-[a-z]*[df](\s|$)", r"\bsudo\b", r"\bchmod\b", r"\bchown\b",
 )
 
+#: A plain path inside the project: no traversal, no metacharacters, no leading slash. **Decidable**,
+#: which is the whole reason it is one of only two things recognised without the operator's help.
+_REPO_PATH = r"^[\w.][\w./+-]*$"
 
-def recognise(target: str) -> str:
-    """One of ``"red"``, ``"ordinary"`` or ``"unrecognised"``.
+#: Read-only version control. Nothing here can change a file, so it can be built in safely.
+_READ_ONLY = r"^git\s+(status|log|diff|show|blame|remote\s+-v|config\s+--get)\b"
 
-    Red lines are checked first and win: `git push --force` is in both shapes, and the destructive
-    reading is the one that matters. Everything the ordinary list does not cover comes back
-    **unrecognised**, which is a statement that this runner does not know what the target does —
-    not a statement that it is fine.
+
+def recognise(target: str, vouched: Sequence[str] = ()) -> str:
+    """``"red"``, ``"ordinary"`` or ``"unrecognised"``.
+
+    ## Why this stopped trying to be clever
+
+    Two rounds of independent review broke two versions of this, in opposite directions:
+
+    * **Round 5** — an enumerated blacklist, where "nothing matched" was read as *safe*. Five
+      destructive commands declared `ordinary` ran a flow to completion with an empty report.
+    * **Round 6** — a prefix allowlist, where "the command is on the list" was read as *safe*. So
+      `git push origin --delete main` was ordinary because `git` was listed, `cat ... > /dev/sda`
+      was ordinary because `cat` was — **and 10 of 10 real development commands were stopped**.
+
+    Wrong in both directions at once is not a mistuning. A runner cannot classify an arbitrary shell
+    string, and pretending otherwise produced a check that was both unsafe and unusable.
+
+    So this only answers what it can actually know:
+
+    1. does it **match a known-dangerous pattern** — imperfect, and every addition is safe;
+    2. is it a **plain repo-relative path**, or **read-only version control** — decidable;
+    3. has **the operator vouched for the command** — they know their toolchain; this runner does
+       not, and guessing on their behalf is what went wrong twice.
+
+    Everything else is `unrecognised`, which is a true statement about this runner's knowledge
+    rather than a verdict about the target. `unrecognised` stops by default and is recorded when
+    allowed through.
     """
     text = str(target).casefold().strip()
     if not text:
@@ -305,14 +327,21 @@ def recognise(target: str) -> str:
     for kind in PERMANENT_HALT_KINDS:
         if any(re.search(pattern, text) for pattern in _TARGET_RULES[kind]):
             return "red"
-    if any(re.search(pattern, text) for pattern in _ORDINARY_TARGETS):
+    if re.search(_COMPOSED, text):
+        return "unrecognised"
+    if re.match(_REPO_PATH, text) or re.search(_READ_ONLY, text):
+        return "ordinary"
+    first = text.split()[0]
+    if first in {str(v).casefold() for v in vouched}:
+        if any(re.search(pattern, text) for pattern in _SUSPECT):
+            return "unrecognised"
         return "ordinary"
     return "unrecognised"
 
 
-def unrecognised(targets: Sequence[str]) -> Tuple[str, ...]:
+def unrecognised(targets: Sequence[str], vouched: Sequence[str] = ()) -> Tuple[str, ...]:
     """The targets this runner cannot place. Empty when it recognises every one."""
-    return tuple(t for t in targets if recognise(t) == "unrecognised")
+    return tuple(t for t in targets if recognise(t, vouched) == "unrecognised")
 
 
 def derive(targets: Sequence[str]) -> Tuple[str, ...]:
@@ -389,7 +418,8 @@ def classify(operation: Mapping[str, object]) -> Optional[str]:
     return permanent_halt(description)
 
 
-def unverified(operation: Mapping[str, object]) -> Tuple[str, ...]:
+def unverified(operation: Mapping[str, object],
+               vouched: Sequence[str] = ()) -> Tuple[str, ...]:
     """The targets of an `ordinary` operation that nothing could confirm.
 
     Separate from `on_trust`, which answers yes/no; this names them, so a halt or a report can quote
@@ -397,10 +427,10 @@ def unverified(operation: Mapping[str, object]) -> Tuple[str, ...]:
     """
     if operation.get("kind") != ORDINARY:
         return ()
-    return unrecognised(operation.get("targets") or ())
+    return unrecognised(operation.get("targets") or (), vouched)
 
 
-def on_trust(operation: Mapping[str, object]) -> bool:
+def on_trust(operation: Mapping[str, object], vouched: Sequence[str] = ()) -> bool:
     """Is this operation being taken on the planner's word alone?
 
     True when it declares `ordinary` and **nothing independently confirmed that** — either it named
@@ -421,7 +451,7 @@ def on_trust(operation: Mapping[str, object]) -> bool:
     targets = operation.get("targets") or ()
     if not targets:
         return True
-    return bool(unrecognised(targets))
+    return bool(unrecognised(targets, vouched))
 
 
 def permanent_halt(text: str) -> Optional[str]:

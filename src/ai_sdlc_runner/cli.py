@@ -315,6 +315,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         operations=plan.get("operations", {}),
         confirmed=tuple(args.confirm or ()),
         effects=effects_provider(plan),
+        ordinary_commands=saved.ordinary_commands,
         undeclared=args.undeclared,
         resume=bool(args.resume),
         journal=journal,

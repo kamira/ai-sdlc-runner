@@ -12,7 +12,7 @@ whether that step may proceed on its own or has to stop and ask a person.
 It exists so that running this flow needs no other company's agent, and it holds no skill, prompt
 pack, or vendored contract. The flow and the governance are its own, in two files:
 
-- **`policy.py`** — five roles with capability flags, ten gates × three risk grades, six
+- **`policy.py`** — five roles with capability flags, 10 gates × three risk grades, six
   never-automated actions, four review seats and the rule that adjudicates them.
 - **`graph.py`** — 23 nodes, one kind of work each.
 
@@ -57,7 +57,7 @@ re-review, second failure halts), and the **feedback edge** (the flow closes rat
 
 ## 4. The gates
 
-Ten gates, three risk grades. One rule: **a gate stops when getting it wrong is expensive to undo.**
+10 gates, three risk grades. One rule: **a gate stops when getting it wrong is expensive to undo.**
 Reviewing a module is cheap to redo, so it never stops the run; merging is a one-way door, so it asks
 at every grade.
 
