@@ -24,7 +24,7 @@ two writes leaves the question on disk exactly as it was asked.
 | `node_id` | str | required | Which node asked |
 | `status` | str (enum) | `pending` \| `answered` | `pending` is written first; `answered` replaces it |
 | `order` | object | required | The work order verbatim — the question itself, not a summary of it |
-| `answer` | object | present when answered | Whatever the backend replied |
+| `result` | object | present when answered | Whatever the backend replied |
 
 A reconstructed approximation of a question is not the question. The order is stored whole so a
 resumed run re-asks the same thing rather than something like it.
@@ -33,7 +33,7 @@ resumed run re-asks the same thing rather than something like it.
 
 ### The work order — a closed schema
 
-Sixteen fields, listed in `workorder.WORK_ORDER_FIELDS`, and a field outside the list is refused
+Seventeen fields, listed in `workorder.WORK_ORDER_FIELDS`, and a field outside the list is refused
 rather than passed through. What is **not** in it matters as much as what is: no tool list, no model
 name, no allowlist, no session context, and nothing any previous answer touched. A harness detail in
 the order is a harness the order cannot outlive.
@@ -49,6 +49,9 @@ the order is a harness the order cannot outlive.
 | `policy_verdict` | the gate's decision, already resolved — a node never re-derives it |
 | `capabilities` | `can_spawn` / `can_write` / `can_execute` for this role |
 | `permanent_halts` | all six, always, never filtered to "the ones this node might hit" |
+
+The order is what a backend receives, and it receives it through `workorder.to_json` — sorted keys,
+LF, UTF-8 — so the same order is the same bytes on every machine.
 
 ### The run report
 
@@ -81,6 +84,9 @@ deliberately no way to construct one without a probe.
 - **verdict**: `auto | confirm | halt | halt_independent`
 - **gate**: `plan_confirmed | feasibility_confirmed | before_dispatch | self_verify | task_review |
   lead_review | qa_verify | acceptance | pr | merge`
+- **operation kind** (what a plan declares each operation to be): `deploy | migration | delete |
+  money | access | publish | ordinary`. **There is no default** — an operation declaring nothing is
+  refused, because a red line whose default branch is "proceed" is not a red line
 - **role**: `pm | lead | engineer | qa | seat`
 - **seat**: `conformance` (veto) `| defect | risk | idiom`
 - **gate phase**: `before | after`

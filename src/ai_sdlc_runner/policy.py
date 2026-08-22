@@ -111,8 +111,11 @@ GATES: Dict[str, Dict[str, str]] = {
     "qa_verify":             {"low": AUTO, "medium": AUTO, "high": HALT},
     # Acceptance. On a high-risk change the verifier must not be the builder.
     "acceptance":            {"low": AUTO, "medium": AUTO, "high": HALT_INDEPENDENT},
-    # Opening a PR is reversible; closing one costs nothing.
-    "pr":                    {"low": AUTO, "medium": AUTO, "high": AUTO},
+    # Opening a PR is reversible and closing one costs nothing, so low and medium proceed. High
+    # asks: a high-risk change becoming visible to reviewers and to CI is the last cheap moment to
+    # say "not like this". Graded auto everywhere, this gate could never fire and its phase was
+    # unobservable — a verifier called that out, and a gate that cannot fire is decoration.
+    "pr":                    {"low": AUTO, "medium": AUTO, "high": CONFIRM},
     # Merging is a one-way door, so it stops earliest of anything here — including at low risk,
     # where it asks rather than halts. "Low risk" grades the change, not the door.
     "merge":                 {"low": CONFIRM, "medium": HALT, "high": HALT},
@@ -121,49 +124,103 @@ GATES: Dict[str, Dict[str, str]] = {
 #: Never automated, at any risk grade, and no configuration relaxes them. These are the actions whose
 #: worst case is not "redo the work" but "the work cannot be undone".
 #:
-#: Each entry pairs the description a person reads with the words that recognise it in an operation
-#: the flow is about to carry out. A list nothing checks is a paragraph — the previous version of
-#: this file printed these into the work order and never looked at them again, which an independent
-#: verifier found by writing a run that deployed to production without stopping.
-PERMANENT_HALTS: Tuple[str, ...] = (
-    "production deploy or release",
-    "data migration or irreversible schema change",
-    "deleting data, dropping a table, any hard delete",
-    "moving money",
-    "changing secrets, credentials, access control or permissions",
-    "publishing public content",
-)
+#: Keyed by the **kind** a plan declares, valued by the description a person reads. The kind is what
+#: is checked; the description is what a halt reason quotes, so the stop names the rule rather than
+#: whatever happened to match.
+PERMANENT_HALT_KINDS: Dict[str, str] = {
+    "deploy":     "production deploy or release",
+    "migration":  "data migration or irreversible schema change",
+    "delete":     "deleting data, dropping a table, any hard delete",
+    "money":      "moving money",
+    "access":     "changing secrets, credentials, access control or permissions",
+    "publish":    "publishing public content",
+}
 
-#: description -> the words that recognise it. Matching is deliberately generous: a false stop costs
-#: one question, a missed one costs the thing that cannot be undone.
+#: What a plan declares for work that crosses none of them. It is a **declaration**, not a default:
+#: see `classify`.
+ORDINARY = "ordinary"
+
+PERMANENT_HALTS: Tuple[str, ...] = tuple(PERMANENT_HALT_KINDS.values())
+
+#: A **backstop**, not the guarantee. kind -> words that suggest it, used only to catch an operation
+#: declared `ordinary` whose own description says otherwise. It can add a stop and can never remove
+#: one, which is the only direction a word list is safe in.
+#:
+#: The previous version of this file made this list *the* check, and an independent verifier broke
+#: every one of the six with an ordinary English sentence: "promote the new build into the live
+#: environment", "erase every customer record permanently", "wire USD 500 to the vendor", "grant
+#: Alice administrator privileges", "make the embargoed article visible to everyone", "rewrite all
+#: customer rows to the new format". Not one contains a listed word, and adding those six phrasings
+#: would not have fixed anything — the next six sentences are free. A blacklist stops the phrasings
+#: somebody thought of, and the phrasings nobody thought of are the ones that reach production.
 _HALT_WORDS: Dict[str, Tuple[str, ...]] = {
-    PERMANENT_HALTS[0]: ("deploy", "release to prod", "production", "prod push", "ship to prod",
-                         "上線", "部署"),
-    PERMANENT_HALTS[1]: ("migrate", "migration", "alter table", "drop column", "schema change",
-                         "backfill", "遷移"),
-    PERMANENT_HALTS[2]: ("delete", "drop table", "truncate", "rm -rf", "purge", "hard delete",
-                         "刪除", "清除"),
-    PERMANENT_HALTS[3]: ("money", "payment", "transfer funds", "charge", "refund", "invoice",
-                         "payout", "付款", "轉帳"),
-    PERMANENT_HALTS[4]: ("secret", "credential", "token", "api key", "password", "permission",
-                         "access control", "iam", "金鑰", "權限"),
-    PERMANENT_HALTS[5]: ("publish", "post to", "tweet", "announce", "send email", "broadcast",
-                         "發布", "公開"),
+    "deploy": ("deploy", "release to prod", "production", "prod push", "ship to prod", "go live",
+               "live environment", "cut over", "rollout", "上線", "部署", "發版"),
+    "migration": ("migrate", "migration", "alter table", "drop column", "schema change", "backfill",
+                  "rewrite all", "reindex", "遷移", "資料轉換"),
+    "delete": ("delete", "drop table", "truncate", "rm -rf", "purge", "hard delete", "erase",
+               "wipe", "destroy", "remove all", "刪除", "清除", "抹除"),
+    "money": ("money", "payment", "transfer funds", "charge", "refund", "invoice", "payout",
+              "wire ", "usd", "eur", "billing", "付款", "轉帳", "退款"),
+    "access": ("secret", "credential", "token", "api key", "password", "permission", "privilege",
+               "access control", "iam", "grant ", "revoke", "role assignment", "金鑰", "權限"),
+    "publish": ("publish", "post to", "tweet", "announce", "send email", "broadcast", "make public",
+                "visible to everyone", "go public", "發布", "公開"),
 }
 
 
-def permanent_halt(operation: str) -> Optional[str]:
-    """The permanent halt an operation trips, or ``None``.
+def classify(operation: Mapping[str, object]) -> Optional[str]:
+    """The permanent halt this operation crosses, or ``None``.
 
-    ``operation`` is what the flow is about to do, in the words whoever planned it used. The return
-    value is the halt's own description, so the halt reason quotes the rule rather than the keyword
-    that happened to match.
+    An operation is a declaration: ``{"description": str, "kind": str}``, where ``kind`` is one of
+    `PERMANENT_HALT_KINDS` or `ORDINARY`. **An operation that declares nothing is refused**, and
+    that inversion is the whole fix: the previous version guessed a kind from the words, so anything
+    it failed to recognise was silently ordinary — and a red line whose default branch is "proceed"
+    is not a red line. Unclassified now stops the run and asks the planner to say what this is.
+
+    Declaring ``ordinary`` is not the last word. The description is still read against `_HALT_WORDS`,
+    so a mis-declaration whose own wording gives it away still stops. The backstop can only add a
+    stop, never remove one: a declared red line halts whatever its description says.
     """
-    text = operation.casefold()
-    for description, words in _HALT_WORDS.items():
-        if any(word in text for word in words):
-            return description
+    if not isinstance(operation, Mapping):
+        raise PolicyError(
+            f"an operation must declare what kind of work it is, as "
+            f"{{'description': ..., 'kind': one of {sorted(PERMANENT_HALT_KINDS) + [ORDINARY]}}}. "
+            f"Got {operation!r}. A bare description would have to be classified by guessing at its "
+            f"words, and a guess that comes out wrong dispatches something irreversible.")
+
+    kind = operation.get("kind")
+    description = str(operation.get("description", ""))
+    if kind is None:
+        raise PolicyError(
+            f"operation {description!r} declares no kind. It must be one of "
+            f"{sorted(PERMANENT_HALT_KINDS) + [ORDINARY]} — an undeclared operation is not assumed "
+            f"to be safe.")
+    if kind in PERMANENT_HALT_KINDS:
+        return PERMANENT_HALT_KINDS[kind]
+    if kind != ORDINARY:
+        raise PolicyError(
+            f"operation {description!r} declares kind {kind!r}, which is not one of "
+            f"{sorted(PERMANENT_HALT_KINDS) + [ORDINARY]}")
+
+    suspected = permanent_halt(description)
+    if suspected is not None:
+        return suspected
     return None
+
+
+def permanent_halt(text: str) -> Optional[str]:
+    """The halt an operation's *wording* suggests, or ``None`` — the backstop only.
+
+    Never the guarantee on its own: see `classify`. Matching is deliberately generous, because in
+    this direction a false stop costs one question and a miss costs the thing that cannot be undone.
+    """
+    lowered = text.casefold()
+    for kind, words in _HALT_WORDS.items():
+        if any(word in lowered for word in words):
+            return PERMANENT_HALT_KINDS[kind]
+    return None
+
 
 #: The review seats, in opening order — least negotiable first, so opening fewer means taking a
 #: prefix rather than picking favourites. A seat with `veto` cannot be outvoted: its subject is a

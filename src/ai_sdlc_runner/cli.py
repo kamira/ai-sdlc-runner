@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from . import engine, graph, policy, ship, tui
+from . import engine, graph, policy, ship, tui, workorder
 
 DEFAULT_CONFIG = "config/runner.yaml"
 
@@ -98,7 +98,7 @@ class _Process(engine.Session):
         self.argv, self.timeout = argv, timeout
 
     def ask(self, order):
-        proc = subprocess.run(self.argv, input=json.dumps(order, ensure_ascii=False),
+        proc = subprocess.run(self.argv, input=workorder.to_json(order),
                               capture_output=True, text=True, timeout=self.timeout)
         if proc.returncode != 0:
             raise CliError(
@@ -146,7 +146,8 @@ def cmd_flow(args: argparse.Namespace) -> int:
         for label, target in sorted(node.branches.items()):
             print(f"{'':22s} {'':11s}   {label} → {target}")
     print(f"\n{len(graph.NODES)} nodes, {len(graph.asking_nodes())} of them ask someone; "
-          f"{len(set(graph.gates_used()))} gates")
+          f"{len(set(graph.gates_used()))} gates; "
+          f"roles: {', '.join(graph.roles_used())}")
     return 0
 
 
@@ -169,10 +170,11 @@ def cmd_policy(args: argparse.Namespace) -> int:
 def effects_provider(plan: dict):
     """The effects each node carries out, from the plan's ``ship`` block — or ``None``.
 
-    Only the `pr` node has a sequence today: record the intent, branch, commit, push, open the PR.
-    It is built by `ship.effects_for`, so the ordering and the probes live in one place rather than
-    being restated here. With no ``ship`` block the flow runs without side effects, which is what a
-    dry run wants.
+    Two nodes have one. `pr`: record the intent, branch, commit, push, open the PR. `record_module`,
+    when the plan names a ``task``: tick it, and write the acceptance record if the plan names one.
+    Both are built by `ship`, so the ordering and the probes live in one place rather than being
+    restated here. With no ``ship`` block the flow runs without side effects, which is what a dry
+    run wants.
     """
     settings = plan.get("ship")
     if not settings:
@@ -195,10 +197,50 @@ def effects_provider(plan: dict):
         repo=repo, chg_id=chg_id, branch=settings["branch"], message=settings["message"],
         write_chg=_write_chg, remote=settings.get("remote", "origin"))
 
+    task = settings.get("task")
+    acc_id = settings.get("acc_id")
+    acc_body = settings.get("acc_body")
+
+    def _tick() -> None:
+        raise ship.ShipError(
+            f"ticking task {task!r} of {chg_id} is the lead's judgement written into the ledger, "
+            f"not something this runner writes on its behalf. Tick it, then re-run — the probe "
+            f"reads the file, so a resumed run will find it done.")
+
+    def _write_acc() -> None:
+        if acc_body is None:
+            raise ship.ShipError(
+                f"the plan records acceptance as {acc_id} but supplies no acc_body — an acceptance "
+                f"record with no evidence is the false green this repo keeps catching")
+        path = Path(repo) / "docs" / "acceptance" / f"{acc_id}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(acc_body, encoding="utf-8")
+
+    record = ship.record_effects(repo, chg_id, task, acc_id, tick=_tick,
+                                 write_acc=_write_acc) if task else []
+
     def provider(node_id: str):
-        return sequence if node_id == "pr" else ()
+        if node_id == "pr":
+            return sequence
+        if node_id == "record_module":
+            return record
+        return ()
 
     return provider
+
+
+def _report_pending(journal) -> None:
+    """Say what is still waiting to be asked, if anything.
+
+    `AskJournal.pending()` is the point of journalling before the ask — and until this printed it,
+    nothing outside the tests ever read it, which a verifier called out. A question preserved where
+    nobody looks is preserved in the same sense as a backup nobody restores.
+    """
+    if journal is None:
+        return
+    for entry in journal.pending():
+        print(f"still to ask:  {entry['node_id']} ({entry['ask_id']}) — "
+              f"{entry['order'].get('role_label', entry['order'].get('role'))}")
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -210,6 +252,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 2
     plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
 
+    journal = engine.AskJournal(args.ask_journal) if args.ask_journal else None
     seats = args.review_seats
     high_risk = bool(args.high_risk_mode)
     if seats is not None and seats < policy.SEAT_FLOOR and not high_risk:
@@ -220,21 +263,34 @@ def cmd_run(args: argparse.Namespace) -> int:
     cfg = engine.RunConfig(
         node_specs=plan.get("node_specs", {}),
         decisions=plan.get("decisions", {}),
-        risk=plan.get("risk", "high"),
+        risk=args.risk or plan.get("risk", "high"),
         autonomy=plan.get("autonomy"),
         review_seats=seats,
         high_risk_mode=high_risk,
         operations=plan.get("operations", {}),
         confirmed=tuple(args.confirm or ()),
         effects=effects_provider(plan),
-        journal=engine.AskJournal(args.ask_journal) if args.ask_journal else None,
+        undeclared=args.undeclared,
+        journal=journal,
     )
-    seat_models = plan.get("seat_models") or {}
+    seat_models = dict(plan.get("seat_models") or {})
+    for pair in args.seat_model or ():
+        seat, _, command = pair.partition("=")
+        if not command:
+            print(f"error: --seat-model wants SEAT=COMMAND, got {pair!r}")
+            return 2
+        if seat not in policy.BY_SEAT:
+            print(f"error: no seat {seat!r}; this runner defines {sorted(policy.BY_SEAT)}")
+            return 2
+        seat_models[seat] = command.split()
     try:
         report = engine.walk(cfg, session_factory(config, seat_models), enabled=True)
-    except (engine.EngineError, policy.PolicyError) as exc:
+    except (engine.EngineError, policy.PolicyError, CliError) as exc:
         print(f"halted: {exc}")
+        _report_pending(journal)
         return 10
+
+    _report_pending(journal)
 
     for relaxation in report.relaxations:
         print(f"relaxation:    {relaxation}")
@@ -266,13 +322,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     pr = sub.add_parser("run", help="walk the flow for one change")
     pr.add_argument("--plan", default=None, help="JSON plan: node_specs, decisions, risk")
-    pr.add_argument("--review-seats", type=int, default=None,
+    pr.add_argument("--review-seats", "--seats", type=int, default=None, dest="review_seats",
                     help=f"how many review seats to open (default: the floor, {policy.SEAT_FLOOR})")
+    pr.add_argument("--risk", choices=list(policy.RISKS), default=None,
+                    help="grade this change, overriding the plan's own risk")
+    pr.add_argument("--seat-model", action="append", default=None, metavar="SEAT=COMMAND",
+                    help="route one review seat to a different command; repeatable. The same "
+                         "question, different answerers — which is what cross-model review means.")
     pr.add_argument("--high-risk-mode", action="store_true",
                     help="allow fewer seats than the floor; the run records that it did")
     pr.add_argument("--confirm", action="append", default=None, metavar="GATE",
                     help="a gate you have already approved; repeatable. A halt is a pause with a "
                          "way back, and every confirmation is recorded in the run's report.")
+    pr.add_argument("--undeclared", choices=("refuse", "allow"), default="refuse",
+                    help="what to do at a node that does real work and declares no operations. "
+                         "`refuse` (the default) stops and asks; `allow` runs it and records that "
+                         "nothing was checked against the permanent halts.")
     pr.add_argument("--ask-journal", default=None,
                     help="directory to journal each question in before asking it")
     pr.set_defaults(func=cmd_run)

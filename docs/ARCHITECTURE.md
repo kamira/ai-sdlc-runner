@@ -73,7 +73,13 @@ recorded in the run report.
 
 Six actions are never automated at any grade and no confirmation or mode relaxes them: production
 deploys, data migrations, hard deletes, moving money, changing secrets or permissions, publishing.
-They are matched against what each node says it is about to do, and stop the run before dispatch.
+
+Each operation a node carries out **declares its kind**, from a closed set of the six plus
+`ordinary`, and **an operation that declares nothing is refused**. That inversion is the guarantee.
+An earlier version guessed the kind from the wording, and an independent verifier broke all six with
+ordinary English — "promote the new build into the live environment", "wire USD 500 to the vendor" —
+none of which contained a listed word. Word lists remain, as a backstop that catches a red line
+mis-declared as ordinary; they can add a stop and can never remove one.
 
 ## 5. Sessions, and why they are short
 
@@ -103,10 +109,11 @@ they made.
 ## 7. Interfaces
 
 - `runner flow` — print the flow. `runner policy` — print the governance. Neither runs anything.
-- `runner run --config <yaml> --plan <json> [--risk] [--seats N] [--high-risk-mode]
-  [--confirm GATE ...] [--ask-journal DIR]`
-- The plan carries `node_specs`, `decisions`, `risk`, `autonomy`, `operations`, `seat_models` and an
-  optional `ship` block. The config carries `agent_command` and `agent_timeout` — dispatch settings
+- `runner run --config <yaml> --plan <json> [--risk low|medium|high] [--seats N]
+  [--high-risk-mode] [--confirm GATE ...] [--seat-model SEAT=COMMAND ...] [--ask-journal DIR]`
+- The plan carries `node_specs`, `decisions`, `risk`, `autonomy`, `operations` (each declaring its
+  `kind`), `seat_models` and an optional `ship` block. `--risk` and `--seat-model` override the
+  plan's own values. The config carries `agent_command` and `agent_timeout` — dispatch settings
   only.
 - A backend reads the work order as JSON on stdin and prints its answer as JSON. At a decision node
   the answer must name its branch (`branch`, `verdict` or `outcome`); a non-zero exit means it
@@ -120,7 +127,9 @@ they made.
 - No silent fallback: missing configuration, an unknown gate, a branch the plan did not supply, an
   unanswerable probe, an unrecognised ledger status — each raises and names what is missing.
 - **A mechanism is not built until something calls it** (KN-8). This repo's recurring defect is a
-  correct piece nothing reaches, shipped green.
+  correct piece nothing reaches, shipped green — three rounds of it, every one found by an
+  independent verifier rather than by CI. `tests/test_nothing_is_unwired.py` now checks it
+  mechanically: nothing public in `src/` may be unreachable from `src/`.
 
 ## 9. Testing
 

@@ -18,6 +18,7 @@
 | KN-6 | pattern | node-engine / idempotence | An operation may be an **effect** only if it leaves a probeable postcondition in the ledger, git or the forge; constructing one without a probe raises. Probes describe the **postcondition, not the action**, and read the world rather than any record the runner wrote. Unanswerable **raises** — never `False`. Nothing already true is re-applied, before or after the frontier. | active |
 | KN-7 | pattern | node-engine / sessions | Every **asking** node gets its own session: opened, asked once, closed in a `finally`; a factory that returns a session it already returned is refused. A multi-seat review is several asks, so each seat is its own session. The question is journalled **before** the session opens, so a dropped session costs the answer and not the question. | active |
 | KN-8 | pattern | governance / wiring | A mechanism is not built until something calls it. Three rounds here shipped a correct piece that nothing reached — an engine ignoring its own policy verdict, an `adjudicate` no caller invoked, a `PERMANENT_HALTS` list printed into every order and never checked — and each passed its own suite. The test that matters is the one that fails when the wire is cut. | active |
+| KN-10 | pattern | governance / red lines | A blacklist cannot be a safety guarantee. Two verifiers independently broke all six permanent halts with ordinary English containing no listed word, and a plan that simply **omitted** its operations was checked against nothing at all. The fix is the inversion: each operation **declares** its kind from a closed set, an undeclared one is refused, and word lists are demoted to a backstop that can only add a stop. | active |
 | KN-9 | pattern | governance / vocabularies | A vocabulary that classifies must be **closed**: an unrecognised value is a failure, never a pass. The ledger lint knew only "built", so `accepted`, `merged`, `completed` and `完成` all sailed past it with no acceptance record. And read the **field**, not the prose around it — `draft — all 9 tasks built` is a draft. | active |
 
 <!-- Append DIR-n (user directives) / KN-n (observed patterns) as anchored sections below and add
@@ -249,3 +250,50 @@ commentary, and commentary does not decide anything.
 Generalised: when a program classifies on text a person wrote, pin down exactly which span is the
 datum, make the set of legal values closed, and treat both "unknown value" and "two values at once"
 as errors that name the document.
+
+
+## KN-10 — A blacklist is not a guarantee; invert the default instead
+*tags: governance · source: CHG-20260823-02 · tier: pattern*
+
+FR-12 said six actions are "never automated at any risk grade". The check behind that sentence was a
+substring blacklist over the operation's description. Two independent verifiers broke it the same
+afternoon, separately, with twelve ordinary English sentences between them:
+
+| Red line | codex-seat | fable-seat |
+|---|---|---|
+| production deploy | `promote the new build into the live environment` | `push the new build to prod` |
+| data migration | `rewrite all customer rows to the new format` | `alter the table schema` |
+| hard delete | `erase every customer record permanently` | `wipe the users table` |
+| moving money | `wire USD 500 to the vendor` | `wire 500 USD to the vendor` |
+| secrets / access | `grant Alice administrator privileges` | `rotate the signing key` |
+| publishing | `make the embargoed article visible to everyone` | `make the repo public` |
+
+Every one was dispatched. **Adding those twelve phrasings would have fixed nothing** — the next
+twelve are free, and free again after that. The defect was never the list's contents.
+
+Two things were actually wrong, and both are about **defaults**:
+
+1. **The classifier's default branch was "proceed".** Anything the word list failed to recognise was
+   treated as ordinary. A red line whose default branch is proceed is not a red line.
+2. **Silence was treated as a declaration.** The check only read the operations a plan volunteered,
+   so omitting the field skipped it entirely. The guarantee could be evaded by saying *less* rather
+   than by saying something false — which is worse, because saying less looks like nothing happened.
+
+The fix inverts both. Every operation **declares** its kind from a closed set; an undeclared
+operation is refused; a node that does real work and declares nothing is refused. Word lists survive
+only as a **backstop** against a red line mis-declared as ordinary, in the one direction where a
+word list is safe: it can add a stop and can never remove one.
+
+The general rule, which is KN-9 one level up: **when a check decides whether something dangerous may
+proceed, the unrecognised case must be the stopping case, and absence of input must not read as
+absence of risk.**
+
+What this does *not* buy, stated because the limit is real: an operation declared `ordinary` and
+described in words that give nothing away will still be dispatched. The backstop catches
+carelessness, not intent. Deriving the kind from what the operation will actually touch — paths,
+commands, endpoints — is the stronger design and is not built.
+
+The test that was supposed to cover all of this fed each rule's own description back into its own
+word list and asserted it matched. A tautology, and it passed, and it gave false confidence in
+exactly the coverage that did not exist. **The corpus is now the twelve sentences that broke it** —
+a test written from what actually failed, not from what the mechanism does.

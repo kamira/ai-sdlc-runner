@@ -184,10 +184,17 @@ class RunConfig:
     #: this hook existed that sentence was a comment: the node did nothing at all. Each effect is
     #: probed before it is applied and re-probed after, so a resumed run redoes nothing.
     effects: Optional[Callable[[str], Sequence["effects_mod.Effect"]]] = None
-    #: What each node is about to actually do, in the planner's words, keyed by node id. This is
-    #: what `policy.PERMANENT_HALTS` is checked against — a node that says it deploys to production
-    #: stops there, at every risk grade, whatever is confirmed and whatever mode is on.
-    operations: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    #: What each node is about to actually do, keyed by node id. Each entry **declares** its kind:
+    #: ``{"description": ..., "kind": one of policy.PERMANENT_HALT_KINDS or policy.ORDINARY}``. A
+    #: declared red line stops the run at every risk grade, whatever is confirmed and whatever mode
+    #: is on — and an operation that declares nothing is refused rather than assumed safe.
+    operations: Mapping[str, Sequence[Mapping[str, object]]] = field(default_factory=dict)
+    #: What to do at a node that does real work and declares no operations. ``refuse`` is the
+    #: default and the only safe one: a plan that simply omits `operations` used to be checked
+    #: against nothing at all, so "run a deploy without stopping" was a matter of saying less rather
+    #: than saying something false. ``allow`` exists for dry runs and records itself as a relaxation
+    #: — never silently.
+    undeclared: str = "refuse"
     #: Gates a human has already confirmed. Without this a stopping verdict ends every run at the
     #: same place forever — an independent verifier found that medium and high risk could never get
     #: past the first gate, which made most of the matrix unreachable. A halt is a pause with a way
@@ -302,19 +309,52 @@ def _run_effects(node: graph.Node, cfg: "RunConfig", report: "RunReport"):
     return None
 
 
-def _permanent_halt(node: graph.Node, cfg: "RunConfig") -> Optional[str]:
+def _does_work(node: graph.Node, cfg: "RunConfig") -> bool:
+    """Could this node change the world? Then it owes a declaration.
+
+    True when the node dispatches a role that may write or execute, or when it carries effects.
+    A review seat reads and answers, so it is not asked to declare anything.
+    """
+    if cfg.effects is not None and cfg.effects(node.id):
+        return True
+    if not node.role or node.role == "seat":
+        return False
+    role = policy.role(node.role)
+    return bool(role.can_write or role.can_execute)
+
+
+def _permanent_halt(node: graph.Node, cfg: "RunConfig", report: "RunReport") -> Optional[str]:
     """The halt reason if this node's work trips a permanent halt, else ``None``.
 
     Checked before the gate, and unaffected by `confirmed` and by high-risk mode: these are the
     actions whose worst case is not "redo the work". Everything else in this file is a policy the
     operator can turn down; this one is not.
+
+    A node that does real work and declares **nothing** is refused by default. An independent
+    verifier found the hole: the check only ever looked at what a plan volunteered, so omitting
+    `operations` skipped it entirely — the red lines could be walked past by saying less rather
+    than by saying something false.
     """
-    for operation in cfg.operations.get(node.id, ()):
-        halt = policy.permanent_halt(operation)
-        if halt is not None:
+    declared = cfg.operations.get(node.id)
+    if not declared and _does_work(node, cfg):
+        if cfg.undeclared != "allow":
             return (
-                f"permanent halt at {node.id!r}: {operation!r} is {halt}. No risk grade, "
-                f"confirmation or mode relaxes this — a person does it.")
+                f"{node.id!r} does work that could change the world and declares no operations. "
+                f"Say what it will do — each as {{'description': ..., 'kind': ...}} — or pass "
+                f"undeclared='allow' for a dry run, which is recorded. Silence is not a "
+                f"declaration that nothing risky happens.")
+        report.relaxations.append(f"{node.id} ran undeclared: nothing was checked against the "
+                                  f"permanent halts")
+        return None
+
+    for operation in declared or ():
+        halt = policy.classify(operation)
+        if halt is not None:
+            what = operation.get("description", operation) if isinstance(operation, Mapping) \
+                else operation
+            return (
+                f"permanent halt at {node.id!r}: {what!r} is {halt}. No risk grade, confirmation "
+                f"or mode relaxes this — a person does it.")
     return None
 
 
@@ -381,6 +421,14 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             f"high-risk mode: review opened with {seats} seat(s), below the floor of "
             f"{policy.SEAT_FLOOR}")
 
+    # A confirmation is spent, not standing. Counted per gate and decremented at each stop it
+    # covers, because the operator confirmed *that* stop having seen it — an independent verifier
+    # found that one `--confirm plan_confirmed`, given to unlock a revision loop, also waved through
+    # the final approval on the way out. Confirming twice takes two.
+    confirmations: Dict[str, int] = {}
+    for gate in cfg.confirmed:
+        confirmations[gate] = confirmations.get(gate, 0) + 1
+
     node_id: Optional[str] = "intake"
     for _ in range(cfg.max_steps):
         if node_id is None:
@@ -388,7 +436,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
         node = graph.BY_ID[node_id]
         report.visited.append(node.id)
 
-        tripped = _permanent_halt(node, cfg)
+        tripped = _permanent_halt(node, cfg, report)
         if tripped is not None:
             report.halted_at = node.id
             report.halt_reason = tripped
@@ -405,9 +453,10 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             """
             if node.gate_when != phase or not policy.stops(str(verdict["verdict"])):
                 return None
-            if node.gate in cfg.confirmed:
+            if confirmations.get(node.gate, 0) > 0:
+                confirmations[node.gate] -= 1
                 report.confirmations.append(
-                    f"{node.gate} = {verdict['verdict']} at risk {verdict['risk']}, "
+                    f"{node.gate} = {verdict['verdict']} at risk {verdict['risk']} at {node.id}, "
                     f"confirmed by the operator")
                 return None
             report.halted_at = node.id
