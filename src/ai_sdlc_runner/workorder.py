@@ -178,17 +178,27 @@ def _situational(tree: Path, flag: str) -> Dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _checkpoint(tree: Path, checkpoint_id: str) -> Dict[str, object]:
-    try:
-        namespace, key = checkpoint_id.split(":", 1)
-    except ValueError:
-        raise WorkOrderError(f"checkpoint id {checkpoint_id!r} is not '<namespace>:<key>'") from None
-    path = tree / "dispatch" / "checkpoints" / namespace / f"{key}.json"
-    if not path.is_file():
+def _element_id(tree: Path, element_id: str, index: Mapping[str, object]) -> str:
+    """Resolve the element this node is named by — a checkpoint, or any other real element.
+
+    Most nodes name a checkpoint (`<namespace>:<key>`) and the id comes from that element. A node the
+    shipped policy grades no gate for — `whole-branch review` is a code gate, not a risk gate — names
+    the element it was written from instead. Either way the id must resolve to something that exists:
+    an order carrying an id nothing backs is the fabrication this contract exists to prevent.
+    """
+    if ":" in element_id and "#" not in element_id:
+        namespace, key = element_id.split(":", 1)
+        path = tree / "dispatch" / "checkpoints" / namespace / f"{key}.json"
+        if not path.is_file():
+            raise WorkOrderError(
+                f"no checkpoint element {element_id!r} in {tree} — this store version does not ship "
+                f"the policy it derives from")
+        return str(json.loads(path.read_text(encoding="utf-8"))["element_id"])
+    if element_id not in index:
         raise WorkOrderError(
-            f"no checkpoint element {checkpoint_id!r} in {tree} — this store version does not ship "
-            f"the policy it derives from")
-    return json.loads(path.read_text(encoding="utf-8"))
+            f"element {element_id!r} is not in this tree's manifest — a work order may not name an "
+            f"id that nothing backs")
+    return element_id
 
 
 def _check_node_spec(node_spec: Mapping[str, object]) -> None:
@@ -235,8 +245,8 @@ def render(
 
     capabilities = capabilities_for(skill_path, role)
     loadout = _loadout(tree, role)
-    checkpoint = _checkpoint(tree, checkpoint_id)
     index = _source_index(tree)
+    element_id = _element_id(tree, checkpoint_id, index)
 
     # Language is selected at dispatch for the same reason situational flags and risk are: the
     # element tree holds every language completely and unevaluated, and the engine picks. Sending a
@@ -254,17 +264,20 @@ def render(
         element_ids.extend(_pick(_situational(tree, flag)["element_ids"]))
 
     sources = []
-    for element_id in sorted(set(element_ids)):
-        resolved = index.get(element_id)
+    # `source_id`, not `element_id`: the node's own element id is already bound above, and rebinding
+    # it here silently made every order name the last source instead of the node — caught by the
+    # test that asserts a no-checkpoint node names the element it came from.
+    for source_id in sorted(set(element_ids)):
+        resolved = index.get(source_id)
         if resolved is None:
             raise WorkOrderError(
-                f"loadout for {role!r} names content element {element_id!r}, which is not in the "
+                f"loadout for {role!r} names content element {source_id!r}, which is not in the "
                 f"tree's manifest — the order would carry an id the node cannot resolve")
         sources.append(resolved)
 
     order = {
         "node_id": f"{role}@{checkpoint_id}",
-        "element_id": checkpoint["element_id"],
+        "element_id": element_id,
         "store_version": str(_manifest(tree, "manifest.json")["skill_version"]),
         "role": role,
         "scope": node_spec["scope"],

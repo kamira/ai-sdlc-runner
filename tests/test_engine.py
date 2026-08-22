@@ -32,9 +32,6 @@ SPEC = {
     "scope": "src/", "objective": "o", "done_criteria": ["d"], "input_artifacts": [],
     "expected_outputs": [], "acceptance_predicate": "p", "idempotence_probes": [], "workdir": ".",
 }
-VERDICT = {"checkpoint": "halt:before_implement", "risk": "medium", "verdict": "auto",
-           "source": "assets/halt_policy.json"}
-
 #: A straight run: CHG already confirmed, plan passes, one task, review passes, acceptance passes.
 DECISIONS = {
     "chg_confirmed": "yes", "plan_check": "pass", "next_task": "none",
@@ -44,9 +41,9 @@ DECISIONS = {
 
 def _cfg(**kw):
     specs = {n.id: dict(SPEC) for n in graph.NODES if n.role}
-    verdicts = {n.id: dict(VERDICT) for n in graph.NODES if n.role}
-    base = dict(node_specs=specs, verdicts=verdicts, decisions=dict(DECISIONS),
-                languages=["en"])
+    # `low` is the only grade whose shipped verdicts are `auto` all the way through, so it is the
+    # grade a straight-run fixture has to use now that the engine actually consults the policy.
+    base = dict(node_specs=specs, decisions=dict(DECISIONS), languages=["en"], risk="low")
     base.update(kw)
     return engine.RunConfig(**base)
 
@@ -95,14 +92,6 @@ def test_a_node_with_no_work_order_is_a_hard_error_naming_the_node():
     assert "never a fall back" in str(exc.value)
 
 
-def test_a_node_with_no_resolved_verdict_is_a_hard_error():
-    cfg = _cfg()
-    del cfg.verdicts["plan_check"]
-    with pytest.raises(engine.EngineError) as exc:
-        engine.walk(STORE, TREE, cfg, Recorder(), enabled=True)
-    assert "plan_check" in str(exc.value)
-
-
 def test_a_role_with_no_capability_data_stops_the_run_and_does_not_advance(monkeypatch):
     """The panel made this binding: terminate, name the role, and leave the frontier where it was.
     Driven through an actual walk rather than by calling the helper, which is the gap the review
@@ -115,7 +104,6 @@ def test_a_role_with_no_capability_data_stops_the_run_and_does_not_advance(monke
     recorder = Recorder()
     cfg = _cfg()
     cfg.node_specs["plan_check"] = dict(SPEC)
-    cfg.verdicts["plan_check"] = dict(VERDICT)
     with pytest.raises(engine.EngineError) as exc:
         engine.walk(STORE, TREE, cfg, recorder, enabled=True)
     message = str(exc.value)
@@ -541,3 +529,69 @@ def test_session_identity_survives_garbage_collection():
     # a second full run in the same process reuses the address space the first run released
     report = engine.walk(STORE, TREE, _cfg(), _Factory(), enabled=True)
     assert report.halted_at == "close_out"
+
+
+# --------------------------------------------------------------------------------------
+# the gate is consulted, not carried
+# --------------------------------------------------------------------------------------
+
+def test_the_engine_resolves_verdicts_from_the_shipped_policy():
+    """Both independent verifiers named the same worst finding: the engine took a verdict from the
+    caller's plan and walked past it without looking. A gate nobody consults is not a gate."""
+    node = graph.BY_ID["confirm_gate"]
+    assert engine.resolve_verdict(STORE, TREE, node, "low")["verdict"] == "auto"
+    assert engine.resolve_verdict(STORE, TREE, node, "medium")["verdict"] == "confirm"
+    assert engine.resolve_verdict(STORE, TREE, node, "high")["verdict"] == "halt"
+
+
+def test_a_non_auto_verdict_stops_the_walk_before_anything_is_dispatched():
+    """Halting after the work was done is not halting, so the gate is consulted first."""
+    recorder = Recorder()
+    report = engine.walk(STORE, TREE, _cfg(risk="high"), recorder, enabled=True)
+    assert report.halted_at is not None
+    assert "halt" in report.halt_reason
+    node = graph.BY_ID[report.halted_at]
+    assert not any(a.node_id == node.id for a in report.asks)
+
+
+def test_the_halt_names_the_checkpoint_the_risk_and_the_source():
+    report = engine.walk(STORE, TREE, _cfg(risk="high"), Recorder(), enabled=True)
+    assert "risk high" in report.halt_reason
+    assert ":" in report.halt_reason.split(" = ")[0]      # a real checkpoint id
+    assert "assets/" in report.halt_reason or "halt_gate.py" in report.halt_reason
+
+
+def test_a_medium_risk_confirm_also_stops():
+    """`confirm` is not `auto`. Treating it as continue would be the runner approving on the user's
+    behalf at the one gate the policy put there for them."""
+    report = engine.walk(STORE, TREE, _cfg(risk="medium"), Recorder(), enabled=True)
+    assert report.halted_at is not None
+    assert "confirm" in report.halt_reason or "halt" in report.halt_reason
+
+
+def test_a_node_with_no_checkpoint_gets_no_invented_one():
+    """The silent fallback an independent verifier found: nodes with no checkpoint were defaulted to
+    `halt:before_implement`, inside the module whose own docstring forbids silent fallbacks."""
+    verdict = engine.resolve_verdict(STORE, TREE, graph.BY_ID["branch_review"], "high")
+    assert verdict["checkpoint"] is None
+    assert verdict["verdict"] == "auto"
+    assert "no policy checkpoint" in verdict["source"]
+
+
+def test_a_multi_checkpoint_node_is_judged_by_all_of_them():
+    """`confirm_gate` carries two. The strictest wins — which is also why fork point 6 never has to
+    be settled: anything that is not `auto` stops, so no ordering between the stopping values is
+    needed."""
+    node = graph.BY_ID["confirm_gate"]
+    assert len(node.checkpoints) == 2
+    verdict = engine.resolve_verdict(STORE, TREE, node, "high")
+    assert verdict["verdict"] != "auto"
+    assert verdict["checkpoint"] in node.checkpoints
+
+
+def test_the_report_records_every_verdict_for_audit():
+    report = engine.walk(STORE, TREE, _cfg(), Recorder(), enabled=True)
+    assert report.verdicts
+    for node_id, verdict in report.verdicts.items():
+        assert set(verdict) == {"checkpoint", "risk", "verdict", "source"}
+    assert report.as_dict()["verdicts"] == report.verdicts

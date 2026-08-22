@@ -70,6 +70,10 @@ from typing import Dict, List, Optional, Sequence, Tuple
 SOURCE_ELEMENT = "references/autopilot-loop#state-machine"
 SOURCE_REL_PATH = "elements/references/autopilot-loop/001-state-machine.md"
 
+#: The checkpoint namespace whose verdicts the store ships a resolver for.
+HALT_NS = "halt"
+AUTOPILOT_NS = "autopilot"
+
 STEP = "step"
 DECISION = "decision"
 LOOP = "loop"

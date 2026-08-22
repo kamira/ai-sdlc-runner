@@ -406,9 +406,12 @@ def _engine_session_factory(config: dict, backend: Optional[str]):
 def cmd_engine_run(args: argparse.Namespace) -> int:
     """Walk the node graph (CHG-20260822-04 task 6). Opt-in: `runner run --engine`.
 
-    The plan file supplies what no store can: per-node objectives, done-criteria, resolved policy
-    verdicts and branch choices. Task 7 replaces the file with the CHG itself; until then the flag is
-    honest about needing it rather than inventing defaults.
+    The plan file supplies what no store can: per-node objectives, done-criteria, branch choices,
+    and the CHG's risk grade. It does **not** supply verdicts — the engine resolves those from the
+    shipped policy itself, because a gate the runner is handed rather than asked is not a gate.
+
+    Reading the plan out of the CHG instead of a file is a later change; until then the flag says
+    what it needs rather than inventing defaults.
     """
     import json as _json
 
@@ -420,8 +423,9 @@ def cmd_engine_run(args: argparse.Namespace) -> int:
                                 Path(skill_path).name)
 
     if not args.plan:
-        print("error: --engine needs --plan <file> (per-node objectives, verdicts and branch "
-              "choices). Nothing in the store can supply them; task 7 reads them from the CHG.")
+        print("error: --engine needs --plan <file> (per-node objectives, branch choices and the "
+              "CHG's risk grade). Nothing in the store can supply them. Policy verdicts are not "
+              "among them: the engine resolves those from the shipped policy itself.")
         return 2
     plan = _json.loads(Path(args.plan).read_text(encoding="utf-8"))
 
@@ -436,8 +440,9 @@ def cmd_engine_run(args: argparse.Namespace) -> int:
 
     cfg = engine.RunConfig(
         node_specs=plan.get("node_specs", {}),
-        verdicts=plan.get("verdicts", {}),
         decisions=plan.get("decisions", {}),
+        risk=plan.get("risk", "high"),
+        autonomy=plan.get("autonomy"),
         review_seats=seats,
         high_risk_mode=high_risk,
         situational_flags=plan.get("situational_flags", []),

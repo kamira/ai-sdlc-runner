@@ -26,14 +26,11 @@ pytestmark = pytest.mark.skipif(
 SPEC = {"scope": "src/", "objective": "o", "done_criteria": ["d"], "input_artifacts": [],
         "expected_outputs": [], "acceptance_predicate": "p", "idempotence_probes": [],
         "workdir": "."}
-VERDICT = {"checkpoint": "halt:before_implement", "risk": "medium", "verdict": "auto",
-           "source": "assets/halt_policy.json"}
-
 
 def _plan(tmp_path, **overrides):
     plan = {
         "node_specs": {n.id: dict(SPEC) for n in graph.NODES if n.role},
-        "verdicts": {n.id: dict(VERDICT) for n in graph.NODES if n.role},
+        "risk": "low",
         "decisions": {"chg_confirmed": "yes", "plan_check": "pass", "next_task": "none",
                       "task_review": "pass", "re_review": "pass", "acceptance": "pass"},
         "languages": ["en"],
@@ -74,7 +71,8 @@ def test_the_engine_needs_a_plan_and_says_why(capsys, tmp_path):
     """Refusing with a reason beats inventing per-node objectives the store cannot supply."""
     assert cli.main(["run", ".", "--engine", "--skill-path", str(STORE)]) == 2
     out = capsys.readouterr().out
-    assert "--plan" in out and "task 7 reads them from the CHG" in out
+    assert "--plan" in out
+    assert "Policy verdicts are not" in out, "the message must not imply the plan supplies verdicts"
 
 
 # --------------------------------------------------------------------------------------

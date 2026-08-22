@@ -183,6 +183,8 @@ class RunReport:
     halt_reason: str = ""
     #: Recorded, not just honoured: every relaxation the run was granted.
     relaxations: List[str] = field(default_factory=list)
+    #: The verdict the shipped policy gave at each node, so a halt can be audited afterwards.
+    verdicts: Dict[str, Dict[str, object]] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, object]:
         return {
@@ -191,6 +193,7 @@ class RunReport:
             "halted_at": self.halted_at,
             "halt_reason": self.halt_reason,
             "relaxations": list(self.relaxations),
+            "verdicts": {k: dict(v) for k, v in self.verdicts.items()},
         }
 
 
@@ -246,10 +249,16 @@ class RunConfig:
     """Everything the walk needs that a store cannot supply."""
 
     node_specs: Mapping[str, Mapping[str, object]]
-    verdicts: Mapping[str, Mapping[str, object]]
     decisions: Mapping[str, object]
+    #: The CHG's risk grade. The engine resolves each checkpoint's verdict from the shipped policy
+    #: itself — it is not handed one. A caller supplying verdicts would be the runner trusting
+    #: somebody else's reading of a gate, which is the opposite of what the gate is for.
+    risk: str = "high"
+    #: The CHG's `Autonomy:` field, passed through to the shipped resolver. Tighten-only: it can
+    #: make a gate stricter and never looser (the shipped script enforces that, not this module).
     review_seats: Optional[int] = None
     high_risk_mode: bool = False
+    autonomy: Optional[str] = None
     situational_flags: Sequence[str] = ()
     languages: Sequence[str] = ()
     max_steps: int = 200
@@ -278,19 +287,84 @@ def _choose(cfg: RunConfig, node: graph.Node, taken: Dict[str, int]) -> Optional
     return value[visit]
 
 
-def _order_for(skill_path, tree, node: graph.Node, cfg: RunConfig) -> Dict[str, object]:
+def resolve_verdict(skill_path: str | Path, tree: str | Path, node: graph.Node,
+                    risk: str, autonomy: Optional[str] = None) -> Dict[str, object]:
+    """The verdict for this node, resolved from the shipped policy — never taken on trust.
+
+    The Goal says the engine halts "only where the shipped policy says halt", and that is only true
+    if the engine asks the policy. An earlier version took a verdict from the caller's plan and
+    walked past it without looking; **both independent verifiers named that as their worst finding**,
+    and they were right — a gate nobody consults is not a gate.
+
+    Two axes, resolved the way each one ships:
+
+    * ``halt:*`` — delegated to the store's own ``halt_gate.py`` through ``gates.check_halt``
+      (FR-8, guideline §8 "calls, not re-implementations"). The CHG's ``Autonomy`` field goes with
+      it, and the shipped script is what enforces tighten-only.
+    * ``autopilot:*`` — read from the verdict table the element carries verbatim, because no usable
+      resolver ships for that axis (``scripts/autopilot_runner.py`` cannot import; its ``lib/`` was
+      not archived).
+
+    A node with **several** checkpoints is judged by all of them and the **strictest wins** — which
+    is why this never has to settle fork point 6. Ordering ``halt`` against ``halt_independent``
+    would only matter if something continued on one of them; nothing does. Anything that is not
+    ``auto`` stops the run, so the engine needs the two-way split it can actually derive, and the
+    raw verdict travels for the record.
+    """
+    from . import gates
+
+    if not node.checkpoints:
+        # No checkpoint means the shipped policy grades no gate here — `whole-branch review` is a
+        # code gate, not a risk gate. Inventing one (an earlier version defaulted to
+        # `halt:before_implement`) is the silent fallback this module's own docstring forbids.
+        return {"checkpoint": None, "risk": risk, "verdict": "auto",
+                "source": "no policy checkpoint on this node"}
+
+    resolved = []
+    for checkpoint_id in node.checkpoints:
+        namespace, key = checkpoint_id.split(":", 1)
+        if namespace == graph.HALT_NS:
+            decision = gates.check_halt(skill_path, key, risk, autonomy=autonomy)
+            verdict = "auto" if decision.result == "AUTO" else "halt"
+            source = "scripts/halt_gate.py"
+        else:
+            table = _checkpoint_table(tree, checkpoint_id)
+            verdict = table.get(risk.lower())
+            if verdict is None:
+                raise EngineError(
+                    f"{checkpoint_id} ships no verdict for risk {risk!r}; it grades "
+                    f"{sorted(table)}. The engine does not guess a gate.")
+            source = f"assets/autopilot_policy.json#{key}"
+        resolved.append({"checkpoint": checkpoint_id, "verdict": verdict, "source": source})
+
+    stopping = [r for r in resolved if r["verdict"] != "auto"]
+    chosen = stopping[0] if stopping else resolved[0]
+    return {"checkpoint": chosen["checkpoint"], "risk": risk, "verdict": chosen["verdict"],
+            "source": chosen["source"]}
+
+
+def _checkpoint_table(tree: str | Path, checkpoint_id: str) -> Dict[str, str]:
+    namespace, key = checkpoint_id.split(":", 1)
+    path = Path(tree) / "dispatch" / "checkpoints" / namespace / f"{key}.json"
+    if not path.is_file():
+        raise EngineError(f"no checkpoint element {checkpoint_id!r} in {tree}")
+    return json.loads(path.read_text(encoding="utf-8"))["risk_table"]
+
+
+def _order_for(skill_path, tree, node: graph.Node, cfg: RunConfig,
+               verdict: Mapping[str, object]) -> Dict[str, object]:
     spec = cfg.node_specs.get(node.id)
     if spec is None:
         raise EngineError(
             f"node {node.id!r} has no work order: no node spec was supplied for it. A node the "
             f"engine cannot template is a hard error naming the node — never a fall back to a "
             f"generic prompt (D7).")
-    verdict = cfg.verdicts.get(node.id)
-    if verdict is None:
-        raise EngineError(f"node {node.id!r} has no resolved policy verdict")
-    checkpoint = node.checkpoints[0] if node.checkpoints else "halt:before_implement"
+    # The work order names the element this node came from. With a checkpoint that is the checkpoint
+    # element; without one it is the shipped flow element the node was written from — a real element
+    # either way, never a fabricated id.
+    element_id = verdict["checkpoint"] or graph.SOURCE_ELEMENT
     return workorder.render(
-        skill_path, tree, node.role, checkpoint, spec, verdict,
+        skill_path, tree, node.role, element_id, spec, verdict,
         situational_flags=cfg.situational_flags, languages=cfg.languages,
     )
 
@@ -377,6 +451,17 @@ def walk(skill_path: str | Path, tree: str | Path, cfg: RunConfig,
         node = graph.BY_ID[node_id]
         report.visited.append(node.id)
 
+        # The gate is consulted *before* anything is dispatched: halting after the work was done
+        # is not halting.
+        verdict = resolve_verdict(skill_path, tree, node, cfg.risk, cfg.autonomy)
+        report.verdicts[node.id] = dict(verdict)
+        if verdict["verdict"] != "auto":
+            report.halted_at = node.id
+            report.halt_reason = (
+                f"{verdict['checkpoint']} = {verdict['verdict']} at risk {verdict['risk']} "
+                f"(per {verdict['source']})")
+            return report
+
         if node.role:
             # Capability first: a role with no shipped data stops the run where it stands, so the
             # frontier does not advance past a node that was never actually performed.
@@ -391,14 +476,14 @@ def walk(skill_path: str | Path, tree: str | Path, cfg: RunConfig,
 
             if node.id == "branch_review":
                 for seat in seat_names(skill_path, seats):
-                    order = _order_for(skill_path, tree, node, cfg)
+                    order = _order_for(skill_path, tree, node, cfg, verdict)
                     # One ask, one session — per seat, not per node. Three seats answering inside one
                     # context would be one opinion repeated.
                     report.asks.append(Ask(node.id, node.role, seat, _ask(
                         factory, order, opened, seat=seat, journal=cfg.journal,
                         ask_id=f"{len(report.asks):03d}-{node.id}-{seat}", node_id=node.id)))
             else:
-                order = _order_for(skill_path, tree, node, cfg)
+                order = _order_for(skill_path, tree, node, cfg, verdict)
                 report.asks.append(Ask(node.id, node.role, None, _ask(
                     factory, order, opened, journal=cfg.journal,
                     ask_id=f"{len(report.asks):03d}-{node.id}", node_id=node.id)))

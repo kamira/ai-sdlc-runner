@@ -240,10 +240,20 @@ def test_an_unknown_checkpoint_is_a_hard_error_naming_it():
     assert "halt:no_such_gate" in str(exc.value)
 
 
-def test_a_malformed_checkpoint_id_is_rejected():
+def test_an_id_that_nothing_backs_is_rejected():
+    """A bare `before_implement` is neither a checkpoint id nor a content element id. An order
+    carrying an id nothing backs is the fabrication this contract exists to prevent."""
     with pytest.raises(workorder.WorkOrderError) as exc:
         workorder.render(STORE, TREE, "verifier", "before_implement", NODE_SPEC, VERDICT)
-    assert "namespace" in str(exc.value)
+    assert "nothing backs" in str(exc.value)
+
+
+def test_a_node_with_no_checkpoint_may_name_the_element_it_came_from():
+    """`whole-branch review` is a code gate, not a risk gate, so the shipped policy grades nothing
+    for it. It names the shipped flow element instead of a fabricated checkpoint."""
+    order = workorder.render(STORE, TREE, "verifier", "references/autopilot-loop#state-machine",
+                             NODE_SPEC, VERDICT, languages=["en"])
+    assert order["element_id"] == "references/autopilot-loop#state-machine"
 
 
 def test_the_resolved_verdict_travels_verbatim():
@@ -256,3 +266,12 @@ def test_serialisation_is_deterministic_and_lf_only():
     assert a == b
     assert "\r" not in a
     assert a.endswith("\n")
+
+
+def test_the_order_names_the_node_element_not_the_last_source():
+    """Regression: `render` rebound `element_id` in the sources loop, so every order named the last
+    source it happened to iterate instead of the node's own element — invisible because the older
+    test asserted `node_id` and never `element_id`."""
+    order = _render(languages=["en"])
+    assert order["element_id"] == "halt:before_implement"
+    assert order["element_id"] not in {s["element_id"] for s in order["sources"]}
