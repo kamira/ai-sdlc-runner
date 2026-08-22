@@ -74,14 +74,24 @@ recorded in the run report.
 Six actions are never automated at any grade and no confirmation or mode relaxes them: production
 deploys, data migrations, hard deletes, moving money, changing secrets or permissions, publishing.
 
-Each operation a node carries out **declares its kind**, from a closed set of the six plus
-`ordinary`, and **an operation that declares nothing is refused**. That inversion is the guarantee.
-An earlier version guessed the kind from the wording, and an independent verifier broke all six with
-ordinary English — "promote the new build into the live environment", "wire USD 500 to the vendor" —
-none of which contained a listed word. Word lists remain, as a backstop that catches a red line
-mis-declared as ordinary; they can add a stop and can never remove one — and they are weak: across
-eighteen red-line sentences written by verifiers, they catch **8**. The number is pinned in a test
-so nobody starts trusting it.
+Three layers decide, and each may only ever **add** a stop:
+
+1. **The targets** — the commands, paths and URLs the operation will act on. `rm -rf` in a command
+   is not a phrasing choice and a path under `secrets/` is not an opinion, so these are read
+   directly and **outrank the declaration**. A plan naming `kubectl apply -f prod/` has said
+   "production deploy" whatever it wrote in `kind`. This is the layer that stops the planner from
+   being the trust boundary.
+2. **The declaration** — each operation declares its `kind` from a closed set of the six plus
+   `ordinary`, and **an operation that declares nothing is refused**. A declared red line always
+   halts.
+3. **The description**, against word lists — the backstop, and the weakest. An earlier version made
+   this the whole check, and two verifiers broke all six red lines with ordinary English containing
+   no listed word. Widening the lists was tried and bought nothing: across eighteen sentences they
+   catch **8**, and the number is pinned in a test so nobody starts trusting it.
+
+An operation that declares `ordinary` and names no targets is taken on the plan's word. It is not
+blocked — an empty target list is exactly as forgeable as a wrong `kind` — but it lands in the run
+report under `on_trust`, so an auditor can see which steps nothing verified.
 
 `--undeclared allow` exists for dry runs and records itself as a relaxation. It **never** covers a
 node that applies effects: a run that changes the world is not a dry run, whatever the flag says.

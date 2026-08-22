@@ -294,6 +294,8 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     for relaxation in report.relaxations:
         print(f"relaxation:    {relaxation}")
+    for line in report.on_trust:
+        print(f"unverified:    {line}")
     for line in report.confirmations:
         print(f"confirmed:     {line}")
     for decision in report.adjudications:

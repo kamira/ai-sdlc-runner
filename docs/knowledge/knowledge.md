@@ -18,6 +18,7 @@
 | KN-6 | pattern | node-engine / idempotence | An operation may be an **effect** only if it leaves a probeable postcondition in the ledger, git or the forge; constructing one without a probe raises. Probes describe the **postcondition, not the action**, and read the world rather than any record the runner wrote. Unanswerable **raises** — never `False`. Nothing already true is re-applied, before or after the frontier. | active |
 | KN-7 | pattern | node-engine / sessions | Every **asking** node gets its own session: opened, asked once, closed in a `finally`; a factory that returns a session it already returned is refused. A multi-seat review is several asks, so each seat is its own session. The question is journalled **before** the session opens, so a dropped session costs the answer and not the question. | active |
 | KN-8 | pattern | governance / wiring | A mechanism is not built until something calls it. Three rounds here shipped a correct piece that nothing reached — an engine ignoring its own policy verdict, an `adjudicate` no caller invoked, a `PERMANENT_HALTS` list printed into every order and never checked — and each passed its own suite. The test that matters is the one that fails when the wire is cut. | active |
+| KN-11 | pattern | governance / trust boundaries | Read the **fact**, not the claim. A declaration is what somebody says an operation is; a target (`kubectl apply -f prod/`, `secrets/key.pem`) is what it will touch. Facts may overrule claims; prose may not. And where a trust boundary cannot be removed, **record it** — an operation nothing verified belongs in the report, not in silence. | active |
 | KN-10 | pattern | governance / red lines | A blacklist cannot be a safety guarantee. Two verifiers independently broke all six permanent halts with ordinary English containing no listed word, and a plan that simply **omitted** its operations was checked against nothing at all. The fix is the inversion: each operation **declares** its kind from a closed set, an undeclared one is refused, and word lists are demoted to a backstop that can only add a stop. | active |
 | KN-9 | pattern | governance / vocabularies | A vocabulary that classifies must be **closed**: an unrecognised value is a failure, never a pass. The ledger lint knew only "built", so `accepted`, `merged`, `completed` and `完成` all sailed past it with no acceptance record. And read the **field**, not the prose around it — `draft — all 9 tasks built` is a draft. | active |
 
@@ -308,10 +309,56 @@ claim instead of describing it: `tests/test_flow.py::test_the_backstop_is_weak_a
 written_down` keeps the count where a change has to look at it, and says in its own name that it is
 a record of weakness rather than an assertion of strength.
 
-Deriving the kind from what the operation will actually touch — paths, commands, endpoints — is the
-stronger design and is not built.
+**Built in CHG-20260823-04**, because a limit disclosed three rounds running stops being a
+disclosure and starts being an excuse. An operation may name the **targets** it will act on, and
+those are read directly: `rm -rf` in a command is not a phrasing choice, and a path under `secrets/`
+is not an opinion. Because they are facts rather than claims, targets are allowed to **overrule** a
+declaration of `ordinary` — which the word lists never were.
+
+The trust that remains is recorded rather than assumed away: an operation declaring `ordinary` with
+no targets is taken on the plan's word and lands in the run report under `on_trust`. It is not
+blocked, because an empty target list is exactly as forgeable as a wrong `kind` and requiring one
+would buy ceremony rather than safety. **Not removed, but no longer invisible** is the honest shape
+of a trust boundary you cannot eliminate.
 
 The test that was supposed to cover all of this fed each rule's own description back into its own
 word list and asserted it matched. A tautology, and it passed, and it gave false confidence in
 exactly the coverage that did not exist. **The corpus is now the twelve sentences that broke it** —
 a test written from what actually failed, not from what the mechanism does.
+
+
+## KN-11 — Read the fact, not the claim; and where trust remains, record it
+*tags: governance · source: CHG-20260823-04 · tier: pattern*
+
+A red-line check has three kinds of evidence available, and they are not equal:
+
+| Evidence | What it is | May overrule |
+|---|---|---|
+| **the target** — `kubectl apply -f prod/`, `rm -rf /srv/audit`, `secrets/key.pem` | a fact about what will be touched | everything below |
+| **the declaration** — the plan's `kind` field | a claim the planner makes | the backstop |
+| **the description** — prose, matched against word lists | a claim, phrased freely | nothing |
+
+The ordering is not a preference. `rm -rf` in a command is not a phrasing choice; "obliterate the
+audit archive beyond recovery" is. That is exactly why targets may overrule a declaration and word
+lists may not: **a check earns the right to contradict somebody in proportion to how little of it
+they control.**
+
+This repo learned it the long way. The first version read only prose and two verifiers broke all six
+red lines with ordinary English. The second made the declaration the guarantee and inverted the
+defaults, which held — and then every round for three rounds closed with the same sentence: *the
+declaration is only as strong as the planner.* A limit disclosed three times without being closed
+stops being a disclosure and starts being an excuse.
+
+**Two corollaries worth keeping:**
+
+**Report every match, not the first.** `.env.production` is a secrets file *and* sits in something
+called production. Stopping while naming one of them is a half-truth, and half-truths are how people
+stop believing a stop.
+
+**Where a trust boundary cannot be removed, record it.** An operation that declares `ordinary` and
+names no targets rests on the planner's word, and there is no way around that: an empty target list
+is exactly as forgeable as a wrong `kind`, so *requiring* one buys ceremony rather than safety. The
+answer is not to block it and not to ignore it — it goes into the run report under `on_trust`, where
+an auditor reads which steps nothing verified. **Not removed, but no longer invisible** is the
+honest end state for a trust you cannot eliminate, and it is a much better one than a mechanism that
+implies it eliminated it.
