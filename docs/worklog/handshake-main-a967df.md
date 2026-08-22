@@ -174,3 +174,8 @@ repo 為 PUBLIC(`gh repo view --json visibility`),不涉計費封鎖。
    不自己發明 `halt` 與 `halt_independent` 的全序。補 vendoring 是另一筆變更。
 
 最後更新:2026-08-22(UTC+0)
+
+### task 2 的 CI(真綠)
+
+PR #12 · run 32557718514 —— 5/5 pass。doc-integrity 7 steps、四個 pytest job 各 8 steps,
+全部 0 失敗;windows py3.9 的 log 讀到 `210 passed, 2 skipped`。
