@@ -130,6 +130,13 @@ for every asking role. A dropped session costs the answer and not the question.
 `--seat-model` routes a named seat to a different command: the same question, different answerers,
 which is what makes cross-model review real. The routing lives in the CLI and never in the order.
 
+**When nobody uses it, the run says so.** Three seats answered by one backend are independent of each
+other's context and not of that model's blind spots — which is most of what the seats are for. The
+report records `single_model_panels` and the CLI prints `single model:`, naming the fix. A
+disclosure, not a gate: the seat count is the user's, and refusing to run would make the honest
+default unusable. It compares **backends**, not models — two wrappers around the same model read as
+diverse, and the runner cannot see past the command it ran.
+
 **Resuming.** `runner run --resume --ask-journal DIR` continues an interrupted run: what the journal
 already answered is not asked again, and the pending question is re-asked verbatim. Resuming is a
 decision — without the flag, a journal that happens to exist changes nothing, because a run silently

@@ -71,6 +71,9 @@ def load_config(path: str) -> dict:
 class _Stub(engine.Session):
     """Answers nothing, records that it was asked. The default, so a dry run costs nothing."""
 
+    def describe(self) -> str:
+        return "stub"
+
     def ask(self, order):
         return {"backend": "stub", "node_id": order["node_id"], "role": order["role"]}
 
@@ -96,6 +99,10 @@ class _Process(engine.Session):
 
     def __init__(self, argv: List[str], timeout: int):
         self.argv, self.timeout = argv, timeout
+
+    def describe(self) -> str:
+        """Which backend this is, for the panel-diversity note. The command, not the process."""
+        return " ".join(self.argv)
 
     def ask(self, order):
         proc = subprocess.run(self.argv, input=workorder.to_json(order),
@@ -297,7 +304,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     # verifier pointed out that "a flag beats the file" held only in the relaxing direction, which
     # is the wrong one to be asymmetric in.
     if args.no_high_risk_mode:
+        # Declining the bypass means "run at the floor", not "ask me about it again". Leaving a
+        # below-floor seat count in place sent the operator straight into the confirmation prompt
+        # they had just declined on the command line — a flag that reopens the question it answers.
         high_risk = False
+        if seats is not None and seats < policy.SEAT_FLOOR:
+            print(f"note:          --no-high-risk-mode: {seats} seat(s) is below the floor, "
+                  f"opening {policy.SEAT_FLOOR}")
+            seats = None
     else:
         high_risk = bool(args.high_risk_mode) or saved.high_risk_mode
     if seats is not None and seats < policy.SEAT_FLOOR and not high_risk:
@@ -345,6 +359,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"unverified:    {line}")
     for line in report.confirmations:
         print(f"confirmed:     {line}")
+    for line in report.single_model_panels:
+        print(f"single model:  {line}")
     for decision in report.adjudications:
         seat_line = ", ".join(f"{k}={v}" for k, v in sorted(decision["verdicts"].items()))
         print(f"panel:         {decision['node_id']} → {decision['outcome']} ({seat_line})")
