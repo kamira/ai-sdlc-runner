@@ -30,7 +30,13 @@ DEFAULT_CONFIG = "config/runner.yaml"
 
 
 def load_config(path: str) -> dict:
-    """Read runner.yaml. PyYAML if present, else a small reader for the flat keys we use."""
+    """Read runner.yaml. PyYAML if present, else a small reader for the flat keys we use.
+
+    The fallback has to understand an **inline list**, because `agent_command` is documented as one
+    and PyYAML is optional — a reader that silently split ``["python", "agent.py"]`` on whitespace
+    produced an argv whose first element was ``'["python",'``, which failed only on machines without
+    PyYAML. That is every CI runner here, and none of the developer machines.
+    """
     p = Path(path)
     if not p.is_file():
         return {}
@@ -42,11 +48,19 @@ def load_config(path: str) -> dict:
         config: Dict[str, object] = {}
         for line in text.splitlines():
             line = line.split("#", 1)[0].strip()
-            if ":" in line and not line.startswith("-"):
-                key, _, value = line.partition(":")
-                value = value.strip().strip('"').strip("'")
-                if value:
-                    config[key.strip()] = value
+            if ":" not in line or line.startswith("-"):
+                continue
+            key, _, raw = line.partition(":")
+            raw = raw.strip()
+            if not raw:
+                continue
+            if raw.startswith("["):
+                try:
+                    config[key.strip()] = json.loads(raw)
+                    continue
+                except json.JSONDecodeError:
+                    pass
+            config[key.strip()] = raw.strip('"').strip("'")
         return config
 
 

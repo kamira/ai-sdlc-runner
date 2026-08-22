@@ -457,3 +457,34 @@ def test_a_lost_backend_leaves_the_question_on_disk(tmp_path, py_stub):
     pending = engine.AskJournal(journal).pending()
     assert len(pending) == 1
     assert pending[0]["node_id"] == "pm_plan"
+
+
+def test_the_fallback_reader_parses_an_inline_list(tmp_path, monkeypatch):
+    """`agent_command` is documented as a list, and PyYAML is optional. A reader that split it on
+    whitespace produced an argv beginning `["python",` — green on every developer machine, red on
+    every CI runner, which is exactly where it happened."""
+    path = tmp_path / "runner.yaml"
+    path.write_text('agent_command: ["python", "agent.py", "--json"]\n', encoding="utf-8")
+    real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __import__
+
+    def no_yaml(name, *a, **kw):
+        if name == "yaml":
+            raise ImportError("no yaml")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr("builtins.__import__", no_yaml)
+    assert cli.load_config(str(path))["agent_command"] == ["python", "agent.py", "--json"]
+
+
+def test_a_malformed_inline_list_is_kept_as_text_rather_than_dropped(tmp_path, monkeypatch):
+    path = tmp_path / "runner.yaml"
+    path.write_text('agent_command: [oops\n', encoding="utf-8")
+    real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __import__
+
+    def no_yaml(name, *a, **kw):
+        if name == "yaml":
+            raise ImportError("no yaml")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr("builtins.__import__", no_yaml)
+    assert cli.load_config(str(path))["agent_command"] == "[oops"
