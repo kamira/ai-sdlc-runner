@@ -524,3 +524,7 @@ forge(可注入的指令,只讀退出碼與 stdout 空否)、ledger(CHG 有沒�
 ### 閘門
 
 `pytest tests/` **388 passed, 2 skipped**;doc-integrity exit 0。
+
+### task 7 的 CI
+
+PR #17 · run 32583011810 —— 6/6 pass,逐 job 7–8 steps、0 失敗。
