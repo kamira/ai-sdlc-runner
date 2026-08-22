@@ -39,7 +39,8 @@ ai-sdlc-runner/
 │   ├── workspace.py           # multi-project workspace: authority(main) + consumers, persisted; CHG-08
 │   ├── structure_scan.py      # structure analysis: scan + scaffold 4 structures + authority/pointers; CHG-08
 │   ├── decompose.py           # split store references into anchored, provenanced elements; CHG-20260822-04 task 1
-│   └── dispatch.py            # derive checkpoint + role-loadout elements from shipped policy (task 2); emit_all + verify_elements three-state gate (task 4); CHG-20260822-04
+│   ├── dispatch.py            # derive checkpoint + role-loadout elements from shipped policy (task 2); emit_all + verify_elements three-state gate (task 4); CHG-20260822-04
+│   └── workorder.py           # render one node's work order: closed D5 schema, no harness-specific field, self-sufficient; CHG-20260822-04 task 5
 ├── config/
 │   └── runner.yaml            # contract version, skill path, concurrency/depth limits
 ├── docs/
@@ -61,7 +62,8 @@ ai-sdlc-runner/
     ├── test_decompose.py       # decomposer: determinism, anchor traceability, provenance; CHG-20260822-04 task 1
     ├── test_dispatch.py        # dispatch elements: policy coverage, no hand-written ids; CHG-20260822-04 task 2
     ├── test_elements_tree.py   # every store version has elements; committed tree regenerates byte-for-byte; CHG-20260822-04 task 3
-    └── test_elements_gate.py   # regeneration gate: match / drift / source-missing, each produced by breaking a real repo; CHG-20260822-04 task 4
+    ├── test_elements_gate.py   # regeneration gate: match / drift / source-missing, each produced by breaking a real repo; CHG-20260822-04 task 4
+    └── test_workorder.py       # work-order schema is closed; sentinel proves no tool name escapes; 9/13 roles refuse to render; CHG-20260822-04 task 5
 ```
 
 ## Responsibility per directory
