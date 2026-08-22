@@ -99,8 +99,9 @@ able only to **add** a stop:
    rather than claims, so they overrule a declaration that says otherwise;
 3. **the declaration** — every operation says which of the six kinds it is, or `ordinary`. An
    operation that declares nothing is refused, not assumed safe;
-4. **the description**, against word lists. The weakest layer by far — 8 of 18 known attempts — and
-   never trusted alone.
+4. **the description**, against word lists. The weakest layer by far, and both of its numbers are
+   measured: it catches 6 of 18 known attempts and falsely stops 0 of 56 ordinary engineering
+   briefs. Never trusted alone.
 
 All of it happens before the work is dispatched. An operation that declares `ordinary` and names no
 targets rests on the plan's word, and the run report says so under `unverified:`.
@@ -188,7 +189,8 @@ runner run --config runner.yaml --risk medium --seats 3
 2. **operation 申報的 targets**(`kubectl apply -f prod/`、`secrets/key.pem`)——這些是事實而非說法,
    所以可以推翻申報;
 3. **申報本身**——每個 operation 必須說自己是六類之一或 `ordinary`;什麼都不申報會被拒絕,不會被當成安全;
-4. **描述文字**比對字詞表——最弱的一層(18 句已知嘗試中只擋下 8 句),絕不單獨採信。
+4. **描述文字**比對字詞表——最弱的一層,兩個數字都實測並釘在測試裡:18 句已知繞過擋下 6 句,
+   56 句正常開發任務誤擋 0 句。絕不單獨採信。
 
 以上全部在派工**之前**發生。申報為 `ordinary` 又沒指定 targets 的 operation 等於靠計畫的說法,執行報告
 會在 `unverified:` 底下把它列出來。
