@@ -338,3 +338,7 @@ fable 查證後指出那句在 **`review_seats.json`** 的 `_extending`,而 `rol
 ### 閘門
 
 `pytest tests/` **285 passed, 2 skipped**;doc-integrity **exit 0**。
+
+### task 5 的 CI
+
+PR #15 · run 32560052136 —— **6/6 pass**,逐 job 7–8 steps、0 失敗。
