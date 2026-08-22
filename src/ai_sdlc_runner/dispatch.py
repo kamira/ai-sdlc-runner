@@ -672,6 +672,122 @@ def elements_dir(repo_root: str | Path, version: str) -> Path:
     return Path(repo_root) / "elements" / v
 
 
+#: The gate's three states, worst last. Both failures are hard, and they are distinguishable
+#: because they call for different actions: drift means regenerate (or stop hand-editing elements),
+#: source-missing means the store the elements were derived from is no longer there to derive from.
+MATCH = "match"
+DRIFT = "drift"
+SOURCE_MISSING = "source_missing"
+_SEVERITY = {MATCH: 0, DRIFT: 1, SOURCE_MISSING: 2}
+
+#: Exit codes, following the shipped `halt_gate.py` convention the runner already branches on:
+#: 0 continues, anything else stops, and the specific code says which stop it is.
+EXIT_MATCH = 0
+EXIT_DRIFT = 10
+EXIT_SOURCE_MISSING = 11
+
+
+def _committed_sources(tree: Path) -> List[str]:
+    """Every store-relative path the committed elements claim they were derived from.
+
+    Read out of the committed manifests' own provenance rather than inferred from the directory
+    layout: that is what makes "the source of this element is gone" a mechanical finding instead of
+    a judgement about which files a version ought to have had.
+    """
+    sources: List[str] = []
+    for name in ("manifest.json", "dispatch/manifest.json"):
+        path = tree / name
+        if not path.is_file():
+            continue
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            raise DispatchError(f"{path} is not valid JSON: {exc}") from exc
+        for record in manifest.get("elements", []):
+            source = record.get("source_path")
+            if source:
+                sources.append(source)
+    return sorted(set(sources))
+
+
+def verify_elements(repo_root: str | Path) -> Dict[str, object]:
+    """Re-derive every store version and compare against the committed tree. Three states.
+
+    | | |
+    |---|---|
+    | `match` | committed bytes are what the generators produce right now |
+    | `drift` | regeneration succeeds and disagrees — the store moved without the elements being regenerated, or an element was hand-edited (guideline §2/§8) |
+    | `source_missing` | something the committed elements name as their source is gone, so the comparison cannot even be made |
+
+    Versions are enumerated from **both** `skills/` and `elements/`, so a tree whose store version
+    was deleted is found rather than skipped — skipping it is precisely how a missing source would
+    otherwise read as "nothing to check".
+    """
+    import tempfile
+    from . import skillstore
+
+    root = Path(repo_root)
+    store_versions = set(skillstore.store_versions(root / "skills"))
+    tree_versions = {
+        d.name[1:] for d in (root / "elements").glob("v*") if d.is_dir()
+    } if (root / "elements").is_dir() else set()
+
+    results: List[Dict[str, object]] = []
+    for version in sorted(store_versions | tree_versions):
+        results.append(_verify_one(root, version, store_versions, tree_versions, tempfile))
+
+    worst = max((r["state"] for r in results), key=lambda s: _SEVERITY[s], default=MATCH)
+    return {"state": worst, "versions": results}
+
+
+def _verify_one(root: Path, version: str, store_versions, tree_versions, tempfile) -> Dict[str, object]:
+    skill = root / "skills" / f"v{version}"
+    tree = elements_dir(root, version)
+
+    if version not in store_versions:
+        return {"version": version, "state": SOURCE_MISSING,
+                "detail": f"elements/v{version}/ exists but skills/v{version}/ does not"}
+    if version not in tree_versions:
+        return {"version": version, "state": DRIFT,
+                "detail": f"skills/v{version}/ has no elements/v{version}/ — regenerate"}
+
+    gone = [s for s in _committed_sources(tree) if not (skill / s).exists()]
+    if gone:
+        return {"version": version, "state": SOURCE_MISSING,
+                "detail": f"committed elements name sources that no longer exist in the store: "
+                          + ", ".join(gone[:5]) + (" …" if len(gone) > 5 else "")}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            emit_all(skill, tmp)
+        except DispatchError as exc:
+            return {"version": version, "state": SOURCE_MISSING,
+                    "detail": f"regeneration could not run: {exc}"}
+        fresh = _bytes_under(Path(tmp))
+
+    committed = _bytes_under(tree)
+    missing = sorted(set(fresh) - set(committed))
+    extra = sorted(set(committed) - set(fresh))
+    differing = sorted(n for n in fresh if n in committed and fresh[n] != committed[n])
+    if missing or extra or differing:
+        parts = []
+        if differing:
+            parts.append(f"{len(differing)} file(s) differ (e.g. {differing[0]})")
+        if missing:
+            parts.append(f"{len(missing)} regenerated file(s) not committed (e.g. {missing[0]})")
+        if extra:
+            parts.append(f"{len(extra)} committed file(s) no longer regenerate (e.g. {extra[0]})")
+        return {"version": version, "state": DRIFT, "detail": "; ".join(parts)}
+
+    return {"version": version, "state": MATCH,
+            "detail": f"{len(committed)} file(s) byte-identical"}
+
+
+def _bytes_under(root: Path) -> Dict[str, bytes]:
+    return {p.relative_to(root).as_posix(): p.read_bytes()
+            for p in sorted(root.rglob("*")) if p.is_file()}
+
+
 def emit_all(skill_path: str | Path, out_dir: str | Path) -> Dict[str, object]:
     """Emit a store version's **complete** decomposition: content elements and dispatch elements.
 

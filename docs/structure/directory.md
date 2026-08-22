@@ -9,7 +9,7 @@ ai-sdlc-runner/
 ├── README.md                  # positioning + "depends on the ai-sdlc skill contract v1, per-project major.minor lock"
 ├── .gitignore                 # Python
 ├── .github/
-│   └── workflows/ci.yml       # CI: pytest on {ubuntu,windows} × py{3.9,3.13} + doc-integrity gate; CHG-20260817-10
+│   └── workflows/ci.yml       # CI: pytest on {ubuntu,windows} × py{3.9,3.13} + doc-integrity gate (CHG-20260817-10) + elements regeneration gate (CHG-20260822-04 task 4)
 ├── pyproject.toml             # deps & entry point (runner = ai_sdlc_runner.cli:main)
 ├── requirements-dev.txt       # DERIVED probe-facing view of pyproject's optional-dependencies (bare names only, no ranges) so toolchain_probe.sh can run; CHG-20260822-01
 ├── skills/                    # PRIMARY offline skill store (CHG-05, CHG-20260703-01, CHG-20260703-06, CHG-20260822-03): v1.0.0/, v1.1.0/, v1.12.1/, v1.16.0/, v1.64.0/ (vendored verbatim)
@@ -26,7 +26,7 @@ ai-sdlc-runner/
 │                              #     families derive per version from that archive's assets/ — v1.0.0 has no role table, only v1.64.0 has autopilot_policy
 ├── src/ai_sdlc_runner/
 │   ├── __init__.py
-│   ├── cli.py                 # entry: run / migrate / status subcommands
+│   ├── cli.py                 # entry: run / migrate / status / check / elements … subcommands
 │   ├── contract.py            # read skill version, per-project lock, migrate
 │   ├── agents.py              # parse role table, spawn by role (tools/permissions)
 │   ├── gates.py               # call skill's halt_gate.py / cross_repo_check.py
@@ -39,7 +39,7 @@ ai-sdlc-runner/
 │   ├── workspace.py           # multi-project workspace: authority(main) + consumers, persisted; CHG-08
 │   ├── structure_scan.py      # structure analysis: scan + scaffold 4 structures + authority/pointers; CHG-08
 │   ├── decompose.py           # split store references into anchored, provenanced elements; CHG-20260822-04 task 1
-│   └── dispatch.py            # derive checkpoint + role-loadout elements from shipped policy; CHG-20260822-04 task 2
+│   └── dispatch.py            # derive checkpoint + role-loadout elements from shipped policy (task 2); emit_all + verify_elements three-state gate (task 4); CHG-20260822-04
 ├── config/
 │   └── runner.yaml            # contract version, skill path, concurrency/depth limits
 ├── docs/
@@ -60,7 +60,8 @@ ai-sdlc-runner/
     ├── test_requirements_dev_sync.py  # requirements-dev.txt stays derived from pyproject + probe-readable; CHG-20260822-01
     ├── test_decompose.py       # decomposer: determinism, anchor traceability, provenance; CHG-20260822-04 task 1
     ├── test_dispatch.py        # dispatch elements: policy coverage, no hand-written ids; CHG-20260822-04 task 2
-    └── test_elements_tree.py   # every store version has elements; committed tree regenerates byte-for-byte; CHG-20260822-04 task 3
+    ├── test_elements_tree.py   # every store version has elements; committed tree regenerates byte-for-byte; CHG-20260822-04 task 3
+    └── test_elements_gate.py   # regeneration gate: match / drift / source-missing, each produced by breaking a real repo; CHG-20260822-04 task 4
 ```
 
 ## Responsibility per directory
@@ -70,7 +71,7 @@ ai-sdlc-runner/
 | `config/` | Runtime-variable settings (limits, paths) | Isolated from the contract |
 | `docs/` | ai-sdlc governance artifacts for this repo | Dogfooding |
 | `tests/` | Unit tests for contract/lock/migrate | pytest |
-| `.github/workflows/` | Mechanical verification of every PR and every push to `main` | Read-only; tests + doc-integrity. Gated on tests passing, **not** on a coverage % — see CHG-20260817-10 |
+| `.github/workflows/` | Mechanical verification of every PR and every push to `main` | Read-only; tests + doc-integrity + the elements regeneration gate. Gated on tests passing, **not** on a coverage % — see CHG-20260817-10 |
 
 ## Naming & placement rules
 - One responsibility per module file; no module re-implements skill logic.

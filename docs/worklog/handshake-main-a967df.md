@@ -240,3 +240,44 @@ PR #13 · run 32558950015 —— 5/5 pass,逐 job 7–8 steps、0 失敗。
 **windows py3.9 讀到 `238 passed, 2 skipped`** ——委付的 1,664 個元素檔在 CRLF 傾向的
 Windows 檢出上與現生成結果 byte-compare 通過。`.gitattributes` 的 `elements/** text eol=lf`
 因此是在真實環境驗證過的,不是只在本機推論。
+
+---
+
+## 2026-08-22 — task 3 已 merge(`d288f4d`);task 4 建置完成
+
+分支:`claude/chg-20260822-04-task4`(自 `origin/main` @ `d288f4d`)
+現在做:CHG-20260822-04 task 4/9 —— 收尾中(push → PR → CI → merge)
+下一步:**task 5(work-order 格式:schema + renderer)**。task 6 前不需確認關卡,task 6 需要。
+
+### 三態閘門
+
+| 狀態 | exit | 意思 | 要你做什麼 |
+|---|---|---|---|
+| `match` | 0 | 委付的位元組就是現在生成器的產出 | 無 |
+| `drift` | 10 | 重生成成功但不一致 | 重生成——或停止手改元素(§2/§8 禁止) |
+| `source_missing` | 11 | 委付元素指名的來源不見了 | 救回 store;重生成救不了 |
+
+**兩個失敗給不同 exit code,不是同一個紅**——因為它們要的動作不同。store 版本被刪掉時
+叫人「重生成」,是把人推上一條走不通的路。多版同時失敗時 `source_missing` 壓過 `drift`,
+否則標題會是一個修不好的建議。
+
+`source_missing` 的偵測**走 provenance**:每份 manifest 都記了每個元素的 `source_path`,
+閘門讀回來檢查路徑是否還在。這讓「這個元素的來源沒了」是機械發現,不是「這版本該有哪些檔」
+的判斷——與 task 3 拒絕手寫 per-version 表同一個原則。
+
+版本列舉**同時**掃 `skills/` 與 `elements/`。只掃 store 的話,孤兒元素樹會被整個跳過,
+被刪掉的 store 版本會讀成「沒東西要檢查」——在閘門最該響的那一刻靜默放行。
+
+### 測試
+
+13 個測試,**每一個失敗狀態都是把 repo 真的弄壞來產生的**——手改元素、動 store 不重生成、
+刪 reference、刪 policy 資產、刪整個 store 版本——沒有一個是把偵測器 stub 掉。
+只測快樂路徑的閘門正是這個 repo 歷來 false-green 的活法。
+
+CI 新增獨立的 `elements` job(不是塞進既有 job 的一個 step),所以那裡一紅永遠代表
+「衍生樹與 store 不一致」,不會是「別的 lint 掛了」。
+
+### 閘門
+
+`pytest tests/` **251 passed, 2 skipped**;doc-integrity **exit 0**;
+`runner elements --repo .` 五版全 `match`(227 / 256 / 347 / 355 / 479 個檔逐位元組相同)。
