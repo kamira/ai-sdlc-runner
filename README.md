@@ -93,18 +93,23 @@ moving money, changing secrets or permissions, and publishing public content. No
 against them by guessing — a run says what each node will do, and it is read in four places, each
 able only to **add** a stop:
 
-1. **the node's brief** — a work order whose instructions say "wipe the users table" stops, whatever
-   is declared beside it;
+1. **the node's brief** — every field of it. A work order whose instructions say "wipe the users
+   table" stops, whatever is declared beside it;
 2. **the targets** an operation names — `kubectl apply -f prod/`, `secrets/key.pem`. These are facts
-   rather than claims, so they overrule a declaration that says otherwise;
+   rather than claims, so they overrule a declaration that says otherwise. A target the runner does
+   **not recognise** is a third case, and it is not the safe one: it stops by default;
 3. **the declaration** — every operation says which of the six kinds it is, or `ordinary`. An
    operation that declares nothing is refused, not assumed safe;
 4. **the description**, against word lists. The weakest layer by far, and both of its numbers are
    measured: it catches 6 of 18 known attempts and falsely stops 0 of 56 ordinary engineering
    briefs. Never trusted alone.
 
-All of it happens before the work is dispatched. An operation that declares `ordinary` and names no
-targets rests on the plan's word, and the run report says so under `unverified:`.
+All of it happens before the work is dispatched. An operation nothing could confirm — `ordinary`,
+with no targets or with unrecognised ones — rests on the plan's word; it stops by default, and if
+allowed through the run report says so under `unverified:`.
+
+**Resuming.** `runner run --resume --ask-journal DIR` continues an interrupted run without re-asking
+what was already answered.
 
 ## High-risk mode
 
@@ -113,9 +118,10 @@ open one — and the run report records that the floor was bypassed, at what sea
 safeguard silently is the thing being prevented; bypassing it on the record is a decision someone
 made.
 
-Both live in `runner settings`, on a screen, and persist to `config/settings.json`. `runner settings
---show` prints them without opening a menu, so the bypass is visible to somebody reading a log
-rather than sitting at a terminal. A flag still wins for a single run.
+Both live in `runner settings` — a terminal screen, curses with a numbered fallback — and persist to
+`config/settings.json`. `runner settings --show` prints them without opening a menu, so the bypass
+is visible to somebody reading a log rather than sitting at a terminal. A flag wins for a single run
+in **both** directions: `--high-risk-mode` turns it on, `--no-high-risk-mode` declines a saved one.
 
 Settings can lower the seat floor and can do nothing else — gates, the never-automated actions and
 the adjudication rule are in `policy.py` and take no input. A key the runner does not read is

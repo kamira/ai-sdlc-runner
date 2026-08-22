@@ -63,7 +63,8 @@ LF, UTF-8 — so the same order is the same bytes on every machine.
 | `confirmations` | list[str] | Gates the operator had already approved — an approval with no trace is one nobody can audit |
 | `adjudications` | list[object] | Each panel decision, with every seat's verdict that produced it |
 | `relaxations` | list[str] | The seat floor bypassed, and at what count; a node run undeclared |
-| `on_trust` | list[str] | Operations nothing could check — declared ordinary, no targets. The planner's word is all that is behind them, and this is where that shows |
+| `on_trust` | list[str] | Operations nothing could confirm — declared ordinary, with no targets *or* with targets this runner does not recognise. The planner's word is all that is behind them, and this is where that shows |
+| `resumed` | list[str] | Ask ids answered from the journal rather than by opening a session |
 | `effects` | dict[str, object] | Per node: applied, already met, and anything found true out of causal order |
 | `halted_at`, `halt_reason` | str | Where the run stopped and why, in words that name the rule |
 
@@ -98,7 +99,7 @@ because it is the only one that is a fact rather than a claim.
 |-------|------|------------|-------------|
 | `description` | str | required in practice | What this does, in the planner's words. Read only by the backstop |
 | `kind` | str (enum) | **required** | One of the six red lines, or `ordinary`. Absent → refused |
-| `targets` | list[str] | optional | The commands, paths and URLs it will act on. A red-line target **overrules** a `kind` of `ordinary`. A bare string is refused — joined into one blob, the boundary between two targets can hide a third |
+| `targets` | list[str] | optional | The commands, paths and URLs it will act on. Each is **red**, **recognised-ordinary**, or **unrecognised**; a red one overrules a `kind` of `ordinary`, and an unrecognised one is not evidence of anything. A bare string is refused — joined into one blob, the boundary between two targets can hide a third |
 - **role**: `pm | lead | engineer | qa | seat`
 - **seat**: `conformance` (veto) `| defect | risk | idiom`
 - **gate phase**: `before | after`

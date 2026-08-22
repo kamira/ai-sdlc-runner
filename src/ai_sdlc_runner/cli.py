@@ -292,7 +292,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     # run; the file is the standing one. Neither is silent: whichever produces a floor crossing, the
     # run records it.
     seats = args.review_seats if args.review_seats is not None else saved.review_seats
-    high_risk = bool(args.high_risk_mode) or saved.high_risk_mode
+    # `--no-high-risk-mode` turns a saved bypass off for this run. Without it the file and the flag
+    # were OR-ed, so a bypass persisted in settings could not be declined for a single run — a
+    # verifier pointed out that "a flag beats the file" held only in the relaxing direction, which
+    # is the wrong one to be asymmetric in.
+    if args.no_high_risk_mode:
+        high_risk = False
+    else:
+        high_risk = bool(args.high_risk_mode) or saved.high_risk_mode
     if seats is not None and seats < policy.SEAT_FLOOR and not high_risk:
         high_risk = tui.confirm_high_risk(seats, policy.SEAT_FLOOR)
         if not high_risk:
@@ -309,6 +316,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         confirmed=tuple(args.confirm or ()),
         effects=effects_provider(plan),
         undeclared=args.undeclared,
+        resume=bool(args.resume),
         journal=journal,
     )
     seat_models = dict(plan.get("seat_models") or {})
@@ -339,6 +347,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     for decision in report.adjudications:
         seat_line = ", ".join(f"{k}={v}" for k, v in sorted(decision["verdicts"].items()))
         print(f"panel:         {decision['node_id']} → {decision['outcome']} ({seat_line})")
+    if report.resumed:
+        print(f"resumed:       {len(report.resumed)} ask(s) answered from the journal, "
+              f"not re-asked")
     for node_id, outcome in report.effects.items():
         print(f"effects:       {node_id} applied={outcome['applied']} "
               f"already_met={outcome['already_met']}")
@@ -382,11 +393,18 @@ def build_parser() -> argparse.ArgumentParser:
                     help="a gate you have already approved; repeatable. A halt is a pause with a "
                          "way back, and every confirmation is recorded in the run's report.")
     pr.add_argument("--undeclared", choices=("refuse", "allow"), default="refuse",
-                    help="what to do at a node that does real work and declares no operations. "
-                         "`refuse` (the default) stops and asks; `allow` runs it and records that "
-                         "nothing was checked against the permanent halts.")
+                    help="what to do when this runner could not verify what a node does — it "
+                         "declares no operations, or names targets nothing recognises. `refuse` "
+                         "(the default) stops and asks; `allow` runs it and records in the report "
+                         "that nothing confirmed it.")
+    pr.add_argument("--no-high-risk-mode", action="store_true",
+                    help="ignore a high-risk mode saved in settings, for this run only. The "
+                         "reverse of --high-risk-mode, so the override works both ways.")
     pr.add_argument("--ask-journal", default=None,
                     help="directory to journal each question in before asking it")
+    pr.add_argument("--resume", action="store_true",
+                    help="continue an interrupted run: skip what the journal already answered and "
+                         "re-ask only what it does not have. Needs --ask-journal.")
     pr.set_defaults(func=cmd_run)
     return p
 

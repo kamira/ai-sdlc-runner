@@ -78,6 +78,63 @@ def _used_names(root: Path):
     return used
 
 
+def _qualified_uses(root: Path):
+    """Uses resolved to where they came from: ``{(module_stem, name)}``.
+
+    `policy.adjudicate` yields `("policy", "adjudicate")`; `from .policy import adjudicate` yields
+    the same; `subprocess.run` yields `("subprocess", "run")` — which no longer vouches for a local
+    function called `run`.
+
+    Narrower than the name-level pass on purpose: it sees qualified and imported uses but not bare
+    same-module calls, so it is used to **confirm** a hit for names likely to collide rather than to
+    replace the broad pass.
+    """
+    uses = set()
+    for path in sorted(root.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+
+        # `from . import effects as effects_mod` means `effects_mod.run` is a use of `effects.run`.
+        # Without this the checker reported three real, wired symbols as orphans — a false positive
+        # in a checker written to catch false negatives, which is its own small lesson.
+        alias_of = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.asname:
+                        alias_of[alias.asname] = alias.name
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.asname:
+                        alias_of[alias.asname] = alias.name.split(".")[-1]
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+                module = alias_of.get(node.value.id, node.value.id)
+                uses.add((module, node.attr))
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                for alias in node.names:
+                    uses.add((node.module.split(".")[-1], alias.name))
+    return uses
+
+
+def _used_inside_its_own_module(root: Path, home: str, name: str) -> bool:
+    """A same-module caller is a real use the qualified pass cannot see."""
+    path = root / home
+    if not path.is_file():
+        return False
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id == name:
+            return True
+    return False
+
+
+#: Names common enough that an unrelated call elsewhere would mask an orphan of the same name.
+#: `subprocess.run` masking a local `run` is not hypothetical — a verifier planted exactly that and
+#: the check passed it.
+COLLIDING = ("run", "load", "save", "check", "read", "write", "close", "open", "record", "render",
+             "select", "verdict", "entries", "answers", "pending", "classify", "derive")
+
+
 def test_nothing_public_in_src_is_unreachable_from_src():
     used = _used_names(SRC)
     orphans = sorted(f"{home}:{name}" for name, home in _public_symbols(SRC).items()
@@ -86,6 +143,38 @@ def test_nothing_public_in_src_is_unreachable_from_src():
         f"these exist and nothing in src/ uses them: {orphans}. Either wire each one in, delete it, "
         f"or add it to PUBLIC_API with a reason. A mechanism nothing calls is not built — see "
         f"docs/knowledge/knowledge.md KN-8.")
+
+
+def test_a_symbol_with_a_common_name_needs_a_qualified_use(tmp_path):
+    """The name-level pass alone lets `subprocess.run` vouch for an orphan called `run`.
+
+    For names likely to collide, the use must be **module-qualified** — `policy.classify`, or an
+    explicit `from .policy import classify` — or inside the symbol's own module. A bare call to the
+    same word somewhere unrelated proves nothing.
+    """
+    qualified = _qualified_uses(SRC)
+    unconfirmed = [
+        f"{home}:{name}" for name, home in _public_symbols(SRC).items()
+        if name in COLLIDING and name not in PUBLIC_API
+        and (home[:-3], name) not in qualified
+        and not _used_inside_its_own_module(SRC, home, name)
+    ]
+    assert not unconfirmed, (
+        f"common-named and never qualified: {unconfirmed}. Something calls a word that looks like "
+        f"these, but nothing calls *these*.")
+
+
+def test_the_qualified_pass_is_not_fooled_by_a_stdlib_namesake(tmp_path):
+    """The exact planted orphan a verifier used."""
+    (tmp_path / "orphan.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "user.py").write_text(
+        "import subprocess\ndef go():\n    return subprocess.run(['ls'])\n", encoding="utf-8")
+
+    # the broad pass is fooled...
+    assert "run" in _used_names(tmp_path)
+    # ...and the qualified pass is not.
+    assert ("orphan", "run") not in _qualified_uses(tmp_path)
+    assert not _used_inside_its_own_module(tmp_path, "orphan.py", "run")
 
 
 def test_the_check_catches_a_planted_orphan(tmp_path):

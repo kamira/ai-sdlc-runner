@@ -617,7 +617,13 @@ def test_any_role_can_be_interrupted_and_its_command_survives(tmp_path, role):
     assert pending[0]["node_id"] == plan[index][0]
 
 
-def test_what_was_already_answered_is_not_re_asked(tmp_path):
+def test_the_journal_records_which_asks_were_answered(tmp_path):
+    """**Renamed.** This was called `test_what_was_already_answered_is_not_re_asked` and asserted
+    nothing of the kind — it checked that statuses had been written, while a second run happily
+    re-asked everything. A test named for a behaviour nobody had built, passing for four rounds.
+
+    What it actually checks is worth keeping, so it keeps it under an honest name. The behaviour the
+    old name claimed is tested in `tests/test_resume.py`, by counting sessions."""
     journal = engine.AskJournal(tmp_path / "asks")
     with pytest.raises(RuntimeError):
         engine.walk(_cfg(journal=journal), _FailAt(2), enabled=True)

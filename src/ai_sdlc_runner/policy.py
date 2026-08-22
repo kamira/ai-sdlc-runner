@@ -225,7 +225,12 @@ _TARGET_RULES: Dict[str, Tuple[str, ...]] = {
     ),
     "delete": (
         r"\brm\s+-[a-z]*[rf]", r"\bdrop\s+(table|database|schema)\b", r"\btruncate\b",
-        r"\bdelete\s+from\b", r"\bgit\s+push\s+.*--force\b", r"\bgh\s+repo\s+delete\b",
+        r"\bdelete\s+from\b",
+        # Both spellings. Matching only `--force` let `git push -f` read as an ordinary push once
+        # the allowlist existed — a short flag is the same command, and the pair is the kind of gap
+        # that only shows up when someone writes it the other way.
+        r"\bgit\s+push\s+.*(--force|(^|\s)-f(\s|$))", r"\bgit\s+push\s+-[a-z]*f\b",
+        r"\bgh\s+repo\s+delete\b",
         r"\baws\s+s3\s+rm\b", r"\bshred\b",
     ),
     "money": (
@@ -249,6 +254,65 @@ _TARGET_RULES: Dict[str, Tuple[str, ...]] = {
         r"\baws\s+s3\s+.*--acl\s+public",
     ),
 }
+
+
+#: Targets this runner **recognises as ordinary**: the commands and paths of everyday development.
+#:
+#: This list is why `derive` finding nothing can mean anything at all. Without it, "no red-line
+#: pattern matched" was being read as "verified safe" — and a verifier proved what that was worth by
+#: declaring `dd if=/dev/zero of=/dev/sda`, `kubectl delete namespace legacy` and
+#: `find /var/data -type f -delete` as `ordinary` and watching all three run to completion with an
+#: empty report. A blacklist that recognises nothing has *said* nothing; treating its silence as
+#: assent is KN-10 again, in the layer built to fix KN-10.
+#:
+#: So a target now lands in one of three states — red line, recognised-ordinary, or **unrecognised**
+#: — and the third is not the safe one.
+_ORDINARY_TARGETS: Tuple[str, ...] = (
+    # version control, minus the history-destroying subcommands (those are in _TARGET_RULES)
+    # `push` is here and `push --force` is not: the red-line rules are consulted first, so the
+    # destructive reading of the same command wins. An ordinary push is how work ships.
+    r"^git\s+(status|diff|log|show|add|commit|checkout|switch|restore|branch|fetch|pull|push|"
+    r"stash|merge|rebase|cherry-pick|tag|remote|worktree|blame|bisect|clean\s+-n|config)\b",
+    r"^gh\s+(pr|issue|run|workflow|repo\s+view|api\s+repos)\b",
+    # test, lint, type-check, format
+    r"^(pytest|tox|nox|unittest)\b", r"^python\s+-m\s+(pytest|unittest|pip|venv|build)\b",
+    r"^(ruff|flake8|pylint|mypy|pyright|black|isort|prettier|eslint|clippy|rustfmt|gofmt|vet)\b",
+    # build and package managers, minus their publish/deploy subcommands
+    r"^(make|cmake|ninja|bazel\s+(build|test))\b",
+    r"^(npm|yarn|pnpm)\s+(install|ci|run|test|build|lint|audit|ls)\b",
+    r"^(cargo|go)\s+(build|test|run|fmt|check|vet|clippy|mod)\b",
+    r"^(pip|poetry|uv|pdm)\s+(install|sync|lock|list|show|compile)\b",
+    r"^docker\s+(build|compose\s+(build|up|config)|images|ps)\b",
+    # reading and moving things about inside a workspace
+    r"^(ls|cat|head|tail|grep|rg|find\s+[^|]*-name|wc|diff|file|stat|which|echo|sed\s+-n)\b",
+    r"^(mkdir|touch|cp|mv)\b",
+    # a plain relative path inside the project: the ordinary case for inputs and outputs
+    r"^[\w.][\w./+-]*$",
+)
+
+
+def recognise(target: str) -> str:
+    """One of ``"red"``, ``"ordinary"`` or ``"unrecognised"``.
+
+    Red lines are checked first and win: `git push --force` is in both shapes, and the destructive
+    reading is the one that matters. Everything the ordinary list does not cover comes back
+    **unrecognised**, which is a statement that this runner does not know what the target does —
+    not a statement that it is fine.
+    """
+    text = str(target).casefold().strip()
+    if not text:
+        return "unrecognised"
+    for kind in PERMANENT_HALT_KINDS:
+        if any(re.search(pattern, text) for pattern in _TARGET_RULES[kind]):
+            return "red"
+    if any(re.search(pattern, text) for pattern in _ORDINARY_TARGETS):
+        return "ordinary"
+    return "unrecognised"
+
+
+def unrecognised(targets: Sequence[str]) -> Tuple[str, ...]:
+    """The targets this runner cannot place. Empty when it recognises every one."""
+    return tuple(t for t in targets if recognise(t) == "unrecognised")
 
 
 def derive(targets: Sequence[str]) -> Tuple[str, ...]:
@@ -285,7 +349,7 @@ def classify(operation: Mapping[str, object]) -> Optional[str]:
     2. **The declaration.** A declared red line halts, whatever its targets and description say.
     3. **The description**, against `_HALT_WORDS` — the backstop, and the weakest of the three. It
        catches a red line mis-declared as ordinary *only* when the wording gives it away, which is
-       8 times out of 18 known attempts. Never trusted on its own.
+       6 times out of 18 known attempts. Never trusted on its own.
 
     **An operation that declares nothing is refused.** That inversion is the fix that came before
     this one: a red line whose default branch is "proceed" is not a red line.
@@ -325,15 +389,39 @@ def classify(operation: Mapping[str, object]) -> Optional[str]:
     return permanent_halt(description)
 
 
+def unverified(operation: Mapping[str, object]) -> Tuple[str, ...]:
+    """The targets of an `ordinary` operation that nothing could confirm.
+
+    Separate from `on_trust`, which answers yes/no; this names them, so a halt or a report can quote
+    the thing nobody could place rather than saying "something here".
+    """
+    if operation.get("kind") != ORDINARY:
+        return ()
+    return unrecognised(operation.get("targets") or ())
+
+
 def on_trust(operation: Mapping[str, object]) -> bool:
     """Is this operation being taken on the planner's word alone?
 
-    True when it declares `ordinary` and names no targets: nothing about it was checked against
-    anything except its own prose. The engine records these rather than blocking them — forcing
-    every operation to name a target would buy ceremony rather than safety, since an empty list is
-    as forgeable as a wrong `kind`. What is *not* acceptable is the trust being invisible.
+    True when it declares `ordinary` and **nothing independently confirmed that** — either it named
+    no targets, or it named some this runner does not recognise.
+
+    The second half was missing, and its absence undid the first. The condition used to be simply
+    "no targets", so naming *any* target — a benign `a.py` would do — switched the disclosure off.
+    A verifier used that: it declared destructive commands `ordinary`, named them as targets the
+    red-line list happens not to enumerate, and the run finished with `on_trust` empty. The
+    operation was neither stopped nor recorded, which is the one outcome KN-11 exists to forbid:
+    *where a trust boundary cannot be removed, record it — not in silence.*
+
+    A target the runner cannot place is not evidence of anything. Only a **recognised** one counts
+    as having been checked.
     """
-    return operation.get("kind") == ORDINARY and not operation.get("targets")
+    if operation.get("kind") != ORDINARY:
+        return False
+    targets = operation.get("targets") or ()
+    if not targets:
+        return True
+    return bool(unrecognised(targets))
 
 
 def permanent_halt(text: str) -> Optional[str]:
