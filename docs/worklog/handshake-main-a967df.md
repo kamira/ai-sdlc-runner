@@ -119,3 +119,22 @@ task 6(引擎取代四階段)才需要。
    EN 單獨 184,452。已在 CHG 內更正並保留原數字為第二列。
 
 最後更新:2026-08-22(UTC+0)
+
+### CI 結果(真的綠,不是沒跑成)
+
+PR #11 · run 32556767352 —— **5/5 pass**。逐 job 用 API 查過 `steps`,不只看紅綠:
+
+| job | 結果 | steps | 失敗步驟 |
+|---|---|---|---|
+| doc-integrity | pass 6s | 7 | 0 |
+| pytest ubuntu py3.13 | pass 13s | 8 | 0 |
+| pytest ubuntu py3.9 | pass 22s | 8 | 0 |
+| pytest windows py3.13 | pass 31s | 8 | 0 |
+| pytest windows py3.9 | pass 1m28s | 8 | 0 |
+
+Windows py3.9 的 log 讀到 `185 passed, 2 skipped`,兩個 skip 就是既有的 `curses`——
+**24 個 decompose 測試在 Windows 上全跑了**。這一點是啟發式 B 的實證:
+`test_crlf_and_lf_sources_produce_identical_elements` 自己造 CRLF 與 LF 兩份同內容來源比對,
+在兩個 OS 上都通過,所以跨 OS 雜湊一致是**由構造保證**,不是剛好 checkout 一樣。
+
+repo 為 PUBLIC(`gh repo view --json visibility`),不涉計費封鎖。
