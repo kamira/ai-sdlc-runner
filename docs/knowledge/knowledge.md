@@ -288,10 +288,28 @@ The general rule, which is KN-9 one level up: **when a check decides whether som
 proceed, the unrecognised case must be the stopping case, and absence of input must not read as
 absence of risk.**
 
-What this does *not* buy, stated because the limit is real: an operation declared `ordinary` and
-described in words that give nothing away will still be dispatched. The backstop catches
-carelessness, not intent. Deriving the kind from what the operation will actually touch — paths,
-commands, endpoints — is the stronger design and is not built.
+**And the escape hatch is part of the check.** The relaxation added alongside this fix —
+`undeclared="allow"`, "for a dry run" — turned out to cover the one case it was never meant to: a
+verifier attached a real effect, set the flag, and watched the effect apply with nothing checked. A
+dry run changes nothing; a run that changes the world is not one, whatever the flag is called. When
+a safety check gets an opt-out, the opt-out needs its own boundary written down and tested, or the
+guarantee is only as strong as the name of the flag that disables it.
+
+What this does *not* buy, stated because the limit is real and **measured**: an operation declared
+`ordinary` whose description does not give it away is dispatched. Across eighteen red-line sentences
+written by two verifiers over three rounds, the backstop catches **8**. A third round produced six
+more — "activate revision 42 on the customer-facing cluster", "remit five hundred dollars to our
+supplier", "obliterate the audit archive beyond recovery" — and the widened lists catch **none** of
+them.
+
+I had written "deliberately generous" in the docstring and guessed twelve when pinning the number in
+a test. Eight. Being wrong by four about my own mechanism is the argument for measuring a safety
+claim instead of describing it: `tests/test_flow.py::test_the_backstop_is_weak_and_the_number_is_
+written_down` keeps the count where a change has to look at it, and says in its own name that it is
+a record of weakness rather than an assertion of strength.
+
+Deriving the kind from what the operation will actually touch — paths, commands, endpoints — is the
+stronger design and is not built.
 
 The test that was supposed to cover all of this fed each rule's own description back into its own
 word list and asserted it matched. A tautology, and it passed, and it gave false confidence in

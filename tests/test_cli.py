@@ -481,7 +481,8 @@ def test_effects_run_at_their_node_and_are_reported(tmp_path):
     cfg = engine.RunConfig(
         node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
         decisions={"next_module": ["module", "none"], "feedback": "done"},
-        risk="low", confirmed=("merge",), effects=provider, undeclared="allow")
+        risk="low", confirmed=("merge",), effects=provider, undeclared="allow",
+        operations={"record_module": [{"description": "tick the box", "kind": "ordinary"}]})
 
     def dispatch(order):
         if order.get("seat"):
@@ -509,7 +510,8 @@ def test_an_effect_that_does_not_establish_its_postcondition_halts_the_run():
     cfg = engine.RunConfig(
         node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
         decisions={"next_module": ["module", "none"], "feedback": "done"},
-        risk="low", confirmed=("merge",), effects=provider, undeclared="allow")
+        risk="low", confirmed=("merge",), effects=provider, undeclared="allow",
+        operations={"record_module": [{"description": "tick the box", "kind": "ordinary"}]})
 
     report = engine.walk(cfg, lambda order: (
         {"verdict": "pass"} if order.get("seat")

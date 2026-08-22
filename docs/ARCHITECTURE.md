@@ -79,7 +79,12 @@ Each operation a node carries out **declares its kind**, from a closed set of th
 An earlier version guessed the kind from the wording, and an independent verifier broke all six with
 ordinary English — "promote the new build into the live environment", "wire USD 500 to the vendor" —
 none of which contained a listed word. Word lists remain, as a backstop that catches a red line
-mis-declared as ordinary; they can add a stop and can never remove one.
+mis-declared as ordinary; they can add a stop and can never remove one — and they are weak: across
+eighteen red-line sentences written by verifiers, they catch **8**. The number is pinned in a test
+so nobody starts trusting it.
+
+`--undeclared allow` exists for dry runs and records itself as a relaxation. It **never** covers a
+node that applies effects: a run that changes the world is not a dry run, whatever the flag says.
 
 ## 5. Sessions, and why they are short
 
