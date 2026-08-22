@@ -233,3 +233,10 @@ Windows 檢出成 CRLF 而 blob 是 LF,byte-compare 在半個矩陣上必失敗�
 ### 閘門
 
 `pytest tests/` **238 passed, 2 skipped**;`doc_integrity_check.py` **exit 0**。
+
+### task 3 的 CI(真綠,而且驗到了關鍵那一格)
+
+PR #13 · run 32558950015 —— 5/5 pass,逐 job 7–8 steps、0 失敗。
+**windows py3.9 讀到 `238 passed, 2 skipped`** ——委付的 1,664 個元素檔在 CRLF 傾向的
+Windows 檢出上與現生成結果 byte-compare 通過。`.gitattributes` 的 `elements/** text eol=lf`
+因此是在真實環境驗證過的,不是只在本機推論。
