@@ -492,3 +492,35 @@ PR #16 首跑:**py3.9 兩個 OS 都綠、py3.13 兩個 OS 都紅**。本機 3.11
 
 run 32582438110 —— 6/6 pass,逐 job 7–8 steps、0 失敗。
 首跑 32582135313 為紅(py3.13 兩格),根因即上述 `id(session)` 缺陷,已修並加回歸測試。
+
+---
+
+## 2026-08-22 — task 6 已 merge(`9d004ab`);task 7 建置完成
+
+分支:`claude/chg-20260822-04-task7`(自 `origin/main` @ `9d004ab`)
+下一步:**task 9(結構文件 + knowledge)**,然後 task 8 的完整清掃,最後才是 ACC。
+
+### task 7:probe 接上真實世界
+
+`probes.py`——postcondition 全部讀**世界**:git(`ls-remote` 問遠端而非本地 ref)、
+forge(可注入的指令,只讀退出碼與 stdout 空否)、ledger(CHG 有沒有 `Branch:`、勾沒勾、ACC 在不在)。
+
+**「無法判定」永遠不等於「沒做」。** 遠端連不上、forge 掛了 → `ProbeError`,不是 `False`。
+把兩者混為一談就是讓續跑再推一次、再開一個 PR。這條在測試裡有專門的一組。
+
+`ship.py`——出貨序列(record-intent → branch → commit → push → PR),每個 effect 配一個 probe。
+
+### kill-and-resume:沒有一處是模擬的
+
+- **真的 git repo + 真的 bare remote**
+- **真的子行程**,用 `os._exit` 殺——**不跑 finally、不跑 atexit、不 flush**。
+  in-process 丟例外不夠格:例外會 unwind,而 unwind 正是被殺的行程不會給的禮遇。
+- **forge 是另一個行程,PR 清單存檔案**——in-memory 替身等於用「這次 kill 要摧毀的那份狀態」回答問題。
+
+核心案例(push 與 PR 之間被殺):branch 在遠端、PR 不在 → frontier 恰好是 `pr`,
+續跑 `applied == ["pr"]`,前四個是 `already_met`。**而且參數化跑過每一個邊界**,
+不是只調好一個案例。另外驗了跑兩次不會開出第二個 PR(檔案裡就是恰好一筆)。
+
+### 閘門
+
+`pytest tests/` **388 passed, 2 skipped**;doc-integrity exit 0。
