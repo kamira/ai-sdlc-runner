@@ -113,7 +113,7 @@ def _resolve_skill_path(config: dict, override: Optional[str], project_dir: Opti
         p = skillstore.resolve_path(store)  # latest available
         if p:
             return p
-    return config.get("skill_path", "./skills/v1.16.0")
+    return config.get("skill_path", "./skills/v1.64.0")
 
 
 # --------------------------------------------------------------------------------------
