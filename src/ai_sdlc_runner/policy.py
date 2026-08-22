@@ -144,30 +144,61 @@ ORDINARY = "ordinary"
 
 PERMANENT_HALTS: Tuple[str, ...] = tuple(PERMANENT_HALT_KINDS.values())
 
-#: A **backstop**, not the guarantee. kind -> words that suggest it, used only to catch an operation
-#: declared `ordinary` whose own description says otherwise. It can add a stop and can never remove
-#: one, which is the only direction a word list is safe in.
+#: A **backstop**, not the guarantee, and deliberately **narrow**. kind -> phrases that suggest it,
+#: used only to catch an operation declared `ordinary` whose own wording says otherwise, and to read
+#: a node's brief. It can add a stop and can never remove one.
 #:
-#: The previous version of this file made this list *the* check, and an independent verifier broke
-#: every one of the six with an ordinary English sentence: "promote the new build into the live
-#: environment", "erase every customer record permanently", "wire USD 500 to the vendor", "grant
-#: Alice administrator privileges", "make the embargoed article visible to everyone", "rewrite all
-#: customer rows to the new format". Not one contains a listed word, and adding those six phrasings
-#: would not have fixed anything — the next six sentences are free. A blacklist stops the phrasings
-#: somebody thought of, and the phrasings nobody thought of are the ones that reach production.
+#: ## Why these are phrases and not words
+#:
+#: An earlier version of this file made the word list *the* check and, when two verifiers broke all
+#: six red lines with ordinary English, widened it: single verbs like "delete", "deploy", "publish",
+#: "token", "permission". That bought a measured **8 of 18** on the verifier sentences — and a
+#: measured **69% false-stop rate on ordinary engineering work**. "Fix the token parser" was a
+#: secrets change. "Remove all unused imports" was a hard delete. "Add production-grade error
+#: messages" was a production deploy.
+#:
+#: A check that fires on two jobs in three is not a strict check; it is a check that gets switched
+#: off, and switching it off is one `--undeclared allow` away. At which point four changes of safety
+#: work protect nothing. **The false-stop rate is a safety property, not an ergonomics one.**
+#:
+#: So: a phrase belongs here only if it **cannot plausibly describe safe work**. Single common verbs
+#: are the vocabulary of ordinary engineering and are out. Measured after narrowing: **0% false
+#: stops on 36 real briefs, 6 of 18 verifier sentences caught.** Trading two catches on the weakest
+#: of four layers for twenty-five false stops is not a close call — and the other three layers, the
+#: ones that actually carry the guarantee, are untouched by it.
+#:
+#: `tests/test_false_stops.py` pins both numbers. Either one moving is a fact somebody has to look
+#: at.
 _HALT_WORDS: Dict[str, Tuple[str, ...]] = {
-    "deploy": ("deploy", "release to prod", "production", "prod push", "ship to prod", "go live",
-               "live environment", "cut over", "rollout", "上線", "部署", "發版"),
-    "migration": ("migrate", "migration", "alter table", "drop column", "schema change", "backfill",
-                  "rewrite all", "reindex", "遷移", "資料轉換"),
-    "delete": ("delete", "drop table", "truncate", "rm -rf", "purge", "hard delete", "erase",
-               "wipe", "destroy", "remove all", "刪除", "清除", "抹除"),
-    "money": ("money", "payment", "transfer funds", "charge", "refund", "invoice", "payout",
-              "wire ", "usd", "eur", "billing", "付款", "轉帳", "退款"),
-    "access": ("secret", "credential", "token", "api key", "password", "permission", "privilege",
-               "access control", "iam", "grant ", "revoke", "role assignment", "金鑰", "權限"),
-    "publish": ("publish", "post to", "tweet", "announce", "send email", "broadcast", "make public",
-                "visible to everyone", "go public", "發布", "公開"),
+    "deploy": (
+        "deploy to production", "deploy to prod", "release to production", "push to production",
+        "push to prod", "ship to production", "promote to production", "cut a release",
+        "go live with", "roll out to production", "上線部署", "部署到正式",
+    ),
+    "migration": (
+        "alter table", "drop column", "schema migration", "run the migration",
+        "migrate the database", "migrate the production", "backfill the table",
+        "irreversible schema", "資料庫遷移",
+    ),
+    "delete": (
+        "rm -rf", "drop table", "drop database", "truncate table", "delete from",
+        "hard delete", "wipe the users", "wipe the database", "purge the database",
+        "erase every", "delete all customer", "delete the production", "永久刪除", "清空資料庫",
+    ),
+    "money": (
+        "transfer funds", "wire usd", "wire $", "issue a refund", "charge the card",
+        "send a payout", "move money", "transfer money", "轉帳", "匯款",
+    ),
+    "access": (
+        "rotate the key", "rotate the signing", "rotate the api key", "grant admin",
+        "grant administrator", "grant full control", "revoke access", "change permissions",
+        "set the api key", "publish the secret", "commit the secret", "變更權限", "外洩金鑰",
+    ),
+    "publish": (
+        "publish to the public", "publish publicly", "make public", "make the repo public",
+        "visible to everyone", "post to twitter", "post to the public",
+        "send email to customers", "announce publicly", "對外發布", "公開發布",
+    ),
 }
 
 

@@ -338,32 +338,54 @@ def _does_work(node: graph.Node, cfg: "RunConfig") -> bool:
     return bool(role.can_write or role.can_execute)
 
 
-#: Fields of a node's own spec that describe what it will do, in the planner's words.
-_SPOKEN_FIELDS = ("instructions", "objective", "scope")
+#: Spec fields that name things rather than describe them — paths in, paths out, where the work
+#: happens. These are read as **targets** as well as prose: a node whose expected output is
+#: `prod/manifest.yaml` has said something about what it touches, and that is a fact rather than a
+#: phrasing.
+_TARGET_FIELDS = ("input_artifacts", "expected_outputs", "workdir")
 
 
 def _spoken_halt(node: graph.Node, cfg: "RunConfig") -> Optional[str]:
-    """A red line the node's **own brief** describes, or ``None``.
+    """A red line the node's **own brief** describes or names, or ``None``.
 
-    The backstop used to read only `operation["description"]`, which a verifier walked straight
-    past: a work order whose `instructions` said *"deploy the new build to production, then wipe the
-    users table"* ran to completion, because the operation beside it said `ordinary` / "routine
-    work". The words were right there, in the text the engineer would act on, and nothing looked at
-    them. That is wider than the limit this design had disclosed — it meant a description giving
-    itself away did not matter, as long as it gave itself away in the *other* field.
+    **Every** field of the spec is read, not a chosen few. Choosing was the mistake, and it was the
+    same mistake twice: the check first read only `operation["description"]` while the giveaway sat
+    in `instructions`, and then read three fields while the giveaway could sit in `done_criteria` or
+    `acceptance_predicate`. A list of places to look has exactly as many blind spots as the places
+    it does not name, and each round of "add the field it hid in" buys one round.
 
-    There is deliberately **no way past this except changing what the node is told to do**, or
-    declaring it — and a declared red line halts too. Both roads stop, which is the correct answer
-    for a node whose brief says it will wipe a table. The cost is real and named in the change
-    record: an instruction that merely mentions a red-line word halts a run that was not going to
-    cross one, and the fix is to say what is meant.
+    Two passes over the same brief, because the two questions are different:
+
+    * the fields that **name things** — inputs, outputs, workdir — go through `policy.derive`, which
+      reads targets as facts;
+    * every field goes through `policy.permanent_halt`, the word-list backstop, which reads prose
+      and is weak on purpose-and-record.
+
+    There is deliberately no way past this except changing what the node is told to do — declaring
+    it halts too, which is the right answer for a node whose brief says it will wipe a table. The
+    cost is false stops, and it is named in the change record and pinned by a corpus of ordinary
+    engineering briefs.
     """
     spec = cfg.node_specs.get(node.id) or {}
-    for field_name in _SPOKEN_FIELDS:
+
+    targets = []
+    for field_name in _TARGET_FIELDS:
         value = spec.get(field_name)
         if not value:
             continue
-        text = " ".join(value) if isinstance(value, (list, tuple)) else str(value)
+        targets.extend(value if isinstance(value, (list, tuple)) else [value])
+    derived = policy.derive(targets)
+    if derived:
+        named = " and ".join(policy.PERMANENT_HALT_KINDS[k] for k in derived)
+        return (
+            f"permanent halt at {node.id!r}: the paths it names are {named} — {targets}. "
+            f"No risk grade, confirmation or mode relaxes this — a person does it.")
+
+    for field_name in sorted(spec):
+        value = spec.get(field_name)
+        if not value:
+            continue
+        text = " ".join(str(v) for v in value) if isinstance(value, (list, tuple)) else str(value)
         halt = policy.permanent_halt(text)
         if halt is not None:
             return (

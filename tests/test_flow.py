@@ -423,13 +423,30 @@ def test_a_declared_red_line_stops_however_it_is_worded(kind, description):
     assert policy.PERMANENT_HALT_KINDS[kind] in report.halt_reason
 
 
-@pytest.mark.parametrize("kind,description", BYPASS)
+#: The subset of the verifier corpus the **narrowed** backstop still catches. It was every one of
+#: them when the word lists were wide, and being wide cost a measured 69% false-stop rate on
+#: ordinary engineering briefs — a check that fires on two jobs in three is a check that gets
+#: switched off, and switching it off is one flag away. See `tests/test_false_stops.py`.
+BACKSTOP_CATCHES = tuple((k, d) for k, d in BYPASS if policy.permanent_halt(d) is not None)
+
+
+@pytest.mark.parametrize("kind,description", BACKSTOP_CATCHES)
 def test_the_backstop_catches_a_red_line_misdeclared_as_ordinary(kind, description):
-    """Every one of these six passed the old check. The word lists are a **second** net now — they
-    can add a stop and can never remove one — and they were widened until all six trip."""
-    assert policy.permanent_halt(description) is not None, description
+    """What the word lists still do, on the sentences they still recognise. A **second** net, never
+    the guarantee: it can add a stop and can never remove one."""
     cfg = _cfg(confirmed=ALL_GATES, operations={"engineer_build": [_op(description)]})
     assert engine.walk(cfg, Recorder(), enabled=True).halted_at == "engineer_build"
+
+
+def test_the_backstop_missing_one_is_not_the_guarantee_failing():
+    """The sentences it no longer catches still stop — via the declaration, which is the layer that
+    actually carries FR-12. Narrowing the weakest net does not weaken the guarantee."""
+    missed = [(k, d) for k, d in BYPASS if policy.permanent_halt(d) is None]
+    assert missed, "if the narrow list catches everything, it is not narrow"
+    for kind, description in missed:
+        cfg = _cfg(confirmed=ALL_GATES, high_risk_mode=True,
+                   operations={"engineer_build": [_op(description, kind)]})
+        assert engine.walk(cfg, Recorder(), enabled=True).halted_at == "engineer_build", description
 
 
 def test_an_operation_that_declares_nothing_is_refused_not_assumed_safe():
@@ -892,17 +909,26 @@ def test_the_declaration_stops_every_sentence_a_verifier_wrote(kind, description
 def test_the_backstop_is_weak_and_the_number_is_written_down():
     """**Not** an assertion that the backstop works. It is a record of how far it does not.
 
-    Measured: **8 of 18**. I guessed twelve while writing this test and was wrong by four, which is
-    the argument for measuring rather than describing — "deliberately generous" was the phrase in
-    the docstring, and it was generous to the wrong side. Six of the eighteen were written in round
-    3 specifically to defeat the widened lists and none of the six is caught.
+    Measured: **6 of 18**, deliberately down from 8.
 
-    Pinning the count stops two failures: quietly believing the backstop is a second guarantee, and
-    quietly letting it rot further. If a change moves this number, somebody has to look at it.
+    The history is the point. The lists started narrow, missed everything two verifiers threw at
+    them, and were widened until they caught 8 — at which point a verifier measured what widening
+    had really bought: a **69% false-stop rate on ordinary engineering briefs**. "Fix the token
+    parser" was a secrets change; "Remove all unused imports" was a hard delete. A check that fires
+    on two jobs in three does not get obeyed, it gets switched off, and switching it off is one
+    `--undeclared allow` away.
+
+    So the lists were narrowed back to phrases that cannot plausibly describe safe work: 0% false
+    stops, 6 of 18. **Trading two catches on the weakest of four layers for twenty-five false stops
+    is not a close call**, and the three layers that carry the guarantee are untouched.
+
+    I also guessed twelve when first pinning this and was wrong by four. Twice now this number has
+    been different from what I would have said — which is the argument for measuring a safety claim
+    rather than describing it.
     """
     caught = [d for _, d in VERIFIER_CORPUS if policy.permanent_halt(d) is not None]
-    assert len(caught) == 8, (
-        f"the backstop catches {len(caught)}/{len(VERIFIER_CORPUS)}; it caught 8 when this was "
+    assert len(caught) == 6, (
+        f"the backstop catches {len(caught)}/{len(VERIFIER_CORPUS)}; it caught 6 when this was "
         f"written. Moving the number is fine — updating it without reading KN-10 is not. The "
         f"backstop is not the guarantee: `policy.classify`'s declaration is.")
     assert len(caught) < len(VERIFIER_CORPUS), "if this ever passes 18/18, do not start trusting it"

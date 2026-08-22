@@ -18,6 +18,8 @@
 | KN-6 | pattern | node-engine / idempotence | An operation may be an **effect** only if it leaves a probeable postcondition in the ledger, git or the forge; constructing one without a probe raises. Probes describe the **postcondition, not the action**, and read the world rather than any record the runner wrote. Unanswerable **raises** — never `False`. Nothing already true is re-applied, before or after the frontier. | active |
 | KN-7 | pattern | node-engine / sessions | Every **asking** node gets its own session: opened, asked once, closed in a `finally`; a factory that returns a session it already returned is refused. A multi-seat review is several asks, so each seat is its own session. The question is journalled **before** the session opens, so a dropped session costs the answer and not the question. | active |
 | KN-8 | pattern | governance / wiring | A mechanism is not built until something calls it. Three rounds here shipped a correct piece that nothing reached — an engine ignoring its own policy verdict, an `adjudicate` no caller invoked, a `PERMANENT_HALTS` list printed into every order and never checked — and each passed its own suite. The test that matters is the one that fails when the wire is cut. | active |
+| KN-14 | practice | governance / verification | **Freeze the tree before verification, and do not touch it until every seat reports.** A verifier found the working tree change under it mid-audit — and the change was to the safety check it was auditing. An acceptance round whose subject moved has verified nothing, however good its findings are. | active |
+| KN-13 | pattern | governance / checks | **A false-stop rate is a safety property.** A red-line check measured 95% false positives on ordinary engineering briefs — a check that fires on two jobs in three gets switched off, and switching it off is one flag away. And a benchmark you author for your own mechanism flatters it: mine measured 0% on briefs I chose; a verifier's corpus measured 85%. | active |
 | KN-12 | pattern | governance / checks | **Where** a check runs decides whether it runs. Three placement bugs in one repo: a brief-reading check placed after the early return so it never saw the path that mattered, a report line after the loop that four of five exits jumped past, and a red-line check that read one field of a record while the giveaway sat in the next one. Each looked correct in the diff. | active |
 | KN-11 | pattern | governance / trust boundaries | Read the **fact**, not the claim. A declaration is what somebody says an operation is; a target (`kubectl apply -f prod/`, `secrets/key.pem`) is what it will touch. Facts may overrule claims; prose may not. And where a trust boundary cannot be removed, **record it** — an operation nothing verified belongs in the report, not in silence. | active |
 | KN-10 | pattern | governance / red lines | A blacklist cannot be a safety guarantee. Two verifiers independently broke all six permanent halts with ordinary English containing no listed word, and a plan that simply **omitted** its operations was checked against nothing at all. The fix is the inversion: each operation **declares** its kind from a closed set, an undeclared one is refused, and word lists are demoted to a backstop that can only add a stop. | active |
@@ -400,3 +402,68 @@ anything.** Three questions that would have caught all three:
 
 None of these is caught by a unit test of the check itself, which is why all three survived one. The
 tests that found them ran the **whole flow** and asserted where it stopped.
+
+
+## KN-13 — A false-stop rate is a safety property, and your own benchmark flatters you
+*tags: governance · source: CHG-20260823-06 · tier: pattern*
+
+Two lessons, one measurement.
+
+### The rate is a safety number, not an ergonomics number
+
+The red-line word lists were widened in round 2, when they were the only check, until they caught 8
+of 18 adversarial sentences. Nobody measured what widening cost. A verifier did: **19 of 20 ordinary
+engineering briefs were stopped.**
+
+| Brief | Classified as |
+|---|---|
+| `Fix the token parser` | changing secrets |
+| `Remove all unused imports` | hard delete |
+| `Add production-grade error messages` | production deploy |
+| `Add an invoice parser test` | moving money |
+
+The instinct is to file that under "annoying". It is not. **A check that fires on two jobs in three
+does not get obeyed — it gets switched off**, and this one had a documented flag to switch it off
+with. A safeguard at 95% false positives protects less than a safeguard at 40%, because nobody keeps
+the first one on. When the escape hatch is one flag away, the false-stop rate *is* the residual risk.
+
+The fix was to narrow, not to widen further: a phrase belongs on such a list only if it **cannot
+plausibly describe safe work**. Single common verbs are the vocabulary of ordinary engineering.
+Measured after: **0% false stops, 6 of 18 caught** — two fewer catches on the weakest of four
+layers, in exchange for twenty-five fewer false stops. Not a close call.
+
+### A benchmark you write for your own mechanism flatters it
+
+The day before, this repo had a test measuring the same rate at **0%**, on twenty briefs I wrote
+myself. They were the briefs *I* would write, and they unconsciously avoided the words my own check
+matched. The number was true and worthless.
+
+The verifier's twenty were not chosen to be hard; they were just not chosen by the author of the
+thing being measured. That was the whole difference — 0% versus 85%.
+
+**Keep the adversary's corpus verbatim.** `tests/test_false_stops.py` holds both, and the borrowed
+half is the one that matters. When measuring your own mechanism, an outside sample is not a nice
+extra; it is the only part of the measurement that can surprise you.
+
+## KN-14 — Freeze the tree before verification
+*tags: governance · source: CHG-20260823-06 · tier: practice*
+
+A verifier began an acceptance round on a clean tree, and partway through found
+`M src/ai_sdlc_runner/engine.py` — because the implementer was still working. The edit changed the
+exact safety check being audited. It refused to certify the result, correctly.
+
+**An acceptance round whose subject changed while it was being examined has verified nothing**,
+however good the findings happen to be. Two rounds were lost to this: one voided, and one stopped
+early once the contamination was noticed rather than letting it audit a moving target.
+
+The practice, and it costs nothing:
+
+1. **Commit and push** before asking for verification. Name the commit in the brief.
+2. **Do not edit until every seat has reported.** The urge to fix a finding while another seat is
+   still reading is exactly the failure.
+3. If a verifier reports the tree moving under it, **that finding outranks the technical ones** —
+   the round is void and the technical findings are advisory until re-run.
+
+The round before this one, a verifier had already worked around the same hazard by exporting a clean
+snapshot with `git archive`, and said so in its report. The lesson was available and not taken. That
+is the more useful half of this entry: a hazard somebody else routed around is still your hazard.

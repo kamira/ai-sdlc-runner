@@ -64,8 +64,8 @@ def _cfg(instructions=None, node="engineer_build", **kw):
 @pytest.mark.parametrize("brief", [
     "deploy the new build to production, then wipe the users table",
     "run the migration against the customer database",
-    "rotate the API key and update the secret",
-    "publish the release notes",
+    "rotate the API key before the handover",
+    "make the repo public once the embargo lifts",
 ])
 def test_a_brief_that_describes_a_red_line_stops_the_node(brief):
     """The exact hole: the words were in `instructions`, the operation beside them said `ordinary`,
@@ -97,7 +97,7 @@ def test_the_objective_and_scope_are_read_too():
     """About *which fields are read*, not about the word list's coverage — that is measured
     separately in `test_flow.py`, and it is weak on purpose-and-record."""
     cfg = _cfg()
-    cfg.node_specs["engineer_build"]["objective"] = "purge the legacy table"
+    cfg.node_specs["engineer_build"]["objective"] = "drop table legacy_accounts"
     report = engine.walk(cfg, _dispatch, enabled=True)
     assert report.halted_at == "engineer_build"
     assert "its objective describes" in report.halt_reason

@@ -26,9 +26,11 @@ permanent halt, or the adjudication rule — `policy.py` owns those and takes no
 relaxation the requirement asks for is the one that exists, and `test_settings.py` asserts the
 absence of the others rather than trusting this paragraph.
 
-A file that is missing, empty, or corrupt yields the **defaults** — floor enforced, high-risk mode
-off. Failing safe here is not a nicety: the alternative is a corrupt file silently reading as
-"bypass enabled".
+A file that is missing or empty yields the **defaults** — floor enforced, high-risk mode off. A file
+that **exists and is malformed is an error**, not the defaults: falling back would make a typo
+indistinguishable from a deliberate choice, and one of the two settings here is a safety bypass.
+(This paragraph said "or corrupt yields the defaults" and contradicted `load()` directly below it; a
+verifier caught the contradiction. The code was right.)
 """
 from __future__ import annotations
 

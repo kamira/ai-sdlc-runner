@@ -84,10 +84,11 @@ Three layers decide, and each may only ever **add** a stop:
 2. **The declaration** — each operation declares its `kind` from a closed set of the six plus
    `ordinary`, and **an operation that declares nothing is refused**. A declared red line always
    halts.
-3. **The description**, against word lists — the backstop, and the weakest. An earlier version made
-   this the whole check, and two verifiers broke all six red lines with ordinary English containing
-   no listed word. Widening the lists was tried and bought nothing: across eighteen sentences they
-   catch **8**, and the number is pinned in a test so nobody starts trusting it.
+3. **The description**, against word lists — the backstop, and the weakest by design. Both of its
+   numbers are measured and pinned: it catches **6 of 18** adversarial sentences, and stops **0 of
+   56** ordinary engineering briefs. It was once tuned to catch 8, which cost a 69% false-stop rate
+   — and a check that fires on two jobs in three gets switched off, which protects nothing at all.
+   A phrase is listed only if it cannot plausibly describe safe work.
 
 Before any of that, the node's own **brief** is read — `instructions`, `objective`, `scope`. A work
 order saying *"deploy the new build to production, then wipe the users table"* used to run to
