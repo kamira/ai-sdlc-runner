@@ -84,8 +84,10 @@ NODES: Tuple[Node, ...] = (
          branches={"yes": "lead_assess", "no": "pm_plan"},
          note="PM is asked, and the answer decides; the gate then stops with that answer in hand"),
     Node("lead_assess", STEP, "the lead confirms feasibility and risk", role="lead",
-         gate="feasibility_confirmed", next="pm_signoff",
-         note="judged before anyone is dispatched, which is why the lead is asked first"),
+         gate="feasibility_confirmed", gate_when="after", next="pm_signoff",
+         note="judged before anyone is dispatched, which is why the lead is asked first. The gate "
+              "is consulted AFTER: the thing a person is being asked to confirm IS the lead's "
+              "assessment, and stopping in front of it hands them an empty page"),
     Node("pm_signoff", DECISION, "PM signs off on the lead's assessment", role="pm",
          gate="before_dispatch", gate_when="after", answer_decides=True,
          branches={"yes": "next_module", "no": "pm_plan"}),

@@ -64,11 +64,6 @@ def test_select_uses_fallback_when_forced(monkeypatch):
     assert idx == 0
 
 
-def test_prompt_default_and_value():
-    assert tui.prompt("Project", "x", input_fn=lambda _p: "") == "x"
-    assert tui.prompt("Project", "x", input_fn=lambda _p: "abc") == "abc"
-
-
 # --------------------------------------------------------------------------------------
 # Pure option-cycle core (CHG-20260703-03 step 1) — no curses import needed to test it.
 # --------------------------------------------------------------------------------------

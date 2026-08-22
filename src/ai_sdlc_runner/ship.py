@@ -72,9 +72,12 @@ def effects_for(
         ),
         effects.Effect(
             name="commit",
-            probe=lambda: probes.commit_exists_for(repo, chg_id),
+            # Both halves, deliberately: a commit that exists while the tree is still dirty did not
+            # finish recording the change, and a resume that treats it as done pushes half of it.
+            probe=lambda: (probes.commit_exists_for(repo, chg_id)
+                           and probes.working_tree_clean(repo)),
             apply=_commit,
-            postcondition=f"a commit whose message contains {chg_id}",
+            postcondition=f"a commit whose message contains {chg_id}, and nothing left uncommitted",
         ),
         effects.Effect(
             name="push",
@@ -89,6 +92,42 @@ def effects_for(
             postcondition=f"the forge lists a PR for {branch}",
         ),
     ]
+
+
+def record_effects(repo: str | Path, chg_id: str, task: str, acc_id: Optional[str] = None,
+                   tick=None, write_acc=None) -> List[effects.Effect]:
+    """What `record_module` and `close_out` actually do, as probed effects.
+
+    The flow says `record_module` "ticks, commits and updates the worklog — three ordered effects",
+    and until this existed that sentence was a comment on a node that did nothing. ``tick`` and
+    ``write_acc`` are supplied by the caller, the same way `effects_for` takes ``write_chg``: this
+    module owns the ordering and the probes, never the content of somebody else's record.
+    """
+    repo = Path(repo)
+    sequence = [
+        effects.Effect(
+            name="tick",
+            probe=lambda: probes.task_ticked(repo, chg_id, task),
+            apply=tick or _refuse("tick", f"task {task!r} of {chg_id}"),
+            postcondition=f"task {task!r} is ticked in docs/changes/{chg_id}.md",
+        ),
+    ]
+    if acc_id:
+        sequence.append(effects.Effect(
+            name="acceptance",
+            probe=lambda: probes.acceptance_recorded(repo, acc_id),
+            apply=write_acc or _refuse("acceptance", acc_id),
+            postcondition=f"docs/acceptance/{acc_id}.md exists",
+        ))
+    return sequence
+
+
+def _refuse(name: str, what: str):
+    def _apply() -> None:
+        raise ShipError(
+            f"the plan asks for the {name!r} effect on {what} but supplies no way to write it. "
+            f"This runner will not invent the content of a governance record.")
+    return _apply
 
 
 def _create_pr(repo: Path, branch: str, title: str, argv: Sequence[str]) -> None:

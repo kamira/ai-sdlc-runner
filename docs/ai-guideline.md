@@ -88,9 +88,9 @@ nobody reads to the bottom of.
 | FR-9 | The review panel is one or many seats, each asked separately and blind to the others; the seat count is the user's, above a floor | P0 | `policy.SEATS`, `resolve_seats` |
 | FR-10 | The seats' verdicts are **adjudicated, not averaged**: a veto seat cannot be outvoted, a majority is needed to pass, and a tie does not pass. The engine routes on the result | P0 | `policy.adjudicate`, `engine._adjudicate` |
 | FR-11 | At a decision node where somebody is asked, **the answer decides the branch**. A branch taken from the plan while a model is being asked is a question whose answer changes nothing | P0 | `Node.answer_decides`, `engine._answered_branch` |
-| FR-12 | Six actions are never automated at any risk grade, and no confirmation or mode relaxes them. They are matched against what each node says it is about to do, and stop the run before dispatch | P0 | `policy.PERMANENT_HALTS`, `permanent_halt`, `engine._permanent_halt` |
+| FR-12 | Six actions are never automated at any risk grade, and no confirmation or mode relaxes them. Each operation a node carries out **declares its kind** from a closed set; an operation declaring nothing is refused rather than assumed safe, and the word lists are a backstop that can only add a stop | P0 | `policy.PERMANENT_HALT_KINDS`, `classify`, `engine._permanent_halt` |
 | FR-13 | The seat floor may be lowered only through an explicit high-risk mode, and the run records that it was | P0 | `policy.resolve_seats`, `RunReport.relaxations` |
-| FR-14 | Different seats may be answered by different models — the same question, different answerers. The routing lives in the CLI and never in the order | P0 | `cli.session_factory`, `--seat-model` |
+| FR-14 | Different seats may be answered by different models — the same question, different answerers. The routing lives in the CLI and never in the order | P0 | `cli.session_factory`; `--seat-model SEAT=COMMAND`, or `seat_models` in the plan |
 | FR-15 | Resume is probe-driven: nothing whose postcondition is already true is re-applied, everything applied is re-probed, and anything found true out of causal order is surfaced rather than redone or waved through | P0 | `effects.run` |
 | FR-16 | `runner flow` / `runner policy` print the flow and the governance without running anything, so what will happen can be read before it does | P1 | `cli.py` |
 | FR-17 | The ledger lint is this repo's own: required fields, and a **closed** vocabulary of status words so an unrecognised status is a failure rather than a silent pass | P0 | `tools/ledger_check.py` |
@@ -144,8 +144,11 @@ nobody reads to the bottom of.
       pass, and one veto seat alone does not pass.
 - [ ] An answered decision node branches on **its answer** — answering `fail` reaches the failure
       branch, and an answer naming no branch is an error naming the node.
-- [ ] An operation that trips a permanent halt stops the run even with every gate confirmed and
-      high-risk mode on.
+- [ ] A declared red line stops the run with every gate confirmed and high-risk mode on, however it
+      is worded; an operation declaring nothing, or an unknown kind, is refused; and the six
+      sentences a verifier used to break the previous check all stop even when mis-declared as
+      ordinary.
+- [ ] Nothing public in `src/` is unreachable from `src/` — the KN-8 defect, checked mechanically.
 - [ ] `cli.py`: `--confirm`, `--review-seats`, `--high-risk-mode` and the plan's `operations` all
       reach the engine; a seat model routes that seat elsewhere; a backend's JSON reply becomes the
       answer; a failed backend leaves the question pending.

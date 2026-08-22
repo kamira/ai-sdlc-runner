@@ -169,16 +169,6 @@ def select(
     return _numbered_select(title, options, input_fn=input_fn, out=so)
 
 
-def prompt(message: str, default: str = "", *, input_fn: Callable[[str], str] = input) -> str:
-    """Read a line of text with an optional default (shown in brackets)."""
-    suffix = f" [{default}]" if default else ""
-    try:
-        raw = input_fn(f"{message}{suffix}: ").strip()
-    except EOFError:
-        return default
-    return raw or default
-
-
 def confirm_high_risk(requested: int, floor: int, *, input_fn=input, stream_out=None) -> bool:
     """Ask the operator to turn on high-risk mode, which is the only way below the seat floor.
 

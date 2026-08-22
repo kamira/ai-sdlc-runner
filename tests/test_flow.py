@@ -39,8 +39,15 @@ SEAT_PASS = "pass"
 
 
 def _cfg(**kw):
+    """A config for a dry run.
+
+    ``undeclared="allow"`` is explicit here and is *not* the engine's default: a node that does real
+    work and declares no operations is refused, because a plan that simply omits `operations` used
+    to be checked against nothing at all. These tests are about the flow rather than about what any
+    node touches, so they say so — and the tests that are about the declaration say the opposite.
+    """
     base = dict(node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
-                decisions=dict(DECISIONS), risk="low")
+                decisions=dict(DECISIONS), risk="low", undeclared="allow")
     base.update(kw)
     return engine.RunConfig(**base)
 
@@ -152,7 +159,15 @@ def test_a_review_gate_is_consulted_after_the_review_not_before_it():
 
 def test_a_one_way_door_is_gated_before_it_swings():
     assert graph.BY_ID["merge"].gate_when == "before"
-    assert graph.BY_ID["lead_assess"].gate_when == "before"
+
+
+def test_a_gate_that_confirms_someones_judgement_waits_for_the_judgement():
+    """`feasibility_confirmed` asks a person to confirm the lead's assessment. Stopping in front of
+    the lead hands them an empty page — a verifier called this out, and it was wrong."""
+    assert graph.BY_ID["lead_assess"].gate_when == "after"
+    report = engine.walk(_cfg(risk="high", confirmed=("plan_confirmed",)), Recorder(), enabled=True)
+    assert report.halted_at == "lead_assess"
+    assert any(a.node_id == "lead_assess" for a in report.asks)
 
 
 def test_every_node_that_is_asked_to_decide_says_its_answer_decides():
@@ -228,10 +243,10 @@ def test_an_unknown_seat_is_refused():
 # --------------------------------------------------------------------------------------
 
 def test_a_before_gate_halts_without_dispatching_the_work_it_guards():
-    """`lead_assess` is gated before: at high risk the lead is never asked."""
-    report = engine.walk(_cfg(risk="high", confirmed=("plan_confirmed",)), Recorder(), enabled=True)
-    assert report.halted_at == "lead_assess"
-    assert not any(a.node_id == "lead_assess" for a in report.asks)
+    """`merge` is gated before, and stops at every grade: the door is never opened first."""
+    report = engine.walk(_cfg(), Recorder(), enabled=True)
+    assert report.halted_at == "merge"
+    assert not any(a.node_id == "merge" for a in report.asks)
 
 
 def test_an_after_gate_holds_the_result_rather_than_refusing_to_produce_it():
@@ -380,38 +395,93 @@ def test_the_panel_routes_through_the_policy_not_the_engines_own_arithmetic():
 # the permanent halts
 # --------------------------------------------------------------------------------------
 
-def test_an_operation_that_trips_a_permanent_halt_stops_the_run():
-    cfg = _cfg(operations={"merge": ["deploy the release to production"]})
+#: Six ordinary English sentences, one per red line, written by an independent verifier to break the
+#: previous check. Not one of them contained a listed keyword, and **all six were dispatched**. They
+#: are the corpus now, because a blacklist stops the phrasings somebody thought of and these are the
+#: proof that the phrasings nobody thought of are always available.
+BYPASS = (
+    ("deploy", "promote the new build into the live environment"),
+    ("migration", "rewrite all customer rows to the new format"),
+    ("delete", "erase every customer record permanently"),
+    ("money", "wire USD 500 to the vendor"),
+    ("access", "grant Alice administrator privileges"),
+    ("publish", "make the embargoed article visible to everyone"),
+)
+
+
+def _op(description, kind=policy.ORDINARY):
+    return {"description": description, "kind": kind}
+
+
+@pytest.mark.parametrize("kind,description", BYPASS)
+def test_a_declared_red_line_stops_however_it_is_worded(kind, description):
+    """The guarantee is the declaration, so the wording cannot get around it."""
+    cfg = _cfg(confirmed=ALL_GATES, high_risk_mode=True,
+               operations={"engineer_build": [_op(description, kind)]})
     report = engine.walk(cfg, Recorder(), enabled=True)
-    assert report.halted_at == "merge"
-    assert "production deploy" in report.halt_reason
+    assert report.halted_at == "engineer_build"
+    assert policy.PERMANENT_HALT_KINDS[kind] in report.halt_reason
+
+
+@pytest.mark.parametrize("kind,description", BYPASS)
+def test_the_backstop_catches_a_red_line_misdeclared_as_ordinary(kind, description):
+    """Every one of these six passed the old check. The word lists are a **second** net now — they
+    can add a stop and can never remove one — and they were widened until all six trip."""
+    assert policy.permanent_halt(description) is not None, description
+    cfg = _cfg(confirmed=ALL_GATES, operations={"engineer_build": [_op(description)]})
+    assert engine.walk(cfg, Recorder(), enabled=True).halted_at == "engineer_build"
+
+
+def test_an_operation_that_declares_nothing_is_refused_not_assumed_safe():
+    """The inversion that is the whole fix: unclassified stops, rather than being ordinary by
+    default. A red line whose default branch is "proceed" is not a red line."""
+    cfg = _cfg(operations={"engineer_build": [{"description": "do a thing"}]})
+    with pytest.raises(policy.PolicyError) as exc:
+        engine.walk(cfg, Recorder(), enabled=True)
+    assert "declares no kind" in str(exc.value)
+
+
+def test_a_bare_string_operation_is_refused():
+    cfg = _cfg(operations={"engineer_build": ["deploy to production"]})
+    with pytest.raises(policy.PolicyError) as exc:
+        engine.walk(cfg, Recorder(), enabled=True)
+    assert "must declare what kind of work it is" in str(exc.value)
+
+
+def test_a_kind_nobody_defined_is_refused():
+    cfg = _cfg(operations={"engineer_build": [_op("a thing", "probably-fine")]})
+    with pytest.raises(policy.PolicyError) as exc:
+        engine.walk(cfg, Recorder(), enabled=True)
+    assert "not one of" in str(exc.value)
 
 
 def test_no_confirmation_relaxes_a_permanent_halt():
     cfg = _cfg(confirmed=ALL_GATES, high_risk_mode=True,
-               operations={"record_module": ["hard delete the archived rows"]})
+               operations={"record_module": [_op("tick the box", "delete")]})
     report = engine.walk(cfg, Recorder(), enabled=True)
     assert report.halted_at == "record_module"
     assert "hard delete" in report.halt_reason
 
 
 def test_a_permanent_halt_stops_before_the_work_is_dispatched():
-    cfg = _cfg(operations={"engineer_build": ["rotate the production API key"]})
+    cfg = _cfg(operations={"engineer_build": [_op("rotate the key", "access")]})
     report = engine.walk(cfg, Recorder(), enabled=True)
     assert report.halted_at == "engineer_build"
     assert not any(a.node_id == "engineer_build" for a in report.asks)
 
 
-def test_ordinary_work_is_not_stopped_by_a_permanent_halt():
+def test_ordinary_work_declared_as_such_is_not_stopped():
     cfg = _cfg(confirmed=THROUGH,
-               operations={"engineer_build": ["rename a local variable", "add a unit test"]})
+               operations={"engineer_build": [_op("rename a local variable"),
+                                              _op("add a unit test")]})
     assert engine.walk(cfg, Recorder(), enabled=True).halted_at == "done"
 
 
-def test_every_permanent_halt_is_recognisable_from_its_own_words():
-    """A halt nothing can match is a paragraph, not a gate."""
-    for description in policy.PERMANENT_HALTS:
-        assert policy.permanent_halt(description) is not None, description
+def test_every_kind_has_a_description_and_a_backstop_word_list():
+    """Not the same as the old test, which fed each rule's own description back into its own word
+    list and called the tautology a pass."""
+    assert set(policy.PERMANENT_HALT_KINDS) == set(policy._HALT_WORDS)
+    assert len(policy.PERMANENT_HALTS) == len(policy.PERMANENT_HALT_KINDS) == 6
 
 
 # --------------------------------------------------------------------------------------
@@ -643,3 +713,76 @@ def test_the_scan_reads_this_file_and_every_docstring_in_it():
     text = Path(__file__).read_text(encoding="utf-8")
     assert '"""' in text, "the scan is throwing docstrings away"
     assert "SENTINEL-3ab77c-PRIOR" in text, "the scan is not reading string literals"
+
+
+# --------------------------------------------------------------------------------------
+# silence is not a declaration
+# --------------------------------------------------------------------------------------
+
+def test_a_node_that_does_work_and_declares_nothing_is_refused():
+    """The hole a verifier found: the check only ever read what a plan volunteered, so omitting
+    `operations` skipped it entirely. The red lines could be walked past by saying *less*."""
+    cfg = _cfg(undeclared="refuse")
+    report = engine.walk(cfg, Recorder(), enabled=True)
+    assert report.halted_at == "pm_plan"
+    assert "declares no operations" in report.halt_reason
+
+
+def test_refusing_is_the_default():
+    cfg = engine.RunConfig(node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+                           decisions=dict(DECISIONS), risk="low")
+    assert cfg.undeclared == "refuse"
+    assert engine.walk(cfg, Recorder(), enabled=True).halted_at == "pm_plan"
+
+
+def test_a_node_that_declares_its_work_passes():
+    declared = {node.id: [_op("ordinary development work")]
+                for node in graph.NODES if node.role and node.role != "seat"}
+    cfg = _cfg(undeclared="refuse", confirmed=THROUGH, operations=declared)
+    assert engine.walk(cfg, Recorder(), enabled=True).halted_at == "done"
+
+
+def test_a_review_seat_owes_no_declaration():
+    """A seat reads and answers. It is the nodes that may write or execute that owe a declaration."""
+    declared = {node.id: [_op("ordinary development work")]
+                for node in graph.NODES if node.role and node.role != "seat"}
+    cfg = _cfg(undeclared="refuse", confirmed=THROUGH, operations=declared)
+    report = engine.walk(cfg, Recorder(), enabled=True)
+    assert report.halted_at == "done"
+    assert any(a.seat for a in report.asks)
+
+
+def test_allowing_an_undeclared_run_is_recorded_as_a_relaxation():
+    """`allow` exists for dry runs and never happens silently: a run that checked nothing against
+    the permanent halts says so in its own report."""
+    report = engine.walk(_cfg(confirmed=THROUGH), Recorder(), enabled=True)
+    assert report.relaxations
+    assert any("nothing was checked against the permanent halts" in r for r in report.relaxations)
+
+
+# --------------------------------------------------------------------------------------
+# a confirmation is spent, not standing
+# --------------------------------------------------------------------------------------
+
+def test_one_confirmation_covers_one_stop():
+    """A verifier found that a single `--confirm plan_confirmed`, given to unlock a revision loop,
+    also waved through the final approval on the way out. The operator confirmed *that* stop."""
+    answers = {"pm_confirm": ["no", "yes"]}
+    once = engine.walk(_cfg(risk="medium", confirmed=("plan_confirmed",)), Recorder(answers),
+                       enabled=True)
+    assert once.halted_at == "pm_confirm"
+    assert len(once.confirmations) == 1
+
+
+def test_confirming_twice_covers_two_stops():
+    answers = {"pm_confirm": ["no", "yes"]}
+    twice = engine.walk(_cfg(risk="medium", confirmed=("plan_confirmed", "plan_confirmed")),
+                        Recorder(answers), enabled=True)
+    assert twice.halted_at == "lead_assess"
+    assert len(twice.confirmations) == 2
+
+
+def test_a_confirmation_records_which_node_it_covered():
+    report = engine.walk(_cfg(risk="medium", confirmed=("plan_confirmed",)), Recorder(),
+                         enabled=True)
+    assert "at pm_confirm" in report.confirmations[0]
