@@ -18,12 +18,22 @@ Answers: FR-1..FR-14. Describes layers, responsibilities, and one-way dependenci
 | `gates` | Subprocess-call the skill's `halt_gate.py` / `cross_repo_check.py`; branch on exit code | (calls skill scripts) |
 | `state` | Load/save `state.json`; support `--resume` | — |
 | `config (runner.yaml)` | Hold runtime-variable limits & skill path | — |
+| `decompose` | Split a store version's references at their stable `##`/`###` anchors; provenance per element (generator, source path, source sha256, emitted sha256) | (reads `skills/v*/references`) |
+| `dispatch` | Derive checkpoint + role-loadout + situational elements from the shipped policy; `emit_all`; the three-state regeneration gate | `decompose`, `contract`, `skillstore` |
+| `workorder` | Render one node's work order: the closed D5 field set, capabilities from the shipped role table, no harness-specific field | `agents`, `decompose` |
+| `graph` | The node graph: the skill's shipped `## State machine` written as data, each node pinned to a literal phrase of it | (reads the emitted element tree) |
+| `effects` | Ordered effects, each admitted only if probeable; resume at the first unmet postcondition; nothing already true is re-applied | — |
+| `probes` | Postconditions read out of the world — git, the forge, the ledger. Unanswerable raises rather than returning "not done" | (calls `git`, a forge command; reads `docs/`) |
+| `ship` | The ordered ship sequence (intent → branch → commit → push → PR), each effect paired with its probe | `effects`, `probes` |
+| `engine` | Walk the graph behind an opt-in flag: one session per ask (opened, asked once, closed), the question journalled before it is asked, seats resolved against the shipped floor | `graph`, `workorder` |
 
 ## Main flows
 1. **`runner run <project>`**: load config → `contract.resolve_contract` (lock gate; mismatch → tell user to migrate) → probe runtime caps → `state` load (`--resume`) → orchestrator runs stage 1..4, each calling `gates.check_halt`; implement stage spawns shallow I1.x; acceptance spawns independent V1 → checkpoint per stage → `before_merge_or_release` gate before delivery.
 2. **`runner migrate <project> --to <ver>`**: `contract.migrate` re-reads ALL docs/CHG/ACC/structure under the new contract; all parse → write new lock; any fail → print incompatibility list, keep old lock.
 3. **`runner status <project>`**: read `.sdlc-lock.json` + `state.json`; report locked contract, current stage, completed items, and a best-effort skill-update line.
-6. **`runner check [project]`**: store-aware — lists the offline store versions and compares the newest to the project lock (or config-expected); classifies patch (auto) / minor / major (→ migrate) / older. Read-only; never auto-migrates.
+5. **`runner elements --repo .`**: re-derive every store version and compare with the committed `elements/` tree; three states with distinct exit codes — 0 match, 10 regenerable drift, 11 source missing. Both failures are hard; they are separate codes because they call for different actions.
+6. **`runner run <project> --engine --plan <file>`** *(opt-in, CHG-20260822-04)*: **the node loop that replaces the four stages.** Walk the shipped graph from `handshake`; at each asking node render a work order and dispatch it in **its own session, closed straight after**; write each question to the ask journal *before* asking it; resolve branches from the plan (a decision may be a sequence, consumed per visit, because the shipped per-task loop needs "task, task, none"); stop hard — naming the node or the role — where nothing may be guessed. The four-stage path in flow 1 is untouched until the flag's default flips, which is a separate later decision.
+7. **`runner check [project]`**: store-aware — lists the offline store versions and compares the newest to the project lock (or config-expected); classifies patch (auto) / minor / major (→ migrate) / older. Read-only; never auto-migrates.
 
 ### Multi-project workspace (CHG-08)
 `runner workspace` registers an **authority (main)** project + consumer repos and persists a manifest at
@@ -90,7 +100,12 @@ fetches the skill online.
    above are untouched.
 
 ## Dependency direction
-One-directional: `cli → {orchestrator, tui, dashboard}`; `orchestrator → {contract, gates, agents, state}`;
+One-directional: `cli → {orchestrator, tui, dashboard, engine}`; `orchestrator → {contract, gates, agents, state}`;
+`engine → {graph, workorder}`; `graph → (the emitted element tree)`; `workorder → {agents, decompose}`;
+`dispatch → {decompose, contract, skillstore}`; `ship → {effects, probes}`. The derived-artifact chain runs
+one way and only one way: **store → elements → work order → ask**. Nothing downstream writes back — an
+element is never edited, a work order never carries a prior answer, and a probe never reads a record the
+runner wrote for its own benefit. That is what lets any node be re-asked from a cold start;
 `dashboard → {contract, state}` (read-only) + git + `orchestrator` (the resident app drives runs via its
 existing `approver`/`on_event` hooks) + `tui` (its embeddable selector, not `tui.select()`). `tui`/
 `dashboard` add no third-party dependency. The orchestrator emits events to `dashboard` via an optional
