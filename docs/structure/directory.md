@@ -26,13 +26,13 @@ ai-sdlc-runner/
 │                              #     families derive per version from that archive's assets/ — v1.0.0 has no role table, only v1.64.0 has autopilot_policy
 ├── src/ai_sdlc_runner/
 │   ├── __init__.py
-│   ├── cli.py                 # entry: run / migrate / status / check / elements … subcommands
+│   ├── cli.py                 # entry: run (--engine opt-in) / migrate / status / check / elements … subcommands
 │   ├── contract.py            # read skill version, per-project lock, migrate
 │   ├── agents.py              # parse role table, spawn by role (tools/permissions)
 │   ├── gates.py               # call skill's halt_gate.py / cross_repo_check.py
 │   ├── state.py               # checkpoint / resume (state.json)
 │   ├── orchestrator.py        # main loop: four stages sequential + shallow fan-out (emits events)
-│   ├── tui.py                 # interactive menu (stdlib curses + numbered fallback); CHG-02
+│   ├── tui.py                 # interactive menu (stdlib curses + numbered fallback); CHG-02; + the high-risk-mode toggle guarding the seat floor (CHG-20260822-04 task 6)
 │   ├── dashboard.py           # multi-panel view (status/log/verify/agents); curses + snapshot; CHG-03
 │   ├── skillstore.py          # offline multi-version skill store resolver (by project lock); CHG-05
 │   ├── executors.py           # pluggable agent backends: stub | command(subscription) | api; CHG-06
@@ -69,7 +69,8 @@ ai-sdlc-runner/
     ├── test_workorder.py       # work-order schema is closed; sentinel proves no tool name escapes; 9/13 roles refuse to render; CHG-20260822-04 task 5
     ├── test_graph.py           # the graph is the shipped flow: phrase pin, loop/branch survive, checkpoint + role coverage; CHG-20260822-04 task 6
     ├── test_effects.py         # probeability is the admission rule; frontier resume; nothing already true is re-applied; CHG-20260822-04 task 6
-    └── test_engine.py          # opt-in flag, hard stops, one session per ask (closed after), question survives a dropped session; CHG-20260822-04 task 6
+    ├── test_engine.py          # opt-in flag, hard stops, one session per ask (closed after), question survives a dropped session; CHG-20260822-04 task 6
+    └── test_engine_cli.py      # `run --engine` end to end; the GUI toggle is the only way below the seat floor; CHG-20260822-04 task 6
 ```
 
 ## Responsibility per directory

@@ -140,6 +140,10 @@ def _skill_update_line(config: dict, project: Optional[str]) -> Optional[str]:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    # Opt-in (D7): without --engine the four-stage path below is untouched, and flipping the default
+    # is a separate, later decision.
+    if getattr(args, "engine", False):
+        return cmd_engine_run(args)
     config = load_config(args.config)
     skill_path = _resolve_skill_path(config, args.skill_path, args.project)
     requested = args.contract_version or config.get("contract_version")
@@ -356,6 +360,105 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 20 if info.needs_migrate else 0
 
 
+def _engine_session_factory(config: dict, backend: Optional[str]):
+    """One process per ask when a command backend is configured; a stub otherwise.
+
+    A process per ask is the session boundary made physical: there is no handle to keep alive, so
+    "closed after the ask" is not a promise the backend has to keep. The work order goes in as JSON
+    on stdin — no tool list, no role prompt, nothing the harness owns (D5).
+    """
+    import json as _json
+    import subprocess
+
+    from . import engine
+
+    spec = config.get("executor", {}) if isinstance(config.get("executor"), dict) else {}
+    chosen = (backend or spec.get("backend") or "stub").lower()
+    if chosen != "command":
+        class _Stub(engine.Session):
+            def ask(self, order):
+                return {"backend": "stub", "node_id": order["node_id"]}
+
+            def close(self):
+                pass
+
+        return lambda seat=None: _Stub()
+
+    cmd = spec.get("command", {}) if isinstance(spec.get("command"), dict) else {}
+    argv = cmd.get("argv") or []
+    if isinstance(argv, str):
+        argv = argv.split()
+    argv = list(argv) + list(cmd.get("extra_args") or [])
+    timeout = cmd.get("timeout", 600)
+
+    class _Process(engine.Session):
+        def ask(self, order):
+            proc = subprocess.run(argv, input=_json.dumps(order, ensure_ascii=False),
+                                  capture_output=True, text=True, timeout=timeout)
+            return {"exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
+
+        def close(self):
+            pass
+
+    return lambda seat=None: _Process()
+
+
+def cmd_engine_run(args: argparse.Namespace) -> int:
+    """Walk the node graph (CHG-20260822-04 task 6). Opt-in: `runner run --engine`.
+
+    The plan file supplies what no store can: per-node objectives, done-criteria, resolved policy
+    verdicts and branch choices. Task 7 replaces the file with the CHG itself; until then the flag is
+    honest about needing it rather than inventing defaults.
+    """
+    import json as _json
+
+    from . import engine
+
+    config = load_config(args.config)
+    skill_path = _resolve_skill_path(config, args.skill_path, args.project)
+    tree = args.elements or str(Path(skill_path).parent.parent / "elements" /
+                                Path(skill_path).name)
+
+    if not args.plan:
+        print("error: --engine needs --plan <file> (per-node objectives, verdicts and branch "
+              "choices). Nothing in the store can supply them; task 7 reads them from the CHG.")
+        return 2
+    plan = _json.loads(Path(args.plan).read_text(encoding="utf-8"))
+
+    floor = engine.seat_floor(skill_path)
+    seats = args.review_seats
+    high_risk = bool(args.high_risk_mode)
+    if seats is not None and seats < floor and not high_risk:
+        # The GUI toggle, per the requirement: the operator turns it on, seeing what it costs.
+        high_risk = tui.confirm_high_risk(seats, floor)
+        if not high_risk:
+            seats = None
+
+    cfg = engine.RunConfig(
+        node_specs=plan.get("node_specs", {}),
+        verdicts=plan.get("verdicts", {}),
+        decisions=plan.get("decisions", {}),
+        review_seats=seats,
+        high_risk_mode=high_risk,
+        situational_flags=plan.get("situational_flags", []),
+        languages=plan.get("languages", []),
+        journal=engine.AskJournal(args.ask_journal) if args.ask_journal else None,
+    )
+    factory = _engine_session_factory(config, args.backend)
+    try:
+        report = engine.walk(skill_path, tree, cfg, factory, enabled=True)
+    except engine.EngineError as exc:
+        print(f"engine: {exc}")
+        return 10
+
+    for relaxation in report.relaxations:
+        print(f"relaxation:    {relaxation}")
+    print(f"visited:       {len(report.visited)} node(s)")
+    print(f"asks:          {len(report.asks)}")
+    print(f"halted at:     {report.halted_at} — {report.halt_reason}")
+    return 0
+
+
 def cmd_elements(args: argparse.Namespace) -> int:
     """Regeneration gate: re-derive every store version and compare with the committed elements.
 
@@ -498,6 +601,18 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("project", help="path to the governed project directory")
     pr.add_argument("--contract-version", default=None, help="expected contract version (defaults to config)")
     pr.add_argument("--skill-path", default=None, help="override skill_path (e.g. a local skill cache)")
+    pr.add_argument("--engine", action="store_true",
+                    help="walk the node graph instead of the four stages (opt-in; CHG-20260822-04)")
+    pr.add_argument("--plan", default=None,
+                    help="JSON plan for --engine: node_specs, verdicts, decisions")
+    pr.add_argument("--elements", default=None,
+                    help="element tree for --engine (default: elements/<store version>)")
+    pr.add_argument("--review-seats", type=int, default=None,
+                    help="how many review seats to open (default: the shipped floor)")
+    pr.add_argument("--high-risk-mode", action="store_true",
+                    help="allow fewer seats than the shipped floor; the run records that it did")
+    pr.add_argument("--ask-journal", default=None,
+                    help="directory to journal each question in before asking it")
     pr.add_argument("--risk", default="medium", choices=["low", "medium", "high"], help="overall change risk")
     pr.add_argument("--resume", action="store_true", help="continue from the last checkpoint")
     pr.add_argument("--backend", default=None, choices=[executors.BACKEND_STUB, executors.BACKEND_COMMAND, executors.BACKEND_API],
