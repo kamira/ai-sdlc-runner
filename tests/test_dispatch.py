@@ -40,6 +40,11 @@ def roles(store):
     return dispatch.role_loadouts(store)
 
 
+@pytest.fixture(scope="module")
+def sits(store):
+    return dispatch.situational_sets(store)
+
+
 def _policy(store, name):
     return json.loads((store / "assets" / name).read_text(encoding="utf-8-sig"))
 
@@ -153,26 +158,29 @@ def test_loadout_covers_common_plus_the_role_refs(store, roles):
         assert r.base_references == cfg["common"] + cfg["roles"][r.role]
 
 
-def test_loadout_anchors_point_at_real_content_elements(store, roles):
-    """Every anchor a loadout names must resolve to a task-1 element — this is the join that would
-    otherwise fail silently at dispatch time."""
+def test_loadout_ids_point_at_real_content_elements(store, roles, sits):
+    """Every content element a dispatch element names must exist — the join that would otherwise
+    fail silently at dispatch time. `check_dangling` runs the same proof at generation time."""
     known = {e.element_id for e in decompose.decompose_store(store)}
     assert known
     for r in roles:
-        for lang, anchors in r.base_anchors.items():
-            assert anchors, f"{r.role} has no {lang} anchors"
-            for a in anchors:
-                assert a["element_id"] in known
+        for lang, ids in r.base_element_ids.items():
+            assert ids, f"{r.role} has no {lang} elements"
+            assert all(i in known for i in ids)
+    for st in sits:
+        for lang, ids in st.element_ids.items():
+            assert ids and all(i in known for i in ids)
+    assert dispatch.check_dangling(store) == []
 
 
-def test_loadout_never_inlines_a_body(roles):
-    """D5: paths and anchors only. A body in a manifest would re-import the cost task 1 removed."""
+def test_loadout_names_ids_and_nothing_else(roles):
+    """D5, and the A2 repackaging: a loadout carries content element **ids**, never bodies and
+    never a copy of the fields `manifest.json` already holds authoritatively."""
     for r in roles:
-        rendered = json.dumps(r.record(), ensure_ascii=False)
+        rendered = json.dumps(r.payload(), ensure_ascii=False)
         assert "body" not in rendered
-        for anchors in r.base_anchors.values():
-            for a in anchors:
-                assert set(a) == {"element_id", "source_path", "anchor", "anchor_slug", "level"}
+        for ids in r.base_element_ids.values():
+            assert all(isinstance(i, str) for i in ids)
 
 
 def test_a_reference_with_no_element_is_a_hard_error(store, tmp_path):
@@ -248,16 +256,33 @@ def test_autopilot_axis_states_that_no_resolver_ships(store, cps):
         assert c.resolver["tighten_only"] is True
 
 
-def test_situational_sets_are_present_but_never_evaluated(store, roles):
-    """All five sets ship in every manifest, keyed verbatim. Flipping a flag at dispatch selects
-    among data already in the artifact instead of changing what the artifact contains — which is
-    what keeps task 4's byte-comparison meaningful."""
+def test_situational_sets_are_present_but_never_evaluated(store, roles, sits):
+    """Every flag exists as its own element and every role names all of them. Flipping a flag at
+    dispatch selects among data already in the artifact instead of changing what the artifact
+    contains — which is what keeps task 4's byte-comparison meaningful."""
     cfg = _policy(store, "role_refs.json")["situational"]
+    assert {st.flag for st in sits} == set(cfg)
+    for st in sits:
+        assert st.references == cfg[st.flag]
+        assert st.element_ids
+    expected = sorted(f"situational:{flag}" for flag in cfg)
     for r in roles:
-        assert set(r.situational) == set(cfg)
-        for flag, block in r.situational.items():
-            assert block["references"] == cfg[flag]
-            assert block["anchors"]
+        assert sorted(r.situational_refs) == expected
+
+
+def test_situational_sets_are_emitted_once_not_per_role(store, tmp_path):
+    """The A2 fix, pinned. Inlining the five sets into all 13 role manifests produced 265 KB of
+    byte-identical duplication and a 54,670-byte role file — larger than the biggest reference in
+    the corpus the whole design exists to stop nodes from paying for."""
+    dispatch.emit(store, tmp_path)
+    sit_files = sorted((tmp_path / "dispatch" / "situational").glob("*.json"))
+    assert len(sit_files) == len(_policy(store, "role_refs.json")["situational"])
+    for role_file in (tmp_path / "dispatch" / "roles").glob("*.json"):
+        body = role_file.read_text(encoding="utf-8")
+        assert len(body) < 15_000, f"{role_file.name} is {len(body)} bytes — the A2 defect is back"
+        # the flag is named, its contents are not copied in
+        assert '"references"' in body
+        assert "situational:" in body
 
 
 # --------------------------------------------------------------------------------------
@@ -276,9 +301,10 @@ def test_two_emits_are_byte_identical(store, tmp_path):
 def test_derivation_is_stable_across_calls(store):
     assert dispatch.checkpoints(store) == dispatch.checkpoints(store)
     assert dispatch.role_loadouts(store) == dispatch.role_loadouts(store)
+    assert dispatch.situational_sets(store) == dispatch.situational_sets(store)
 
 
-def test_provenance_is_complete_and_verifiable(store, cps, roles):
+def test_provenance_is_complete_and_verifiable(store, cps, roles, sits):
     """Same four fields task 1 established, and the emitted hash must describe the emitted file."""
     expected = {
         "assets/halt_policy.json": decompose.sha256(
@@ -288,7 +314,7 @@ def test_provenance_is_complete_and_verifiable(store, cps, roles):
         "assets/role_refs.json": decompose.sha256(
             decompose.normalize((store / "assets" / "role_refs.json").read_bytes())),
     }
-    for e in list(cps) + list(roles):
+    for e in list(cps) + list(roles) + list(sits):
         assert e.generator == dispatch.GENERATOR
         assert e.generator_version == dispatch.GENERATOR_VERSION
         assert e.source_sha256 == expected[e.source_path]
@@ -309,7 +335,8 @@ def test_manifest_is_key_sorted_and_machine_independent(store, tmp_path):
     assert str(tmp_path) not in raw and str(STORE) not in raw
     manifest = json.loads(raw)
     assert manifest["skill_version"] == "1.64.0"
-    assert manifest["checkpoint_count"] + manifest["role_count"] == len(manifest["elements"])
+    assert (manifest["checkpoint_count"] + manifest["role_count"]
+            + manifest["situational_count"]) == len(manifest["elements"])
 
 
 def test_emitted_files_never_contain_cr(store, tmp_path):

@@ -1,0 +1,719 @@
+{
+  "checkpoint_count": 5,
+  "elements": [
+    {
+      "element_id": "halt:acceptance_failed",
+      "emitted_sha256": "19dcab67485c932d89891eee59024ff5ca429faa84941dfa4368cfe914416aa7",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "key": "acceptance_failed",
+      "kind": "checkpoint",
+      "meaning": "驗收未通過、要回修迴圈前",
+      "namespace": "halt",
+      "preauthorizable": [],
+      "rel_path": "dispatch/checkpoints/halt/acceptance_failed.json",
+      "resolver": {
+        "arguments": {
+          "autonomy": "<CHG Autonomy, optional>",
+          "gate": "acceptance_failed",
+          "risk": "<risk>"
+        },
+        "exit_codes": {
+          "0": "AUTO",
+          "10": "HALT"
+        },
+        "kind": "shipped_script",
+        "note": "The runner never re-derives this verdict; it branches on the script's exit code.",
+        "script": "scripts/halt_gate.py"
+      },
+      "risk_table": {
+        "high": "halt",
+        "low": "auto",
+        "medium": "halt"
+      },
+      "source_path": "assets/halt_policy.json",
+      "source_sha256": "6bd7080d050f2bcacd472c8bbc58fc101d94f55da51c4df5f931786f2df763cc",
+      "unconditional_halts": {
+        "halt_policy.json#always_halt_actions": [
+          "production deploy / release",
+          "data migration / irreversible schema change",
+          "delete data / drop table / hard delete",
+          "move money / financial transaction",
+          "change secrets / credentials / access control / permissions",
+          "publish public content"
+        ]
+      }
+    },
+    {
+      "element_id": "halt:before_implement",
+      "emitted_sha256": "e178978fd3e15a9c4fb865f9a8626eac8bd5b381f9a7bd65feddc6c49a5eab16",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "key": "before_implement",
+      "kind": "checkpoint",
+      "meaning": "修改治理產出 CHG 後、開始改碼前",
+      "namespace": "halt",
+      "preauthorizable": [],
+      "rel_path": "dispatch/checkpoints/halt/before_implement.json",
+      "resolver": {
+        "arguments": {
+          "autonomy": "<CHG Autonomy, optional>",
+          "gate": "before_implement",
+          "risk": "<risk>"
+        },
+        "exit_codes": {
+          "0": "AUTO",
+          "10": "HALT"
+        },
+        "kind": "shipped_script",
+        "note": "The runner never re-derives this verdict; it branches on the script's exit code.",
+        "script": "scripts/halt_gate.py"
+      },
+      "risk_table": {
+        "high": "halt",
+        "low": "auto",
+        "medium": "auto"
+      },
+      "source_path": "assets/halt_policy.json",
+      "source_sha256": "6bd7080d050f2bcacd472c8bbc58fc101d94f55da51c4df5f931786f2df763cc",
+      "unconditional_halts": {
+        "halt_policy.json#always_halt_actions": [
+          "production deploy / release",
+          "data migration / irreversible schema change",
+          "delete data / drop table / hard delete",
+          "move money / financial transaction",
+          "change secrets / credentials / access control / permissions",
+          "publish public content"
+        ]
+      }
+    },
+    {
+      "element_id": "halt:before_merge_or_release",
+      "emitted_sha256": "6a727ec2c8a451564b227985b307eba3f217887394c389fd1a90d6b638af430b",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "key": "before_merge_or_release",
+      "kind": "checkpoint",
+      "meaning": "驗收通過後、合併 / 發佈 / 交付前",
+      "namespace": "halt",
+      "preauthorizable": [],
+      "rel_path": "dispatch/checkpoints/halt/before_merge_or_release.json",
+      "resolver": {
+        "arguments": {
+          "autonomy": "<CHG Autonomy, optional>",
+          "gate": "before_merge_or_release",
+          "risk": "<risk>"
+        },
+        "exit_codes": {
+          "0": "AUTO",
+          "10": "HALT"
+        },
+        "kind": "shipped_script",
+        "note": "The runner never re-derives this verdict; it branches on the script's exit code.",
+        "script": "scripts/halt_gate.py"
+      },
+      "risk_table": {
+        "high": "halt",
+        "low": "auto",
+        "medium": "halt"
+      },
+      "source_path": "assets/halt_policy.json",
+      "source_sha256": "6bd7080d050f2bcacd472c8bbc58fc101d94f55da51c4df5f931786f2df763cc",
+      "unconditional_halts": {
+        "halt_policy.json#always_halt_actions": [
+          "production deploy / release",
+          "data migration / irreversible schema change",
+          "delete data / drop table / hard delete",
+          "move money / financial transaction",
+          "change secrets / credentials / access control / permissions",
+          "publish public content"
+        ]
+      }
+    },
+    {
+      "element_id": "halt:requirement_confirmed",
+      "emitted_sha256": "2d31b0573a962b8245a0cfe227f91b4f04485efb9157a61f727df75fd7c1c8fc",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "key": "requirement_confirmed",
+      "kind": "checkpoint",
+      "meaning": "需求分析產出 Guideline 後、進結構設計前",
+      "namespace": "halt",
+      "preauthorizable": [],
+      "rel_path": "dispatch/checkpoints/halt/requirement_confirmed.json",
+      "resolver": {
+        "arguments": {
+          "autonomy": "<CHG Autonomy, optional>",
+          "gate": "requirement_confirmed",
+          "risk": "<risk>"
+        },
+        "exit_codes": {
+          "0": "AUTO",
+          "10": "HALT"
+        },
+        "kind": "shipped_script",
+        "note": "The runner never re-derives this verdict; it branches on the script's exit code.",
+        "script": "scripts/halt_gate.py"
+      },
+      "risk_table": {
+        "high": "halt",
+        "low": "auto",
+        "medium": "auto"
+      },
+      "source_path": "assets/halt_policy.json",
+      "source_sha256": "6bd7080d050f2bcacd472c8bbc58fc101d94f55da51c4df5f931786f2df763cc",
+      "unconditional_halts": {
+        "halt_policy.json#always_halt_actions": [
+          "production deploy / release",
+          "data migration / irreversible schema change",
+          "delete data / drop table / hard delete",
+          "move money / financial transaction",
+          "change secrets / credentials / access control / permissions",
+          "publish public content"
+        ]
+      }
+    },
+    {
+      "element_id": "halt:structure_confirmed",
+      "emitted_sha256": "a7b7ae4ad628c2c12d44e7fc8818997fc527e0f270a9542185e8883d8ce1b8d3",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "key": "structure_confirmed",
+      "kind": "checkpoint",
+      "meaning": "結構設計產出後、開始實作前",
+      "namespace": "halt",
+      "preauthorizable": [],
+      "rel_path": "dispatch/checkpoints/halt/structure_confirmed.json",
+      "resolver": {
+        "arguments": {
+          "autonomy": "<CHG Autonomy, optional>",
+          "gate": "structure_confirmed",
+          "risk": "<risk>"
+        },
+        "exit_codes": {
+          "0": "AUTO",
+          "10": "HALT"
+        },
+        "kind": "shipped_script",
+        "note": "The runner never re-derives this verdict; it branches on the script's exit code.",
+        "script": "scripts/halt_gate.py"
+      },
+      "risk_table": {
+        "high": "halt",
+        "low": "auto",
+        "medium": "auto"
+      },
+      "source_path": "assets/halt_policy.json",
+      "source_sha256": "6bd7080d050f2bcacd472c8bbc58fc101d94f55da51c4df5f931786f2df763cc",
+      "unconditional_halts": {
+        "halt_policy.json#always_halt_actions": [
+          "production deploy / release",
+          "data migration / irreversible schema change",
+          "delete data / drop table / hard delete",
+          "move money / financial transaction",
+          "change secrets / credentials / access control / permissions",
+          "publish public content"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "A1"
+      ],
+      "base_references": [
+        "handshake",
+        "knowledge",
+        "doc-integrity",
+        "requirement-analysis",
+        "structure-design"
+      ],
+      "element_count": {
+        "en": 52,
+        "zh-tw": 52
+      },
+      "element_id": "role:analyst",
+      "emitted_sha256": "dc89e25dba52d2f26d2ffc5bb13990ecc7acd95d5a421f6e2c8b1509ae7cf62c",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "kind": "role_loadout",
+      "rel_path": "dispatch/roles/analyst.json",
+      "role": "analyst",
+      "situational": [
+        "situational:autonomous_run",
+        "situational:cicd",
+        "situational:multi_branch",
+        "situational:multi_repo",
+        "situational:parallel_or_handoff"
+      ],
+      "source_path": "assets/role_refs.json",
+      "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+    },
+    {
+      "aliases": [],
+      "base_references": [
+        "handshake",
+        "knowledge",
+        "doc-integrity",
+        "independent-acceptance",
+        "cross-agent"
+      ],
+      "element_count": {
+        "en": 48,
+        "zh-tw": 48
+      },
+      "element_id": "role:integrator",
+      "emitted_sha256": "d59b1beb1557e0d089770e704d1cac8e06f78eeba625e3c367a65dc04d75d835",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "kind": "role_loadout",
+      "rel_path": "dispatch/roles/integrator.json",
+      "role": "integrator",
+      "situational": [
+        "situational:autonomous_run",
+        "situational:cicd",
+        "situational:multi_branch",
+        "situational:multi_repo",
+        "situational:parallel_or_handoff"
+      ],
+      "source_path": "assets/role_refs.json",
+      "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+    },
+    {
+      "aliases": [
+        "I1"
+      ],
+      "base_references": [
+        "handshake",
+        "knowledge",
+        "doc-integrity",
+        "modification-guide",
+        "structure-design",
+        "agent-hierarchy",
+        "agent-worklog"
+      ],
+      "element_count": {
+        "en": 81,
+        "zh-tw": 81
+      },
+      "element_id": "role:lead-implementer",
+      "emitted_sha256": "bef39cbf22b62f160ca7cd4c3df75c5e4fa6244523c9e89675ad0f8831a31b0e",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "kind": "role_loadout",
+      "rel_path": "dispatch/roles/lead-implementer.json",
+      "role": "lead-implementer",
+      "situational": [
+        "situational:autonomous_run",
+        "situational:cicd",
+        "situational:multi_branch",
+        "situational:multi_repo",
+        "situational:parallel_or_handoff"
+      ],
+      "source_path": "assets/role_refs.json",
+      "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+    },
+    {
+      "aliases": [
+        "parent"
+      ],
+      "base_references": [
+        "handshake",
+        "knowledge",
+        "doc-integrity",
+        "agent-hierarchy",
+        "agent-worklog",
+        "autonomy",
+        "review-panel"
+      ],
+      "element_count": {
+        "en": 77,
+        "zh-tw": 77
+      },
+      "element_id": "role:orchestrator",
+      "emitted_sha256": "60c37788ca48089825922aa373081b2c6194252ab13fc02105958d2718e27109",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "kind": "role_loadout",
+      "rel_path": "dispatch/roles/orchestrator.json",
+      "role": "orchestrator",
+      "situational": [
+        "situational:autonomous_run",
+        "situational:cicd",
+        "situational:multi_branch",
+        "situational:multi_repo",
+        "situational:parallel_or_handoff"
+      ],
+      "source_path": "assets/role_refs.json",
+      "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+    },
+    {
+      "aliases": [],
+      "base_references": [
+        "handshake",
+        "knowledge",
+        "doc-integrity",
+        "independent-acceptance"
+      ],
+      "element_count": {
+        "en": 40,
+        "zh-tw": 40
+      },
+      "element_id": "role:reviewer",
+      "emitted_sha256": "6fd1213c7a3bc6c0cc5738b3433f48af91995facfc396357747197d7ea6c9876",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "kind": "role_loadout",
+      "rel_path": "dispatch/roles/reviewer.json",
+      "role": "reviewer",
+      "situational": [
+        "situational:autonomous_run",
+        "situational:cicd",
+        "situational:multi_branch",
+        "situational:multi_repo",
+        "situational:parallel_or_handoff"
+      ],
+      "source_path": "assets/role_refs.json",
+      "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+    },
+    {
+      "aliases": [],
+      "base_references": [
+        "handshake",
+        "knowledge",
+        "doc-integrity",
+        "review-panel",
+        "knowledge"
+      ],
+      "element_count": {
+        "en": 51,
+        "zh-tw": 51
+      },
+      "element_id": "role:seat-compliance",
+      "emitted_sha256": "39510b03c7f30df1f8f3d54a14b1d787dc3eb79211360d1b41e5321bb2fba844",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "kind": "role_loadout",
+      "rel_path": "dispatch/roles/seat-compliance.json",
+      "role": "seat-compliance",
+      "situational": [
+        "situational:autonomous_run",
+        "situational:cicd",
+        "situational:multi_branch",
+        "situational:multi_repo",
+        "situational:parallel_or_handoff"
+      ],
+      "source_path": "assets/role_refs.json",
+      "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+    },
+    {
+      "aliases": [],
+      "base_references": [
+        "handshake",
+        "knowledge",
+        "doc-integrity",
+        "review-panel",
+        "branch-isolation",
+        "cross-repo"
+      ],
+      "element_count": {
+        "en": 56,
+        "zh-tw": 56
+      },
+      "element_id": "role:seat-consistency",
+      "emitted_sha256": "482adc03cf33dc5788f60043fccca5109f3f9c05d3df5703e61eebf0491add51",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "kind": "role_loadout",
+      "rel_path": "dispatch/roles/seat-consistency.json",
+      "role": "seat-consistency",
+      "situational": [
+        "situational:autonomous_run",
+        "situational:cicd",
+        "situational:multi_branch",
+        "situational:multi_repo",
+        "situational:parallel_or_handoff"
+      ],
+      "source_path": "assets/role_refs.json",
+      "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+    },
+    {
+      "aliases": [],
+      "base_references": [
+        "handshake",
+        "knowledge",
+        "doc-integrity",
+        "review-panel",
+        "doc-integrity"
+      ],
+      "element_count": {
+        "en": 52,
+        "zh-tw": 52
+      },
+      "element_id": "role:seat-drift",
+      "emitted_sha256": "61588953831775c9c3625bcdd8ee110785f57a0ff53ef35006c242e37f108e5c",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "kind": "role_loadout",
+      "rel_path": "dispatch/roles/seat-drift.json",
+      "role": "seat-drift",
+      "situational": [
+        "situational:autonomous_run",
+        "situational:cicd",
+        "situational:multi_branch",
+        "situational:multi_repo",
+        "situational:parallel_or_handoff"
+      ],
+      "source_path": "assets/role_refs.json",
+      "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+    },
+    {
+      "aliases": [],
+      "base_references": [
+        "handshake",
+        "knowledge",
+        "doc-integrity",
+        "review-panel",
+        "modification-guide"
+      ],
+      "element_count": {
+        "en": 51,
+        "zh-tw": 51
+      },
+      "element_id": "role:seat-impact",
+      "emitted_sha256": "ca16d3cf0d06d0d41882ec50cce388d8119559b04b34c5f94a1ed0bdf6bf9668",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "kind": "role_loadout",
+      "rel_path": "dispatch/roles/seat-impact.json",
+      "role": "seat-impact",
+      "situational": [
+        "situational:autonomous_run",
+        "situational:cicd",
+        "situational:multi_branch",
+        "situational:multi_repo",
+        "situational:parallel_or_handoff"
+      ],
+      "source_path": "assets/role_refs.json",
+      "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+    },
+    {
+      "aliases": [],
+      "base_references": [
+        "handshake",
+        "knowledge",
+        "doc-integrity",
+        "review-panel",
+        "modification-guide"
+      ],
+      "element_count": {
+        "en": 51,
+        "zh-tw": 51
+      },
+      "element_id": "role:seat-risk",
+      "emitted_sha256": "5ed0db6d96355ccab3df207202f31fda9d13ff257cb13d6b4a8c700f0556a695",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "kind": "role_loadout",
+      "rel_path": "dispatch/roles/seat-risk.json",
+      "role": "seat-risk",
+      "situational": [
+        "situational:autonomous_run",
+        "situational:cicd",
+        "situational:multi_branch",
+        "situational:multi_repo",
+        "situational:parallel_or_handoff"
+      ],
+      "source_path": "assets/role_refs.json",
+      "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+    },
+    {
+      "aliases": [],
+      "base_references": [
+        "handshake",
+        "knowledge",
+        "doc-integrity",
+        "review-panel",
+        "autonomy"
+      ],
+      "element_count": {
+        "en": 50,
+        "zh-tw": 50
+      },
+      "element_id": "role:seat-security",
+      "emitted_sha256": "0680b679a85ffb1633c98d20a2b2821f01447665d0027a56ba863ae6292dd80c",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "kind": "role_loadout",
+      "rel_path": "dispatch/roles/seat-security.json",
+      "role": "seat-security",
+      "situational": [
+        "situational:autonomous_run",
+        "situational:cicd",
+        "situational:multi_branch",
+        "situational:multi_repo",
+        "situational:parallel_or_handoff"
+      ],
+      "source_path": "assets/role_refs.json",
+      "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+    },
+    {
+      "aliases": [
+        "I1.x"
+      ],
+      "base_references": [
+        "handshake",
+        "knowledge",
+        "doc-integrity",
+        "modification-guide",
+        "agent-worklog"
+      ],
+      "element_count": {
+        "en": 51,
+        "zh-tw": 51
+      },
+      "element_id": "role:sub-implementer",
+      "emitted_sha256": "43ee720b058f17a50b4914605b03428ec16c924719cfb952648ef8aaf70f2410",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "kind": "role_loadout",
+      "rel_path": "dispatch/roles/sub-implementer.json",
+      "role": "sub-implementer",
+      "situational": [
+        "situational:autonomous_run",
+        "situational:cicd",
+        "situational:multi_branch",
+        "situational:multi_repo",
+        "situational:parallel_or_handoff"
+      ],
+      "source_path": "assets/role_refs.json",
+      "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+    },
+    {
+      "aliases": [
+        "V1"
+      ],
+      "base_references": [
+        "handshake",
+        "knowledge",
+        "doc-integrity",
+        "acceptance-verification",
+        "independent-acceptance"
+      ],
+      "element_count": {
+        "en": 49,
+        "zh-tw": 49
+      },
+      "element_id": "role:verifier",
+      "emitted_sha256": "baa78e0f80a1bfc80499dcf7850a687da93939ac28c5740f79ff82945036f56d",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "kind": "role_loadout",
+      "rel_path": "dispatch/roles/verifier.json",
+      "role": "verifier",
+      "situational": [
+        "situational:autonomous_run",
+        "situational:cicd",
+        "situational:multi_branch",
+        "situational:multi_repo",
+        "situational:parallel_or_handoff"
+      ],
+      "source_path": "assets/role_refs.json",
+      "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+    },
+    {
+      "element_count": {
+        "en": 10,
+        "zh-tw": 10
+      },
+      "element_id": "situational:autonomous_run",
+      "emitted_sha256": "178cc9cd9fa303e06b6758b6300b0466483fd2f622b7494427ff818a7d3e657a",
+      "flag": "autonomous_run",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "kind": "situational_set",
+      "references": [
+        "autonomy"
+      ],
+      "rel_path": "dispatch/situational/autonomous_run.json",
+      "source_path": "assets/role_refs.json",
+      "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+    },
+    {
+      "element_count": {
+        "en": 10,
+        "zh-tw": 10
+      },
+      "element_id": "situational:cicd",
+      "emitted_sha256": "b4d5a8089bbc7819dc1b8cda1170be9a748ed177f861b5804947108a2274b9ab",
+      "flag": "cicd",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "kind": "situational_set",
+      "references": [
+        "ci-cd"
+      ],
+      "rel_path": "dispatch/situational/cicd.json",
+      "source_path": "assets/role_refs.json",
+      "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+    },
+    {
+      "element_count": {
+        "en": 6,
+        "zh-tw": 6
+      },
+      "element_id": "situational:multi_branch",
+      "emitted_sha256": "5fff45ea783758b430114fb87db75eb30d84a5958083b9fd18b3b7c5fe1349ea",
+      "flag": "multi_branch",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "kind": "situational_set",
+      "references": [
+        "branch-isolation"
+      ],
+      "rel_path": "dispatch/situational/multi_branch.json",
+      "source_path": "assets/role_refs.json",
+      "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+    },
+    {
+      "element_count": {
+        "en": 10,
+        "zh-tw": 10
+      },
+      "element_id": "situational:multi_repo",
+      "emitted_sha256": "8ef331079138237cfbc1af2436836bb36be460f76a33e1d3454a610ff1063911",
+      "flag": "multi_repo",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "kind": "situational_set",
+      "references": [
+        "cross-repo"
+      ],
+      "rel_path": "dispatch/situational/multi_repo.json",
+      "source_path": "assets/role_refs.json",
+      "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+    },
+    {
+      "element_count": {
+        "en": 8,
+        "zh-tw": 8
+      },
+      "element_id": "situational:parallel_or_handoff",
+      "emitted_sha256": "093b191777d21b844aa5894da2fabce08f76c85ccb7f80b00c4c9c2dd99f91d1",
+      "flag": "parallel_or_handoff",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "kind": "situational_set",
+      "references": [
+        "cross-agent"
+      ],
+      "rel_path": "dispatch/situational/parallel_or_handoff.json",
+      "source_path": "assets/role_refs.json",
+      "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+    }
+  ],
+  "generator": "ai_sdlc_runner.dispatch",
+  "generator_version": "1",
+  "role_count": 13,
+  "situational_count": 5,
+  "skill_version": "1.12.1"
+}

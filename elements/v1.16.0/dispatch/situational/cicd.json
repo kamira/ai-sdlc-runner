@@ -1,0 +1,38 @@
+{
+  "element_id": "situational:cicd",
+  "element_ids": {
+    "en": [
+      "references/ci-cd#ci-cd-optional-wire-governance-into-ci-cd",
+      "references/ci-cd#purpose-optional",
+      "references/ci-cd#when-to-read",
+      "references/ci-cd#governance-artifact-gate-mapping",
+      "references/ci-cd#recommended-gates-loose-strict-pick-per-team-needs",
+      "references/ci-cd#apply-gates-by-risk-level",
+      "references/ci-cd#two-checkpoints-pre-commit-preliminary-and-pipeline-full",
+      "references/ci-cd#pre-commit-example-platform-neutral-pseudo",
+      "references/ci-cd#platform-neutral-example-pipeline-pseudo",
+      "references/ci-cd#relation-to-the-base-flow"
+    ],
+    "zh-tw": [
+      "references/ci-cd.zh-tw#ci-cd選用-把治理流程接上-ci-cd",
+      "references/ci-cd.zh-tw#用途選用",
+      "references/ci-cd.zh-tw#何時讀",
+      "references/ci-cd.zh-tw#治理產物-自動化門檻-對應",
+      "references/ci-cd.zh-tw#建議-gates由寬到嚴-依團隊需要選用",
+      "references/ci-cd.zh-tw#依風險分級套用-gates",
+      "references/ci-cd.zh-tw#兩個檢查點-pre-commit初步與-pipeline完整",
+      "references/ci-cd.zh-tw#pre-commit-範例平台中立-pseudo",
+      "references/ci-cd.zh-tw#平台中立範例pipeline-pseudo",
+      "references/ci-cd.zh-tw#與既有流程的關係"
+    ]
+  },
+  "flag": "cicd",
+  "generator": "ai_sdlc_runner.dispatch",
+  "generator_version": "1",
+  "kind": "situational_set",
+  "references": [
+    "ci-cd"
+  ],
+  "source_path": "assets/role_refs.json",
+  "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+}
