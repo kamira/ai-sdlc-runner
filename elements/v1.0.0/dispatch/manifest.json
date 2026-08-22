@@ -1,0 +1,225 @@
+{
+  "checkpoint_count": 5,
+  "elements": [
+    {
+      "element_id": "halt:acceptance_failed",
+      "emitted_sha256": "19dcab67485c932d89891eee59024ff5ca429faa84941dfa4368cfe914416aa7",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "key": "acceptance_failed",
+      "kind": "checkpoint",
+      "meaning": "驗收未通過、要回修迴圈前",
+      "namespace": "halt",
+      "preauthorizable": [],
+      "rel_path": "dispatch/checkpoints/halt/acceptance_failed.json",
+      "resolver": {
+        "arguments": {
+          "autonomy": "<CHG Autonomy, optional>",
+          "gate": "acceptance_failed",
+          "risk": "<risk>"
+        },
+        "exit_codes": {
+          "0": "AUTO",
+          "10": "HALT"
+        },
+        "kind": "shipped_script",
+        "note": "The runner never re-derives this verdict; it branches on the script's exit code.",
+        "script": "scripts/halt_gate.py"
+      },
+      "risk_table": {
+        "high": "halt",
+        "low": "auto",
+        "medium": "halt"
+      },
+      "source_path": "assets/halt_policy.json",
+      "source_sha256": "6bd7080d050f2bcacd472c8bbc58fc101d94f55da51c4df5f931786f2df763cc",
+      "unconditional_halts": {
+        "halt_policy.json#always_halt_actions": [
+          "production deploy / release",
+          "data migration / irreversible schema change",
+          "delete data / drop table / hard delete",
+          "move money / financial transaction",
+          "change secrets / credentials / access control / permissions",
+          "publish public content"
+        ]
+      }
+    },
+    {
+      "element_id": "halt:before_implement",
+      "emitted_sha256": "e178978fd3e15a9c4fb865f9a8626eac8bd5b381f9a7bd65feddc6c49a5eab16",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "key": "before_implement",
+      "kind": "checkpoint",
+      "meaning": "修改治理產出 CHG 後、開始改碼前",
+      "namespace": "halt",
+      "preauthorizable": [],
+      "rel_path": "dispatch/checkpoints/halt/before_implement.json",
+      "resolver": {
+        "arguments": {
+          "autonomy": "<CHG Autonomy, optional>",
+          "gate": "before_implement",
+          "risk": "<risk>"
+        },
+        "exit_codes": {
+          "0": "AUTO",
+          "10": "HALT"
+        },
+        "kind": "shipped_script",
+        "note": "The runner never re-derives this verdict; it branches on the script's exit code.",
+        "script": "scripts/halt_gate.py"
+      },
+      "risk_table": {
+        "high": "halt",
+        "low": "auto",
+        "medium": "auto"
+      },
+      "source_path": "assets/halt_policy.json",
+      "source_sha256": "6bd7080d050f2bcacd472c8bbc58fc101d94f55da51c4df5f931786f2df763cc",
+      "unconditional_halts": {
+        "halt_policy.json#always_halt_actions": [
+          "production deploy / release",
+          "data migration / irreversible schema change",
+          "delete data / drop table / hard delete",
+          "move money / financial transaction",
+          "change secrets / credentials / access control / permissions",
+          "publish public content"
+        ]
+      }
+    },
+    {
+      "element_id": "halt:before_merge_or_release",
+      "emitted_sha256": "6a727ec2c8a451564b227985b307eba3f217887394c389fd1a90d6b638af430b",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "key": "before_merge_or_release",
+      "kind": "checkpoint",
+      "meaning": "驗收通過後、合併 / 發佈 / 交付前",
+      "namespace": "halt",
+      "preauthorizable": [],
+      "rel_path": "dispatch/checkpoints/halt/before_merge_or_release.json",
+      "resolver": {
+        "arguments": {
+          "autonomy": "<CHG Autonomy, optional>",
+          "gate": "before_merge_or_release",
+          "risk": "<risk>"
+        },
+        "exit_codes": {
+          "0": "AUTO",
+          "10": "HALT"
+        },
+        "kind": "shipped_script",
+        "note": "The runner never re-derives this verdict; it branches on the script's exit code.",
+        "script": "scripts/halt_gate.py"
+      },
+      "risk_table": {
+        "high": "halt",
+        "low": "auto",
+        "medium": "halt"
+      },
+      "source_path": "assets/halt_policy.json",
+      "source_sha256": "6bd7080d050f2bcacd472c8bbc58fc101d94f55da51c4df5f931786f2df763cc",
+      "unconditional_halts": {
+        "halt_policy.json#always_halt_actions": [
+          "production deploy / release",
+          "data migration / irreversible schema change",
+          "delete data / drop table / hard delete",
+          "move money / financial transaction",
+          "change secrets / credentials / access control / permissions",
+          "publish public content"
+        ]
+      }
+    },
+    {
+      "element_id": "halt:requirement_confirmed",
+      "emitted_sha256": "2d31b0573a962b8245a0cfe227f91b4f04485efb9157a61f727df75fd7c1c8fc",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "key": "requirement_confirmed",
+      "kind": "checkpoint",
+      "meaning": "需求分析產出 Guideline 後、進結構設計前",
+      "namespace": "halt",
+      "preauthorizable": [],
+      "rel_path": "dispatch/checkpoints/halt/requirement_confirmed.json",
+      "resolver": {
+        "arguments": {
+          "autonomy": "<CHG Autonomy, optional>",
+          "gate": "requirement_confirmed",
+          "risk": "<risk>"
+        },
+        "exit_codes": {
+          "0": "AUTO",
+          "10": "HALT"
+        },
+        "kind": "shipped_script",
+        "note": "The runner never re-derives this verdict; it branches on the script's exit code.",
+        "script": "scripts/halt_gate.py"
+      },
+      "risk_table": {
+        "high": "halt",
+        "low": "auto",
+        "medium": "auto"
+      },
+      "source_path": "assets/halt_policy.json",
+      "source_sha256": "6bd7080d050f2bcacd472c8bbc58fc101d94f55da51c4df5f931786f2df763cc",
+      "unconditional_halts": {
+        "halt_policy.json#always_halt_actions": [
+          "production deploy / release",
+          "data migration / irreversible schema change",
+          "delete data / drop table / hard delete",
+          "move money / financial transaction",
+          "change secrets / credentials / access control / permissions",
+          "publish public content"
+        ]
+      }
+    },
+    {
+      "element_id": "halt:structure_confirmed",
+      "emitted_sha256": "a7b7ae4ad628c2c12d44e7fc8818997fc527e0f270a9542185e8883d8ce1b8d3",
+      "generator": "ai_sdlc_runner.dispatch",
+      "generator_version": "1",
+      "key": "structure_confirmed",
+      "kind": "checkpoint",
+      "meaning": "結構設計產出後、開始實作前",
+      "namespace": "halt",
+      "preauthorizable": [],
+      "rel_path": "dispatch/checkpoints/halt/structure_confirmed.json",
+      "resolver": {
+        "arguments": {
+          "autonomy": "<CHG Autonomy, optional>",
+          "gate": "structure_confirmed",
+          "risk": "<risk>"
+        },
+        "exit_codes": {
+          "0": "AUTO",
+          "10": "HALT"
+        },
+        "kind": "shipped_script",
+        "note": "The runner never re-derives this verdict; it branches on the script's exit code.",
+        "script": "scripts/halt_gate.py"
+      },
+      "risk_table": {
+        "high": "halt",
+        "low": "auto",
+        "medium": "auto"
+      },
+      "source_path": "assets/halt_policy.json",
+      "source_sha256": "6bd7080d050f2bcacd472c8bbc58fc101d94f55da51c4df5f931786f2df763cc",
+      "unconditional_halts": {
+        "halt_policy.json#always_halt_actions": [
+          "production deploy / release",
+          "data migration / irreversible schema change",
+          "delete data / drop table / hard delete",
+          "move money / financial transaction",
+          "change secrets / credentials / access control / permissions",
+          "publish public content"
+        ]
+      }
+    }
+  ],
+  "generator": "ai_sdlc_runner.dispatch",
+  "generator_version": "1",
+  "role_count": 0,
+  "situational_count": 0,
+  "skill_version": "1.0.0"
+}

@@ -1,0 +1,42 @@
+{
+  "element_id": "autopilot:acceptance",
+  "generator": "ai_sdlc_runner.dispatch",
+  "generator_version": "1",
+  "key": "acceptance",
+  "kind": "checkpoint",
+  "meaning": null,
+  "namespace": "autopilot",
+  "preauthorizable": [
+    "medium.confirm_gate"
+  ],
+  "resolver": {
+    "kind": "embedded_table",
+    "note": "No usable resolver for this axis ships in the store: scripts/autopilot_runner.py fails at import because its lib/ package is absent from the vendored archive. The table is copied verbatim and the tighten-only ordering of halt vs halt_independent is left to the engine, where it can be tested.",
+    "shipped_resolver": null,
+    "table": "risk_table",
+    "tighten_only": true
+  },
+  "risk_table": {
+    "high": "halt_independent",
+    "low": "auto",
+    "medium": "auto"
+  },
+  "source_path": "assets/autopilot_policy.json",
+  "source_sha256": "65e101a159fa59f1b1df84c249d3689587d1371bbea9ab555bb9cb228a015ded",
+  "unconditional_halts": {
+    "autopilot_policy.json#permanent_halts": [
+      "irreversible-delete",
+      "payments",
+      "prod-migration",
+      "security-boundary"
+    ],
+    "halt_policy.json#always_halt_actions": [
+      "production deploy / release",
+      "data migration / irreversible schema change",
+      "delete data / drop table / hard delete",
+      "move money / financial transaction",
+      "change secrets / credentials / access control / permissions",
+      "publish public content"
+    ]
+  }
+}

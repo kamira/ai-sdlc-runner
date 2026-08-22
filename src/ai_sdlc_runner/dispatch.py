@@ -8,13 +8,15 @@ literal anywhere in this file.
 
 Two families, deliberately **not** a cartesian product:
 
-* **Checkpoint elements — 11.** The verbatim, un-deduplicated union of two namespaces:
-  ``halt:*`` (5 gates from ``halt_policy.json``) and ``autopilot:*`` (6 per-risk decision points
-  from ``autopilot_policy.json``). Each carries its own risk table copied verbatim from the shipped
-  JSON, both unconditional-halt lists complete and namespaced by source file, and a description of
-  how the verdict is resolved.
-* **Role loadout manifests — 13.** One per role in ``role_refs.json``, naming the anchors of
-  ``common ∪ roles[r]`` plus every ``situational`` set, expanded but **not evaluated**.
+* **Checkpoint elements.** The verbatim, un-deduplicated union of two namespaces: ``halt:*`` (the
+  gates in ``halt_policy.json``) and ``autopilot:*`` (the per-risk decision points in
+  ``autopilot_policy.json``). Each carries its own risk table copied verbatim from the shipped JSON,
+  whichever unconditional-halt lists that version ships (complete, namespaced by source file), and a
+  description of how the verdict is resolved. For ``skills/v1.64.0``: 5 + 6 = **11**.
+* **Role loadout manifests.** One per role in ``role_refs.json``, naming the content element **ids**
+  for ``common ∪ roles[r]``, plus the ids of the situational sets — **not evaluated**. v1.64.0: 13.
+* **Situational sets.** One per ``situational`` flag, emitted once for the whole store version.
+  v1.64.0: 5.
 
 The organising principle behind both, and the thing that makes the elements re-generatable:
 **generation is complete and unevaluated; selection happens at dispatch.** Risk, situational flags
@@ -56,6 +58,59 @@ from the 402-anchor / 343,366-byte corpus to roughly 58 anchor ids, and D5 keeps
 work order regardless. A matcher with no true positives would have been the KN-4 shape: a gate that
 looks like a refinement while quietly selecting nothing.
 
+## Why loadouts name ids
+
+A loadout carries content element **ids** and nothing else, and each situational set is emitted once
+rather than inlined into all 13 roles. This corrects a packaging defect in task 2's first shape,
+found by measuring the tree task 3 would commit — recorded rather than quietly changed:
+
+| | first shape | now |
+|---|---|---|
+| one role manifest | 54,670 bytes | **6,644** |
+| all 13 role manifests | 819,984 bytes | **110,920** |
+| whole element tree | 1,536,506 bytes | **838,922** |
+
+819,984 bytes is **2.4× the 343,366-byte reference corpus** the decomposition exists to stop nodes
+from paying for, and a single role manifest was larger than the biggest reference in it. Two causes,
+both measured: the five situational blocks were byte-identical across all 13 roles (265 KB of pure
+duplication), and every anchor repeated ``source_path``, ``anchor``, ``anchor_slug`` and ``level``
+that ``element_id`` already determines and that ``manifest.json`` already holds authoritatively.
+
+The self-sufficiency constraint (constraint 5, "every node retryable without a session") applies to
+the **work order**, not to intermediate manifests: the renderer holds the whole element tree and
+joins ids against ``manifest.json`` at zero cost, and a loadout is never dispatched to a node. Naming
+ids also keeps one fact in one place — a renamed heading changes one record instead of fanning out
+across 13 files × 5 fields, which is what keeps task 4's regeneration diff readable and free of the
+false positives a denormalised copy would produce.
+
+## Older store versions: what derives is read off the archive
+
+The vendored store holds five versions and they do not ship the same assets. Measured:
+
+| version | content elements | ``halt:*`` | ``autopilot:*`` | role loadouts | situational |
+|---|---|---|---|---|---|
+| v1.0.0 | 220 | 5 | — | — | — |
+| v1.1.0 | 238 | 5 | — | 7 | 4 |
+| v1.12.1 | 322 | 5 | — | 13 | 5 |
+| v1.16.0 | 330 | 5 | — | 13 | 5 |
+| v1.64.0 | 448 | 5 | 6 | 13 | 5 |
+
+Every version therefore gets elements, which is what task 3's done-when requires — and what KN-2
+requires in substance, since 1.0 / 1.1 / 1.12 / 1.16 per-project locks still resolve to their own
+store version. A family derives when the archive ships the policy it reads and not otherwise.
+
+The load-bearing part is **where that expectation comes from**: ``assets/`` ships *inside* the
+archive, so it is the inventory. No hand-maintained per-version table is involved — and must never
+be introduced, because a table is a second source of truth that goes stale silently, which is the
+KN-4 shape the panel rejected in both of its forms (a per-version capability baseline, and a frozen
+list of "legacy" versions). The gate reads both directions off the archive: a family whose policy is
+present must exist and byte-match; a family whose policy is absent must not exist.
+
+What this deliberately does **not** catch: an archive that silently lost a policy file, the way
+CHG-20260822-03's archive lost ``scripts/lib/``. That is store-vs-upstream drift, which D4 assigns
+to ``runner check``, not to the regeneration gate — "elements ≡ the store they came from" is the
+property here, and conflating the two would be the false-green this repo keeps catching.
+
 ## Runner-authored fork points (D3 requires these named)
 
 1. **Namespacing and non-deduplication** of the two checkpoint families (``halt:`` / ``autopilot:``).
@@ -64,7 +119,11 @@ looks like a refinement while quietly selecting nothing.
 2. **The whole-file anchor set** rather than a narrowed one, justified by the zero-true-positive
    measurement above. If the skill ever ships a machine-readable section→checkpoint map, this
    becomes narrowable without changing the element shape.
-3. **The tighten-only total order on the four-valued autopilot axis.** ``halt_policy``'s axis is
+3. **Which policy file feeds which family** — the mapping from ``halt_policy.json`` to ``halt:*``,
+   ``autopilot_policy.json`` to ``autopilot:*`` and ``role_refs.json`` to loadouts. It is three
+   lines and it is not derivable from the files themselves; a different reader could key families
+   off something else entirely.
+4. **The tighten-only total order on the four-valued autopilot axis.** ``halt_policy``'s axis is
    three-valued (auto/halt) and its resolver ships as ``scripts/halt_gate.py``; the autopilot axis
    adds ``confirm`` and ``halt_independent``, and **no usable resolver for it ships in the store** —
    ``scripts/autopilot_runner.py`` fails at import because its ``lib/`` package was not included in
@@ -122,7 +181,8 @@ class Checkpoint:
     generator_version: str
     emitted_sha256: str
 
-    def record(self) -> Dict[str, object]:
+    def payload(self) -> Dict[str, object]:
+        """Exactly what gets written to ``rel_path`` — ``emitted_sha256`` is taken over this."""
         return {
             "element_id": self.element_id,
             "kind": "checkpoint",
@@ -135,16 +195,61 @@ class Checkpoint:
             "unconditional_halts": {k: list(v) for k, v in self.unconditional_halts.items()},
             "preauthorizable": list(self.preauthorizable),
             "resolver": self.resolver,
-            "rel_path": self.rel_path,
             "generator": self.generator,
             "generator_version": self.generator_version,
-            "emitted_sha256": self.emitted_sha256,
         }
+
+    def record(self) -> Dict[str, object]:
+        record = self.payload()
+        record["rel_path"] = self.rel_path
+        record["emitted_sha256"] = self.emitted_sha256
+        return record
+
+
+@dataclass(frozen=True)
+class SituationalSet:
+    """One ``situational`` flag's reference set, emitted once and referred to by every role.
+
+    Its own element rather than a block inside each role manifest — see "Why loadouts name ids"
+    in the module docstring for the measurement that forced this.
+    """
+
+    element_id: str                       # "situational:<flag>"
+    flag: str
+    source_path: str
+    source_sha256: str
+    references: List[str]
+    element_ids: Dict[str, List[str]]     # {lang: [content element id, ...]}
+    rel_path: str
+    generator: str
+    generator_version: str
+    emitted_sha256: str
+
+    def payload(self) -> Dict[str, object]:
+        return {
+            "element_id": self.element_id,
+            "kind": "situational_set",
+            "flag": self.flag,
+            "source_path": self.source_path,
+            "source_sha256": self.source_sha256,
+            "references": list(self.references),
+            "element_ids": {k: list(v) for k, v in sorted(self.element_ids.items())},
+            "generator": self.generator,
+            "generator_version": self.generator_version,
+        }
+
+    def record(self) -> Dict[str, object]:
+        rec = self.payload()
+        rec["element_count"] = {k: len(v) for k, v in sorted(self.element_ids.items())}
+        rec.pop("element_ids")
+        rec["rel_path"] = self.rel_path
+        rec["emitted_sha256"] = self.emitted_sha256
+        return rec
 
 
 @dataclass(frozen=True)
 class RoleLoadout:
-    """One role's addressable anchor surface: base plus every situational set, unevaluated."""
+    """One role's addressable surface: the content element ids it may open, plus the flag keys."""
 
     element_id: str                       # "role:<role>"
     role: str
@@ -152,12 +257,29 @@ class RoleLoadout:
     source_path: str
     source_sha256: str
     base_references: List[str]
-    base_anchors: Dict[str, List[Dict[str, object]]]              # {lang: [anchor ref, ...]}
-    situational: Dict[str, Dict[str, object]]                     # {flag: {references, anchors}}
+    base_element_ids: Dict[str, List[str]]        # {lang: [content element id, ...]}
+    situational_refs: List[str]                   # ["situational:<flag>", ...]
     rel_path: str
     generator: str
     generator_version: str
     emitted_sha256: str
+
+    def payload(self) -> Dict[str, object]:
+        return {
+            "element_id": self.element_id,
+            "kind": "role_loadout",
+            "role": self.role,
+            "aliases": list(self.aliases),
+            "source_path": self.source_path,
+            "source_sha256": self.source_sha256,
+            "base": {
+                "references": list(self.base_references),
+                "element_ids": {k: list(v) for k, v in sorted(self.base_element_ids.items())},
+            },
+            "situational": list(self.situational_refs),
+            "generator": self.generator,
+            "generator_version": self.generator_version,
+        }
 
     def record(self) -> Dict[str, object]:
         return {
@@ -168,8 +290,8 @@ class RoleLoadout:
             "source_path": self.source_path,
             "source_sha256": self.source_sha256,
             "base_references": list(self.base_references),
-            "anchor_count": {lang: len(v) for lang, v in sorted(self.base_anchors.items())},
-            "situational_flags": sorted(self.situational),
+            "element_count": {k: len(v) for k, v in sorted(self.base_element_ids.items())},
+            "situational": list(self.situational_refs),
             "rel_path": self.rel_path,
             "generator": self.generator,
             "generator_version": self.generator_version,
@@ -191,6 +313,35 @@ def _load(skill_path: str | Path, name: str):
         return json.loads(text), decompose.sha256(text)
     except ValueError as exc:
         raise DispatchError(f"assets/{name} is not valid JSON: {exc}") from exc
+
+
+def _maybe_load(skill_path: str | Path, name: str):
+    """``_load`` if the asset is in this version's archive, else ``None``.
+
+    The distinction that makes per-version derivation safe: a **missing file** means the version
+    never shipped that policy, so the family it feeds does not exist for that version; a **present
+    but malformed** file is still a hard error. Absence is read off the archive, never off a table
+    someone maintains by hand — see "Older store versions" in the module docstring.
+    """
+    if not (Path(skill_path) / "assets" / name).is_file():
+        return None
+    return _load(skill_path, name)
+
+
+def supported_families(skill_path: str | Path) -> Dict[str, bool]:
+    """Which dispatch families this version's archive can support, derived from the archive itself.
+
+    ``assets/`` **is** the inventory — it ships inside the archive — so no second source of truth is
+    needed to tell "this version never had that policy" from "this regeneration lost something".
+    The gate reads both directions off this: a family whose policy is present **must** exist and
+    byte-match; a family whose policy is absent **must not** exist.
+    """
+    assets = Path(skill_path) / "assets"
+    return {
+        _HALT_NS: (assets / _HALT_ASSET).is_file(),
+        _AUTOPILOT_NS: (assets / _AUTOPILOT_ASSET).is_file(),
+        "roles": (assets / _ROLE_ASSET).is_file(),
+    }
 
 
 def _canonical(obj) -> str:
@@ -235,36 +386,50 @@ def _autopilot_resolver(key: str) -> Dict[str, object]:
 
 
 def checkpoints(skill_path: str | Path) -> List[Checkpoint]:
-    """The 11 checkpoint elements: the verbatim, un-deduplicated union of the two policy namespaces.
+    """The checkpoint elements: the verbatim, un-deduplicated union of the two policy namespaces.
 
     Both files are read for their *keys* — the ids are never written here. ``halt_policy`` is keyed
     gate → risk → verdict; ``autopilot_policy`` is keyed risk → decision point → verdict, so its
     table is transposed to the same ``{risk: verdict}`` shape without renaming anything.
-    """
-    halt, halt_sha = _load(skill_path, _HALT_ASSET)
-    auto, auto_sha = _load(skill_path, _AUTOPILOT_ASSET)
 
-    gates = halt.get("gates")
-    defaults = auto.get("defaults")
-    if not isinstance(gates, dict) or not gates:
+    **The two namespaces derive independently.** Older store versions ship ``halt_policy.json``
+    without ``autopilot_policy.json``, and coupling them — as this function first did — made the
+    halt family refuse to derive for four of the five vendored versions over the absence of a file
+    it never needed.
+    """
+    halt_loaded = _maybe_load(skill_path, _HALT_ASSET)
+    auto_loaded = _maybe_load(skill_path, _AUTOPILOT_ASSET)
+    if halt_loaded is None and auto_loaded is None:
+        raise DispatchError(
+            f"store ships neither assets/{_HALT_ASSET} nor assets/{_AUTOPILOT_ASSET} — "
+            f"no checkpoint family can be derived")
+
+    halt, halt_sha = halt_loaded if halt_loaded else ({}, "")
+    auto, auto_sha = auto_loaded if auto_loaded else ({}, "")
+    gates = halt.get("gates") if halt_loaded else None
+    defaults = auto.get("defaults") if auto_loaded else None
+    if halt_loaded and (not isinstance(gates, dict) or not gates):
         raise DispatchError(f"assets/{_HALT_ASSET} has no usable 'gates' mapping")
-    if not isinstance(defaults, dict) or not defaults:
+    if auto_loaded and (not isinstance(defaults, dict) or not defaults):
         raise DispatchError(f"assets/{_AUTOPILOT_ASSET} has no usable 'defaults' mapping")
 
-    # Both lists travel with every checkpoint, complete and keyed by where they came from. Filtering
-    # them to "the ones this node could hit" would need a generation-time semantic judgement — a
-    # hand-written node→hazard table whose every omission silently disarms a gate (KN-4). They are a
-    # dozen short strings; carrying all of them costs nothing and keeps a work order self-sufficient.
-    unconditional = {
-        f"{_HALT_ASSET}#always_halt_actions": list(halt.get("always_halt_actions", [])),
-        f"{_AUTOPILOT_ASSET}#permanent_halts": list(auto.get("permanent_halts", [])),
-    }
-    preauthorizable = list(auto.get("preauthorizable", []))
+    # Whichever lists this version ships travel with every checkpoint, complete and keyed by where
+    # they came from. Filtering them to "the ones this node could hit" would need a generation-time
+    # semantic judgement — a hand-written node→hazard table whose every omission silently disarms a
+    # gate (KN-4). They are a dozen short strings; carrying all of them costs nothing and keeps a
+    # work order self-sufficient. A version that ships only one list carries only that one, which is
+    # the truth about that version rather than a padded-out imitation of the current one.
+    unconditional = {}
+    if halt_loaded:
+        unconditional[f"{_HALT_ASSET}#always_halt_actions"] = list(halt.get("always_halt_actions", []))
+    if auto_loaded:
+        unconditional[f"{_AUTOPILOT_ASSET}#permanent_halts"] = list(auto.get("permanent_halts", []))
+    preauthorizable = list(auto.get("preauthorizable", [])) if auto_loaded else []
     meanings = halt.get("gate_meaning", {}) if isinstance(halt.get("gate_meaning"), dict) else {}
 
     out: List[Checkpoint] = []
 
-    for key in sorted(gates):
+    for key in sorted(gates or {}):
         table = gates[key]
         if not isinstance(table, dict):
             raise DispatchError(f"{_HALT_ASSET}: gate {key!r} has no risk table")
@@ -276,7 +441,7 @@ def checkpoints(skill_path: str | Path) -> List[Checkpoint]:
         ))
 
     # risk → {decision point: verdict}  becomes  decision point → {risk: verdict}
-    points = sorted({p for row in defaults.values() if isinstance(row, dict) for p in row})
+    points = sorted({p for row in (defaults or {}).values() if isinstance(row, dict) for p in row})
     for key in points:
         table = {risk: str(row[key]) for risk, row in sorted(defaults.items())
                  if isinstance(row, dict) and key in row}
@@ -292,60 +457,38 @@ def checkpoints(skill_path: str | Path) -> List[Checkpoint]:
 def _checkpoint(namespace: str, key: str, source: str, source_sha: str, meaning: Optional[str],
                 risk_table: Dict[str, str], unconditional: Dict[str, List[str]],
                 preauthorizable: Sequence[str], resolver: Dict[str, object]) -> Checkpoint:
-    element_id = f"{namespace}:{key}"
-    rel_path = f"dispatch/checkpoints/{namespace}/{key}.json"
-    payload = {
-        "element_id": element_id,
-        "kind": "checkpoint",
-        "namespace": namespace,
-        "key": key,
-        "source_path": source,
-        "source_sha256": source_sha,
-        "meaning": meaning,
-        "risk_table": risk_table,
-        "unconditional_halts": unconditional,
-        "preauthorizable": list(preauthorizable),
-        "resolver": resolver,
-        "generator": GENERATOR,
-        "generator_version": GENERATOR_VERSION,
-    }
-    return Checkpoint(
-        element_id=element_id, namespace=namespace, key=key, source_path=source,
+    return _finish(Checkpoint(
+        element_id=f"{namespace}:{key}", namespace=namespace, key=key, source_path=source,
         source_sha256=source_sha, meaning=meaning, risk_table=risk_table,
         unconditional_halts=unconditional, preauthorizable=list(preauthorizable),
-        resolver=resolver, rel_path=rel_path, generator=GENERATOR,
-        generator_version=GENERATOR_VERSION, emitted_sha256=decompose.sha256(_canonical(payload)),
-    )
+        resolver=resolver, rel_path=f"dispatch/checkpoints/{namespace}/{key}.json",
+        generator=GENERATOR, generator_version=GENERATOR_VERSION, emitted_sha256="",
+    ))
 
 
-def _anchor_index(skill_path: str | Path) -> Dict[str, Dict[str, List[Dict[str, object]]]]:
-    """``{reference name: {lang: [anchor reference, ...]}}`` built from task 1's elements.
+def _anchor_index(skill_path: str | Path) -> Dict[str, Dict[str, List[str]]]:
+    """``{reference name: {lang: [content element id, ...]}}`` built from task 1's elements.
 
-    An anchor reference names where the text lives — id, path, anchor, slug, level — and never the
-    body (D5). The engine reads a body only for the anchors a node actually opens.
+    Ids only. ``element_id`` is ``references/<stem>#<slug>``, so the source path, the slug and the
+    language all follow from it, and ``manifest.json`` already carries the full record for every
+    element — repeating those fields here would be denormalising the one authoritative index.
     """
-    index: Dict[str, Dict[str, List[Dict[str, object]]]] = {}
+    index: Dict[str, Dict[str, List[str]]] = {}
     for e in decompose.decompose_store(skill_path):
         stem = e.source_path[len("references/"):-len(".md")]
         name = stem[: -len(".zh-tw")] if stem.endswith(".zh-tw") else stem
-        index.setdefault(name, {}).setdefault(e.lang, []).append({
-            "element_id": e.element_id,
-            "source_path": e.source_path,
-            "anchor": e.anchor,
-            "anchor_slug": e.anchor_slug,
-            "level": e.level,
-        })
+        index.setdefault(name, {}).setdefault(e.lang, []).append(e.element_id)
     return index
 
 
-def _anchors_for(index, references: Sequence[str], where: str) -> Dict[str, List[Dict[str, object]]]:
-    """Anchors for a list of reference names, grouped by language.
+def _element_ids_for(index, references: Sequence[str], where: str) -> Dict[str, List[str]]:
+    """Content element ids for a list of reference names, grouped by language.
 
     A name with no element is a **hard error naming the reference** — never an empty list. A loadout
     that silently lost a reference is the failure this whole design exists to make impossible, and
     it is also exactly how task 6's untemplated-node rule expects to find out.
     """
-    out: Dict[str, List[Dict[str, object]]] = {}
+    out: Dict[str, List[str]] = {}
     for name in references:
         langs = index.get(name)
         if not langs:
@@ -353,62 +496,96 @@ def _anchors_for(index, references: Sequence[str], where: str) -> Dict[str, List
                 f"{_ROLE_ASSET} {where} names reference {name!r}, but no content element exists "
                 f"for it — the store and the role table disagree"
             )
-        for lang, anchors in langs.items():
-            out.setdefault(lang, []).extend(anchors)
+        for lang, ids in langs.items():
+            out.setdefault(lang, []).extend(ids)
     return {lang: out[lang] for lang in sorted(out)}
 
 
-def role_loadouts(skill_path: str | Path) -> List[RoleLoadout]:
-    """One manifest per shipped role: ``common ∪ roles[r]``, plus every situational set expanded.
+def situational_sets(skill_path: str | Path) -> List[SituationalSet]:
+    """One element per ``situational`` flag, emitted once for the whole store version.
 
-    No situational flag is evaluated here. All five sets are present in every manifest, verbatim by
-    key, so that flipping a flag at dispatch selects among data that is already in the artifact
-    rather than changing what the artifact contains — which is what keeps task 4's byte-comparison
-    meaningful.
+    No flag is evaluated here: all of them exist as elements, and dispatch selects among data that
+    is already in the artifact rather than changing what the artifact contains — which is what keeps
+    task 4's byte-comparison meaningful.
     """
-    cfg, sha = _load(skill_path, _ROLE_ASSET)
+    loaded = _maybe_load(skill_path, _ROLE_ASSET)
+    if loaded is None:
+        return []                       # this version never shipped a role table (e.g. v1.0.0)
+    cfg, sha = loaded
+    index = _anchor_index(skill_path)
+    out: List[SituationalSet] = []
+    for flag in sorted(cfg.get("situational", {}) or {}):
+        refs = list(cfg["situational"][flag])
+        ids = _element_ids_for(index, refs, f"situational.{flag}")
+        s = SituationalSet(
+            element_id=f"situational:{flag}", flag=flag, source_path=f"assets/{_ROLE_ASSET}",
+            source_sha256=sha, references=refs, element_ids=ids,
+            rel_path=f"dispatch/situational/{flag}.json", generator=GENERATOR,
+            generator_version=GENERATOR_VERSION, emitted_sha256="",
+        )
+        out.append(_finish(s))
+    return out
+
+
+def role_loadouts(skill_path: str | Path) -> List[RoleLoadout]:
+    """One manifest per shipped role: the content element ids for ``common ∪ roles[r]``.
+
+    Situational sets are **named, not inlined** — the flag's own element carries the ids. Inlining
+    them cost 265 KB of byte-identical duplication across the 13 roles; see the module docstring.
+    """
+    loaded = _maybe_load(skill_path, _ROLE_ASSET)
+    if loaded is None:
+        return []                       # this version never shipped a role table (e.g. v1.0.0)
+    cfg, sha = loaded
     roles = cfg.get("roles")
     if not isinstance(roles, dict) or not roles:
         raise DispatchError(f"assets/{_ROLE_ASSET} has no usable 'roles' mapping")
     common = list(cfg.get("common", []))
-    situational_cfg = cfg.get("situational", {}) or {}
     alias_cfg = cfg.get("aliases", {}) or {}
     index = _anchor_index(skill_path)
-
-    situational = {}
-    for flag in sorted(situational_cfg):
-        refs = list(situational_cfg[flag])
-        situational[flag] = {
-            "references": refs,
-            "anchors": _anchors_for(index, refs, f"situational.{flag}"),
-        }
+    flags = [f"situational:{flag}" for flag in sorted(cfg.get("situational", {}) or {})]
 
     out: List[RoleLoadout] = []
     for role in sorted(roles):
         refs = common + list(roles[role])
-        aliases = sorted(a for a, target in alias_cfg.items() if target == role)
-        anchors = _anchors_for(index, refs, f"roles.{role}")
-        payload = {
-            "element_id": f"role:{role}",
-            "kind": "role_loadout",
-            "role": role,
-            "aliases": aliases,
-            "source_path": f"assets/{_ROLE_ASSET}",
-            "source_sha256": sha,
-            "base": {"references": refs, "anchors": anchors},
-            "situational": situational,
-            "generator": GENERATOR,
-            "generator_version": GENERATOR_VERSION,
-        }
-        out.append(RoleLoadout(
-            element_id=f"role:{role}", role=role, aliases=aliases,
+        r = RoleLoadout(
+            element_id=f"role:{role}", role=role,
+            aliases=sorted(a for a, target in alias_cfg.items() if target == role),
             source_path=f"assets/{_ROLE_ASSET}", source_sha256=sha, base_references=refs,
-            base_anchors=anchors, situational=situational,
-            rel_path=f"dispatch/roles/{role}.json", generator=GENERATOR,
-            generator_version=GENERATOR_VERSION,
-            emitted_sha256=decompose.sha256(_canonical(payload)),
-        ))
+            base_element_ids=_element_ids_for(index, refs, f"roles.{role}"),
+            situational_refs=flags, rel_path=f"dispatch/roles/{role}.json",
+            generator=GENERATOR, generator_version=GENERATOR_VERSION, emitted_sha256="",
+        )
+        out.append(_finish(r))
     return out
+
+
+def _finish(element):
+    """Re-stamp an element with the hash of the bytes it will actually be written as.
+
+    The hash has to be taken over ``payload()`` — the same call ``emit`` writes — so the two can
+    never drift apart the way a separately-assembled dict would.
+    """
+    from dataclasses import replace
+    return replace(element, emitted_sha256=decompose.sha256(_canonical(element.payload())))
+
+
+def check_dangling(skill_path: str | Path) -> List[str]:
+    """Every content element id named by a dispatch element must exist. Returns the offenders.
+
+    A generation-time check rather than a dispatch-time surprise: a loadout pointing at an id that
+    no longer exists is precisely the silent-coverage-loss this design is built to prevent, and it
+    is cheap to prove absent while both sides are in hand.
+    """
+    known = {e.element_id for e in decompose.decompose_store(skill_path)}
+    named: List[str] = []
+    for r in role_loadouts(skill_path):
+        for ids in r.base_element_ids.values():
+            named.extend(ids)
+    for s in situational_sets(skill_path):
+        for ids in s.element_ids.values():
+            named.extend(ids)
+    return sorted({i for i in named if i not in known})
 
 
 def coverage(skill_path: str | Path) -> Dict[str, Dict[str, List[str]]]:
@@ -418,9 +595,9 @@ def coverage(skill_path: str | Path) -> Dict[str, Dict[str, List[str]]]:
     are equal per namespace, so "every gate and decision point covered" is checked against the files
     rather than against a number someone wrote down.
     """
-    halt, _ = _load(skill_path, _HALT_ASSET)
-    auto, _ = _load(skill_path, _AUTOPILOT_ASSET)
-    cfg, _ = _load(skill_path, _ROLE_ASSET)
+    halt = (_maybe_load(skill_path, _HALT_ASSET) or ({}, ""))[0]
+    auto = (_maybe_load(skill_path, _AUTOPILOT_ASSET) or ({}, ""))[0]
+    cfg = (_maybe_load(skill_path, _ROLE_ASSET) or ({}, ""))[0]
     declared = {
         _HALT_NS: sorted(halt.get("gates", {})),
         _AUTOPILOT_NS: sorted({p for row in auto.get("defaults", {}).values()
@@ -437,7 +614,8 @@ def coverage(skill_path: str | Path) -> Dict[str, Dict[str, List[str]]]:
 
 
 def build_manifest(skill_path: str | Path, cps: Sequence[Checkpoint],
-                   roles: Sequence[RoleLoadout]) -> Dict[str, object]:
+                   roles: Sequence[RoleLoadout],
+                   sits: Sequence[SituationalSet]) -> Dict[str, object]:
     from . import contract
     return {
         "generator": GENERATOR,
@@ -445,7 +623,9 @@ def build_manifest(skill_path: str | Path, cps: Sequence[Checkpoint],
         "skill_version": contract.read_skill_version(skill_path),
         "checkpoint_count": len(cps),
         "role_count": len(roles),
-        "elements": [c.record() for c in cps] + [r.record() for r in roles],
+        "situational_count": len(sits),
+        "elements": [c.record() for c in cps] + [r.record() for r in roles]
+                    + [s.record() for s in sits],
     }
 
 
@@ -453,34 +633,23 @@ def emit(skill_path: str | Path, out_dir: str | Path) -> Dict[str, object]:
     """Write the dispatch elements under ``out_dir`` and return the manifest.
 
     Byte-identical across runs and platforms, on the same terms as task 1: sorted inputs, sorted JSON
-    keys, LF-only, no timestamps, no absolute paths.
+    keys, LF-only, no timestamps, no absolute paths. Every element file is ``payload()`` verbatim,
+    which is also what its ``emitted_sha256`` was taken over.
     """
     out = Path(out_dir)
     cps = checkpoints(skill_path)
     roles = role_loadouts(skill_path)
+    sits = situational_sets(skill_path)
 
-    for c in cps:
-        # The emitted file is the record minus the two fields that describe it from outside; the
-        # hash in `emitted_sha256` was taken over exactly this shape, and a test re-checks it.
-        payload = c.record()
-        payload.pop("rel_path")
-        payload.pop("emitted_sha256")
-        _write(out / c.rel_path, _canonical(payload))
-    for r in roles:
-        _write(out / r.rel_path, _canonical({
-            "element_id": r.element_id,
-            "kind": "role_loadout",
-            "role": r.role,
-            "aliases": r.aliases,
-            "source_path": r.source_path,
-            "source_sha256": r.source_sha256,
-            "base": {"references": r.base_references, "anchors": r.base_anchors},
-            "situational": r.situational,
-            "generator": r.generator,
-            "generator_version": r.generator_version,
-        }))
+    dangling = check_dangling(skill_path)
+    if dangling:
+        raise DispatchError(
+            "dispatch elements name content elements that do not exist: " + ", ".join(dangling))
 
-    manifest = build_manifest(skill_path, cps, roles)
+    for element in list(cps) + list(roles) + list(sits):
+        _write(out / element.rel_path, _canonical(element.payload()))
+
+    manifest = build_manifest(skill_path, cps, roles, sits)
     _write(out / "dispatch" / "manifest.json", _canonical(manifest))
     return manifest
 
@@ -490,3 +659,27 @@ def _write(path: Path, text: str) -> None:
     artifacts on Windows and split the CI matrix (task 1, decision B)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(text.encode("utf-8"))
+
+
+def elements_dir(repo_root: str | Path, version: str) -> Path:
+    """Where a store version's derived elements live: ``elements/v<version>/``.
+
+    A sibling of ``skills/v<version>/`` rather than a child of it — the store stays a **verbatim**
+    archive, and writing derived files inside it would break the one property the whole vendoring
+    rests on (KN-1).
+    """
+    v = version if version.startswith("v") else f"v{version}"
+    return Path(repo_root) / "elements" / v
+
+
+def emit_all(skill_path: str | Path, out_dir: str | Path) -> Dict[str, object]:
+    """Emit a store version's **complete** decomposition: content elements and dispatch elements.
+
+    The single entry point vendoring calls (D2): there is to be no state in which a store version
+    exists without its derived elements, so the two emissions are one operation rather than two
+    steps a change could land only half of.
+    """
+    return {
+        "content": decompose.emit(skill_path, out_dir),
+        "dispatch": emit(skill_path, out_dir),
+    }

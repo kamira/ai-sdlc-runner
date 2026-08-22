@@ -1,0 +1,30 @@
+{
+  "element_id": "situational:multi_branch",
+  "element_ids": {
+    "en": [
+      "references/branch-isolation#branch-isolation-branch-isolation",
+      "references/branch-isolation#purpose",
+      "references/branch-isolation#rules",
+      "references/branch-isolation#when-to-read",
+      "references/branch-isolation#template-field",
+      "references/branch-isolation#relation-to-the-rest-of-the-flow"
+    ],
+    "zh-tw": [
+      "references/branch-isolation.zh-tw#branch-isolation-分支隔離",
+      "references/branch-isolation.zh-tw#用途",
+      "references/branch-isolation.zh-tw#規則",
+      "references/branch-isolation.zh-tw#何時讀",
+      "references/branch-isolation.zh-tw#模板欄位",
+      "references/branch-isolation.zh-tw#與既有流程的關係"
+    ]
+  },
+  "flag": "multi_branch",
+  "generator": "ai_sdlc_runner.dispatch",
+  "generator_version": "1",
+  "kind": "situational_set",
+  "references": [
+    "branch-isolation"
+  ],
+  "source_path": "assets/role_refs.json",
+  "source_sha256": "b27f992c842298e8c4d6e13394edfd0506b473747bcd947ac8c7c12369dcd812"
+}

@@ -179,3 +179,57 @@ repo 為 PUBLIC(`gh repo view --json visibility`),不涉計費封鎖。
 
 PR #12 · run 32557718514 —— 5/5 pass。doc-integrity 7 steps、四個 pytest job 各 8 steps,
 全部 0 失敗;windows py3.9 的 log 讀到 `210 passed, 2 skipped`。
+
+---
+
+## 2026-08-22 — task 2 已 merge(`5c87246`);task 3 建置完成(含 task 8 的窄幅 §7 條目)
+
+分支:`claude/chg-20260822-04-task3`(自 `origin/main` @ `5c87246`)
+現在做:CHG-20260822-04 task 3/9 —— 收尾中(push → PR → CI → merge)
+下一步:**task 4(重生成閘門:CI 三態)**。task 6 之前不再需要確認關卡。
+
+### 三件事一起落地(審議席判定不可分離)
+
+1. **修正 task 2 的包裝缺陷(實測驅動,具名記錄不靜默改)**——單份 role manifest
+   54,670 → **6,644** bytes;13 份 819,984 → **110,920**;整棵 v1.64.0 樹 1,536,506 → **838,922**。
+   成因:5 組 situational 在 13 份裡 hash 完全相同(單塊 20,397 bytes,純重複 265KB),
+   加上錨點欄位重複 `element_id` 已能決定、`manifest.json` 已權威持有的資訊。
+   **fable 在看到數字後撤回自己 round 2 的細化寫法。**
+2. **全五版 backfill**——1,664 個檔、2,731,490 bytes,落在 `elements/v<version>/`
+   (`skills/` 的兄弟目錄,不進 store 內,KN-1)。
+3. **§7 窄幅覆寫條目**隨同一筆落地(task 8 部分完成)。
+
+### 審議席三輪,兩席都改判
+
+CHG **自己內部矛盾**:D2 說 v1.64.0 是 one-time migration,task 3 的 done-when 說
+「no store version exists without elements」。
+
+| 輪 | codex | fable |
+|---|---|---|
+| 1 | (iii) 全版本 + 每版受治理期望基線 + 第四態 not_applicable | (ii) 只 v1.64.0 + 凍結四版名單 + 改述 done-when |
+| 2 | **改判 (iv)** | **改判 (iv)** |
+
+**讓兩席同時改判的是我實跑推導的結果,不是論證**:內容元素五版全可導;`halt:*` 五版全可導
+(五版都有 halt_policy)——舊版報錯是**我自己把兩份 policy 綁在同一個函式**的實作耦合,
+不是資產缺失。只有 v1.0.0 真的組不出 work order(無 role table)。
+fable 的「舊版是不可派發的裝飾品」對它涵蓋的四版中的三版不成立,它自己說得很直白:
+「我的核心論證被實測推翻,而且我自己的方案帶有我攻擊對方的同一缺陷。」
+
+(iv) 的關鍵:**族系可導與否讀該版自己的 `assets/`**——它就在 archive 裡,它**就是**清冊。
+兩個第一輪方案各自需要的第二真相源就此消失,而第二真相源會靜默過期卻仍看起來權威(KN-4 形狀)。
+
+### fable 的約束性保留(已滿足)
+
+閘門必須是整樹重生成 + byte-compare,**任何地方都不得有手寫的 per-version 期望表**,
+連測試也不行——`test_elements_tree.py` 在執行期列舉 `skills/`,
+`test_no_version_is_hard_coded_in_the_generators` 會在版本字串出現在生成器裡時失敗。
+
+### 又一次 CRLF
+
+`elements/**` 已在 `.gitattributes` 釘成 `text eol=lf`。沒釘的話 `* text=auto` 會讓這棵樹在
+Windows 檢出成 CRLF 而 blob 是 LF,byte-compare 在半個矩陣上必失敗——
+**這是同一個變更裡第二次要防這個形狀**。
+
+### 閘門
+
+`pytest tests/` **238 passed, 2 skipped**;`doc_integrity_check.py` **exit 0**。
