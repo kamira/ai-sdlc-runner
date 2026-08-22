@@ -313,24 +313,30 @@ def _open(factory: SessionFactory, seat: Optional[str]):
     return factory()
 
 
-def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[int],
+def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object],
          seat: Optional[str] = None, journal: Optional[AskJournal] = None,
          ask_id: Optional[str] = None, node_id: str = ""):
     """Open a session, ask once, close it — the close guaranteed even if the ask raises.
 
     The identity check is the teeth: a factory that returns a session it has returned before is
     keeping one alive across asks, which is the continuity the requirement rules out.
+
+    ``seen`` holds the session **objects**, not their ``id()``. The first version stored ids, which
+    is not identity at all once the object is gone: CPython reuses addresses, so a fresh session
+    could be handed the id of a collected one and be rejected as a reuse. It passed on 3.9 and 3.11
+    by allocation luck and failed on 3.13 — the version matrix earning its place. Holding the
+    references also guarantees no address can be recycled while the run is comparing against it.
     """
     if journal is not None and ask_id is not None:
         # Written down before the session is even opened: if everything after this line is lost, the
         # question survives and the next run asks exactly it.
         journal.record(ask_id, node_id, seat, order)
     session = _open(factory, seat)
-    if id(session) in seen:
+    if any(previous is session for previous in seen):
         raise EngineError(
             "the session factory returned a session it already returned: every ask opens its own "
             "session and closes it afterwards, so nothing carries over between asks")
-    seen.append(id(session))
+    seen.append(session)
     try:
         result = session.ask(order)
     finally:
@@ -355,7 +361,7 @@ def walk(skill_path: str | Path, tree: str | Path, cfg: RunConfig,
 
     graph.validate()
     factory = _as_factory(dispatch)
-    opened: List[int] = []
+    opened: List[object] = []
     taken: Dict[str, int] = {}
     report = RunReport()
     seats = resolve_seats(skill_path, cfg.review_seats, cfg.high_risk_mode)

@@ -523,3 +523,21 @@ def test_what_was_already_answered_is_not_re_asked(tmp_path):
                for p in sorted((tmp_path / "asks").glob("*.json"))]
     assert [e["status"] for e in entries] == ["answered"] * index + ["pending"]
     assert [e["node_id"] for e in entries] == [n for n, _ in plan[:index + 1]]
+
+
+def test_session_identity_survives_garbage_collection():
+    """Regression for a bug the CI version matrix caught and 3.11 hid.
+
+    The first version tracked `id(session)`. An id is not an identity once the object is gone —
+    CPython reuses addresses, so on 3.13 a fresh session was handed the address of a collected one
+    and rejected as a reuse. Every ask closes its session and drops it, which makes this the normal
+    case rather than an exotic one; the check now compares the objects themselves.
+    """
+    import gc
+
+    factory = _Factory()
+    engine.walk(STORE, TREE, _cfg(), factory, enabled=True)
+    gc.collect()
+    # a second full run in the same process reuses the address space the first run released
+    report = engine.walk(STORE, TREE, _cfg(), _Factory(), enabled=True)
+    assert report.halted_at == "close_out"

@@ -472,3 +472,18 @@ task 6 為何要新的確認關卡:`Autonomy: high` 對它再次生效——它*
 
 `graph.py`(22 節點)、`effects.py`、`engine.py` + `test_graph`(21)、`test_effects`(12)、
 `test_engine`(36)。全套 **354 passed, 2 skipped**;doc-integrity exit 0。
+
+### CI 抓到一個只在 py3.13 出現的真 bug(task 6)
+
+PR #16 首跑:**py3.9 兩個 OS 都綠、py3.13 兩個 OS 都紅**。本機 3.11 看不到。
+
+根因:session 的「同一個 session 不得重複使用」檢查存的是 **`id(session)`**。
+每個 ask 結束就 close 並丟棄該物件,**CPython 會回收並重用位址**——py3.13 的配置器重用了,
+於是一個全新的 session 拿到已回收物件的 id,被判成「重複使用」而硬錯誤。
+
+**id 不是 identity**,一旦物件消失就更不是。3.9/3.11 是配置運氣好才綠。
+已改成持有 session 物件本身、用 `is` 比對;持有參照同時保證比對期間位址不會被回收再用。
+加了一條回歸測試(跑兩輪 + `gc.collect()`,讓第二輪去用第一輪釋放的位址空間)。
+
+**這正是 CHG-20260817-10 建 OS/版本矩陣的理由**:單一環境的綠證明不了什麼。
+差別是這次矩陣有版本軸,所以它當場就抓到了。
