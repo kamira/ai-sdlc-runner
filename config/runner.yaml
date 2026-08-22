@@ -8,7 +8,7 @@
 # reading the skill's SKILL.md frontmatter (contract.read_skill_version).
 # Bumped to 1.16.0 (CHG-20260703-06) to match the current published skill baseline;
 # existing per-project locks at 1.0/1.1/1.12 are unaffected and keep resolving to their store version.
-contract_version: "1.16.0"
+contract_version: "1.64.0"
 
 # Primary skill source: a local, offline, multi-version store (CHG-20260617-05).
 # Each subdir (v1.0.0, v1.1.0, v1.12.1, v1.16.0, ...) is a full skill root. The runner auto-selects the
@@ -21,7 +21,7 @@ skill_store: "./skills"
 # ai-skills submodule so the resulting "not found" error names the governed store instead of a
 # repository that was archived on 2026-08-04. Deleted outright by the CHG-ii follow-up, which
 # replaces it with a typed SkillPathError. Co-bumps with contract_version above. (CHG-20260822-02)
-skill_path: "./skills/v1.16.0"
+skill_path: "./skills/v1.64.0"
 
 # Shallow fan-out limits. Platform may support more; kept conservative on purpose
 # to save tokens. Probed at startup; run is degraded/halted if unmet.

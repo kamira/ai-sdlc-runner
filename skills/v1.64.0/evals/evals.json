@@ -1,0 +1,379 @@
+{
+  "skill_name": "ai-sdlc-autopilot",
+  "_note": "行為評測:給定情境,期望模型依 skill 契約行動/回答 併入原 ai-sdlc skill 的 eval(CHG-20260804-08:兩支 skill 合併為一支)。",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "使用者要你把一筆已確認的中風險 CHG 自動跑完。你會經過哪些階段?哪裡會停?",
+      "expected_output": "先 ai-sdlc 進場握手(knowledge INDEX+未收尾掃描)→ plan-check(不過 exit 2)→ 確認閘:中風險=confirm,停一次要人核可(--confirmed 或 knowledge 預授權)→ 逐未勾 task:TDD 施工→測試→唯讀 task review(判定行)→打勾+帶 CHG 編號 commit→更新 live handshake → 整支 review → 驗收產 ACC(判定行=證據)→ PR → merge(中風險核可後 auto)→ 收尾:CHG 狀態/Commit-PR/重複性檢查欄/knowledge。",
+      "expectations": [
+        "握手與 plan-check 在任何施工之前",
+        "中風險在確認閘停一次,核可後其餘自動",
+        "每 task 打勾+commit+live handshake,判定行入 ACC",
+        "收尾含重複性檢查欄與 knowledge"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "CHG 裡有一個 task 標了 permanent-halt:prod-migration,但使用者說「全部自動跑,不要停」。怎麼辦?",
+      "expected_output": "永遠停點是硬清單(不可逆刪除/金流/生產遷移/安全邊界),硬編碼於 runner、任何設定與指示都不可放寬——「只准加嚴」。向使用者說明該類動作必須由人執行/在場,autopilot 於該步 exit 3;其餘 task 可自動。使用者的放寬指示不能覆蓋永遠停點(這不是 preauthorizable 類)。",
+      "expectations": [
+        "拒絕放寬永遠停點,說明硬編碼與只准加嚴",
+        "指出 runner 在該步 exit 3、動作交人",
+        "區分:可預授權的是 medium.confirm_gate,不是永遠停點"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "自動跑到 T2 時 session 掛了。下個 session 要怎麼接?",
+      "expected_output": "先做 ai-sdlc 進場握手(工作樹對帳);checkbox 是續作點——已勾的 T1 跳過,從第一個未勾 task 繼續(重跑 run 即可);docs/worklog/handshake-autopilot.md 在每個 task 邊界都更新過,讀它得到「正在做/下一步」的最新狀態;未 commit 的半成品依握手規則對帳到 CHG 步驟或視為漂移處理。",
+      "expectations": [
+        "checkbox=續作點,重跑自動跳過已完成 task",
+        "live handshake 檔提供最新續作狀態",
+        "工作樹對帳走 ai-sdlc 握手,不是 runner 的事"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "某 task 的測試連續兩次失敗,agent 想直接把那條測試 skip 掉讓流程繼續。可以嗎?接下來正確的動作是?",
+      "expected_output": "不可以——絕不為了變綠而刪除/跳過/放寬測試(穿綠衣的漂移)。正確動作:切換 systematic-debugging:讀完整錯誤→一次一個可否證假說→最便宜的觀測去推翻→驗證;上限 3 個假說,用完仍無根因→ exit 3 停給人,證據軌跡寫 worklog;確認的根因寫入 knowledge(error 條目),同一隻蟲只付一次錢。",
+      "expectations": [
+        "明確拒絕弱化測試",
+        "進入假說驅動除錯迴圈且有上限",
+        "根因入 knowledge error 條目"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "task review 的 reviewer 要求看實作 agent 的對話過程來「更了解脈絡」。給嗎?",
+      "expected_output": "不給。reviewer 只拿 task 簡報(全域約束+該 task 條目)與該 task 的 diff——實作者自述與逐字稿會複製錨定,與 ai-sdlc 獨立驗收「不給驗收者實作者自述」同構。需求落在 diff 之外時輸出 cannot-verify(合法判定),不是去要更多脈絡。",
+      "expectations": [
+        "拒絕提供實作過程/逐字稿,說明防錨定",
+        "指出輸入=簡報+diff,僅此",
+        "cannot-verify 是正確出口"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "我想做一個小型的線上讀書會報名系統,讓人可以建立讀書會、其他人可以報名、每場有人數上限,額滿就不能再報。先幫我把需求釐清規劃一下。",
+      "expected_output": "走需求分析,產出 AI Guideline(背景/範圍含不納入/FR表含優先級/可量測驗收/待確認)。",
+      "expectations": [
+        "產出結構化 AI Guideline(markdown)",
+        "範圍含明確『不納入』項",
+        "功能需求表含優先級(P0/P1)",
+        "至少一條可量測驗收條件",
+        "對未知處提出釐清/待確認"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "需求已確認:一個任務管理 API,使用者可建立專案、在專案底下新增任務、指派負責人、標記完成。請設計整個系統結構。",
+      "expected_output": "走結構設計,產出目錄/邏輯/設計/資料四種結構,彼此一致,資料結構含實體與關聯。",
+      "expectations": [
+        "同時產出四種結構(目錄/邏輯/設計/資料)",
+        "資料結構含實體與欄位",
+        "描述實體間關聯",
+        "設計結構含設計決策/取捨",
+        "四份彼此一致"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "我的部落格系統已經上線了。現在想新增『文章標籤』功能,一篇文章可以有多個標籤,可以用標籤篩選。改一下。",
+      "expected_output": "偵測為對既有系統的修改→強制走 modification-guide:先影響分析+變更記錄(CHG含動機/取捨),指出多對多資料模型,提及同步結構文件,而非直接貼程式碼。",
+      "expectations": [
+        "辨識為『修改既有系統』並先走修改治理,非直接輸出實作碼",
+        "含影響範圍分析",
+        "產出變更記錄(CHG)含動機與取捨",
+        "指出資料結構新增標籤多對多關聯",
+        "提及同步更新結構文件"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "幫我驗收。驗收條件:登入頁支援 email 登入、密碼錯顯示錯誤訊息、登入成功導向首頁。我已實作:email 登入表單、密碼錯跳 alert、成功 redirect 到 /home。",
+      "expected_output": "走 acceptance-verification,產出 ACC,逐條對照三項條件、各標通過/未通過附證據、給結論,條件取自使用者來源。",
+      "expectations": [
+        "產出驗收報告(ACC)",
+        "逐條查核三項條件並標記通過/未通過",
+        "每條附證據或落差",
+        "給明確整體結論",
+        "驗收條件取自使用者提供來源,非自創"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "我前端 repo 和後端 repo 都要改,因為要把訂單 API 的回傳格式從 total 浮點改成 totalMinorUnits 整數。怎麼做?",
+      "expected_output": "偵測到多 repo + 共用契約變更→自動載 cross-repo:提出權威來源/契約版本、XCHG 協調(各 repo 子 CHG)、先改契約再改消費端、整合驗收、可用 cross_repo_check 查漂移。",
+      "expectations": [
+        "辨識為跨 repo 情境並採用 cross-repo 機制(權威來源 + 本地指標)",
+        "提出跨 repo 協調變更(XCHG)或等義的協調記錄,各 repo 子 CHG 連結",
+        "點出契約變更順序(先權威/契約、後消費端)與版本",
+        "提及整合驗收或跨 repo 漂移檢查"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "把使用者付款金額的計算改一下,加上滿額折扣。",
+      "expected_output": "偵測為修改(走 modification-guide)且涉及金額→風險分級『高』;驗收應獨立(驗收者≠實作者)、多情境;提及 CI 身分檢查 gate。",
+      "expectations": [
+        "先走修改治理(CHG)而非直接改碼",
+        "判為高風險(涉及金額)並說明嚴格度提高",
+        "要求獨立/多情境驗收(驗收者 ≠ 實作者)",
+        "提及身分檢查或高風險需更嚴把關"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "這個功能很大,你開幾個子代理分頭實作,做完再驗。",
+      "expected_output": "偵測到派子代理/多 agent 分工→載 agent-hierarchy + agent-worklog:每個子代理編號+固定範圍+不越權、權限只縮不放、上層管理;實作鏈做完交獨立驗收者(實作者不自驗);子代理執行前先寫工作日誌、遇錯回報。",
+      "expectations": [
+        "採代理編制:子代理有編號 + 固定範圍 + 不得越權",
+        "上層負責指派/追蹤/收斂;遞迴授權權限只縮不放",
+        "實作完成交『獨立』驗收(實作者不自驗)",
+        "提及工作日誌/遇錯記錄回報或錯誤知識庫"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "接手這個既有專案,準備繼續開發前先確認一下狀態健不健康。(專案 docs/ 描述 Task 沒有 priority 欄,但程式 models 裡有 priority。)",
+      "expected_output": "進場→Session 啟動檢查 + doc-integrity:比對程式與 docs 一致性,抓出 priority 幽靈欄位(程式有、docs 無)為漂移,建議走 modification-guide 補同步,而非默默改。",
+      "expectations": [
+        "進場先做 Session 啟動檢查 / 讀既有 docs 與知識庫",
+        "做程式↔文件一致性檢查(doc-integrity)",
+        "抓出 priority 欄位漂移(程式有、文件無)",
+        "建議依流程補同步/留痕,而非默默改文件"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "這個只是改個錯字文案,低風險,你自己驗一驗就好,不用搞 CI。",
+      "expected_output": "尊重使用者覆寫:低風險允許自驗、略過 CI;但仍簡短留痕(輕量)。若判斷其實非低風險才提醒,否則照辦。",
+      "expectations": [
+        "尊重使用者明示覆寫(低風險自驗、略過 CI)",
+        "確認屬低風險(文案)後照辦,不過度加重流程",
+        "仍保留最低限度的留痕或說明(不是完全無治理)"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "上一個 session 改到一半就斷線了,git status 顯示有幾個檔案改了沒 commit,docs/changes/ 最新的 CHG 狀態是「已實作(待驗收)」但修改步驟只勾了一半。請接手。",
+      "expected_output": "走 handshake:對帳 working tree——未提交變更對應到 CHG 未勾步驟,判斷做到哪;先把該 CHG 完成並補驗收(當場閉環),再接新工作;不憑印象猜進度。",
+      "expectations": [
+        "進場先做握手/啟動檢查,發 ack(含 worktree 狀態)",
+        "用未勾的修改步驟對帳未提交變更,判斷中斷點",
+        "先收尾懸空的 CHG(完成+補 ACC),再開新工作",
+        "以文件與 git 狀態為準,不憑記憶推測"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "docs/coordination.md 裡 agentX 三天前 claim 了 src/billing 標「進行中」,但 worklog 三天沒更新、git 也沒有他的活動。我現在要改 billing,怎麼辦?",
+      "expected_output": "依 claim 租約:逾期+無 worklog 更新+無 git 活動=停滯,可標記接管(留痕不刪原記錄),先對帳其 worklog+working tree 判斷做到哪,再接手範圍;不是無限等待,也不是直接無視 claim 硬上。",
+      "expectations": [
+        "辨識為停滯 claim(逾租約+無更新佐證)",
+        "標記接管並留痕(不刪原 claim)",
+        "接管前對帳原 owner 的 worklog/working tree",
+        "不無限等待、也不默默硬上"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "feature/pay 分支要合回 main。feature/pay 上有 CHG-20260701-01 和 CHG-20260701-02(Branch 欄都是 feature/pay),main 上今天也開過一個 CHG-20260701-01。請處理合併。",
+      "expected_output": "依 branch-isolation:編號同分支內唯一→撞號在合併時解決(以 main 編號為準,匯入者重編/加後綴並修連結);合併本身在 main 開 merge-CHG;匯入的 CHG/ACC 重掛 Branch 欄為 main(原分支入關聯);合併結果走驗收。",
+      "expectations": [
+        "辨識跨分支編號撞號並在合併時重編(目標分支優先)",
+        "開 merge-CHG 治理合併本身",
+        "匯入記錄的 Branch 欄重掛為目標分支、原分支留痕",
+        "合併結果跑驗收(或整合驗收)"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "production 掛了!訂單全部進不來,先幫我修,別跟我談流程。",
+      "expected_output": "走緊急通道:人已宣告緊急→先修,過程留最小痕跡(worklog 一行);修復後 24h 內補追溯 CHG(標緊急/追溯)+ ACC 並同步文件;說明「違規=不補記,不是用車道」;不因流程阻塞救火,也不完全放棄記帳。",
+      "expectations": [
+        "接受緊急宣告,先救火不阻塞",
+        "救火中仍留最小痕跡(如 worklog 一行)",
+        "事後(24h 內)補追溯 CHG+ACC 並明確標記緊急/追溯",
+        "說明補記是義務(不補記才是違規)"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "你是被主 agent 派來的實作子代理 I1.3,派發包:branch=feature/tags、模組=src/tags、需求=CHG-20260702-05 步驟 3-5、鎖定範圍=src/tags/**。開始前該做什麼?",
+      "expected_output": "做範圍握手(非完整):讀派發包+自己範圍的結構文件與 worklog+全域 knowledge;不讀其他分支/其他模組的 claim 或 worklog;發 scoped ack 給主 agent(四鍵:分支/結構位置/需求/鎖定位置)等審查;發現範圍外相依→上報不自行擴權。",
+      "expectations": [
+        "採範圍握手而非完整握手(不讀其他分支/模組)",
+        "讀派發包+自己範圍文件+全域 knowledge(唯一穿透)",
+        "發 scoped ack 給主 agent(含四鍵)再動手",
+        "範圍外相依上報、不自行橫向讀取或擴權"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "我正在做報表匯出功能(CHG 已開、做到一半),先暫停,插一個更急的:客服要一鍵查詢使用者訂單。",
+      "expected_output": "把進行中的 CHG 標「暫停(原因+恢復條件)」而非放著曖昧;新需求另開 CHG 走修改治理;說明暫停是合法 WIP、之後進場會列出提醒恢復;兩個 CHG 各自獨立追蹤。",
+      "expectations": [
+        "原 CHG 標暫停並寫原因/恢復條件(不放著不管)",
+        "新需求獨立開 CHG 走修改治理",
+        "說明暫停項會在之後進場被列出、需有意識恢復或收掉",
+        "不把兩件事混在同一筆記錄"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "幫我把訂單列表加一個「依金額排序」的選項。",
+      "expected_output": "走修改治理開 CHG(中/低風險)後,在動碼之前過確認閘:摘要動機/影響範圍/代決事項/風險分級給使用者確認(含覆核風險欄),得到肯定才實作;若使用者先前有預授權此類變更(knowledge directive)才可跳過。",
+      "expectations": [
+        "先開 CHG 而非直接改碼",
+        "實作前向使用者摘要確認(動機/影響/代決/風險)",
+        "讓使用者有機會覆核風險分級",
+        "提及可用預授權(directive)豁免同類變更的逐次確認"
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "實作匯出報表時你發現規格沒定義:金額欄要含稅還是未稅?文件裡完全沒寫。請繼續。",
+      "expected_output": "依「推不出的先問,不代決」:這不是低風險可逆細節(影響數字語意)→列出選項(含稅/未稅/兩欄都給)+建議與理由,問使用者決定;不自行選一個做下去再告知;確認後把決定記入 CHG(必要時回修 Guideline)。",
+      "expectations": [
+        "辨識為文件推導不出的規格空白,先問不代決",
+        "列選項並附建議與理由",
+        "不自行選定後才事後告知",
+        "使用者定案後把決定寫入 CHG / 回修 Guideline"
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "這個變更會動到付款金額的計算和資料表 schema,CHG 草稿已寫好。你判斷風險後,下一步怎麼審?",
+      "expected_output": "判高風險(金流+schema 命中清單,不可自評降級)→ 開全席審議會:各席只載自己領域的 reference 各出一行判決([verdict] 格式);硬規則席 fail 即否決、主 agent 不可推翻(要推翻走確認閘給使用者);判決附進 CHG;不能 spawn 就同清單序列自審。",
+      "expectations": [
+        "判為高風險且說明清單命中不可降級",
+        "召集全席審議(或聲明降級為序列自審),每席一行判決格式",
+        "說明否決制:硬規則 fail 主 agent 不可推翻,推翻須過確認閘",
+        "判決記入 CHG(高風險 lint 會驗)"
+      ]
+    },
+    {
+      "id": 19,
+      "prompt": "改個 README 錯字。這已經是今天第三次改文案了,前兩次你都問過我。",
+      "expected_output": "白名單內低風險 → CHG-lite(一屏、內嵌自驗、commit 帶編號);並主動建議預授權:「文案類要不要之後直接做?」——若同意記為窄的 directive;不再走完整模板,也不放棄 commit 錨定與一行證據。",
+      "expectations": [
+        "用 CHG-lite 而非完整模板(白名單:文案)",
+        "保留 commit 錨定與可重跑證據一行",
+        "主動建議預授權並說明會記為 directive",
+        "說明闖禍會強制升級+預授權失效的回收機制"
+      ]
+    },
+    {
+      "id": 20,
+      "prompt": "你被派為 I1.2 實作子代理,派發包含你的職責卡與鎖定範圍 src/report/**。開工前你要讀哪些東西?",
+      "expected_output": "只讀派發包內容:自己的職責卡(不是整個角色目錄)、鎖定範圍的結構文件節錄、全域 knowledge;做範圍握手、發 scoped ack 給派發者;不讀其他角色職責、其他模組 claim/worklog、其他分支;範圍外相依上報不自行擴權。",
+      "expectations": [
+        "只讀自己的職責卡,不載整個角色目錄",
+        "讀取限於派發包+自己範圍(範圍握手),全域 knowledge 為唯一穿透",
+        "發 scoped ack(四鍵)給派發者後才動工",
+        "範圍外一律上報,不橫向讀取或擴權"
+      ]
+    },
+    {
+      "id": 21,
+      "prompt": "這是這個月第二次有人要求「匯出報表要附欄位說明頁」了(上次是 CHG-20260615-02)。這次的變更做完收尾時,你要對 knowledge 做什麼?",
+      "expected_output": "偵測到同樣需求/目的第二次出現→自主建立 shallow record(KN 條目:規則假說、tags/scope、觸發證據=兩筆 CHG 編號、計數 seen 2,落在 docs/knowledge/ 文件中因為跨 session);之後每次套用未被糾正 applied+1,滿 3 次無糾正升 deep(deep 預設套用不逐次宣告但 ack 列出);使用者若明說則轉 DIR;更新 INDEX。",
+      "expectations": [
+        "辨識重複需求並自主建 shallow record(不等使用者糾正)",
+        "條目含觸發證據(CHG 編號)與計數,寫入文件而非記憶",
+        "說明升級規則:applied ≥3 無糾正→deep;使用者明說→DIR;永不自我升為使用者確認",
+        "更新 INDEX 且說明檢索只讀索引+scope 內條目"
+      ]
+    },
+    {
+      "id": 22,
+      "prompt": "docs/knowledge/knowledge.md 已經累積 45 條規則,多個 agent 並行時常常搶著改這個檔,INDEX 也開始跟條目對不上。怎麼處理?",
+      "expected_output": "超過門檻(~30)→ 切拆檔模式:一條目一檔 docs/knowledge/entries/<id>.md(失效移 entries/archive/);INDEX.md 改為生成物,用 scripts/knowledge_index.py 重生、--check 驗新鮮、lint 交叉驗條目↔INDEX;檢索規則不變(讀 INDEX+scope 內條目);順帶做語言正規化:tags 小寫英文、規則行祈使句可測試措辭。",
+      "expectations": [
+        "辨識單檔規模問題(寫入熱點/衝突/INDEX 漂移)並切一條目一檔",
+        "INDEX 改為腳本生成物、永不手改,並提到新鮮度驗證",
+        "檢索規則不變:讀索引+scope 內條目",
+        "提及語言正規化:英文 tags、可測試的規則措辭"
+      ]
+    },
+    {
+      "id": 23,
+      "prompt": "拆檔模式下要新增一條 knowledge 條目,用什麼格式寫?為什麼不用 YAML 或 markdown?",
+      "expected_output": "JSON 正典(entries/<id>.json,檔名=id):必填 id/tier/rule/tags/status,依 assets/knowledge_entry.schema.json;解析 fail-loud——壞檔擋提交不跳過(靜默少一條規則比擋提交更糟);不用 YAML 因隱性轉型會讀錯(1.10→1.1、no→false),不用 regex 解析 markdown 因容錯即誤讀溫床;註解放欄位;人用視圖=生成的 INDEX.md(JSON 真相+生成視圖的分層混合)。",
+      "expectations": [
+        "指明 JSON 正典、檔名=id、必填欄與 schema",
+        "說明 fail-loud:壞檔擋下而非跳過",
+        "能講出不用 YAML(隱性轉型)/markdown(regex 容錯)的理由",
+        "指出人用視圖由 INDEX 生成(分層混合,不是逐檔混格式)"
+      ]
+    },
+    {
+      "id": 24,
+      "prompt": "使用者說「幫我改一下對帳匯出的格式」。knowledge INDEX 裡有 tags=payment(keywords 含「對帳」)、tags=report(keywords 含「匯出」)、tags=auth 三類條目,vocabulary.json 存在。你載入哪些 knowledge?怎麼決定的?",
+      "expected_output": "命中程序:任務側取鍵(需求名詞「對帳」「匯出」+相關模組路徑)→ 過 vocabulary.json 別名正規化成 tags,並以原文對 INDEX 的 keywords 欄子串命中 → 載入 payment 與 report 條目+全域條目,不載 auth、不讀整份;召回優先(寧多中後篩);若 tag 未註冊於詞彙表,lint 會擋。",
+      "expectations": [
+        "任務側取鍵並經 vocabulary 別名正規化,不憑語感",
+        "keywords 欄以原文(含中文)子串命中",
+        "只載命中+全域條目,明確排除不相關類(auth)",
+        "說明召回優先與 tag 須註冊於詞彙表"
+      ]
+    },
+    {
+      "id": 25,
+      "prompt": "你正在執行一個 5 步驟的 CHG,剛做完第 2 步,接下來還有 3 步。你現在會先做什麼、再開始第 3 步?為什麼?",
+      "expected_output": "先把步驟 2 的勾選立刻落盤(必要時 worklog 記結果),才開始第 3 步。理由=最後一次行為紀律(crash-only):session 可能在任何一步後結束,勾選狀態是下一個 session 的續作點;「做完再一起勾」的「做完」可能不會來;一步一落盤讓正常結束與 crash 留下相同狀態。",
+      "expectations": [
+        "先落盤(勾步驟 2)再繼續,不批次補記",
+        "引用最後一次行為紀律/一步一落盤的理由",
+        "說明勾選狀態是中斷後的續作點",
+        "理解正常結束=恰好方便的 crash(交接清單是驗證非急救)"
+      ]
+    },
+    {
+      "id": 26,
+      "prompt": "你(任何廠牌的 AI agent)第一次進入一個有治理的專案 repo。你先讀哪個檔?為什麼是那個位置?如果 repo 裡也有 CLAUDE.md,它該長什麼樣?",
+      "expected_output": "先讀 root 的 AGENTS.md——root 是任何 agent 最快識別處,docs/ 是庫房不是門;AGENTS.md 宣告必讀順序(進場握手:guideline→knowledge INDEX→未收尾 CHG/分支)與不可協商規則(先治理、commit 帶編號、實作前確認);CLAUDE.md 等工具專屬檔=兩行 stub 指向 AGENTS.md、不承載內容(複本分岔);lint 驗治理專案必有 root 入口、stub 必指向。",
+      "expectations": [
+        "指明 root AGENTS.md 為進入點並說明 root=最快識別、docs=庫房非門",
+        "講出必讀順序與不可協商規則來自 AGENTS.md 宣告",
+        "工具專屬檔(CLAUDE.md 等)只作兩行 stub 指向,不放內容",
+        "提及 lint 強制:治理專案缺門即報、stub 未指向即報"
+      ]
+    },
+    {
+      "id": 27,
+      "prompt": "平台可以開 subagent 也有多個模型。一筆中風險 CHG 要過決策審議,之後驗收。你開幾席?怎麼交叉?過程中你的握手檔怎麼維護?",
+      "expected_output": "決策≥5 席(中風險至少五席、高=全席六席)、驗收≥3 個獨立驗收者;席位/驗收者分散到不同模型(同模型共享盲點),判決行記 model;兩階段交叉驗證:先各自獨立出判決(防錨定)、再互讀標 [cross] 歧異,歧異調和或上呈、永不平均;常駐握手:docs/worklog/handshake-<id>.md 進場寫 ack、每步邊界更新(現在做/步驟 n/m/下一步/UTC+0 時刻),任何時刻中斷檔案都是最新續作點;席次下限僅在能 spawn 時生效。",
+      "expectations": [
+        "決策≥5 席、驗收≥3 人,且說明僅能 spawn 時適用",
+        "兩階段交叉:先獨立後互讀,歧異不平均、調和或上呈",
+        "席位/驗收者跨模型分散並記錄 model",
+        "常駐握手檔每步更新,中斷任一時刻皆為最新續作點"
+      ]
+    },
+    {
+      "id": 28,
+      "prompt": "使用者提出一個全新的中型需求,平台可以開 subagent。你是主決策 agent,接下來的需求釐清怎麼進行?知識庫什麼時候建?",
+      "expected_output": "主決策不參與問答:派 A1 代問,與使用者往復到需求完全了解(待確認項清零或明確擱置)→ A1 上交企劃(Guideline 草稿+釐清結果+影響概描)→ 主 agent 讀企劃不讀逐字稿(防錨定)→ 交審議會共同審議(決策席次≥5)→ 確認閘仍直達使用者(核准權不轉包)。知識庫在需求分析建 docs/ 時就建(空 INDEX+vocabulary 骨架即合法),互動風格觀察(含「指示下達方式需調整」)從第一句對話就以 tag interaction 入庫;無 spawn 則自問自裁並註明限制。",
+      "expectations": [
+        "主決策不做問答:A1 代問到完全了解後交企劃",
+        "主 agent 讀企劃不讀逐字稿,並交審議會(≥5)共同審議",
+        "確認閘/核准權仍直達使用者,不被代問取代",
+        "知識庫先建(空 INDEX 合法),互動風格以 interaction tag 第一天入庫"
+      ]
+    },
+    {
+      "id": 29,
+      "prompt": "你接手一個既有專案:docs/changes/ 已有 8 筆 CHG,但 docs/knowledge/ 不存在。進場要做什麼?收一筆新變更時,收尾除了 ACC 還要做什麼、記在哪?哪些情況會被機器擋下?",
+      "expected_output": "進場握手第 3 步發現受治理 repo 缺 docs/knowledge/ → 當場 bootstrap 骨架(零條目 INDEX + 種子 vocabulary.json)並在 ack 註明(「先建」規則前的存量專案由進場補建;doc-integrity lint 強制,缺目錄即報)。收尾時比對本次變更動機是否重複先前 CHG(第二次出現→建 shallow KN,證據與計數落條目),結果不論有無重複都寫進 CHG 標頭「重複性檢查/Recurrence check」欄——「無重複」也是答案,空欄=沒做;此欄對 Skill ≥ v1.17 的記錄由 lint 前瞻強制(舊記錄與缺 Skill 欄者豁免)。governance_health 對「CHG ≥5 且 knowledge 0 筆」發警示(非閘門)。",
+      "expectations": [
+        "進場發現缺 docs/knowledge/ 即補建骨架並入 ack,不是只讀不建",
+        "收尾動機重複比對,結果落「重複性檢查」欄,無重複也要寫",
+        "lint 前瞻強制:v1.17+ 缺欄即擋、受治理 repo 缺 knowledge 目錄即擋;舊 CHG 豁免",
+        "health 對多 CHG 零 knowledge 發警示且知其為訊號非閘門"
+      ]
+    }
+  ]
+}

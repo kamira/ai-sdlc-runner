@@ -19,12 +19,13 @@
      one INDEX row each; register any new tag in vocabulary.json first. -->
 
 ## KN-1 — Offline skill-store vendoring pattern
-*tags: contract · source: CHG-20260703-01, CHG-20260703-06, CHG-20260822-02 · tier: pattern*
+*tags: contract · source: CHG-20260703-01, CHG-20260703-06, CHG-20260822-02, CHG-20260822-03 · tier: pattern*
 
 The runner sources the `ai-sdlc` skill **offline-first**. `skills/<version>/` is the PRIMARY store,
 each version vendored verbatim as an offline `git archive` of the published skill's `main` HEAD and
 labelled by that checkout's SKILL.md frontmatter version (e.g. `v1.12.1` @ `605425e`, `v1.16.0` @
-`b4d6ef3`) — versions without a git tag are still pinned by commit. The store is treated as read-only
+`b4d6ef3`, `v1.64.0` @ `e3d27c3`) — versions without a git tag are still pinned by commit. The
+upstream repo is now `kamira/skill-ai-sdlc-autopilot` (CHG-20260822-02). The store is treated as read-only
 reference: the runner **never re-implements skill logic and never copies skill markdown into itself**
 (ai-guideline §7).
 

@@ -12,11 +12,12 @@ ai-sdlc-runner/
 │   └── workflows/ci.yml       # CI: pytest on {ubuntu,windows} × py{3.9,3.13} + doc-integrity gate; CHG-20260817-10
 ├── pyproject.toml             # deps & entry point (runner = ai_sdlc_runner.cli:main)
 ├── requirements-dev.txt       # DERIVED probe-facing view of pyproject's optional-dependencies (bare names only, no ranges) so toolchain_probe.sh can run; CHG-20260822-01
-├── skills/                    # PRIMARY offline skill store (CHG-05, CHG-20260703-01, CHG-20260703-06): v1.0.0/, v1.1.0/, v1.12.1/, v1.16.0/ (vendored verbatim)
+├── skills/                    # PRIMARY offline skill store (CHG-05, CHG-20260703-01, CHG-20260703-06, CHG-20260822-03): v1.0.0/, v1.1.0/, v1.12.1/, v1.16.0/, v1.64.0/ (vendored verbatim)
 │   ├── v1.0.0/                 #   full skill root (SKILL.md, references/, scripts/, assets/)
 │   ├── v1.1.0/                 #   + role catalog (role_loadout.py, role_refs.json)
 │   ├── v1.12.1/                #   offline `git archive` @ 605425e
-│   └── v1.16.0/                #   current baseline (config default); offline `git archive` @ b4d6ef3
+│   ├── v1.16.0/                #   offline `git archive` @ b4d6ef3
+│   └── v1.64.0/                #   current baseline (config default); offline `git archive` @ e3d27c3 (upstream repo renamed — see CHG-20260822-02)
 ├── src/ai_sdlc_runner/
 │   ├── __init__.py
 │   ├── cli.py                 # entry: run / migrate / status subcommands
