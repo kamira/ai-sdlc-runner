@@ -356,6 +356,28 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 20 if info.needs_migrate else 0
 
 
+def cmd_elements(args: argparse.Namespace) -> int:
+    """Regeneration gate: re-derive every store version and compare with the committed elements.
+
+    Three states, two of them hard failures with **different** exit codes, because they call for
+    different actions: drift means regenerate (or stop hand-editing elements, which §2/§8 of the
+    guideline forbid), source-missing means the store the elements came from is no longer there to
+    derive from. Collapsing the two into one red is what would make the log unreadable at the moment
+    it matters (CHG-20260822-04 task 4).
+    """
+    from . import dispatch
+
+    report = dispatch.verify_elements(args.repo)
+    for row in report["versions"]:
+        print(f"v{row['version']:<10} {row['state']:<15} {row['detail']}")
+    print(f"result:        {report['state']}")
+    return {
+        dispatch.MATCH: dispatch.EXIT_MATCH,
+        dispatch.DRIFT: dispatch.EXIT_DRIFT,
+        dispatch.SOURCE_MISSING: dispatch.EXIT_SOURCE_MISSING,
+    }[report["state"]]
+
+
 def cmd_workspace(args: argparse.Namespace) -> int:
     """Register a multi-project workspace: an authority (main) + consumer repos; persist the manifest.
 
@@ -519,12 +541,16 @@ def build_parser() -> argparse.ArgumentParser:
     pc.add_argument("project", nargs="?", default=None, help="project dir (compare to its lock); omit to compare to config-expected")
     pc.add_argument("--skill-path", default=None, help="override skill_path (the local skill location to check)")
     pc.set_defaults(func=cmd_check)
+
+    pe = sub.add_parser("elements", help="regeneration gate: derived elements vs the store they came from")
+    pe.add_argument("--repo", default=".", help="repo root holding skills/ and elements/ (default: .)")
+    pe.set_defaults(func=cmd_elements)
     return p
 
 
 # Known subcommand names — used only to distinguish `runner <project>` (bare, pre-opening the
 # resident app) from `runner <subcommand> ...` before handing off to the real argparse subparsers.
-SUBCOMMANDS = ("menu", "run", "dashboard", "migrate", "status", "workspace", "analyze", "check")
+SUBCOMMANDS = ("menu", "run", "dashboard", "migrate", "status", "workspace", "analyze", "check", "elements")
 
 
 def main(argv: Optional["list[str]"] = None) -> int:

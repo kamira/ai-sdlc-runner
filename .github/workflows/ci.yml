@@ -74,3 +74,29 @@ jobs:
       # Stdlib-only, vendored in-repo: no install step needed.
       - name: Governance gate
         run: python skills/v1.16.0/scripts/doc_integrity_check.py --repo .
+
+  elements:
+    name: elements (regeneration gate)
+    # Its own job, not a step inside another one, so the three states are legible from the checks
+    # list alone: a red here always means "the derived tree and the store disagree", never "some
+    # other lint failed". CHG-20260822-04 task 4.
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install
+        run: pip install -e .
+
+      # Exit codes are the contract: 0 match, 10 regenerable drift, 11 source missing. Both
+      # failures are hard; they are separate codes because they call for different actions —
+      # regenerate, versus recover the store the elements were derived from. The step prints the
+      # per-version verdict before exiting, so the log says which version and which files.
+      - name: Regeneration gate
+        run: runner elements --repo .
