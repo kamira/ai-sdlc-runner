@@ -608,3 +608,87 @@ def test_undeclared_defaults_to_refusing(tmp_path, py_stub, capsys):
     out = capsys.readouterr().out
     assert "stopped at:    pm_plan" in out
     assert "declares no operations" in out
+
+
+# --------------------------------------------------------------------------------------
+# settings, from the command line
+# --------------------------------------------------------------------------------------
+
+def test_settings_show_prints_the_current_state(capsys, tmp_path):
+    assert cli.main(["--settings", str(tmp_path / "none.json"), "settings", "--show"]) == 0
+    out = capsys.readouterr().out
+    assert "review seats: 3" in out
+    assert "high-risk mode: off" in out
+
+
+def test_settings_show_warns_when_running_below_the_floor(capsys, tmp_path):
+    """A bypass has to be visible to somebody who never opens a menu — in CI, in a log, in a review
+    of what this project is configured to do."""
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"review_seats": 1, "high_risk_mode": True}), encoding="utf-8")
+    cli.main(["--settings", str(path), "settings", "--show"])
+    out = capsys.readouterr().out
+    assert "high-risk mode: ON" in out
+    assert "warning:" in out and "below the review floor" in out
+
+
+def test_a_broken_settings_file_stops_the_command_rather_than_defaulting(capsys, tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text("{oops", encoding="utf-8")
+    assert cli.main(["--settings", str(path), "settings", "--show"]) == 2
+    assert "not valid JSON" in capsys.readouterr().out
+
+
+def test_a_broken_settings_file_stops_a_run_too(capsys, tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text("{oops", encoding="utf-8")
+    assert cli.main(["--settings", str(path), "run", "--plan", _plan_file(tmp_path)]) == 2
+    assert "not valid JSON" in capsys.readouterr().out
+
+
+def test_a_run_reads_the_saved_settings(tmp_path, py_stub, capsys):
+    """The point of persisting them: the seat count is a property of the project, not something
+    retyped every run."""
+    argv = py_stub(AGENT)
+    config = tmp_path / "runner.yaml"
+    config.write_text(f"agent_command: {json.dumps(argv)}\n", encoding="utf-8")
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps({"review_seats": 1, "high_risk_mode": True}),
+                             encoding="utf-8")
+
+    cli.main(["--config", str(config), "--settings", str(settings_file), "run",
+              "--undeclared", "allow", "--plan", _plan_file(tmp_path), "--confirm", "merge"])
+    out = capsys.readouterr().out
+    assert "relaxation:" in out and "below the floor" in out
+
+
+def test_a_flag_beats_the_saved_settings(tmp_path, py_stub, capsys):
+    """Someone typing `--seats` now is deciding about this run; the file is the standing decision.
+    Neither is silent — whichever produces a floor crossing, the run records it."""
+    argv = py_stub(AGENT)
+    config = tmp_path / "runner.yaml"
+    config.write_text(f"agent_command: {json.dumps(argv)}\n", encoding="utf-8")
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps({"review_seats": 1, "high_risk_mode": True}),
+                             encoding="utf-8")
+
+    cli.main(["--config", str(config), "--settings", str(settings_file), "run",
+              "--undeclared", "allow", "--plan", _plan_file(tmp_path), "--confirm", "merge",
+              "--seats", "3"])
+    out = capsys.readouterr().out
+    # An undeclared dry run has relaxations of its own, so look for the *seat* one specifically.
+    assert "below the floor" not in out
+    for seat in policy.seat_names(policy.SEAT_FLOOR):
+        assert f"{seat}=pass" in out
+
+
+def test_an_unverified_operation_is_printed(tmp_path, py_stub, capsys):
+    argv = py_stub(AGENT)
+    config = tmp_path / "runner.yaml"
+    config.write_text(f"agent_command: {json.dumps(argv)}\n", encoding="utf-8")
+    plan = _plan_file(tmp_path, operations={
+        "engineer_build": [{"description": "rename a variable", "kind": "ordinary"}]})
+
+    cli.main(["--config", str(config), "run", "--undeclared", "allow", "--plan", plan,
+              "--confirm", "merge"])
+    assert "unverified:" in capsys.readouterr().out

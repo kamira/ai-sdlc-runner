@@ -41,6 +41,12 @@ review seats:
 runner policy
 ```
 
+Set how much review this project wants, and whether the floor may be crossed:
+
+```bash
+runner settings
+```
+
 Walk the flow for real. `--risk` grades the change; `--seats` sets how many review seats open;
 `--confirm` names a gate you have already approved, and may be repeated:
 
@@ -82,10 +88,22 @@ A halt is a pause with a way back, not a wall — `--confirm <gate>` continues p
 approval is recorded in the run report so it can be audited afterwards. Run `runner policy` for the
 current table.
 
-Six actions are never automated at any grade, and no confirmation or mode relaxes them: production
-deploys, data migrations, hard deletes, moving money, changing secrets or permissions, and
-publishing public content. They are checked against what each node says it is about to do, and they
-stop the run before the work is dispatched.
+Six actions are never automated at any grade: production deploys, data migrations, hard deletes,
+moving money, changing secrets or permissions, and publishing public content. Nothing is checked
+against them by guessing — a run says what each node will do, and it is read in four places, each
+able only to **add** a stop:
+
+1. **the node's brief** — a work order whose instructions say "wipe the users table" stops, whatever
+   is declared beside it;
+2. **the targets** an operation names — `kubectl apply -f prod/`, `secrets/key.pem`. These are facts
+   rather than claims, so they overrule a declaration that says otherwise;
+3. **the declaration** — every operation says which of the six kinds it is, or `ordinary`. An
+   operation that declares nothing is refused, not assumed safe;
+4. **the description**, against word lists. The weakest layer by far — 8 of 18 known attempts — and
+   never trusted alone.
+
+All of it happens before the work is dispatched. An operation that declares `ordinary` and names no
+targets rests on the plan's word, and the run report says so under `unverified:`.
 
 ## High-risk mode
 
@@ -93,6 +111,15 @@ The review panel has a floor of three seats. A user who needs fewer can turn on 
 open one — and the run report records that the floor was bypassed, at what seat count. Bypassing a
 safeguard silently is the thing being prevented; bypassing it on the record is a decision someone
 made.
+
+Both live in `runner settings`, on a screen, and persist to `config/settings.json`. `runner settings
+--show` prints them without opening a menu, so the bypass is visible to somebody reading a log
+rather than sitting at a terminal. A flag still wins for a single run.
+
+Settings can lower the seat floor and can do nothing else — gates, the never-automated actions and
+the adjudication rule are in `policy.py` and take no input. A key the runner does not read is
+refused rather than ignored, and a corrupt settings file is an error rather than a silent default:
+a typo must not be indistinguishable from turning a safeguard off.
 
 ## Governance
 
@@ -123,6 +150,7 @@ an acceptance, or drifts from what was actually done.
 ```bash
 runner flow      # 印出流程
 runner policy    # 印出治理表
+runner settings  # 設定審議席數與高風險模式
 runner run --config runner.yaml --risk medium --seats 3
 ```
 
@@ -153,13 +181,30 @@ runner run --config runner.yaml --risk medium --seats 3
 
 停下來是**可以續走的暫停**,不是牆:`--confirm <閘門>` 可以續走,而且該次核可會記進執行報告以供稽核。
 
-六個動作在任何風險等級都不自動、任何確認或模式都不能放寬:上線部署、資料遷移、硬刪除、金流、變更金鑰
-或權限、對外發布。它們比對每個節點宣告要做的事,並在派工**之前**停住。
+六個動作在任何風險等級都不自動:上線部署、資料遷移、硬刪除、金流、變更金鑰或權限、對外發布。判斷不靠
+猜:執行計畫必須說明每個節點要做什麼,而這件事會在四個地方被讀,每一層都**只能加停、不能解停**:
+
+1. **節點自己的工作說明**——工單裡寫「wipe the users table」就停,旁邊申報成什麼都一樣;
+2. **operation 申報的 targets**(`kubectl apply -f prod/`、`secrets/key.pem`)——這些是事實而非說法,
+   所以可以推翻申報;
+3. **申報本身**——每個 operation 必須說自己是六類之一或 `ordinary`;什麼都不申報會被拒絕,不會被當成安全;
+4. **描述文字**比對字詞表——最弱的一層(18 句已知嘗試中只擋下 8 句),絕不單獨採信。
+
+以上全部在派工**之前**發生。申報為 `ordinary` 又沒指定 targets 的 operation 等於靠計畫的說法,執行報告
+會在 `unverified:` 底下把它列出來。
 
 ## 高風險模式
 
 審議席預設下限三席。需要更少的使用者可以開啟高風險模式並只開一席——而執行報告會記下「下限被規避,實際
 開了幾席」。要避免的是**無聲**繞過安全機制;留下紀錄地繞過,那是有人做的決定。
+
+兩者都在 `runner settings` 的畫面上設定,存進 `config/settings.json`;`runner settings --show` 不開
+選單也能印出目前狀態,讓「這個專案在低於下限的情況下執行」是讀 log 的人也看得到的事實。單次執行仍可用
+旗標覆蓋。
+
+設定只能放寬審議席下限,不能碰其他任何東西——閘門、永久停點、裁決規則都在 `policy.py`,不吃任何輸入。
+不認得的設定鍵會被拒絕而不是忽略;設定檔壞掉是錯誤而不是靜默採用預設:打錯字不可以和「關掉某個安全
+機制」長得一模一樣。
 
 ## 治理
 

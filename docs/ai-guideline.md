@@ -90,7 +90,9 @@ nobody reads to the bottom of.
 | FR-11 | At a decision node where somebody is asked, **the answer decides the branch**. A branch taken from the plan while a model is being asked is a question whose answer changes nothing | P0 | `Node.answer_decides`, `engine._answered_branch` |
 | FR-12 | Six actions are never automated at any risk grade, and no confirmation or mode relaxes them. Three layers, each able only to add a stop: **targets** (commands, paths, URLs — facts, so they outrank the declaration), the **declaration** (undeclared is refused), and the **description** against word lists (the backstop, weak: 8 of 18). The dry-run opt-out never covers a node that applies effects | P0 | `policy.derive`, `classify`, `PERMANENT_HALT_KINDS`, `engine._permanent_halt`, `_has_effects` |
 | FR-18 | An operation nothing could verify — declared ordinary, no targets named — is **recorded**, not blocked. Requiring a target would buy ceremony; leaving the trust invisible would not | P0 | `policy.on_trust`, `RunReport.on_trust` |
-| FR-13 | The seat floor may be lowered only through an explicit high-risk mode, and the run records that it was | P0 | `policy.resolve_seats`, `RunReport.relaxations` |
+| FR-13 | The seat floor may be lowered only through an explicit high-risk mode, and the run records that it was. Both the seat count and the mode are **set on a screen** and persisted, not retyped each run | P0 | `policy.resolve_seats`, `settings.edit`, `RunReport.relaxations` |
+| FR-19 | A node's own brief — `instructions`, `objective`, `scope` — is read against the red lines before anything else. A brief that describes one stops the node, and declaring it does not get past it either | P0 | `engine._spoken_halt` |
+| FR-20 | Settings may lower the seat floor and nothing else. An unknown key is refused, a corrupt file is an error rather than a silent default | P0 | `settings.load`, `settings.FIELDS` |
 | FR-14 | Different seats may be answered by different models — the same question, different answerers. The routing lives in the CLI and never in the order | P0 | `cli.session_factory`; `--seat-model SEAT=COMMAND`, or `seat_models` in the plan |
 | FR-15 | Resume is probe-driven: nothing whose postcondition is already true is re-applied, everything applied is re-probed, and anything found true out of causal order is surfaced rather than redone or waved through | P0 | `effects.run` |
 | FR-16 | `runner flow` / `runner policy` print the flow and the governance without running anything, so what will happen can be read before it does | P1 | `cli.py` |
@@ -155,6 +157,12 @@ nobody reads to the bottom of.
 - [ ] A target that is a red line overrules a declaration of `ordinary`, for all six kinds; ordinary
       development targets (`git commit`, `pytest`, a source path) are not stopped; and an operation
       taken on the plan's word alone appears in the run report.
+- [ ] A node's brief describing a red line stops it, quoting the phrase; ordinary briefs are not
+      stopped; and the seats owe a declaration like anything else that can act.
+- [ ] `--confirm` for a gate nobody defined raises and names the real gates; a confirmation the run
+      never reached is reported rather than dropped.
+- [ ] `runner settings` sets the seat count and the bypass, persists them, and `run` reads them; an
+      unknown settings key is refused and a corrupt file is an error.
 - [ ] `cli.py`: `--confirm`, `--review-seats`, `--high-risk-mode` and the plan's `operations` all
       reach the engine; a seat model routes that seat elsewhere; a backend's JSON reply becomes the
       answer; a failed backend leaves the question pending.

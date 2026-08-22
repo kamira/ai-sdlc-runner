@@ -18,6 +18,7 @@
 | KN-6 | pattern | node-engine / idempotence | An operation may be an **effect** only if it leaves a probeable postcondition in the ledger, git or the forge; constructing one without a probe raises. Probes describe the **postcondition, not the action**, and read the world rather than any record the runner wrote. Unanswerable **raises** — never `False`. Nothing already true is re-applied, before or after the frontier. | active |
 | KN-7 | pattern | node-engine / sessions | Every **asking** node gets its own session: opened, asked once, closed in a `finally`; a factory that returns a session it already returned is refused. A multi-seat review is several asks, so each seat is its own session. The question is journalled **before** the session opens, so a dropped session costs the answer and not the question. | active |
 | KN-8 | pattern | governance / wiring | A mechanism is not built until something calls it. Three rounds here shipped a correct piece that nothing reached — an engine ignoring its own policy verdict, an `adjudicate` no caller invoked, a `PERMANENT_HALTS` list printed into every order and never checked — and each passed its own suite. The test that matters is the one that fails when the wire is cut. | active |
+| KN-12 | pattern | governance / checks | **Where** a check runs decides whether it runs. Three placement bugs in one repo: a brief-reading check placed after the early return so it never saw the path that mattered, a report line after the loop that four of five exits jumped past, and a red-line check that read one field of a record while the giveaway sat in the next one. Each looked correct in the diff. | active |
 | KN-11 | pattern | governance / trust boundaries | Read the **fact**, not the claim. A declaration is what somebody says an operation is; a target (`kubectl apply -f prod/`, `secrets/key.pem`) is what it will touch. Facts may overrule claims; prose may not. And where a trust boundary cannot be removed, **record it** — an operation nothing verified belongs in the report, not in silence. | active |
 | KN-10 | pattern | governance / red lines | A blacklist cannot be a safety guarantee. Two verifiers independently broke all six permanent halts with ordinary English containing no listed word, and a plan that simply **omitted** its operations was checked against nothing at all. The fix is the inversion: each operation **declares** its kind from a closed set, an undeclared one is refused, and word lists are demoted to a backstop that can only add a stop. | active |
 | KN-9 | pattern | governance / vocabularies | A vocabulary that classifies must be **closed**: an unrecognised value is a failure, never a pass. The ledger lint knew only "built", so `accepted`, `merged`, `completed` and `完成` all sailed past it with no acceptance record. And read the **field**, not the prose around it — `draft — all 9 tasks built` is a draft. | active |
@@ -362,3 +363,40 @@ answer is not to block it and not to ignore it — it goes into the run report u
 an auditor reads which steps nothing verified. **Not removed, but no longer invisible** is the
 honest end state for a trust you cannot eliminate, and it is a much better one than a mechanism that
 implies it eliminated it.
+
+
+## KN-12 — Where a check runs decides whether it runs
+*tags: governance · source: CHG-20260823-05 · tier: pattern*
+
+Three defects in this repo, all found within one change, all the same shape: the logic was right and
+it was in the wrong place. Each read correctly in review, because reading a diff shows you what the
+code *says*, not which paths reach it.
+
+**Reading one field while the giveaway is in the next one.** The red-line backstop read
+`operation["description"]`. A work order whose `instructions` said *"deploy the new build to
+production, then wipe the users table"* ran to completion, with the operation beside it declaring
+`ordinary`. The words were in the text the engineer would act on. For three changes this repo
+disclosed the limit as *"a description that gives nothing away gets through"*; the truth was that a
+description **giving itself away** got through, if it did so in the other field.
+
+**Placed after the early return.** Once the brief check existed, it sat below the undeclared-check
+block — which returns early on `--undeclared allow`. That is exactly the flag somebody is using when
+they have declared nothing, and therefore exactly the case where the brief is the only evidence
+there is. The check existed, was tested, and could not fire where it was needed.
+
+**Placed after the loop.** The unspent-confirmation report sat past the `for`, where four of the
+five ways a walk can end — halt, terminal, permanent halt, effect failure — return directly. A
+report that is only correct when the run succeeds is not a report.
+
+The general rule: **for any check, name the paths that reach it before believing it covers
+anything.** Three questions that would have caught all three:
+
+1. *What returns before this?* An early return above a check is a hole shaped exactly like the
+   condition that triggers it.
+2. *What are the other exits?* Anything that finalises state belongs on every exit, not on the happy
+   one — or in a helper every exit calls, which is the fix used here.
+3. *What else carries this information?* A record with several free-text fields gives a check as many
+   blind spots as it has fields it does not read.
+
+None of these is caught by a unit test of the check itself, which is why all three survived one. The
+tests that found them ran the **whole flow** and asserted where it stopped.

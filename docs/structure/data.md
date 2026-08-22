@@ -105,6 +105,21 @@ because it is the only one that is a fact rather than a claim.
 - **node kind**: `step | decision | loop | terminal`
 - **ask status**: `pending | answered`
 
+### config/settings.json
+
+What the user set, and the only file this runner writes on their behalf. Two fields, both about the
+seat floor — settings cannot reach a gate verdict, a permanent halt or the adjudication rule.
+
+| Field | Type | Constraint | Description |
+|-------|------|------------|-------------|
+| `review_seats` | int \| null | ≥ 1, or absent | How many seats open. `null` means the floor |
+| `high_risk_mode` | bool | required-ish (defaults false) | Whether the floor may be crossed at all |
+
+Missing or empty → the defaults. **Malformed → an error**, not the defaults: a typo must not be
+indistinguishable from a deliberate choice when one of the two settings is a safety bypass. An
+unknown key is refused rather than ignored, because a setting nobody reads looks exactly like one
+that works.
+
 ## Configuration
 
 `config/runner.yaml` is dispatch settings only — `agent_command`, `agent_timeout`. There is no skill

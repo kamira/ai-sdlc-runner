@@ -89,6 +89,12 @@ Three layers decide, and each may only ever **add** a stop:
    no listed word. Widening the lists was tried and bought nothing: across eighteen sentences they
    catch **8**, and the number is pinned in a test so nobody starts trusting it.
 
+Before any of that, the node's own **brief** is read — `instructions`, `objective`, `scope`. A work
+order saying *"deploy the new build to production, then wipe the users table"* used to run to
+completion because the operation beside it said `ordinary`: the words were in the text the engineer
+would act on and nothing looked at them. There is no way past this except changing what the node is
+told to do.
+
 An operation that declares `ordinary` and names no targets is taken on the plan's word. It is not
 blocked — an empty target list is exactly as forgeable as a wrong `kind` — but it lands in the run
 report under `on_trust`, so an auditor can see which steps nothing verified.
@@ -117,13 +123,17 @@ blind to the others; their instructions say so explicitly.
 Verdicts are **adjudicated, not averaged**: the `conformance` seat has a veto and cannot be outvoted,
 a majority is needed to pass, and a tie does not pass. The engine routes the flow on the result.
 
-The floor may be lowered only through an explicit high-risk mode, and the run records that it was.
+The floor may be lowered only through an explicit high-risk mode — set in `runner settings`, or per
+run with `--high-risk-mode` — and the run records that it was.
 Relaxing a safeguard is the user's call; a relaxation nobody can see themselves making is not one
 they made.
 
 ## 7. Interfaces
 
 - `runner flow` — print the flow. `runner policy` — print the governance. Neither runs anything.
+- `runner settings` — the screen that sets the review seat count and the high-risk bypass, persisted
+  to `config/settings.json`. `runner settings --show` prints them without a menu, so a bypass is
+  visible to somebody reading a log rather than sitting at a terminal.
 - `runner run --config <yaml> --plan <json> [--risk low|medium|high] [--seats N]
   [--high-risk-mode] [--confirm GATE ...] [--seat-model SEAT=COMMAND ...] [--ask-journal DIR]`
 - The plan carries `node_specs`, `decisions`, `risk`, `autonomy`, `operations` (each declaring its
@@ -138,7 +148,12 @@ they made.
 
 - No skill content in this repo and no skill read at runtime — asserted by a test that scans source,
   tools, tests, packaging, the README and CI, docstrings included, and is written so it scans itself.
-- The six permanent halts never auto-run, at any grade, under any mode.
+- The six permanent halts never auto-run at any risk grade, and no confirmation
+  relaxes them. **`--undeclared allow` is the one mode that can reduce the check** —
+  it skips the declaration for a node that only dispatches a question, never for one
+  that applies effects, and records itself in the run. This sentence used to read
+  "under any mode", which a verifier showed was false; a guardrail described more
+  strongly than it behaves is worse than one described honestly.
 - No silent fallback: missing configuration, an unknown gate, a branch the plan did not supply, an
   unanswerable probe, an unrecognised ledger status — each raises and names what is missing.
 - **A mechanism is not built until something calls it** (KN-8). This repo's recurring defect is a

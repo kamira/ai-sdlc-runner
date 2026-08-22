@@ -322,14 +322,56 @@ def _does_work(node: graph.Node, cfg: "RunConfig") -> bool:
     """Could this node change the world? Then it owes a declaration.
 
     True when the node dispatches a role that may write or execute, or when it carries effects.
-    A review seat reads and answers, so it is not asked to declare anything.
+
+    The criterion is the **capability**, never the role's name. An earlier version exempted the
+    review seats by name while `policy.role("seat").can_execute` was True and the work order handed
+    that capability over — so the panel was dispatched with no declaration at all, on the reasoning
+    that a reviewer only reads. A reviewer that may execute can do whatever executing can do, and a
+    verifier found the exemption disagreeing with this function's own stated rule. Seats owe a
+    declaration like anything else that can act.
     """
     if _has_effects(node, cfg):
         return True
-    if not node.role or node.role == "seat":
+    if not node.role:
         return False
     role = policy.role(node.role)
     return bool(role.can_write or role.can_execute)
+
+
+#: Fields of a node's own spec that describe what it will do, in the planner's words.
+_SPOKEN_FIELDS = ("instructions", "objective", "scope")
+
+
+def _spoken_halt(node: graph.Node, cfg: "RunConfig") -> Optional[str]:
+    """A red line the node's **own brief** describes, or ``None``.
+
+    The backstop used to read only `operation["description"]`, which a verifier walked straight
+    past: a work order whose `instructions` said *"deploy the new build to production, then wipe the
+    users table"* ran to completion, because the operation beside it said `ordinary` / "routine
+    work". The words were right there, in the text the engineer would act on, and nothing looked at
+    them. That is wider than the limit this design had disclosed — it meant a description giving
+    itself away did not matter, as long as it gave itself away in the *other* field.
+
+    There is deliberately **no way past this except changing what the node is told to do**, or
+    declaring it — and a declared red line halts too. Both roads stop, which is the correct answer
+    for a node whose brief says it will wipe a table. The cost is real and named in the change
+    record: an instruction that merely mentions a red-line word halts a run that was not going to
+    cross one, and the fix is to say what is meant.
+    """
+    spec = cfg.node_specs.get(node.id) or {}
+    for field_name in _SPOKEN_FIELDS:
+        value = spec.get(field_name)
+        if not value:
+            continue
+        text = " ".join(value) if isinstance(value, (list, tuple)) else str(value)
+        halt = policy.permanent_halt(text)
+        if halt is not None:
+            return (
+                f"permanent halt at {node.id!r}: its {field_name} describes {halt} — "
+                f"{text.strip()[:120]!r}. If that is what this node does, it is not automated at "
+                f"any risk grade and a person carries it out. If it is not, the brief has to say "
+                f"so, because this runner reads it.")
+    return None
 
 
 def _permanent_halt(node: graph.Node, cfg: "RunConfig", report: "RunReport") -> Optional[str]:
@@ -344,6 +386,13 @@ def _permanent_halt(node: graph.Node, cfg: "RunConfig", report: "RunReport") -> 
     `operations` skipped it entirely — the red lines could be walked past by saying less rather
     than by saying something false.
     """
+    # Read first, and unconditionally. Placed after the undeclared check, this never ran on the
+    # path that matters: `allow` returns early, and `allow` is exactly the setting somebody uses
+    # when they have not declared anything — which is when the brief is the only evidence there is.
+    described = _spoken_halt(node, cfg)
+    if described is not None:
+        return described
+
     declared = cfg.operations.get(node.id)
     if not declared and _does_work(node, cfg):
         # `allow` never covers a node that carries effects. It is documented as "for a dry run",
@@ -423,6 +472,24 @@ def _adjudicate(node: graph.Node, report: "RunReport", seats: int) -> str:
     return "pass" if outcome["outcome"] == "pass" else "fail"
 
 
+def _finish(report: "RunReport", confirmations: Dict[str, int]) -> "RunReport":
+    """Close out a walk, however it ended.
+
+    A confirmation the run never spent is **not** an error: a run can legitimately finish without
+    reaching a gate it was prepared for. But dropping it silently leaves the operator believing an
+    approval was used, and it matters most for the gate they thought hardest about.
+
+    Every exit from `walk` goes through here. The first version put this after the loop, where four
+    of the five ways a walk can end — halt, terminal, permanent halt, effect failure — jumped
+    straight past it. A report that is only correct when the run succeeds is not a report.
+    """
+    unspent = {gate: n for gate, n in confirmations.items() if n > 0}
+    report.confirmations.extend(
+        f"{gate} was confirmed {n} more time(s) than the run stopped at it"
+        for gate, n in sorted(unspent.items()))
+    return report
+
+
 def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunReport:
     """Walk the flow from ``intake``, dispatching one work order per ask.
 
@@ -451,6 +518,15 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
     # the final approval on the way out. Confirming twice takes two.
     confirmations: Dict[str, int] = {}
     for gate in cfg.confirmed:
+        if gate not in policy.GATES:
+            # Silently ignoring it is the worst option available: the operator believes they
+            # confirmed something, the run stops anyway, and nothing says why. A verifier found
+            # `--confirm no_such_gate` swallowed whole, against this repo's own no-silent-fallback
+            # rule — the exact shape KN-9 is about.
+            raise EngineError(
+                f"confirmed gate {gate!r} does not exist. This runner's gates are "
+                f"{sorted(policy.GATES)} — a confirmation for a gate nobody defined confirms "
+                f"nothing, and passing it silently would leave you believing otherwise.")
         confirmations[gate] = confirmations.get(gate, 0) + 1
 
     node_id: Optional[str] = "intake"
@@ -464,7 +540,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
         if tripped is not None:
             report.halted_at = node.id
             report.halt_reason = tripped
-            return report
+            return _finish(report, confirmations)
 
         verdict = resolve_verdict(node, cfg.risk, cfg.autonomy)
         report.verdicts[node.id] = dict(verdict)
@@ -487,11 +563,11 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             report.halt_reason = (
                 f"{verdict['gate']} = {verdict['verdict']} at risk {verdict['risk']} "
                 f"(per {verdict['source']}) — confirm it to continue")
-            return report
+            return _finish(report, confirmations)
 
         stop = _gate("before")
         if stop is not None:
-            return stop
+            return _finish(stop, confirmations)
 
         answers: List[Mapping[str, object]] = []
         if node.role:
@@ -512,16 +588,16 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
 
         stop = _gate("after")
         if stop is not None:
-            return stop
+            return _finish(stop, confirmations)
 
         stop = _run_effects(node, cfg, report)
         if stop is not None:
-            return stop
+            return _finish(stop, confirmations)
 
         if node.kind == graph.TERMINAL:
             report.halted_at = node.id
             report.halt_reason = node.note or node.label
-            return report
+            return _finish(report, confirmations)
 
         if node.branches:
             if node.role == "seat":
@@ -544,4 +620,4 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
         raise EngineError(
             f"walk exceeded {cfg.max_steps} steps — the flow is cycling without progress")
 
-    return report
+    return _finish(report, confirmations)

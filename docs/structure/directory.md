@@ -26,10 +26,12 @@ ai-sdlc-runner/
 │   ├── probes.py              # postconditions read from the world: git, the forge, the ledger
 │   ├── ship.py                # the ordered ship sequence, each effect paired with its probe
 │   ├── cli.py                 # flow / policy / run
+│   ├── settings.py            # what the user sets on a screen: seats, high-risk mode
 │   └── tui.py                 # the interactive selector, and the high-risk-mode toggle
 ├── docs/ARCHITECTURE.md       # the overview; the structure docs below carry the detail
 ├── config/
-│   └── runner.yaml            # dispatch settings only — no skill path, because there is no skill
+│   ├── runner.yaml            # dispatch settings only — no skill path, because there is no skill
+│   └── settings.json          # written by `runner settings`; seats + the bypass, nothing else
 └── docs/
     ├── ai-guideline.md
     ├── structure/{directory,logical,design,data}.md
