@@ -86,6 +86,8 @@ nobody reads to the bottom of.
 | FR-7 | The question is journalled as `pending` **before** its session opens and marked `answered` after, so a dropped session costs the answer and not the question — for every asking role, not only the seats | P0 | `engine.AskJournal` |
 | FR-22 | A resumed run **does not re-ask what the journal already answered**, and asks the pending question verbatim. Resuming is explicit: without it a journal that exists changes nothing | P0 | `AskJournal.answers`, `RunConfig.resume`, `--resume` |
 | FR-23 | A target this runner does not recognise is **not** treated as safe: it stops by default, and is recorded when allowed through. A blacklist finding nothing has said nothing | P0 | `policy.recognise`, `unverified`, `engine._permanent_halt` |
+| FR-25 | A command whose name does not constrain what it does — an interpreter, a shell, `rm`, `curl` — **cannot be vouched for**, and settings refuse it with an explanation. The `python -m <tool>` form recognises the tool, never the interpreter | P0 | `policy.EXECUTORS`, `_MODULE_FORM`, `settings.load` |
+| FR-26 | A vouch covers the **tool**, not the command line: a destructive verb in subcommand position, or a dangerous flag form, removes `ordinary` however the tool was vouched | P0 | `policy._suspect` |
 | FR-8 | A work order carries the work and nothing about the harness: no tool list, no model, no allowlist, no prior answer. The schema is closed and a field outside it is refused | P0 | `workorder.WORK_ORDER_FIELDS` |
 | FR-9 | The review panel is one or many seats, each asked separately and blind to the others; the seat count is the user's, above a floor | P0 | `policy.SEATS`, `resolve_seats` |
 | FR-10 | The seats' verdicts are **adjudicated, not averaged**: a veto seat cannot be outvoted, a majority is needed to pass, and a tie does not pass. The engine routes on the result | P0 | `policy.adjudicate`, `engine._adjudicate` |
@@ -161,6 +163,8 @@ nobody reads to the bottom of.
 - [ ] A target that is a red line overrules a declaration of `ordinary`, for all six kinds; ordinary
       development targets (`git commit`, `pytest`, a source path) are not stopped; and an operation
       taken on the plan's word alone appears in the run report.
+- [ ] An interpreter cannot be vouched for, in settings or at recognition time; `python -m <tool>`
+      still works; and a destructive verb in subcommand position beats a vouched tool.
 - [ ] A node's brief describing a red line stops it, quoting the phrase; ordinary briefs are not
       stopped; and the seats owe a declaration like anything else that can act.
 - [ ] `--confirm` for a gate nobody defined raises and names the real gates; a confirmation the run

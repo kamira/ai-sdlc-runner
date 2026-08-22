@@ -18,6 +18,7 @@
 | KN-6 | pattern | node-engine / idempotence | An operation may be an **effect** only if it leaves a probeable postcondition in the ledger, git or the forge; constructing one without a probe raises. Probes describe the **postcondition, not the action**, and read the world rather than any record the runner wrote. Unanswerable **raises** — never `False`. Nothing already true is re-applied, before or after the frontier. | active |
 | KN-7 | pattern | node-engine / sessions | Every **asking** node gets its own session: opened, asked once, closed in a `finally`; a factory that returns a session it already returned is refused. A multi-seat review is several asks, so each seat is its own session. The question is journalled **before** the session opens, so a dropped session costs the answer and not the question. | active |
 | KN-8 | pattern | governance / wiring | A mechanism is not built until something calls it. Three rounds here shipped a correct piece that nothing reached — an engine ignoring its own policy verdict, an `adjudicate` no caller invoked, a `PERMANENT_HALTS` list printed into every order and never checked — and each passed its own suite. The test that matters is the one that fails when the wire is cut. | active |
+| KN-16 | pattern | governance / checks | **A name is evidence only if it constrains what happens.** `pytest` names a job; `python` names an execution engine and the argument is the program. Vouching for the second is vouching for everything. And a vouch covers the tool, not the command line — `docker volume rm` from an operator who vouched for `docker` is not vouched work. | active |
 | KN-15 | pattern | governance / checks | **A recogniser needs three answers, not two.** "No dangerous pattern matched" is not "safe" — it is "I did not recognise this". Five destructive commands declared ordinary ran a flow to completion because a blacklist's silence was read as assent, and the disclosure meant to catch that was keyed on *having named a target* rather than on one being **recognised**. Unknown must be its own state, and it is not the safe one. | active |
 | KN-14 | practice | governance / verification | **Freeze the tree before verification, and do not touch it until every seat reports.** A verifier found the working tree change under it mid-audit — and the change was to the safety check it was auditing. An acceptance round whose subject moved has verified nothing, however good its findings are. | active |
 | KN-13 | pattern | governance / checks | **A false-stop rate is a safety property.** A red-line check measured 95% false positives on ordinary engineering briefs — a check that fires on two jobs in three gets switched off, and switching it off is one flag away. And a benchmark you author for your own mechanism flatters it: mine measured 0% on briefs I chose; a verifier's corpus measured 85%. | active |
@@ -517,3 +518,56 @@ pinned the hole as the requirement: *"an operation that names targets is not rec
 asserting the implementation rather than the intent. 433 tests passed before the bug was reproduced
 and after. KN-8's shape again: **a test that feeds the mechanism only what the mechanism can
 digest.** The corpus that matters is the one built from what the mechanism cannot.
+
+
+## KN-16 — A name is evidence only if it constrains what happens
+*tags: governance · source: CHG-20260823-10 · tier: pattern*
+
+This repository built four versions of one check across four rounds of review, and every version
+failed the same way: **a coarse test answered "safe" about something it had not examined.** What
+stood in for the examination changed each time, which is why each version looked like a fix.
+
+| Version | The thing that stood in for examination | How it broke |
+|---|---|---|
+| a word blacklist | "no dangerous word in the prose" | twelve ordinary English sentences |
+| a target blacklist | "no dangerous pattern in the command" | five commands nobody had listed |
+| a prefix allowlist | "the command starts with a known-good word" | `cat … > /dev/sda`, and 65% false stops |
+| tool vouching | "the operator vouched for this command" | `python -c "…unlink()"`, `docker volume rm` |
+
+The last one is the most instructive, because the premise was *right*. The operator does know their
+toolchain and the runner does not; letting them say so is correct. What was wrong was assuming a
+**command name carries information about what the command does.**
+
+For some names it does. `pytest` runs tests; `ruff` lints; `mypy` checks types. The name bounds the
+work, so vouching for it is a real statement.
+
+For others it carries nothing at all. `python`, `sh`, `node`, `perl`, `rm`, `mv`, `curl`, `xargs`,
+`env`, `ssh` — these are **execution engines**, and the argument is the program. Vouching for one is
+not a narrow permission, it is every permission, dressed as a narrow one. So:
+
+**A name may be used as evidence only where the name constrains what happens.** Where it does not,
+refuse the vouch outright, and refuse it *at configuration time* so the operator learns while they
+are deciding rather than while it is running. Keep the common case through **shape** instead:
+`python -m pytest` is ordinary because `pytest` is vouched — never because `python` is.
+
+### The corollary that cost a second finding in the same round
+
+**A vouch covers the tool, not the command line.** `docker volume rm pgdata` and
+`git push origin +main:main` were ordinary for an operator who had vouched for `docker` and `git` —
+and were not even recorded, because a "recognised" target suppresses the disclosure. The safety net
+had a hole shaped exactly like the thing it was for.
+
+The argument guard that was supposed to prevent this matched **tokens anywhere**, which made it
+simultaneously too loose (missing `rm`, `stop`, `remove`, a `+refspec`) and too strict (stopping
+`cargo build --release`, `docker compose up -d`). Matching a destructive **verb in subcommand
+position** is the distinction: a verb there says what the command does; the same letters in a flag
+value do not.
+
+### And the part worth remembering longest
+
+Four versions, four rounds, each fixing the last one's defect and introducing its own — each defect
+a **category the previous version had not distinguished**. Prose vs. facts. Unknown vs. safe. Prefix
+vs. whole. Bounded name vs. execution engine.
+
+When a check keeps failing in a new way after each fix, the useful question stops being "what else
+should be on the list" and becomes **"what am I still treating as one thing that is actually two?"**
