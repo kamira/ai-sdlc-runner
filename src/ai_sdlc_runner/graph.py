@@ -1,78 +1,45 @@
-"""graph.py — the node graph the runner walks: the skill's own flow, written down once.
+"""graph.py — the development flow this runner drives, as data.
 
-CHG-20260822-04 task 6. The runner exists to be **an agent built on this flow** rather than a
-dependency on somebody else's agent, so the flow is the specification and this module is it, stated
-plainly. Nothing here is clever on purpose.
+CHG-20260823-01. The flow is the one the requirement describes, node by node:
 
-## Where the flow comes from
+    user instruction → PM plans → PM confirms → lead confirms feasibility and risk →
+    PM signs off → [ per module: engineer builds → engineer verifies its own work →
+    lead reviews → record | one fix pass → re-review → second failure halts ] →
+    review seats cross-check the whole change → QA tests and verifies → acceptance →
+    PR → merge → close-out → user feedback → back to PM
 
-It is **shipped**, as a fenced block under `## State machine` in `references/autopilot-loop.md`
-(lines 14–30), which task 1 already decomposed into the element
-``references/autopilot-loop#state-machine``. `SKILL.md`'s `## The loop` carries a shortened variant
-of the same flow.
+It was **designed from** the ai-sdlc-autopilot flowchart and is **not read from it**. The previous
+version pinned every node to a literal phrase of a shipped block; there is no shipped block here any
+more, and pinning to one would be exactly the runtime dependency this change removes. What replaces
+the pin is `policy.py`: every gate a node names must exist there, every role must have capabilities,
+and both are asserted — correctness is checked against our own definitions rather than against a file
+we no longer hold.
 
-That matters because CHG-20260822-04's D1 says the 99 flowchart nodes in the skill repo's
-``design.md`` are not shipped and must not be reconstructed by hand — true of *that* diagram, and it
-was read for two review rounds as "no flow is shipped anywhere", which is false. The flow below is
-not a reconstruction of anything: it is the shipped block, written as data, with each node naming
-the phrase it came from.
+## One node, one kind of work
 
-## Runner-authored fork point (D3): authored and pinned, not parsed
+The requirement says it plainly, and it is the rule that decides where the boundaries fall: *一個項目
+只做單一類型的工作*. Building, verifying your own work, and having it reviewed are three kinds of
+work, so they are three nodes. Opening a PR and merging are two. Planning and confirming the plan are
+two — the second is where a human can still say no.
 
-Writing the flow down rather than parsing the shipped block is a judgement, and D3 requires the
-judgement to be named rather than left looking like it fell out of the data. It is fork point 8 in
-`ai-guideline` §6's index. A different reader could parse the block — the reason not to is below.
+Sub-steps *inside* one node are **effects**, not nodes: ticking a box, committing, and updating the
+worklog are one kind of work — recording that a module is done — carried out in order with a probe
+each.
 
-## How it stays honest: one pin, no machinery
+## What is not a line
 
-Each node carries ``source_phrase`` — a literal substring of the shipped block. A test asserts that
-every phrase is present and that the nodes' order matches the phrases' order of first appearance.
-If the skill changes its flow, the pin goes red.
+Three shapes carry most of the meaning and would be lost by flattening, so each is explicit:
 
-The deliberate decision **not** to parse the block: it contains arrows that are not edges. Line 10 is
-``→ operational verify (run it for real: operate → observe → pass; per policy)`` — the two arrows
-inside the parentheses are prose, and a splitter would emit "observe" and "pass; per policy" as
-nodes. Nineteen arrows in the block, at least two of them decoration. A parser could be taught to
-skip parenthesised text, but that rule is hand-written against this block's typography, so parsing
-buys no independence from human judgement — and it changes the **direction** of failure: a
-misreading produces a wrong graph silently, and task 4's gate cannot catch it because the store did
-not change. Writing the flow down and pinning it means a mistake shows up as a red test instead.
-
-## What the graph must not lose
-
-The shipped flow is not a line. Flattening it would quietly drop the parts that carry the most
-meaning, so they are represented explicitly and tested:
-
-* the **per-task loop** — "[ per unticked task T_i: … ]" — is a back edge, and it is the same
-  mechanism as resume: an already-ticked task is simply not the frontier.
-* the **review fail branch** — one fix pass, then re-review, and "second fail = halt" — is a bounded
-  retry, not a repeat-until-green.
-* the **CHG-not-confirmed branch** — "no → requirement/modification governance first" — loops back
-  into requirement analysis and structure design, which the runner **drives itself**: it is the agent
-  built on this flow, not a driver handing that stage to something else. (An earlier draft of this
-  paragraph called it a halt-with-reason while the node table already drove it; the review panel
-  caught the contradiction. The table was right.)
-
-* the **plan-check failure** — "exit 2 on failure — a bad plan never starts" — is a stop, on the same
-  footing as "second fail = halt". Both failure modes are stated inside the shipped block, so both
-  get a node; representing one and leaving the other as a prose note was the inconsistency the panel
-  found.
+* the **per-module loop** — one engineer per small module, and the loop is also the resume mechanism:
+  an already-recorded module is simply not the frontier.
+* the **bounded retry** — one fix pass, one re-review, and a second failure halts. Not
+  repeat-until-green.
+* the **feedback loop** — user feedback returns to PM, so the flow closes rather than ends.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
-
-#: The shipped element this graph is pinned to. Exactly one authority: `SKILL.md`'s `## The loop` is
-#: a shortened variant (it omits the confirm gate and every branch), so pinning to both would fail
-#: for a difference in detail rather than a difference in flow.
-SOURCE_ELEMENT = "references/autopilot-loop#state-machine"
-SOURCE_REL_PATH = "elements/references/autopilot-loop/001-state-machine.md"
-
-#: The checkpoint namespace whose verdicts the store ships a resolver for.
-HALT_NS = "halt"
-AUTOPILOT_NS = "autopilot"
+from typing import Dict, List, Optional, Tuple
 
 STEP = "step"
 DECISION = "decision"
@@ -82,126 +49,105 @@ TERMINAL = "terminal"
 
 @dataclass(frozen=True)
 class Node:
-    """One node of the shipped flow.
+    """One node: one kind of work.
 
-    ``checkpoints`` are dispatch-element ids from task 2 — policy hanging on the node, never the
-    source of its position. ``role`` is the role whose work order this node dispatches; ``None``
-    means the runner does it itself (reading the ledger, checking a gate) and nothing is dispatched.
+    ``role`` names who does it — ``None`` means the runner does it itself and asks no model, which is
+    what keeps "every asking node is its own session" a statement about the nodes that ask. ``gate``
+    names the policy gate consulted before the work, where the flow puts one.
     """
 
     id: str
     kind: str
-    source_phrase: str
+    label: str
     role: Optional[str] = None
-    checkpoints: Tuple[str, ...] = ()
+    gate: Optional[str] = None
     next: Optional[str] = None
-    #: decision/loop nodes only: label → target node id.
     branches: Dict[str, str] = field(default_factory=dict)
     note: str = ""
 
 
-#: The flow, in the shipped order. Roles follow the skill's own least-privilege table: the lead
-#: implementer is the only role with `can_spawn`, which is what makes "the lead dispatches the
-#: engineers" a shipped fact rather than an arrangement invented here; the verifier is read-only on
-#: what it verifies but may execute, which is what "QA runs the whole thing for real" needs.
 NODES: Tuple[Node, ...] = (
-    Node(id="handshake", kind=STEP, source_phrase="entry handshake", next="chg_confirmed",
-         note="governance layer: knowledge INDEX + pending CHG scan"),
-    Node(id="chg_confirmed", kind=DECISION, source_phrase="CHG exists & confirmed?",
-         branches={"no": "requirement_analysis", "yes": "plan_check"},
-         note="'no' leaves the runner's layer: governance first, then re-enter"),
-    Node(id="requirement_analysis", kind=STEP, source_phrase="requirement/modification governance",
-         role="analyst", checkpoints=("halt:requirement_confirmed",), next="structure_design",
-         note="the user's requirement becomes a Guideline"),
-    Node(id="structure_design", kind=STEP, source_phrase="requirement/modification governance",
-         role="analyst", checkpoints=("halt:structure_confirmed",), next="chg_confirmed",
-         note="governance produces the CHG, then the flow re-enters the decision"),
-    Node(id="plan_check", kind=DECISION, source_phrase="plan-check gate", role="lead-implementer",
-         branches={"pass": "confirm_gate", "fail": "halt_bad_plan"},
-         note="the block states this gate's own failure mode; it gets a stop, like second-fail does"),
-    Node(id="halt_bad_plan", kind=TERMINAL, source_phrase="exit 2 on failure",
-         note="a bad plan never starts"),
-    Node(id="confirm_gate", kind=STEP, source_phrase="confirm gate", role="lead-implementer",
-         checkpoints=("autopilot:confirm_gate", "halt:before_implement"), next="next_task",
-         note="feasibility and risk confirmed before any engineer is dispatched"),
-    Node(id="next_task", kind=LOOP, source_phrase="per unticked task",
-         branches={"task": "build", "none": "branch_review"},
-         note="the frontier is the first unticked task — the loop and resume are one mechanism"),
-    Node(id="build", kind=STEP, source_phrase="TDD build", role="sub-implementer", next="task_tests",
-         note="one small module per dispatched engineer"),
-    Node(id="task_tests", kind=STEP, source_phrase="task tests", role="sub-implementer",
-         next="task_review", note="the engineer's own verification"),
-    Node(id="task_review", kind=DECISION, source_phrase="read-only task review",
-         role="lead-implementer", checkpoints=("autopilot:task_review",),
-         branches={"pass": "tick_commit", "fail": "fix_pass"},
+    Node("intake", STEP, "the user's instruction arrives", next="pm_plan",
+         note="the runner reads it; nobody is asked anything yet"),
+    Node("pm_plan", STEP, "PM turns the instruction into a plan", role="pm", next="pm_confirm"),
+    Node("pm_confirm", DECISION, "PM confirms the plan", gate="plan_confirmed",
+         branches={"yes": "lead_assess", "no": "pm_plan"},
+         note="the first place a human can say no, and the cheapest"),
+    Node("lead_assess", STEP, "the lead confirms feasibility and risk", role="lead",
+         gate="feasibility_confirmed", next="pm_signoff",
+         note="judged before anyone is dispatched, which is why the lead is asked first"),
+    Node("pm_signoff", DECISION, "PM signs off on the lead's assessment", gate="before_dispatch",
+         branches={"yes": "next_module", "no": "pm_plan"}),
+    Node("next_module", LOOP, "take the next unbuilt module",
+         branches={"module": "engineer_build", "none": "lead_review"},
+         note="the frontier is the first module with no record — the loop and the resume are one"),
+    Node("engineer_build", STEP, "an engineer builds one small module", role="engineer",
+         next="engineer_selfverify"),
+    Node("engineer_selfverify", STEP, "the engineer verifies its own work", role="engineer",
+         gate="self_verify", next="lead_task_review",
+         note="its own work — which is why it is never the last word"),
+    Node("lead_task_review", DECISION, "the lead reviews that module", role="lead",
+         gate="task_review", branches={"pass": "record_module", "fail": "fix_pass"},
          note="the lead reviews work it did not write"),
-    Node(id="tick_commit", kind=STEP, source_phrase="tick + commit", role="lead-implementer",
-         next="next_task"),
-    Node(id="fix_pass", kind=STEP, source_phrase="one fix pass", role="sub-implementer",
-         next="re_review"),
-    Node(id="re_review", kind=DECISION, source_phrase="re-review", role="lead-implementer",
-         branches={"pass": "tick_commit", "fail": "halt_second_fail"},
-         note="bounded retry: exactly one fix pass, never repeat-until-green"),
-    Node(id="halt_second_fail", kind=TERMINAL, source_phrase="second fail = halt"),
-    Node(id="branch_review", kind=STEP, source_phrase="whole-branch review", role="lead-implementer",
-         next="operational_verify", note="no policy checkpoint: this is a code gate, not a risk gate"),
-    Node(id="operational_verify", kind=STEP, source_phrase="operational verify", role="verifier",
-         checkpoints=("autopilot:operational_verify",), next="acceptance",
-         note="QA runs it for real; task tests are not acceptance"),
-    Node(id="acceptance", kind=DECISION, source_phrase="acceptance", role="verifier",
-         checkpoints=("autopilot:acceptance",),
+    Node("record_module", STEP, "record the module as done", next="next_module",
+         note="tick, commit, update the worklog — one kind of work, three ordered effects"),
+    Node("fix_pass", STEP, "one fix pass", role="engineer", next="re_review"),
+    Node("re_review", DECISION, "the lead re-reviews", role="lead",
+         branches={"pass": "record_module", "fail": "halt_second_fail"},
+         note="bounded: exactly one fix pass, never repeat-until-green"),
+    Node("halt_second_fail", TERMINAL, "a second failure halts",
+         note="two failures on one module is not something retrying fixes"),
+    Node("lead_review", STEP, "review seats cross-check the whole change", role="seat",
+         gate="lead_review", next="qa_verify",
+         note="one or many seats, each in its own session — the count is the user's to set"),
+    Node("qa_verify", STEP, "QA tests and verifies the whole change", role="qa", gate="qa_verify",
+         next="qa_accept", note="run for real; a module's own tests are not this"),
+    Node("qa_accept", DECISION, "acceptance", role="qa", gate="acceptance",
          branches={"pass": "pr", "fail": "acceptance_failed"}),
-    Node(id="acceptance_failed", kind=STEP, source_phrase="acceptance",
-         checkpoints=("halt:acceptance_failed",), next="next_task",
-         note="back into the fix loop, under the policy's own gate"),
-    Node(id="pr", kind=STEP, source_phrase="PR", role="lead-implementer",
-         checkpoints=("autopilot:pr",), next="merge"),
-    Node(id="merge", kind=STEP, source_phrase="merge", role="lead-implementer",
-         checkpoints=("autopilot:merge", "halt:before_merge_or_release"), next="close_out"),
-    Node(id="close_out", kind=TERMINAL, source_phrase="close-out",
-         note="CHG status + Commit/PR + recurrence check + knowledge"),
+    Node("acceptance_failed", STEP, "back into the module loop", next="next_module"),
+    Node("pr", STEP, "open the pull request", role="lead", gate="pr", next="merge"),
+    Node("merge", STEP, "merge", role="lead", gate="merge", next="close_out",
+         note="a one-way door, which is why its gate stops earliest"),
+    Node("close_out", STEP, "close out: status, links, what was learned", next="feedback"),
+    Node("feedback", DECISION, "user feedback returns to PM",
+         branches={"more": "pm_plan", "done": "done"},
+         note="the flow closes rather than ends — new feedback is a new plan"),
+    Node("done", TERMINAL, "nothing further was asked for"),
 )
 
-BY_ID: Dict[str, Node] = {node.id: node for node in NODES}
+BY_ID: Dict[str, Node] = {n.id: n for n in NODES}
 
 
 class GraphError(Exception):
-    """Raised when the graph and the shipped flow, the elements, or itself disagree."""
+    """Raised when the graph disagrees with itself or with the policy."""
 
 
-def source_text(tree: str | Path) -> str:
-    """The shipped state-machine element, read from an emitted element tree."""
-    path = Path(tree) / SOURCE_REL_PATH
-    if not path.is_file():
-        raise GraphError(
-            f"the shipped flow element is missing: {path} ({SOURCE_ELEMENT}). The graph is pinned "
-            f"to it, so without it nothing here can be checked against its source.")
-    return path.read_text(encoding="utf-8")
+def gates_used() -> List[str]:
+    """Every gate the flow consults, in flow order, duplicates kept so a test can see them."""
+    return [n.gate for n in NODES if n.gate]
 
 
-def checkpoint_ids() -> List[str]:
-    """Every checkpoint attached anywhere on the graph, in graph order, with duplicates kept.
-
-    Duplicates are kept on purpose: the coverage check wants to see a checkpoint attached **exactly
-    once**, and silently de-duplicating here would hide the case it exists to catch.
-    """
-    return [cp for node in NODES for cp in node.checkpoints]
+def roles_used() -> List[str]:
+    return sorted({n.role for n in NODES if n.role})
 
 
-def dispatched_roles() -> List[str]:
-    """Roles this graph actually dispatches work orders to, deduplicated and sorted."""
-    return sorted({node.role for node in NODES if node.role})
+def asking_nodes() -> List[str]:
+    """The nodes that ask a model — the ones the one-session rule binds."""
+    return [n.id for n in NODES if n.role]
 
 
 def validate() -> None:
-    """Internal consistency: every edge lands somewhere, every node is reachable, kinds are sane.
+    """Internal consistency, and agreement with the policy.
 
-    Deliberately separate from the pin against the shipped text: this catches a graph that is
-    malformed, the pin catches a graph that is well-formed but no longer the skill's flow.
+    Every edge lands somewhere, every node is reachable, and every gate and role a node names exists
+    in `policy.py`. A node naming a gate nothing defines is the failure that would otherwise show up
+    as a run halting on something nobody wrote down.
     """
-    ids = set(BY_ID)
+    from . import policy
+
     if len(BY_ID) != len(NODES):
-        raise GraphError("duplicate node id in the graph")
+        raise GraphError("duplicate node id")
+    ids = set(BY_ID)
     for node in NODES:
         targets = list(node.branches.values()) + ([node.next] if node.next else [])
         for target in targets:
@@ -213,16 +159,21 @@ def validate() -> None:
             raise GraphError(f"{node.kind} node {node.id!r} needs at least two branches")
         if node.kind == STEP and not node.next:
             raise GraphError(f"step node {node.id!r} has no successor")
+        if node.gate and node.gate not in policy.GATES:
+            raise GraphError(
+                f"node {node.id!r} names gate {node.gate!r}, which policy.py does not define")
+        if node.role and node.role not in policy.BY_ROLE:
+            raise GraphError(
+                f"node {node.id!r} names role {node.role!r}, which policy.py does not define")
 
-    reachable = {"handshake"}
-    frontier = ["handshake"]
+    reachable = {"intake"}
+    frontier = ["intake"]
     while frontier:
         current = BY_ID[frontier.pop()]
         for target in list(current.branches.values()) + ([current.next] if current.next else []):
             if target not in reachable:
                 reachable.add(target)
                 frontier.append(target)
-        reachable.add(current.id)
     unreachable = sorted(ids - reachable)
     if unreachable:
         raise GraphError(f"unreachable node(s): {unreachable}")

@@ -1,440 +1,146 @@
-"""cli.py — entry point: ``run`` / ``migrate`` / ``status`` subcommands.
+"""cli.py — the runner's command line.
 
-Loads ``config/runner.yaml`` (PyYAML if available, else a tiny built-in reader so the runner has
-zero hard dependencies), then dispatches to the orchestrator / contract layer.
+CHG-20260823-01. What is left after the skill dependency went is small on purpose: this runner drives
+one flow, and the flow is `graph.py`. The subcommands that existed to manage a vendored skill —
+`migrate`, `check`, the store resolution, the multi-project workspace and its structure scan — went
+with the thing they managed. Nothing here resolves a skill path, because there is no skill.
+
+## Dispatch: one process per ask
+
+A command backend gets **one process per ask**. That is the session boundary made physical: there is
+no handle to keep alive, so "closed after the ask" is not a promise a backend has to keep. The work
+order goes in as JSON on stdin and nothing else does — no tool list, no role prompt, nothing a
+harness owns.
+
+`--seat-model` routes a named seat to a different command, which is what makes cross-model review
+real: **the same question, different answerers.** The routing lives here and never in the order.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional
 
-from . import (contract, dashboard, executors, gates, orchestrator, skillstore,
-               state, structure_scan, tui, workspace)
+from . import engine, graph, policy, tui
 
 DEFAULT_CONFIG = "config/runner.yaml"
 
 
-# --------------------------------------------------------------------------------------
-# Config loading (no hard YAML dependency)
-# --------------------------------------------------------------------------------------
-
-def load_config(path: str | Path) -> dict:
-    """Load runner.yaml. Use PyYAML if installed; otherwise parse the flat key: value file."""
+def load_config(path: str) -> dict:
+    """Read runner.yaml. PyYAML if present, else a small reader for the flat keys we use."""
     p = Path(path)
     if not p.is_file():
-        raise FileNotFoundError(f"config not found: {p}")
+        return {}
     text = p.read_text(encoding="utf-8")
     try:
-        import yaml  # type: ignore
-
+        import yaml
         return yaml.safe_load(text) or {}
     except ImportError:
-        return _mini_yaml(text)
-
-
-def _scalar(val: str):
-    """Parse a YAML scalar: int, inline JSON list/dict, or quoted/plain string."""
-    val = val.strip()
-    if not val:
-        return None
-    if val[0] in "[{":
-        try:
-            return json.loads(val)
-        except json.JSONDecodeError:
-            return val
-    if val.lstrip("-").isdigit():
-        return int(val)
-    return val.strip("'\"")
-
-
-def _mini_yaml(text: str) -> dict:
-    """Minimal indentation-aware YAML reader: scalars, inline JSON lists, and nested maps.
-
-    Enough for runner.yaml (a few levels of nested ``key: value`` + inline ``[...]`` lists). Used only
-    when PyYAML is not installed; PyYAML is preferred when available.
-    """
-    root: dict = {}
-    # Stack of (indent, container) to attach children by indentation.
-    stack: list = [(-1, root)]
-    for raw in text.splitlines():
-        no_comment = raw.split("#", 1)[0].rstrip()
-        if not no_comment.strip():
-            continue
-        indent = len(no_comment) - len(no_comment.lstrip())
-        key, sep, val = no_comment.strip().partition(":")
-        if not sep:
-            continue
-        key = key.strip()
-        while stack and indent <= stack[-1][0]:
-            stack.pop()
-        parent = stack[-1][1]
-        if val.strip() == "":
-            child: dict = {}
-            parent[key] = child
-            stack.append((indent, child))
-        else:
-            parent[key] = _scalar(val)
-    return root
-
-
-def _resolve_skill_path(config: dict, override: Optional[str], project_dir: Optional[str] = None) -> str:
-    """Resolve the concrete skill path (CHG-20260617-05).
-
-    Precedence: explicit ``--skill-path`` override → local store version matching the project lock
-    major.minor (or config-expected on first run, else the latest in the store) → the vestigial
-    ``skill_path`` fallback. Offline throughout — the store is local.
-
-    That last step is reached only when the store resolves to nothing at all, so it cannot resolve
-    either; it survives only to keep the resulting error legible. CHG-ii replaces it with a typed
-    ``SkillPathError`` (CHG-20260822-02).
-    """
-    if override:
-        return override
-    store = config.get("skill_store")
-    if store:
-        # Prefer the version a project is locked to; else the config-expected; else the latest.
-        lock = contract.read_lock(project_dir) if project_dir else None
-        if lock:
-            p = skillstore.resolve_path(store, major=lock["contract_major"], minor=lock["contract_minor"])
-            if p:
-                return p
-        expected = config.get("contract_version")
-        if expected:
-            try:
-                emaj, emin = contract.contract_key(expected)
-                p = skillstore.resolve_path(store, major=emaj, minor=emin)
-                if p:
-                    return p
-            except contract.ContractError:
-                pass
-        p = skillstore.resolve_path(store)  # latest available
-        if p:
-            return p
-    return config.get("skill_path", "./skills/v1.64.0")
+        config: Dict[str, object] = {}
+        for line in text.splitlines():
+            line = line.split("#", 1)[0].strip()
+            if ":" in line and not line.startswith("-"):
+                key, _, value = line.partition(":")
+                value = value.strip().strip('"').strip("'")
+                if value:
+                    config[key.strip()] = value
+        return config
 
 
 # --------------------------------------------------------------------------------------
-# Subcommands
+# dispatch
 # --------------------------------------------------------------------------------------
 
-def _skill_update_line(config: dict, project: Optional[str]) -> Optional[str]:
-    """One-line skill-update summary (store-aware). Returns None if nothing can be determined."""
-    try:
-        store = config.get("skill_store")
-        expected = config.get("contract_version")
-        info = None
-        if store and skillstore.store_versions(store):
-            info = skillstore.detect(store, project_dir=project, expected=expected)
-        else:
-            skill_path = _resolve_skill_path(config, None, project)
-            info = contract.detect_update(skill_path, expected=expected, project_dir=project)
-        if info is None:
-            return None
-        flag = " ⚠ migrate" if info.needs_migrate else ""
-        return f"skill:    newest {info.local} vs {info.baseline or '?'} → {info.kind}{flag}"
-    except Exception:
-        return None
+class _Stub(engine.Session):
+    """Answers nothing, records that it was asked. The default, so a dry run costs nothing."""
+
+    def ask(self, order):
+        return {"backend": "stub", "node_id": order["node_id"], "role": order["role"]}
+
+    def close(self):
+        pass
+
+
+class _Process(engine.Session):
+    """One process per ask: the work order on stdin, whatever it prints back as the answer."""
+
+    def __init__(self, argv: List[str], timeout: int):
+        self.argv, self.timeout = argv, timeout
+
+    def ask(self, order):
+        proc = subprocess.run(self.argv, input=json.dumps(order, ensure_ascii=False),
+                              capture_output=True, text=True, timeout=self.timeout)
+        return {"exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
+
+    def close(self):
+        pass
+
+
+def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = None):
+    """Build the factory the engine opens a session from, routing by seat where asked."""
+    seat_models = seat_models or {}
+    default = config.get("agent_command")
+    timeout = int(config.get("agent_timeout", 600))
+
+    def factory(seat: Optional[str] = None):
+        argv = seat_models.get(seat) or default
+        if not argv:
+            return _Stub()
+        return _Process(list(argv) if isinstance(argv, list) else str(argv).split(), timeout)
+
+    return factory
+
+
+# --------------------------------------------------------------------------------------
+# commands
+# --------------------------------------------------------------------------------------
+
+def cmd_flow(args: argparse.Namespace) -> int:
+    """Print the flow this runner drives — the fastest way to see what it will actually do."""
+    graph.validate()
+    for node in graph.NODES:
+        who = f"[{node.role}]" if node.role else "[runner]"
+        gate = f"  gate:{node.gate}" if node.gate else ""
+        print(f"{node.id:22s} {who:11s} {node.label}{gate}")
+        for label, target in sorted(node.branches.items()):
+            print(f"{'':22s} {'':11s}   {label} → {target}")
+    print(f"\n{len(graph.NODES)} nodes, {len(graph.asking_nodes())} of them ask someone; "
+          f"{len(set(graph.gates_used()))} gates")
+    return 0
+
+
+def cmd_policy(args: argparse.Namespace) -> int:
+    """Print the governance: roles, gates, seats. Ours, not read from anywhere."""
+    print("roles")
+    for role in policy.ROLES:
+        caps = "".join(c for c, on in
+                       (("s", role.can_spawn), ("w", role.can_write), ("x", role.can_execute)) if on)
+        print(f"  {role.name:10s} {caps:3s} {role.label}")
+    print("\ngates (risk → verdict)")
+    for gate, grades in policy.GATES.items():
+        print(f"  {gate:22s} " + "  ".join(f"{r}:{grades[r]}" for r in policy.RISKS))
+    print(f"\nseats (floor {policy.SEAT_FLOOR})")
+    for seat in policy.SEATS:
+        print(f"  {seat.name:12s} {'veto' if seat.veto else '    '}  {seat.label}")
+    return 0
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    # Opt-in (D7): without --engine the four-stage path below is untouched, and flipping the default
-    # is a separate, later decision.
-    if getattr(args, "engine", False):
-        return cmd_engine_run(args)
+    """Walk the flow for one change."""
     config = load_config(args.config)
-    skill_path = _resolve_skill_path(config, args.skill_path, args.project)
-    requested = args.contract_version or config.get("contract_version")
-
-    # Multi-project (cross-repo) mode: if the target is an authority with a saved workspace,
-    # verify cross-repo consistency first (drift → halt), then run the loop on the authority.
-    ws = workspace.load(args.project)
-    if ws is not None and ws.is_multi:
-        print(f"workspace: authority {ws.authority} + {len(ws.consumers)} consumer(s)")
-        code = _cross_repo_gate(config, ws, args.project)
-        if code is not None:
-            return code
-
-    # In a real run the executor/approver are platform-bound; --dry-run uses stubs and
-    # an approver that never auto-approves, so red-line gates correctly stop.
-    # With --dashboard, collect events into a model and stream a one-line feed as they arrive.
-    use_dash = getattr(args, "dashboard", False)
-    model = (dashboard.DashboardModel(project_dir=str(args.project),
-                                      skill_line=_skill_update_line(config, args.project))
-             if use_dash else None)
-
-    def on_event(ev: dict) -> None:
-        model.add(ev)
-        # Lightweight live feed (the full panel view is rendered after the run / at halt).
-        t = ev.get("type")
-        if t == "stage":
-            print(f"▶ {ev.get('stage')}")
-        elif t == "gate":
-            print(f"  gate {ev.get('gate')} -> {ev.get('result')}")
-        elif t == "agent":
-            if ev.get("phase") == "dispatch":
-                print(f"    · agent {ev.get('role')} dispatched")
-
-    # Build the platform-agnostic execution backend (stub | command/subscription | api).
-    backend = getattr(args, "backend", None)
-    try:
-        executor = executors.from_config(config, override_backend=backend)
-    except executors.ExecutorError as exc:
-        print(f"executor config error: {exc}")
-        return 2
-    # The stub keeps the orchestrator's internal path (and existing output) identical.
-    agent_executor = None if getattr(executor, "backend", "stub") == "stub" else executor.run
-
-    report = orchestrator.run(
-        args.project,
-        skill_path=skill_path,
-        config=config,
-        requested_version=requested,
-        risk=args.risk,
-        resume=args.resume,
-        agent_executor=agent_executor,
-        approver=None,                 # no auto-approval; HALT gates stop the run
-        on_event=on_event if use_dash else None,
-    )
-
-    if model is not None:
-        print()
-        dashboard.view(model, getattr(args, "agent_view", dashboard.AGENT_VIEW_MERGED))
-        print()
-
-    print(f"status: {report.status}")
-    print(f"contract: {report.contract_version}")
-    if report.caps:
-        print(f"caps: concurrency<={report.caps.concurrency_max}, nesting<={report.caps.nesting_depth_max}")
-    print(f"stages run: {', '.join(report.stages_run) or '(none)'}")
-    for d in report.decisions:
-        print(f"  gate {d.gate} [{d.risk}] -> {d.result}: {d.reason}")
-    if report.status == "halted_for_approval":
-        print(f"HALTED at gate '{report.halted_at}' — awaiting human approval.\n  {report.detail}")
-        return 10
-    if report.status == "migrate_required":
-        print(report.detail)
-        return 20
-    return 0
-
-
-def cmd_migrate(args: argparse.Namespace) -> int:
-    result = contract.migrate(args.project, args.to)
-    print(f"migrate -> {result.to_version}")
-    print(f"checked {len(result.checked)} doc(s)")
-    if result.ok:
-        print("OK: all docs re-parsed under the new contract; lock raised.")
-        return 0
-    print("BLOCKED: the following did not parse under the new contract (lock left unchanged):")
-    for item in result.incompatibilities:
-        print(f"  - {item}")
-    return 1
-
-
-def cmd_menu(args: argparse.Namespace) -> int:
-    """Interactive menu (arrow-key when on a TTY, numbered fallback otherwise).
-
-    The menu only *collects inputs* and dispatches to the existing commands, so every halt gate and
-    red-line stop still applies — a "Run" launched here goes through the same orchestrator.
-    """
-    actions = [
-        ("Set up workspace", "register projects; pick the main (authority) project"),
-        ("Analyze structure", "structure analysis across the workspace (before the loop)"),
-        ("Run four-stage loop", "drive a project through requirement→structure→implement→acceptance"),
-        ("Dashboard", "open the multi-panel dashboard for a project (status/log/verify/agents)"),
-        ("Check skill updates", "detect whether the local skill location is newer than the lock"),
-        ("Migrate contract", "validating contract upgrade (re-read all docs first)"),
-        ("Status", "show the per-project lock + run state"),
-        ("Help", "show command-line help"),
-        ("Exit", "quit"),
-    ]
-    while True:
-        idx = tui.select("ai-sdlc-runner — what would you like to do?", actions)
-        if idx is None:
-            return 0
-        choice = actions[idx][0]
-        if choice == "Exit":
-            return 0
-        if choice == "Help":
-            build_parser().print_help()
-            continue
-        if choice == "Status":
-            project = tui.prompt("Project path")
-            if project:
-                cmd_status(argparse.Namespace(project=project))
-            continue
-        if choice == "Migrate contract":
-            project = tui.prompt("Project path")
-            to = tui.prompt("Target contract version", "")
-            if project and to:
-                cmd_migrate(argparse.Namespace(project=project, to=to))
-            continue
-        if choice == "Set up workspace":
-            cmd_workspace(argparse.Namespace(authority=None, repo=None, name=None))
-            continue
-        if choice == "Analyze structure":
-            authority = tui.prompt("Authority (main) project path")
-            if authority:
-                cmd_analyze(argparse.Namespace(authority=authority, repo=None, config=args.config))
-            continue
-        if choice == "Dashboard":
-            project = tui.prompt("Project path")
-            if project:
-                view = _ask_agent_view()
-                cmd_dashboard(argparse.Namespace(project=project, agent_view=view,
-                                                 config=args.config, skill_path=args.skill_path))
-            continue
-        if choice == "Check skill updates":
-            project = tui.prompt("Project path (blank = compare to config-expected)", "")
-            cmd_check(argparse.Namespace(project=project or None, config=args.config,
-                                         skill_path=args.skill_path))
-            continue
-        if choice == "Run four-stage loop":
-            project = tui.prompt("Project path")
-            if not project:
-                continue
-            risk = tui.prompt("Risk (low/medium/high)", "medium") or "medium"
-            want_dash = (tui.prompt("Show dashboard? (y/N)", "N") or "N").lower().startswith("y")
-            view = _ask_agent_view() if want_dash else dashboard.AGENT_VIEW_MERGED
-            cmd_run(argparse.Namespace(
-                project=project,
-                config=args.config,
-                skill_path=args.skill_path,
-                contract_version=None,
-                risk=risk if risk in ("low", "medium", "high") else "medium",
-                resume=False,
-                dashboard=want_dash,
-                agent_view=view,
-                backend=None,
-            ))
-            continue
-    return 0
-
-
-def _ask_agent_view() -> str:
-    """Menu choice: consolidate agent logs in one panel (default) or tabbed per agent."""
-    options = [
-        ("Consolidated (one panel)", "all agents interleaved in one chronological log"),
-        ("Tabbed (per agent)", "group the log by agent (A1/I1/I1.x/V1)"),
-    ]
-    idx = tui.select("Agent log layout?", options)
-    return dashboard.AGENT_VIEW_TABBED if idx == 1 else dashboard.AGENT_VIEW_MERGED
-
-
-def cmd_dashboard(args: argparse.Namespace) -> int:
-    """Render the multi-panel dashboard for a project from its saved state/ACC/git."""
-    skill_line = None
-    try:
-        config = load_config(args.config)
-        skill_line = _skill_update_line(config, args.project)
-    except (FileNotFoundError, OSError):
-        pass
-    model = dashboard.DashboardModel.from_saved(args.project, skill_line=skill_line)
-    dashboard.view(model, getattr(args, "agent_view", dashboard.AGENT_VIEW_MERGED))
-    return 0
-
-
-def cmd_check(args: argparse.Namespace) -> int:
-    """Detect whether the local skill store/location has an update relative to the lock / expected."""
-    config = load_config(args.config)
-    expected = config.get("contract_version")
-    store = config.get("skill_store")
-    versions = skillstore.store_versions(store) if store else []
-    if versions:
-        print(f"skill store:   {store}")
-        print(f"versions:      {', '.join(versions)}")
-        info = skillstore.detect(store, project_dir=args.project, expected=expected)
-    else:
-        skill_path = _resolve_skill_path(config, args.skill_path, args.project)
-        print(f"skill path:    {skill_path}")
-        info = contract.detect_update(skill_path, expected=expected, project_dir=args.project)
-    if info is None:
-        print("status:        no skill versions found.")
-        return 1
-    print(f"newest:        {info.local}")
-    print(f"baseline:      {info.baseline or '(none)'}"
-          + ("   [project lock]" if args.project else "   [config expected]"))
-    print(f"status:        {info.kind} — {info.message}")
-    return 20 if info.needs_migrate else 0
-
-
-def _engine_session_factory(config: dict, backend: Optional[str]):
-    """One process per ask when a command backend is configured; a stub otherwise.
-
-    A process per ask is the session boundary made physical: there is no handle to keep alive, so
-    "closed after the ask" is not a promise the backend has to keep. The work order goes in as JSON
-    on stdin — no tool list, no role prompt, nothing the harness owns (D5).
-    """
-    import json as _json
-    import subprocess
-
-    from . import engine
-
-    spec = config.get("executor", {}) if isinstance(config.get("executor"), dict) else {}
-    chosen = (backend or spec.get("backend") or "stub").lower()
-    if chosen != "command":
-        class _Stub(engine.Session):
-            def ask(self, order):
-                return {"backend": "stub", "node_id": order["node_id"]}
-
-            def close(self):
-                pass
-
-        return lambda seat=None: _Stub()
-
-    cmd = spec.get("command", {}) if isinstance(spec.get("command"), dict) else {}
-    argv = cmd.get("argv") or []
-    if isinstance(argv, str):
-        argv = argv.split()
-    argv = list(argv) + list(cmd.get("extra_args") or [])
-    timeout = cmd.get("timeout", 600)
-
-    class _Process(engine.Session):
-        def ask(self, order):
-            proc = subprocess.run(argv, input=_json.dumps(order, ensure_ascii=False),
-                                  capture_output=True, text=True, timeout=timeout)
-            return {"exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
-
-        def close(self):
-            pass
-
-    return lambda seat=None: _Process()
-
-
-def cmd_engine_run(args: argparse.Namespace) -> int:
-    """Walk the node graph (CHG-20260822-04 task 6). Opt-in: `runner run --engine`.
-
-    The plan file supplies what no store can: per-node objectives, done-criteria, branch choices,
-    and the CHG's risk grade. It does **not** supply verdicts — the engine resolves those from the
-    shipped policy itself, because a gate the runner is handed rather than asked is not a gate.
-
-    Reading the plan out of the CHG instead of a file is a later change; until then the flag says
-    what it needs rather than inventing defaults.
-    """
-    import json as _json
-
-    from . import engine
-
-    config = load_config(args.config)
-    skill_path = _resolve_skill_path(config, args.skill_path, args.project)
-    tree = args.elements or str(Path(skill_path).parent.parent / "elements" /
-                                Path(skill_path).name)
-
     if not args.plan:
-        print("error: --engine needs --plan <file> (per-node objectives, branch choices and the "
-              "CHG's risk grade). Nothing in the store can supply them. Policy verdicts are not "
-              "among them: the engine resolves those from the shipped policy itself.")
+        print("error: run needs --plan <file>: the objective, instructions, done-criteria and "
+              "branch choices for this change. The governance is ours; the work is not.")
         return 2
-    plan = _json.loads(Path(args.plan).read_text(encoding="utf-8"))
+    plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
 
-    floor = engine.seat_floor(skill_path)
     seats = args.review_seats
     high_risk = bool(args.high_risk_mode)
-    if seats is not None and seats < floor and not high_risk:
-        # The GUI toggle, per the requirement: the operator turns it on, seeing what it costs.
-        high_risk = tui.confirm_high_risk(seats, floor)
+    if seats is not None and seats < policy.SEAT_FLOOR and not high_risk:
+        high_risk = tui.confirm_high_risk(seats, policy.SEAT_FLOOR)
         if not high_risk:
             seats = None
 
@@ -445,282 +151,53 @@ def cmd_engine_run(args: argparse.Namespace) -> int:
         autonomy=plan.get("autonomy"),
         review_seats=seats,
         high_risk_mode=high_risk,
-        situational_flags=plan.get("situational_flags", []),
-        languages=plan.get("languages", []),
         journal=engine.AskJournal(args.ask_journal) if args.ask_journal else None,
     )
-    factory = _engine_session_factory(config, args.backend)
+    seat_models = plan.get("seat_models") or {}
     try:
-        report = engine.walk(skill_path, tree, cfg, factory, enabled=True)
-    except engine.EngineError as exc:
-        print(f"engine: {exc}")
+        report = engine.walk(cfg, session_factory(config, seat_models), enabled=True)
+    except (engine.EngineError, policy.PolicyError) as exc:
+        print(f"halted: {exc}")
         return 10
 
     for relaxation in report.relaxations:
         print(f"relaxation:    {relaxation}")
     print(f"visited:       {len(report.visited)} node(s)")
     print(f"asks:          {len(report.asks)}")
-    print(f"halted at:     {report.halted_at} — {report.halt_reason}")
+    print(f"stopped at:    {report.halted_at} — {report.halt_reason}")
     return 0
 
-
-def cmd_elements(args: argparse.Namespace) -> int:
-    """Regeneration gate: re-derive every store version and compare with the committed elements.
-
-    Three states, two of them hard failures with **different** exit codes, because they call for
-    different actions: drift means regenerate (or stop hand-editing elements, which §2/§8 of the
-    guideline forbid), source-missing means the store the elements came from is no longer there to
-    derive from. Collapsing the two into one red is what would make the log unreadable at the moment
-    it matters (CHG-20260822-04 task 4).
-    """
-    from . import dispatch
-
-    report = dispatch.verify_elements(args.repo)
-    for row in report["versions"]:
-        print(f"v{row['version']:<10} {row['state']:<15} {row['detail']}")
-    print(f"result:        {report['state']}")
-    return {
-        dispatch.MATCH: dispatch.EXIT_MATCH,
-        dispatch.DRIFT: dispatch.EXIT_DRIFT,
-        dispatch.SOURCE_MISSING: dispatch.EXIT_SOURCE_MISSING,
-    }[report["state"]]
-
-
-def cmd_workspace(args: argparse.Namespace) -> int:
-    """Register a multi-project workspace: an authority (main) + consumer repos; persist the manifest.
-
-    Non-interactive with `--authority`/`--repo`; otherwise prompts to add projects and pick the main.
-    """
-    authority = args.authority
-    repos = list(args.repo or [])
-    if not authority:
-        authority = tui.prompt("Main (authority) project path")
-        if not authority:
-            print("no authority project given.")
-            return 2
-        while True:
-            more = tui.prompt("Add a consumer repo path (blank to finish)", "")
-            if not more:
-                break
-            repos.append(more)
-    try:
-        ws = workspace.build(authority, repos, name=args.name or "workspace")
-        path = ws.save()
-    except workspace.WorkspaceError as exc:
-        print(f"workspace error: {exc}")
-        return 2
-    print(f"workspace saved: {path}")
-    print(f"  authority (main): {ws.authority}")
-    for c in ws.consumers:
-        print(f"  consumer:         {c}")
-    if not ws.is_multi:
-        print("  (single-project workspace)")
-    return 0
-
-
-def cmd_analyze(args: argparse.Namespace) -> int:
-    """Structure-analysis pass across the workspace, before the AI-SDLC loop.
-
-    Scans + scaffolds four structures per project; for multi-project, sets up the authority contract
-    and each consumer's pointer (the skill's cross-repo model).
-    """
-    config = load_config(args.config)
-    ws = workspace.load(args.authority)
-    if ws is None:
-        # No saved workspace at this path → treat it as a single-project authority.
-        try:
-            ws = workspace.build(args.authority, args.repo or [])
-        except workspace.WorkspaceError as exc:
-            print(f"workspace error: {exc}")
-            return 2
-    version = config.get("contract_version", "1.0.0")
-    result = structure_scan.analyze_workspace(ws, version)
-    print(f"analyzed {len(result.scanned)} project(s):")
-    for p in result.scanned:
-        print(f"  scanned: {p}")
-    print(f"scaffolded {len(result.scaffolded)} structure doc(s)")
-    if ws.is_multi:
-        print(f"authority contract: {ws.authority}/docs/contracts/VERSION = {result.authority_version}")
-        for ptr in result.pointers:
-            print(f"  pointer: {ptr}")
-    print("next: `runner run <authority>` to drive the four-stage loop.")
-    return 0
-
-
-def _cross_repo_gate(config: dict, ws: "workspace.Workspace", project: str) -> Optional[int]:
-    """Run the skill's cross_repo_check as a gate for a multi-project workspace.
-
-    Returns an exit code to stop the run on drift, or None to continue.
-    """
-    if not ws.is_multi:
-        return None
-    skill_path = _resolve_skill_path(config, None, project)
-    decision = gates.check_cross_repo_drift(skill_path, ws.authority, ws.consumers)
-    if decision.is_halt:
-        print("cross-repo drift detected — halting (a consumer is behind the authority contract):")
-        print("  " + (decision.reason or "").replace("\n", "\n  "))
-        print("Bring the lagging repo(s) up to the authority version, then re-run.")
-        return 10
-    print("cross-repo check: consistent.")
-    return None
-
-
-def cmd_status(args: argparse.Namespace) -> int:
-    lock = contract.read_lock(args.project)
-    st = state.load(args.project)
-    if lock is None:
-        print(f"{args.project}: no contract lock (never run).")
-    else:
-        print(f"{args.project}: locked at {lock['contract_major']}.{lock['contract_minor']}.x "
-              f"(recorded {lock['contract_version']}, first run {lock['first_run']})")
-    if st is None:
-        print("  no run state.")
-    else:
-        print(f"  stage: {st.stage}; completed: {', '.join(st.completed) or '(none)'}")
-    # Best-effort skill-update line (store-aware; skipped silently if undeterminable).
-    try:
-        config = load_config(getattr(args, "config", DEFAULT_CONFIG))
-        line = _skill_update_line(config, args.project)
-        if line:
-            print("  " + line.replace("skill:    ", "skill: "))
-    except Exception:
-        pass
-    return 0
-
-
-# --------------------------------------------------------------------------------------
-# Parser
-# --------------------------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="runner", description="External orchestrator for the ai-sdlc skill.")
+    p = argparse.ArgumentParser(prog="runner",
+                                description="A governed development flow, driven end to end.")
     p.add_argument("--config", default=DEFAULT_CONFIG, help=f"path to runner.yaml (default {DEFAULT_CONFIG})")
-    # Not required: bare `runner` (no subcommand) opens the interactive menu.
     sub = p.add_subparsers(dest="command", required=False)
 
-    pmenu = sub.add_parser("menu", help="interactive menu (arrow-key selectable list)")
-    pmenu.add_argument("--skill-path", default=None, help="override skill_path (e.g. a local skill cache)")
-    pmenu.set_defaults(func=cmd_menu)
+    pf = sub.add_parser("flow", help="print the flow this runner drives")
+    pf.set_defaults(func=cmd_flow)
 
-    pr = sub.add_parser("run", help="drive the four-stage loop for a project")
-    pr.add_argument("project", help="path to the governed project directory")
-    pr.add_argument("--contract-version", default=None, help="expected contract version (defaults to config)")
-    pr.add_argument("--skill-path", default=None, help="override skill_path (e.g. a local skill cache)")
-    pr.add_argument("--engine", action="store_true",
-                    help="walk the node graph instead of the four stages (opt-in; CHG-20260822-04)")
-    pr.add_argument("--plan", default=None,
-                    help="JSON plan for --engine: node_specs, verdicts, decisions")
-    pr.add_argument("--elements", default=None,
-                    help="element tree for --engine (default: elements/<store version>)")
+    pp = sub.add_parser("policy", help="print the roles, gates and seats")
+    pp.set_defaults(func=cmd_policy)
+
+    pr = sub.add_parser("run", help="walk the flow for one change")
+    pr.add_argument("--plan", default=None, help="JSON plan: node_specs, decisions, risk")
     pr.add_argument("--review-seats", type=int, default=None,
-                    help="how many review seats to open (default: the shipped floor)")
+                    help=f"how many review seats to open (default: the floor, {policy.SEAT_FLOOR})")
     pr.add_argument("--high-risk-mode", action="store_true",
-                    help="allow fewer seats than the shipped floor; the run records that it did")
+                    help="allow fewer seats than the floor; the run records that it did")
     pr.add_argument("--ask-journal", default=None,
                     help="directory to journal each question in before asking it")
-    pr.add_argument("--risk", default="medium", choices=["low", "medium", "high"], help="overall change risk")
-    pr.add_argument("--resume", action="store_true", help="continue from the last checkpoint")
-    pr.add_argument("--backend", default=None, choices=[executors.BACKEND_STUB, executors.BACKEND_COMMAND, executors.BACKEND_API],
-                    help="agent execution backend (overrides config): stub | command | api")
-    pr.add_argument("--dashboard", action="store_true", help="show the multi-panel dashboard while running")
-    pr.add_argument("--agent-view", default=dashboard.AGENT_VIEW_MERGED,
-                    choices=[dashboard.AGENT_VIEW_MERGED, dashboard.AGENT_VIEW_TABBED],
-                    help="agent log layout: merged (default) or tabbed per agent")
     pr.set_defaults(func=cmd_run)
-
-    pd = sub.add_parser("dashboard", help="open the multi-panel dashboard for a project")
-    pd.add_argument("project", help="path to the governed project directory")
-    pd.add_argument("--skill-path", default=None, help="override skill_path (enables the skill-update line)")
-    pd.add_argument("--agent-view", default=dashboard.AGENT_VIEW_MERGED,
-                    choices=[dashboard.AGENT_VIEW_MERGED, dashboard.AGENT_VIEW_TABBED],
-                    help="agent log layout: merged (default) or tabbed per agent")
-    pd.set_defaults(func=cmd_dashboard)
-
-    pm = sub.add_parser("migrate", help="validating contract upgrade for a project")
-    pm.add_argument("project", help="path to the governed project directory")
-    pm.add_argument("--to", required=True, help="target contract version")
-    pm.set_defaults(func=cmd_migrate)
-
-    ps = sub.add_parser("status", help="show lock + run state for a project")
-    ps.add_argument("project", help="path to the governed project directory")
-    ps.add_argument("--skill-path", default=None, help="override skill_path")
-    ps.set_defaults(func=cmd_status)
-
-    pw = sub.add_parser("workspace", help="register a multi-project workspace (authority + consumers)")
-    pw.add_argument("--authority", default=None, help="main/authority project path")
-    pw.add_argument("--repo", action="append", default=None, help="consumer repo path (repeatable)")
-    pw.add_argument("--name", default=None, help="workspace name")
-    pw.set_defaults(func=cmd_workspace)
-
-    pa = sub.add_parser("analyze", help="structure analysis across a workspace (before the loop)")
-    pa.add_argument("authority", help="authority project path (with a saved workspace, or single project)")
-    pa.add_argument("--repo", action="append", default=None, help="consumer repo path (if no saved workspace)")
-    pa.set_defaults(func=cmd_analyze)
-
-    pc = sub.add_parser("check", help="detect whether the local skill has an update for a project")
-    pc.add_argument("project", nargs="?", default=None, help="project dir (compare to its lock); omit to compare to config-expected")
-    pc.add_argument("--skill-path", default=None, help="override skill_path (the local skill location to check)")
-    pc.set_defaults(func=cmd_check)
-
-    pe = sub.add_parser("elements", help="regeneration gate: derived elements vs the store they came from")
-    pe.add_argument("--repo", default=".", help="repo root holding skills/ and elements/ (default: .)")
-    pe.set_defaults(func=cmd_elements)
     return p
 
 
-# Known subcommand names — used only to distinguish `runner <project>` (bare, pre-opening the
-# resident app) from `runner <subcommand> ...` before handing off to the real argparse subparsers.
-SUBCOMMANDS = ("menu", "run", "dashboard", "migrate", "status", "workspace", "analyze", "check", "elements")
-
-
-def main(argv: Optional["list[str]"] = None) -> int:
-    raw = list(argv if argv is not None else sys.argv[1:])
-
-    # `runner <project>` (a single non-flag token that isn't a known subcommand) pre-opens the
-    # resident app on that project — a convenience alias, not a new subcommand; every existing
-    # subcommand still takes precedence (a project literally named "run" would need `./run`).
-    non_flags = [a for a in raw if not a.startswith("-")]
-    project_preopen = None
-    if raw and len(non_flags) == 1 and non_flags[0] not in SUBCOMMANDS:
-        pre_parser = argparse.ArgumentParser(prog="runner", add_help=False)
-        pre_parser.add_argument("--config", default=DEFAULT_CONFIG)
-        pre_parser.add_argument("project")
-        try:
-            pre_args, _unknown = pre_parser.parse_known_args(raw)
-        except SystemExit:
-            pre_args = None
-        if pre_args is not None:
-            if _resident_available():
-                return dashboard.run_resident(project=pre_args.project,
-                                               config=_safe_load_config(pre_args.config))
-            # Off-TTY: same as bare `runner` off-TTY — the interactive menu / its numbered fallback,
-            # ignoring the convenience project arg rather than erroring (subcommands unaffected).
-            return cmd_menu(argparse.Namespace(config=pre_args.config, skill_path=None))
-
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    if getattr(args, "command", None) is None:
-        if _resident_available():
-            # Bare `runner` on a TTY → the resident app (empty start; `runner <project>` handled above).
-            return dashboard.run_resident(project=None, config=_safe_load_config(args.config))
-        # Off-TTY (pipes/CI/AI_SDLC_NO_CURSES) → unchanged: interactive menu / its numbered fallback.
-        return cmd_menu(argparse.Namespace(config=args.config, skill_path=None))
+def main(argv: Optional[List[str]] = None) -> int:
+    args = build_parser().parse_args(argv if argv is not None else sys.argv[1:])
+    if not getattr(args, "func", None):
+        return cmd_flow(args)
     return args.func(args)
 
 
-def _resident_available() -> bool:
-    """True only when the resident app should take over bare `runner` (a real TTY)."""
-    return dashboard._want_resident_curses()
-
-
-def _safe_load_config(path: str) -> dict:
-    """Best-effort config load for the resident app entry point — a missing/invalid config should not
-    prevent the empty-start dashboard from opening; it just runs with an empty config dict."""
-    try:
-        return load_config(path)
-    except (FileNotFoundError, OSError):
-        return {}
-
-
-if __name__ == "__main__":
+if __name__ == "__main__":       # pragma: no cover
     sys.exit(main())

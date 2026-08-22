@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""ledger_check.py — this repo's own governance lint (CHG-20260823-01).
+
+The gate that used to run this was a script inside the vendored skill. There is no skill, so the
+check is ours — which is the same move as `policy.py`: the discipline was never the skill's, only the
+implementation was.
+
+Three checks, each on something that has actually gone wrong here:
+
+1. **A change that claims to be built has an acceptance record.** A CHG marked built with no ACC is
+   the false-green this repo keeps catching — work reported complete with nothing saying it was
+   checked.
+2. **Every change carries its required fields.** A ledger entry missing its branch, risk or status is
+   one the next reader cannot act on.
+3. **A change's status is read from its status line, not from its prose.** The previous lint scanned
+   the whole document for words like "accepted", so writing *about* acceptance in a paragraph
+   flipped the document's classification — it happened three times in one session, twice inside the
+   sentence explaining the first time. Status is a field. This reads the field.
+
+Exit 0 when the ledger is consistent, 1 when it is not, with the reason on stdout.
+"""
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+from typing import List
+
+#: Required of every change. `Status` is not here: it is a *section*, read below, because reading it
+#: as a field is what let prose about status change a document's status.
+REQUIRED_FIELDS = ("Project", "Date", "Risk")
+
+#: Required only from this id onward. The convention started partway through this repo's life, and a
+#: lint that fails on history it cannot change teaches people to ignore the lint. Prospective, the
+#: same way the rules it replaces were.
+BRANCH_REQUIRED_FROM = "CHG-20260703-01"
+
+BUILT = ("built", "已建置", "implemented", "已實作")
+DRAFT = ("draft", "草稿")
+
+
+def _status_line(text: str) -> str:
+    """The `## Status` section's first non-empty line, and nothing else.
+
+    Deliberately narrow. A document that discusses its own status in prose must not thereby change
+    it, which is exactly the failure this replaces.
+    """
+    match = re.search(r"^##\s+Status\s*$", text, re.MULTILINE)
+    if not match:
+        return ""
+    for line in text[match.end():].splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _field_present(text: str, field: str) -> bool:
+    return bool(re.search(rf"^\s*-?\s*{field}\s*[:：]", text, re.MULTILINE | re.IGNORECASE))
+
+
+def check(repo: Path) -> List[str]:
+    problems: List[str] = []
+    changes = sorted((repo / "docs" / "changes").glob("CHG-*.md"))
+    if not changes:
+        return ["docs/changes/ holds no CHG files — this repo is governed and should"]
+
+    accepted = {p.stem.replace("ACC-", "") for p in (repo / "docs" / "acceptance").glob("ACC-*.md")}
+
+    for path in changes:
+        text = path.read_text(encoding="utf-8")
+        chg_id = path.stem
+
+        required = list(REQUIRED_FIELDS)
+        if chg_id >= BRANCH_REQUIRED_FROM:
+            required.append("Branch")
+        missing = [f for f in required if not _field_present(text, f)]
+        if missing:
+            problems.append(f"{chg_id}: missing required field(s): {missing}")
+
+        status = _status_line(text).lower()
+        if not status:
+            problems.append(f"{chg_id}: has no Status section")
+            continue
+
+        is_draft = any(d in status for d in DRAFT)
+        claims_built = any(b in status.lower() for b in BUILT)
+        if claims_built and not is_draft and chg_id.replace("CHG-", "") not in accepted:
+            problems.append(
+                f"{chg_id}: its status says the work is built, but docs/acceptance/ has no "
+                f"matching ACC — a change reported complete with nothing saying it was checked")
+    return problems
+
+
+def main(argv: List[str]) -> int:
+    repo = Path(argv[argv.index("--repo") + 1]) if "--repo" in argv else Path(".")
+    problems = check(repo)
+    if problems:
+        print("ledger check failed:")
+        for problem in problems:
+            print(f"  - {problem}")
+        return 1
+    print(f"ledger check passed ({len(list((repo / 'docs' / 'changes').glob('CHG-*.md')))} changes)")
+    return 0
+
+
+if __name__ == "__main__":       # pragma: no cover
+    sys.exit(main(sys.argv[1:]))

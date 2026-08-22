@@ -1,49 +1,15 @@
 # ai-sdlc-runner configuration
-# The contract surface is the *skill's stable output*, not Claude Code's current
-# runtime behavior. Runtime limits (nesting/concurrency) live here and are
-# probed at startup; if the platform changes, change this file — never the contract.
+#
+# This runner holds its own governance (src/ai_sdlc_runner/policy.py) and drives its own flow
+# (graph.py). Nothing here points at a skill: there is none to point at. What lives here is what
+# genuinely varies between machines and runs.
 
-# Contract version the runner expects (major.minor is locked per project).
-# This is the *expected* version; the *actual* version is detected at runtime by
-# reading the skill's SKILL.md frontmatter (contract.read_skill_version).
-# Bumped to 1.16.0 (CHG-20260703-06) to match the current published skill baseline;
-# existing per-project locks at 1.0/1.1/1.12 are unaffected and keep resolving to their store version.
-contract_version: "1.64.0"
+# How an ask is dispatched. Omit it and asks are answered by a stub, which is what makes a dry run
+# free. Given a command, the runner starts ONE PROCESS PER ASK and writes the work order to its
+# stdin — the session boundary made physical, so "closed after the ask" is not a promise the backend
+# has to keep.
+# agent_command: ["claude", "-p"]
+agent_timeout: 600
 
-# Primary skill source: a local, offline, multi-version store (CHG-20260617-05).
-# Each subdir (v1.0.0, v1.1.0, v1.12.1, v1.16.0, ...) is a full skill root. The runner auto-selects the
-# version matching a project's lock major.minor; first run uses contract_version.
-skill_store: "./skills"
-
-# Fallback skill path, reached only when skill_store resolves to nothing at all (i.e. ./skills is
-# missing or empty) and no --skill-path override is given. VESTIGIAL: it therefore cannot resolve
-# either, by construction. It is kept pointing at the repo-local baseline rather than at the old
-# ai-skills submodule so the resulting "not found" error names the governed store instead of a
-# repository that was archived on 2026-08-04. Deleted outright by the CHG-ii follow-up, which
-# replaces it with a typed SkillPathError. Co-bumps with contract_version above. (CHG-20260822-02)
-skill_path: "./skills/v1.64.0"
-
-# Shallow fan-out limits. Platform may support more; kept conservative on purpose
-# to save tokens. Probed at startup; run is degraded/halted if unmet.
-concurrency_max: 4        # subscription sweet spot 3-5
-nesting_depth_max: 3      # platform supports 5; deliberately conservative
-
-# Agent-execution backend (runtime concern, not the contract). Platform-agnostic:
-# run via an HTTP API or a subscription/CLI agent. Default `stub` = offline/dry-run.
-# Secrets (API keys) are read from the named ENVIRONMENT VARIABLE, never stored here.
-executor:
-  backend: stub                 # stub | command | api  (override per-run with --backend)
-  # command: any local CLI agent (e.g. a logged-in subscription tool)
-  command:
-    argv: ["claude", "-p"]      # base command; the agent prompt is added per `prompt_via`
-    prompt_via: stdin           # stdin | arg
-    timeout: 600
-    extra_args: []              # appended to argv verbatim, e.g. ["--settings", "config/pure-ai-sdlc.settings.json"] to load only the ai-sdlc skill
-    extra_env: {}                # merged into the subprocess env on top of the inherited environment (CHG-20260703-02)
-  # api: any HTTP endpoint; provider adapter shapes the request/response
-  api:
-    provider: generic           # anthropic | openai | generic
-    base_url: ""                # e.g. https://api.anthropic.com/v1/messages
-    model: ""                   # e.g. a model name your platform exposes
-    api_key_env: "AI_SDLC_API_KEY"   # name of the env var holding the key
-    timeout: 120
+# Per-seat routing lives in the plan file, not here, because which model answers which seat is a
+# property of a change rather than of a machine. See `seat_models` in the plan.

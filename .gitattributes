@@ -1,8 +1,2 @@
 # Auto detect text files and perform LF normalization
 * text=auto
-
-# Derived elements are byte-compared against freshly generated output (CHG-20260822-04 task 3/4).
-# Under the `* text=auto` rule above these check out CRLF on Windows while the blob stays LF, so the
-# comparison would fail on half the CI matrix for a tree nobody touched — the same shape as the
-# CHG-20260817-09 defects. `eol=lf` pins the working-tree bytes to what the generator writes.
-elements/** text eol=lf

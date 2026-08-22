@@ -8,41 +8,50 @@
 
 ## 1. Background & Goals
 
-Building the first `ai-sdlc-runner`: an **external Python orchestrator** that drives the `ai-sdlc`
-skill through a semi-autonomous development loop (requirement analysis → structure design →
-implement → acceptance), stopping at gated halt-points for human approval.
+**Superseded positioning (CHG-20260823-01).** This project began as an *external driver for the
+ai-sdlc skill*: it read the skill's governance, called the skill's scripts, and was forbidden to hold
+any of it. Everything below §1 through §8 was written for that. It is no longer what this is.
 
-Core positioning: **the skill stays pure (markdown + zero-dependency gate scripts); the runner is
-an external driver. The skill does not know the runner exists.** Dependency is strictly one-way.
+`ai-sdlc-runner` is **a governed development agent in its own right**. It drives the full development
+flow — the user's instruction, PM's plan, the lead's feasibility and risk call, engineers building one
+small module each and verifying their own work, the lead's review, QA's testing and verification, and
+user feedback returning to PM — from **its own governance**, designed from the ai-sdlc-autopilot
+flowchart. The flowchart is a **design input**, not a runtime dependency.
 
-Success = a runner that (a) ~~references — never copies — the skill via a pinned submodule~~
-**(superseded twice: CHG-20260617-05 replaced the submodule with a vendored store, CHG-20260822-02
-deleted the submodule declaration, and CHG-20260822-04 added deterministically derived elements —
-the runner now *holds* skill text, under the named §6 overrides; what it still never does is
-hand-copy or hand-edit it)**, (b) reads all governance logic (halt-points, role definitions, CHG/ACC
-fields) from the skill rather than re-implementing it, (c) locks the contract at `major.minor` per
-governed project with a validating `migrate`, (d) runs the four stages sequentially with shallow
-per-stage fan-out — **and, behind the opt-in `--engine` flag (CHG-20260822-04), walks the skill's own
-shipped node graph instead; the four-stage default is unchanged until a separate later decision
-flips it** — and (e) mechanically locks down the V1 verifier's tool layer. This repo is itself governed by ai-sdlc (dogfooding).
+It exists so that running this flow does not require somebody else's agent.
+
+**No skill is stored, referenced, or read.** Not vendored, not installed-and-read. `policy.py` holds
+the roles, capabilities, gates and seats; `graph.py` holds the flow. A test asserts that no module
+reaches for a skill path, because a quiet "if it's there, use it" branch is exactly how a removed
+dependency comes back.
+
+Success = a runner that (a) **holds its own governance**, complete by construction — every role the
+flow names has capabilities and every gate it consults is defined; (b) **consults its gates before
+dispatching**, since halting after the work was done is not halting; (c) gives **every asking node its
+own session**, opened per ask and closed after, because continuity breeds bias; (d) **cross-checks
+through several review seats**, count set by the user above a floor only an explicit high-risk mode
+lowers; and (e) **survives interruption** — the question is written down before it is asked, so a
+dropped session costs the answer and not the question. This repo is itself governed by ai-sdlc's
+discipline, now implemented here rather than borrowed.
 
 ## 2. Scope
 
 ### In scope
-- The runner Python package per build-guide §2/§3: `cli`, `contract`, `agents`, `gates`, `state`, `orchestrator`.
-- `config/runner.yaml`, `pyproject.toml`, `README.md`, `tests/test_contract.py`.
-- Governance docs for this repo: `docs/ai-guideline.md`, `docs/structure/*.md`, `docs/changes/CHG-*.md`, `docs/acceptance/ACC-*.md`.
-- ~~Submodule scaffolding (`.gitmodules`) expecting `ai-skills` pinned to tag `v1.0.0` (the submodule itself is provided by the user).~~ **(Superseded, CHG-20260617-05 → removed, CHG-20260822-02):** the vendored offline store replaced the submodule as the skill source, and the declaration was deleted once the upstream repo was archived (2026-08-04).
+- `policy.py` (governance), `graph.py` (the flow), `engine.py` (walking it), `workorder.py`,
+  `effects.py`, `probes.py`, `ship.py`, `cli.py`, `tui.py`.
+- `tools/ledger_check.py` — this repo's own ledger lint, replacing one that lived in the skill.
+- Governance docs for this repo: `docs/ai-guideline.md`, `docs/structure/*.md`, `docs/changes/`,
+  `docs/acceptance/`.
 
 ### Out of scope (explicitly excluded)
-- Re-implementing any skill logic (halt matrix, role table, CHG/ACC field lists) inside the runner.
-- Copying any skill markdown into the runner. **(Narrowly overridden, CHG-20260822-04):** still
-  forbidden for hand-copied or edited text; the override covers **deterministically derived
-  artifacts only** — see §6 "Derived-artifact baseline". Anything a human typed or adjusted by hand
-  remains excluded, and the prohibition is unchanged for it.
-- The §4 autonomous loop as a *build step* — §4 is the runner's runtime behavior spec (a product to implement), not how the first runner is built.
-- Driving real deployment/migration/deletion/money/secret/publish actions automatically — these always halt for a human.
-- Pinning the submodule to `main` or any floating branch.
+- **Storing any skill content**, vendored or derived. There is nothing to copy from and nothing to
+  keep in step with.
+- **Reading a skill at runtime.** Not an installed one either — that was considered and rejected by
+  the user: the flowchart informs the design, the code is ours.
+- Re-implementing anything *because* the skill did it that way. Each governance value here has a
+  reason written next to it, and "the skill did this" is not one of them.
+- Driving real deployment / migration / deletion / money / secret / publish actions automatically —
+  `policy.PERMANENT_HALTS`, never automated at any risk grade.
 - Any browser storage / frontend concern (pure backend Python tool).
 
 ## 3. Stakeholders
@@ -59,18 +68,31 @@ flips it** — and (e) mechanically locks down the V1 verifier's tool layer. Thi
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
 | FR-1 | `contract.read_skill_version(skill_path)` reads the skill version from SKILL.md frontmatter (`version` or `metadata.version`) | P0 | Version detected from file, not from a git tag |
+| ↳ | **(superseded, CHG-20260823-01: there is no skill version to read)** | | |
 | FR-2 | `contract.contract_key(ver)` reduces `"1.2.3"`→`(1,2)`, ignoring patch | P0 | Lock granularity is major.minor |
+| ↳ | **(superseded: nothing to lock a contract against)** | | |
 | FR-3 | `contract.resolve_contract(project, requested)` writes `<project>/.sdlc-lock.json` on first run; on later runs rejects a differing `(major,minor)` with a migrate prompt; same/unspecified continues the locked version | P0 | per-project lock |
+| ↳ | **(superseded: no per-project skill lock)** | | |
 | FR-4 | PATCH differences pass freely; `minor`/`major` bumps force explicit `migrate` | P0 | §5 semantics |
+| ↳ | **(superseded: no contract versions)** | | |
 | FR-5 | `contract.migrate(project, to_version)` re-reads ALL existing docs/CHG/ACC/structure under the new contract; any that fail to parse → stop, list incompatibilities, do NOT raise the lock; only if all pass, write the new lock | P0 | Validating upgrade, not forced |
+| ↳ | **(superseded: nothing to migrate between)** | | |
 | FR-6 | `agents.parse_role_table(skill_path)` parses the "Role startup spec" table in `references/agent-hierarchy.md` → `{role: {tools, can_spawn, writable, scope}}` | P0 | Read from skill, not hardcoded |
+| ↳ | **(superseded: roles are `policy.ROLES`, complete by construction)** | | |
 | FR-7 | `agents.spawn(role, scope, task)` starts an agent with that role's tools allowlist; **V1's tools must exclude `Agent`**; prompt carries "load ai-sdlc skill + your role & scope" | P0 | Role chain A1→I1(→I1.x)→V1 |
+| ↳ | **(superseded: dispatch carries a work order, and capabilities are abstract flags)** | | |
 | FR-8 | `gates.check_halt(gate, risk, action, autonomy)` subprocess-calls the skill's `halt_gate.py` and branches on exit code 0=AUTO / 10=HALT / else error; no risk matrix re-written in the runner | P0 | Calls skill script |
+| ↳ | **(superseded: gates are `policy.GATES`, consulted directly)** | | |
 | FR-9 | `gates.check_cross_repo_drift(...)` subprocess-calls the skill's `cross_repo_check.py` and branches on exit code | P1 | Calls skill script |
+| ↳ | **(superseded: no cross-repo skill drift to check)** | | |
 | FR-10 | `state` writes a checkpoint (`state.json`) at each stage boundary; `--resume` continues from the last checkpoint without re-running completed stages | P0 | Crash-resumable |
+| ↳ | **(superseded: resume is probe-driven (`effects.py`), not checkpoint-driven)** | | |
 | FR-11 | `orchestrator` runs four stages sequentially, each passing its halt gate, with shallow fan-out (depth ≤ 3, concurrency ≤ 4) inside the implement stage | P0 | §4 runtime spec |
+| ↳ | **(superseded: the four stages are replaced by the flow in `graph.py`)** | | |
 | FR-12 | `cli` exposes `run` / `migrate` / `status` subcommands | P0 | entry point `runner` |
+| ↳ | **(narrowed: `runner flow` / `runner policy` / `runner run`)** | | |
 | FR-13 | Runtime limits (nesting/concurrency) come from `config/runner.yaml` and are probed at startup; contract targets the skill's stable output, not Claude Code's current behavior | P0 | runtime isolation |
+| ↳ | **(narrowed: `config/runner.yaml` holds dispatch settings only)** | | |
 | FR-14 | `before_merge_or_release` and always-halt actions (deploy/release/migration/delete/money/secret/publish) always surface for human approval | P0 | red lines |
 
 ## 5. Non-Functional Requirements
@@ -79,7 +101,7 @@ flips it** — and (e) mechanically locks down the V1 verifier's tool layer. Thi
 |----------|-------------|
 | Performance | Conservative fan-out (depth ≤ 3, concurrency ≤ 4) to save tokens, even though the platform supports more |
 | Security | Least-privilege tool allowlists per role; V1 mechanically cannot spawn or edit code under review; red-line actions never auto-run |
-| Maintainability | Single source of truth = skill; runner holds no duplicated governance **logic** — it does hold derived skill **text** under the §6 overrides, but only as machine output that CI regenerates and byte-compares, never as something a person may edit; runtime variability isolated in config |
+| Maintainability | **(Superseded, CHG-20260823-01: the source of truth is this repo's own `policy.py` and `graph.py`; there is no skill.)** ~~Single source of truth = skill; runner holds no duplicated governance **logic** — it does hold derived skill **text** under the §6 overrides, but only as machine output that CI regenerates and byte-compares, never as something a person may edit; runtime variability isolated in config |
 | Compatibility/Scale | Standard-library-only runner (PyYAML optional); Python ≥ 3.9; one-way dependency keeps the skill reusable without the runner |
 
 ## 6. Constraints & Assumptions
