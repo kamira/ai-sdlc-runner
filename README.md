@@ -75,6 +75,11 @@ is not asked again.
 seats, each asked separately and each blind to the others. Their verdicts are adjudicated, not
 averaged: a veto seat cannot be outvoted, a majority is needed to pass, and a tie does not pass.
 
+Point the seats at different commands with `--seat-model` and the review is genuinely cross-model.
+Leave it out and the run **says so** — three seats answered by one backend are independent of each
+other's context, not of that model's blind spots, and a report that does not distinguish those is
+worse than no report.
+
 ## The gates
 
 10 gates, three risk grades each. The rule behind every cell is the same: **a gate stops when

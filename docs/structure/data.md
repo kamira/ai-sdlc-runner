@@ -65,6 +65,7 @@ LF, UTF-8 — so the same order is the same bytes on every machine.
 | `relaxations` | list[str] | The seat floor bypassed, and at what count; a node run undeclared |
 | `on_trust` | list[str] | Operations nothing could confirm — declared ordinary, with no targets *or* with targets this runner does not recognise. The planner's word is all that is behind them, and this is where that shows |
 | `resumed` | list[str] | Ask ids answered from the journal rather than by opening a session |
+| `single_model_panels` | list[str] | Panels where every seat was answered by the same backend — independent sessions, one set of blind spots |
 | `effects` | dict[str, object] | Per node: applied, already met, and anything found true out of causal order |
 | `halted_at`, `halt_reason` | str | Where the run stopped and why, in words that name the rule |
 

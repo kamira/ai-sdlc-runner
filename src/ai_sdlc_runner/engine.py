@@ -169,6 +169,10 @@ class RunReport:
     confirmations: List[str] = field(default_factory=list)
     #: Every panel decision, with the seats' verdicts that produced it.
     adjudications: List[Dict[str, object]] = field(default_factory=list)
+    #: Said out loud when every seat was answered by the same backend. Sessions are independent of
+    #: each other's context either way; they are not independent of one model's blind spots, and
+    #: that is most of what a panel is for.
+    single_model_panels: List[str] = field(default_factory=list)
     #: What each node's effects did — applied, already met, and anything found true out of order.
     effects: Dict[str, Dict[str, object]] = field(default_factory=dict)
     #: Asks answered from the journal rather than by opening a session, on a resumed run.
@@ -185,6 +189,7 @@ class RunReport:
             "on_trust": list(self.on_trust),
             "confirmations": list(self.confirmations),
             "adjudications": [dict(a) for a in self.adjudications],
+            "single_model_panels": list(self.single_model_panels),
             "effects": {k: dict(v) for k, v in self.effects.items()},
             "resumed": list(self.resumed),
         }
@@ -525,6 +530,28 @@ def _answered_branch(node: graph.Node, answers: List[Mapping[str, object]]) -> s
     return str(branch)
 
 
+def _note_panel_diversity(node: graph.Node, report: "RunReport", opened_for_panel: List[object]
+                          ) -> None:
+    """Record whether the seats were actually answered by different things.
+
+    Asks each session what it is — `describe()` if it offers one, else its class. Identical
+    descriptions across every seat means one backend answered the whole panel: independent sessions,
+    one set of blind spots. Not refused; **stated**, because a report that reads like a cross-model
+    panel while one model answered it is the assurance this design is against.
+    """
+    if len(opened_for_panel) < 2:
+        return
+    kinds = set()
+    for session in opened_for_panel:
+        describe = getattr(session, "describe", None)
+        kinds.add(describe() if callable(describe) else type(session).__name__)
+    if len(kinds) == 1:
+        report.single_model_panels.append(
+            f"{node.id}: every seat was answered by the same backend ({kinds.pop()}). The sessions "
+            f"were independent; the model was not, so the seats share whatever it cannot see. Use "
+            f"--seat-model SEAT=COMMAND to make the review cross-model.")
+
+
 def _adjudicate(node: graph.Node, report: "RunReport", seats: int) -> str:
     """Turn the seats' verdicts into one branch, through `policy.adjudicate`.
 
@@ -657,6 +684,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
         answers: List[Mapping[str, object]] = []
         if node.role:
             if node.role == "seat":
+                panel_sessions: List[object] = []
+                before = len(opened)
                 for seat in policy.seat_names(seats):
                     result = _ask(
                         factory, _order_for(node, cfg, verdict, seat), opened, seat=seat,
@@ -667,6 +696,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                         report.resumed.append(ask_key)
                     report.asks.append(Ask(node.id, node.role, seat, result))
                     answers.append(result)
+                panel_sessions = opened[before:]
+                _note_panel_diversity(node, report, panel_sessions)
             else:
                 result = _ask(
                     factory, _order_for(node, cfg, verdict), opened, journal=cfg.journal,

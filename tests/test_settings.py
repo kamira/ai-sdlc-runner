@@ -337,3 +337,86 @@ def test_no_settings_value_changes_what_the_policy_says():
     settings_mod.Settings(review_seats=1, high_risk_mode=True).seats()
     assert {g: dict(v) for g, v in policy.GATES.items()} == before
     assert len(policy.PERMANENT_HALTS) == 6
+
+
+# --------------------------------------------------------------------------------------
+# declining a saved bypass, for one run
+# --------------------------------------------------------------------------------------
+
+def _shipped(tmp_path, py_stub, **saved):
+    """A config, a plan and a settings file — the three inputs a real run takes."""
+    import json as _json
+
+    agent = """
+import json, sys
+order = json.load(sys.stdin)
+answers = %r
+if order.get("seat"):
+    print(json.dumps({"verdict": "pass"}))
+else:
+    branch = answers.get(order["node_id"])
+    print(json.dumps({"verdict": branch} if branch else {"ok": True}))
+""" % (ANSWERS,)
+    argv = py_stub(agent)
+    config = tmp_path / "runner.yaml"
+    config.write_text(f"agent_command: {_json.dumps(argv)}\n", encoding="utf-8")
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(_json.dumps(saved), encoding="utf-8")
+    plan = tmp_path / "plan.json"
+    plan.write_text(_json.dumps({
+        "node_specs": {n.id: dict(SPEC) for n in graph.NODES if n.role},
+        "decisions": {"next_module": ["module", "none"], "feedback": "done"},
+        "risk": "low"}), encoding="utf-8")
+    return str(config), str(settings_file), str(plan)
+
+
+def test_a_saved_bypass_can_be_declined_for_one_run(tmp_path, py_stub, capsys):
+    """`--high-risk-mode` and the settings file were OR-ed, so a bypass persisted in settings could
+    not be turned off for a single run. A verifier pointed out that "a flag beats the file" was only
+    true in the *relaxing* direction — the wrong one to be asymmetric in. This shipped without a
+    test; it has one now."""
+    from ai_sdlc_runner import cli
+
+    config, settings_file, plan = _shipped(tmp_path, py_stub, review_seats=1, high_risk_mode=True)
+    cli.main(["--config", config, "--settings", settings_file, "run", "--undeclared", "allow",
+              "--plan", plan, "--confirm", "merge", "--no-high-risk-mode"])
+    out = capsys.readouterr().out
+    # The thing that matters is whether a *bypass was recorded*, not whether the words "below the
+    # floor" appear — the note explaining the fall-back to the floor contains them too, and an
+    # assertion that cannot tell those apart is one that fails for the wrong reason.
+    assert "review opened with" not in out, "a floor bypass was still recorded"
+    for seat in policy.seat_names(policy.SEAT_FLOOR):
+        assert f"{seat}=pass" in out
+
+
+def test_without_the_flag_the_saved_bypass_still_applies(tmp_path, py_stub, capsys):
+    from ai_sdlc_runner import cli
+
+    config, settings_file, plan = _shipped(tmp_path, py_stub, review_seats=1, high_risk_mode=True)
+    cli.main(["--config", config, "--settings", settings_file, "run", "--undeclared", "allow",
+              "--plan", plan, "--confirm", "merge"])
+    assert "below the floor" in capsys.readouterr().out
+
+
+def test_declining_puts_the_floor_back_not_merely_the_count(tmp_path, py_stub, capsys):
+    """The bypass is what makes a count below the floor legal. Declining it must restore the floor,
+    not run one seat without recording the relaxation."""
+    from ai_sdlc_runner import cli
+
+    config, settings_file, plan = _shipped(tmp_path, py_stub, review_seats=1, high_risk_mode=True)
+    cli.main(["--config", config, "--settings", settings_file, "run", "--undeclared", "allow",
+              "--plan", plan, "--confirm", "merge", "--no-high-risk-mode"])
+    out = capsys.readouterr().out
+    assert "review opened with" not in out, "a floor bypass was still recorded"
+    assert "opening 3" in out, "the fall-back to the floor should be stated, not silent"
+    assert out.count("=pass") >= policy.SEAT_FLOOR
+
+
+def test_the_flag_is_harmless_when_nothing_was_saved(tmp_path, py_stub, capsys):
+    from ai_sdlc_runner import cli
+
+    config, settings_file, plan = _shipped(tmp_path, py_stub)
+    code = cli.main(["--config", config, "--settings", settings_file, "run", "--undeclared",
+                     "allow", "--plan", plan, "--confirm", "merge", "--no-high-risk-mode"])
+    assert code == 0
+    assert "stopped at:    done" in capsys.readouterr().out

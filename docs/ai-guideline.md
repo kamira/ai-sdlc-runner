@@ -97,6 +97,7 @@ nobody reads to the bottom of.
 | FR-21 | The false-stop rate on ordinary work is **measured against a corpus written by someone else** and pinned. A check that fires on ordinary work is one people disable, and the rate is therefore a safety property | P0 | `tests/test_false_stops.py` |
 | FR-20 | Settings may lower the seat floor and nothing else. An unknown key is refused, a corrupt file is an error rather than a silent default | P0 | `settings.load`, `settings.FIELDS` |
 | FR-14 | Different seats may be answered by different models — the same question, different answerers. The routing lives in the CLI and never in the order | P0 | `cli.session_factory`; `--seat-model SEAT=COMMAND`, or `seat_models` in the plan |
+| FR-24 | A panel every seat of which was answered by the **same backend** is recorded and printed. Independent sessions are not independent blind spots, and a report that reads like a cross-model panel when one model answered it is false assurance | P0 | `engine._note_panel_diversity`, `RunReport.single_model_panels` |
 | FR-15 | Resume is probe-driven: nothing whose postcondition is already true is re-applied, everything applied is re-probed, and anything found true out of causal order is surfaced rather than redone or waved through | P0 | `effects.run` |
 | FR-16 | `runner flow` / `runner policy` print the flow and the governance without running anything, so what will happen can be read before it does | P1 | `cli.py` |
 | FR-17 | The ledger lint is this repo's own: required fields, and a **closed** vocabulary of status words so an unrecognised status is a failure rather than a silent pass | P0 | `tools/ledger_check.py` |
@@ -166,6 +167,10 @@ nobody reads to the bottom of.
       never reached is reported rather than dropped.
 - [ ] `runner settings` sets the seat count and the bypass, persists them, and `run` reads them; an
       unknown settings key is refused and a corrupt file is an error.
+- [ ] `--no-high-risk-mode` declines a saved bypass for one run: it opens the floor, records no
+      bypass, says why, and does not re-ask the question it just answered.
+- [ ] A panel answered entirely by one backend is reported; routing seats separately silences it;
+      partial overlap and one-seat panels are not reported.
 - [ ] `cli.py`: `--confirm`, `--review-seats`, `--high-risk-mode` and the plan's `operations` all
       reach the engine; a seat model routes that seat elsewhere; a backend's JSON reply becomes the
       answer; a failed backend leaves the question pending.
