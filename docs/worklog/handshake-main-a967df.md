@@ -138,3 +138,44 @@ Windows py3.9 的 log 讀到 `185 passed, 2 skipped`,兩個 skip 就是既有的
 在兩個 OS 上都通過,所以跨 OS 雜湊一致是**由構造保證**,不是剛好 checkout 一樣。
 
 repo 為 PUBLIC(`gh repo view --json visibility`),不涉計費封鎖。
+
+---
+
+## 2026-08-22 — task 1 已 merge;task 2 建置完成
+
+分支:`claude/chg-20260822-04-task2`(自 `origin/main` @ `30a9bd3`)
+現在做:CHG-20260822-04 task 2/9 —— 收尾中(push → PR → CI → merge)
+下一步:**task 3(fuse into vendoring + backfill v1.64.0)**。task 6 之前不再需要確認關卡。
+
+- task 1:PR #11 merge 為 `30a9bd3`,兩輪 CI 皆 5/5 真綠(逐 job 查 steps,7–8 個、0 失敗)。
+- task 2:`dispatch.py` + `test_dispatch.py`(25 測試)。全套 **210 passed, 2 skipped**;
+  doc-integrity exit 0。
+
+### 兩席審議:兩輪,codex 三題全部改判
+
+| | round 1 codex | round 1 fable | round 2 |
+|---|---|---|---|
+| Q1 元素鍵 | 13 × 11 = 143 | 不做乘積:11 checkpoint + 13 role manifest | codex 改判 |
+| Q2 錨點收斂 | 規則選出 + fail-closed | 角色檔案集全錨點 | codex 改判(自認「會永遠失敗」) |
+| Q3 risk 軸 | 進元素鍵 | 執行期參數 | codex 改判 |
+
+收尾無分歧。每次改判都掛在一個實測事實上,不是折衷。
+
+### 我自己查證、兩席都沒查到這麼細的三件事
+
+1. **11 個 policy key 對 402 個真標題:真陽性 0、偽陽性 21**(`pr` 中在 `Org principles`、
+   `merge` 中在 `Emergency override`)。這是 Q2 的判決依據。
+2. **同一個子字串陷阱咬到我自己的守門測試**:`test_no_node_id_is_written_in_the_source`
+   首跑就掛,回報 `merge` 與 `pr` ——它們出現在我自己程式碼的普通英文字裡。
+   已改成比對**帶引號的字串字面量**,那才是真正被禁止的東西。
+3. **store 缺 `scripts/lib/`**:`autopilot_runner.py` 在 vendored store 裡**跑不起來**
+   (`from lib import roles` → `ModuleNotFoundError`),CHG-20260822-03 的 `git archive` 沒收進去。
+   所以 autopilot 軸**沒有可用的出貨解析器**——元素照實寫 `"shipped_resolver": null`,
+   不自己發明 `halt` 與 `halt_independent` 的全序。補 vendoring 是另一筆變更。
+
+最後更新:2026-08-22(UTC+0)
+
+### task 2 的 CI(真綠)
+
+PR #12 · run 32557718514 —— 5/5 pass。doc-integrity 7 steps、四個 pytest job 各 8 steps,
+全部 0 失敗;windows py3.9 的 log 讀到 `210 passed, 2 skipped`。
