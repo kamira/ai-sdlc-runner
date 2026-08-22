@@ -17,6 +17,12 @@ was read for two review rounds as "no flow is shipped anywhere", which is false.
 not a reconstruction of anything: it is the shipped block, written as data, with each node naming
 the phrase it came from.
 
+## Runner-authored fork point (D3): authored and pinned, not parsed
+
+Writing the flow down rather than parsing the shipped block is a judgement, and D3 requires the
+judgement to be named rather than left looking like it fell out of the data. It is fork point 8 in
+`ai-guideline` §6's index. A different reader could parse the block — the reason not to is below.
+
 ## How it stays honest: one pin, no machinery
 
 Each node carries ``source_phrase`` — a literal substring of the shipped block. A test asserts that

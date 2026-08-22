@@ -558,3 +558,43 @@ PR #17 · run 32583011810 —— 6/6 pass,逐 job 7–8 steps、0 失敗。
 until gh pr checks <n> 2>&1 | grep -q 'https://'; do sleep 5; done
 gh pr checks <n> --watch --interval 20
 ```
+
+---
+
+## 2026-08-22 — task 9 已 merge(`5ff96dc`);task 8 完成 → **九個 task 全數建置完畢**
+
+分支:`claude/chg-20260822-04-task8`(自 `origin/main` @ `5ff96dc`)
+下一步:**驗收(ACC)**,而且要把已知未涵蓋的部分明列出來。
+
+### task 8 的完整清掃
+
+1. **§1 掃到兩處早就不成立的敘述**,而且從來沒人回頭改:
+   - 「references — never copies — the skill via a pinned submodule」——被推翻兩次
+     (CHG-20260617-05 換成 vendored store、CHG-20260822-02 刪掉宣告),再加上本筆的衍生元素。
+   - 「runs the four stages sequentially」——現在還有 `--engine` 那條路。
+   兩處都改成**劃掉 + 寫原因**,不是默默改掉。
+2. **§5 Maintainability** 原文說「runner holds no duplicated governance logic」——**logic** 仍然成立,
+   但現在確實持有衍生的 **text**。已把兩者分開講明。
+3. **§6 新增完整的 fork point 索引**(8 項,含每項的位置與「為什麼選它」)。
+   第 6 項(四值軸的 tighten 全序)**刻意留白**,標記 deferred。
+
+### 驗證不靠人重讀,靠測試
+
+`test_guideline_truthful.py`(12 條):結構性宣稱對著「要讓它不成立就得改的那個檔」驗;
+量測性宣稱**從 store 重算**——未來 vendoring 換了語料,guideline 裡的數字會在這裡爆掉,
+而不是悄悄變成一個沒人重新導過的數字。
+
+**它當場抓到兩件事**:
+- `graph.py` 在索引裡被宣稱有 fork point,但它自己**從沒用過那個詞**。已補。
+- 我的測試切片抓錯段落(§2 的指向,不是 §6 的條目)。已修。
+
+### 又踩了一次 pit #6(當場被閘門擋下)
+
+我在 Status 寫「which is not the same as **accepted**」——`accepted` 是 `IMPLEMENTED_HINTS` 之一,
+於是整筆 CHG 被判成「已實作卻無 ACC = 懸空驗收」,doc-integrity exit 1。
+**這正是交接文件第 6 條寫的那個坑,我照樣踩了。** 改寫該句後 exit 0。
+
+### 現況
+
+**九個 task 全部打勾**,400 passed / 2 skipped,doc-integrity exit 0。
+但打勾與閘門綠**不等於已驗收**——ACC 是下一步,而且會明列未涵蓋項。
