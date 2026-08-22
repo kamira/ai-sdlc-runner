@@ -177,3 +177,23 @@ def prompt(message: str, default: str = "", *, input_fn: Callable[[str], str] = 
     except EOFError:
         return default
     return raw or default
+
+
+def confirm_high_risk(requested: int, floor: int, *, input_fn=input, stream_out=None) -> bool:
+    """Ask the operator to turn on high-risk mode, which is the only way below the seat floor.
+
+    Deliberately a question with the consequence written into the options rather than a silent
+    config field: relaxing a gate is the user's call to make, and a call they cannot see themselves
+    making is not one they made. Cancelling means no.
+    """
+    choice = select(
+        f"Review is set to {requested} seat(s); the shipped floor is {floor}.",
+        [
+            ("Keep the floor", f"open {floor} seat(s) — the shipped default"),
+            ("Enable high-risk mode",
+             f"open {requested} seat(s), below the floor; the run records that it did"),
+        ],
+        input_fn=input_fn,
+        stream_out=stream_out,
+    )
+    return choice == 1
