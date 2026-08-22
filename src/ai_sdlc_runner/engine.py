@@ -146,6 +146,9 @@ class RunReport:
     relaxations: List[str] = field(default_factory=list)
     #: What the policy said at each node, so a halt can be audited afterwards.
     verdicts: Dict[str, Dict[str, object]] = field(default_factory=dict)
+    #: Operations nothing could check: declared ordinary with no targets named. The planner's word
+    #: is the only thing behind them, and this is where that shows.
+    on_trust: List[str] = field(default_factory=list)
     #: Gates the operator had already confirmed, recorded so an approval leaves a trace.
     confirmations: List[str] = field(default_factory=list)
     #: Every panel decision, with the seats' verdicts that produced it.
@@ -161,6 +164,7 @@ class RunReport:
             "halt_reason": self.halt_reason,
             "relaxations": list(self.relaxations),
             "verdicts": {k: dict(v) for k, v in self.verdicts.items()},
+            "on_trust": list(self.on_trust),
             "confirmations": list(self.confirmations),
             "adjudications": [dict(a) for a in self.adjudications],
             "effects": {k: dict(v) for k, v in self.effects.items()},
@@ -361,6 +365,14 @@ def _permanent_halt(node: graph.Node, cfg: "RunConfig", report: "RunReport") -> 
 
     for operation in declared or ():
         halt = policy.classify(operation)
+        if halt is None and policy.on_trust(operation):
+            # Nothing about this was checked except its own prose: it declares `ordinary` and names
+            # no targets. Not blocked — forcing every operation to name one buys ceremony, since an
+            # empty list is as forgeable as a wrong `kind`. What is unacceptable is the trust being
+            # invisible, so it goes in the report where an auditor reads it.
+            report.on_trust.append(
+                f"{node.id}: {operation.get('description', '')!r} was taken on the plan's word — "
+                f"declared ordinary, no targets named, nothing verified")
         if halt is not None:
             what = operation.get("description", operation) if isinstance(operation, Mapping) \
                 else operation

@@ -39,8 +39,10 @@ cheap to redo and never stops.
 """
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass
-from typing import Dict, List, Mapping, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 AUTO = "auto"
 CONFIRM = "confirm"
@@ -169,44 +171,138 @@ _HALT_WORDS: Dict[str, Tuple[str, ...]] = {
 }
 
 
+#: What an operation will actually touch, matched to the kind of work touching it is. Keyed by kind,
+#: valued by regexes over a **target** — a command it will run, a path it will write, or a URL it
+#: will call.
+#:
+#: This is the difference between reading what somebody *says* and reading what they will *do*. The
+#: description is prose a planner writes; a target is the thing itself, and a plan that names
+#: `kubectl apply -f prod/` has said "production deploy" whatever word it put in `kind`.
+_TARGET_RULES: Dict[str, Tuple[str, ...]] = {
+    "deploy": (
+        r"\bkubectl\s+(apply|rollout|set|scale)\b", r"\bhelm\s+(install|upgrade)\b",
+        r"\bdocker\s+push\b", r"\b(terraform|pulumi)\s+apply\b",
+        r"\bserverless\s+deploy\b", r"\baws\s+(deploy|ecs|lambda)\b",
+        r"\bgh\s+release\s+create\b", r"\bnpm\s+publish\b", r"\bcargo\s+publish\b",
+        r"\btwine\s+upload\b", r"\bfly\s+deploy\b", r"\bvercel\s+(deploy|--prod)\b",
+        r"(^|[\s/@:.])prod(uction)?([\s/.:]|$)",
+    ),
+    "migration": (
+        r"\balter\s+table\b", r"\bcreate\s+index\b", r"\bdrop\s+column\b",
+        r"\b(alembic|flyway|liquibase|knex|prisma)\b", r"\bdjango-admin\s+migrate\b",
+        r"\bmanage\.py\s+migrate\b", r"(^|/)migrations?/",
+    ),
+    "delete": (
+        r"\brm\s+-[a-z]*[rf]", r"\bdrop\s+(table|database|schema)\b", r"\btruncate\b",
+        r"\bdelete\s+from\b", r"\bgit\s+push\s+.*--force\b", r"\bgh\s+repo\s+delete\b",
+        r"\baws\s+s3\s+rm\b", r"\bshred\b",
+    ),
+    "money": (
+        r"\b(stripe|paypal|braintree|adyen|wise|plaid|square)\b",
+        r"/v\d+/(charges|payments|payouts|transfers|refunds)\b",
+        r"\bcheckout\.session\b", r"\bbilling\b",
+    ),
+    "access": (
+        r"(^|/)\.env(\.|$)", r"\.(pem|key|p12|pfx|jks|keystore)$", r"(^|/)(secrets?|creds?)/",
+        r"(^|/)id_(rsa|ed25519|ecdsa)$", r"\bvault\s+(write|kv\s+put)\b",
+        r"\baws\s+iam\b", r"\bgcloud\s+(iam|projects\s+add-iam)\b",
+        r"\bgh\s+(secret|api\s+.*collaborators)\b", r"\bchmod\s+[0-7]*777\b",
+        r"(^|/)authorized_keys$",
+    ),
+    "publish": (
+        r"\bgh\s+repo\s+edit\s+.*--visibility\s+public\b",
+        r"\bgh\s+(release|gist)\s+create\b",
+        r"\b(api\.twitter|graph\.facebook|slack\.com/api|discord\.com/api|api\.telegram)",
+        r"/v\d+/(messages|posts|tweets|statuses)\b",
+        r"\b(sendgrid|mailgun|ses\.amazonaws|postmark)\b",
+        r"\baws\s+s3\s+.*--acl\s+public",
+    ),
+}
+
+
+def derive(targets: Sequence[str]) -> Tuple[str, ...]:
+    """Every kind these targets **are**, read from the targets themselves.
+
+    A target is a command, a path, or a URL the operation will act on. Unlike `permanent_halt`, this
+    does not read prose: `rm -rf` in a command is not a phrasing choice, and neither is a path under
+    `secrets/`. That is why it is allowed to overrule a declaration, and why the word lists are not.
+
+    **All** matching kinds are returned, not the first. `.env.production` is a secrets file *and*
+    sits in something called production; picking one and reporting it alone names the operation
+    wrongly while still stopping it, which is the kind of half-truth that erodes trust in a stop.
+    """
+    haystack = " ".join(str(t) for t in targets).casefold()
+    if not haystack.strip():
+        return ()
+    return tuple(kind for kind in PERMANENT_HALT_KINDS
+                 if any(re.search(pattern, haystack) for pattern in _TARGET_RULES[kind]))
+
+
 def classify(operation: Mapping[str, object]) -> Optional[str]:
     """The permanent halt this operation crosses, or ``None``.
 
-    An operation is a declaration: ``{"description": str, "kind": str}``, where ``kind`` is one of
-    `PERMANENT_HALT_KINDS` or `ORDINARY`. **An operation that declares nothing is refused**, and
-    that inversion is the whole fix: the previous version guessed a kind from the words, so anything
-    it failed to recognise was silently ordinary — and a red line whose default branch is "proceed"
-    is not a red line. Unclassified now stops the run and asks the planner to say what this is.
+    An operation is ``{"description": str, "kind": str, "targets": [str, ...]}``. ``kind`` is one of
+    `PERMANENT_HALT_KINDS` or `ORDINARY`; ``targets`` are the commands, paths and URLs it will act
+    on, and are optional.
 
-    Declaring ``ordinary`` is not the last word. The description is still read against `_HALT_WORDS`,
-    so a mis-declaration whose own wording gives it away still stops. The backstop can only add a
-    stop, never remove one: a declared red line halts whatever its description says.
+    Three things decide, in this order, and each may only ever **add** a stop:
+
+    1. **The targets.** What an operation will touch is a fact, not a phrasing, so a target that is
+       a red line overrules a declaration that says otherwise. This is the layer that stops the
+       planner from being the trust boundary — a plan naming `kubectl apply -f prod/` has said
+       "production deploy" whatever it wrote in ``kind``.
+    2. **The declaration.** A declared red line halts, whatever its targets and description say.
+    3. **The description**, against `_HALT_WORDS` — the backstop, and the weakest of the three. It
+       catches a red line mis-declared as ordinary *only* when the wording gives it away, which is
+       8 times out of 18 known attempts. Never trusted on its own.
+
+    **An operation that declares nothing is refused.** That inversion is the fix that came before
+    this one: a red line whose default branch is "proceed" is not a red line.
     """
     if not isinstance(operation, Mapping):
         raise PolicyError(
             f"an operation must declare what kind of work it is, as "
-            f"{{'description': ..., 'kind': one of {sorted(PERMANENT_HALT_KINDS) + [ORDINARY]}}}. "
-            f"Got {operation!r}. A bare description would have to be classified by guessing at its "
-            f"words, and a guess that comes out wrong dispatches something irreversible.")
+            f"{{'description': ..., 'kind': one of {sorted(PERMANENT_HALT_KINDS) + [ORDINARY]}, "
+            f"'targets': [...]}}. Got {operation!r}. A bare description would have to be classified "
+            f"by guessing at its words, and a guess that comes out wrong dispatches something "
+            f"irreversible.")
 
     kind = operation.get("kind")
     description = str(operation.get("description", ""))
+    targets = operation.get("targets") or ()
+    if isinstance(targets, str):
+        raise PolicyError(
+            f"operation {description!r} gives targets as a single string. It must be a list — one "
+            f"entry per command, path or URL — or the whole lot is matched as one blob and a "
+            f"boundary between two of them can hide a third.")
+
     if kind is None:
         raise PolicyError(
             f"operation {description!r} declares no kind. It must be one of "
             f"{sorted(PERMANENT_HALT_KINDS) + [ORDINARY]} — an undeclared operation is not assumed "
             f"to be safe.")
-    if kind in PERMANENT_HALT_KINDS:
-        return PERMANENT_HALT_KINDS[kind]
-    if kind != ORDINARY:
+    if kind != ORDINARY and kind not in PERMANENT_HALT_KINDS:
         raise PolicyError(
             f"operation {description!r} declares kind {kind!r}, which is not one of "
             f"{sorted(PERMANENT_HALT_KINDS) + [ORDINARY]}")
 
-    suspected = permanent_halt(description)
-    if suspected is not None:
-        return suspected
-    return None
+    derived = derive(targets)
+    if derived:
+        return " and ".join(PERMANENT_HALT_KINDS[k] for k in derived)
+    if kind in PERMANENT_HALT_KINDS:
+        return PERMANENT_HALT_KINDS[kind]
+    return permanent_halt(description)
+
+
+def on_trust(operation: Mapping[str, object]) -> bool:
+    """Is this operation being taken on the planner's word alone?
+
+    True when it declares `ordinary` and names no targets: nothing about it was checked against
+    anything except its own prose. The engine records these rather than blocking them — forcing
+    every operation to name a target would buy ceremony rather than safety, since an empty list is
+    as forgeable as a wrong `kind`. What is *not* acceptable is the trust being invisible.
+    """
+    return operation.get("kind") == ORDINARY and not operation.get("targets")
 
 
 def permanent_halt(text: str) -> Optional[str]:
