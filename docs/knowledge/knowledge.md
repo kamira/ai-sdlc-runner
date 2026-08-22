@@ -14,6 +14,9 @@
 | KN-2 | pattern | contract / version lock | Per-project `.sdlc-lock.json` locks major.minor; `runner.yaml` `contract_version` is a first-run default only; version bumps never touch existing locks; `migrate` is explicit & validating (patch=auto, minor/major=migrate-required), never silent auto-migrate. | active |
 | KN-3 | pattern | dashboard / TUI | Terminal-only stdlib `curses` with a numbered / non-TTY fallback; the vertical `render_snapshot` path is always preserved; panels are computed on real events and cached (no per-keystroke I/O); red-line gates still require explicit human approval. | active |
 | KN-4 | pattern | toolchain / handshake step 0 | `requirements-dev.txt` is a DERIVED, probe-facing view of `pyproject.toml`'s extras: **bare distribution names only** — the probe returns `NOT_RUN` (not PASS) for version ranges, `-e`/`-r` lines, URLs, extras and markers, so "adding the version floors back" silently disables the gate. | active |
+| KN-5 | pattern | node-engine / work order | A work order carries **exactly** the closed D5 field set and nothing else: no tool names, no allowlist, no skill-loading line, no session or prior-turn context, no model/dispatch settings. Bodies are never inlined — paths and anchors only — and a content element id never appears without the path and anchor it resolves to. Routing (which model answers) lives in the dispatcher, never in the order. | active |
+| KN-6 | pattern | node-engine / idempotence | An operation may be an **effect** only if it leaves a probeable postcondition in the ledger, git or the forge; constructing one without a probe raises. Probes describe the **postcondition, not the action**, and read the world rather than any record the runner wrote. Unanswerable **raises** — never `False`. Nothing already true is re-applied, before or after the frontier. | active |
+| KN-7 | pattern | node-engine / sessions | Every **asking** node gets its own session: opened, asked once, closed in a `finally`; a factory that returns a session it already returned is refused. A multi-seat review is several asks, so each seat is its own session. The question is journalled **before** the session opens, so a dropped session costs the answer and not the question. | active |
 
 <!-- Append DIR-n (user directives) / KN-n (observed patterns) as anchored sections below and add
      one INDEX row each; register any new tag in vocabulary.json first. -->
@@ -95,3 +98,85 @@ That belongs to **`kamira/skill-ai-sdlc-autopilot`** — successor to `ai-skills
 reachable but is a separate governance domain, and a fix there reaches this repo only once a fixed
 skill version is installed or vendored. On this side the workaround stands: the submodule is absent,
 the vendored store tops out at v1.16.0 (predating the probe), and KN-1 forbids editing the store.
+
+## KN-5 — The work-order contract: what a dispatched node receives, and what it must never receive
+*tags: node-engine · source: CHG-20260822-04 task 5 · tier: pattern*
+
+`workorder.WORK_ORDER_FIELDS` is the complete set, and rendering asserts the produced keys are
+**exactly** it — no more, no fewer. The exclusions are the load-bearing half, because they are what
+makes an order runnable on a model that has never seen this runner: concrete tool names and
+allowlists, the "load the ai-sdlc skill" bootstrap line, session or prior-turn context, model and
+dispatch settings. An order carrying any of them runs on one harness only, however short it is.
+
+Two traps this repo has already fallen into, both recorded so the next reader does not repeat them:
+
+- **`agents.RoleSpec` is not a source of truth for capabilities.** Its `tools` list is *synthesised
+  here* — `Read`, `Bash`, `Edit`, `Write`, `Agent` are Claude Code names hard-coded in `agents.py`,
+  not shipped data — and its `writes_docs` flag is guessed from prose in the Notes column. Only the
+  three shipped booleans (`can_spawn` / `writable` / `can_execute`) may be read, and they must never
+  be derived back from tool names.
+- **Check the exclusion by enumerating what is present, never by searching for banned words.** A
+  substring search for a forbidden term scores 21 false positives on this corpus — `pr` inside "Org
+  **pr**inciples", `merge` inside "E**merge**ncy" — and it failed the guard test written for task 2
+  on its first run. Two instruments work: a closed key set, and a **sentinel** injected through the
+  field you fear leaking, asserted absent from the serialised order by exact value.
+
+**Nine of thirteen declared roles cannot be rendered at all**, and that is deliberate: the shipped
+role table has four rows, and `orchestrator`, `integrator`, `reviewer` and the six `seat-*` roles
+have no capability data anywhere in the store. Rendering one is a hard error naming the role.
+Defaulting the flags is not a neutral safe default but this runner authoring an authorization policy.
+
+## KN-6 — Effect admissibility and the shape of a probe
+*tags: node-engine · source: CHG-20260822-04 tasks 6–7 (D6) · tier: pattern*
+
+An operation may be an **effect** only if it leaves a probeable postcondition (D6.2), and that is
+enforced rather than documented: `effects.Effect` raises if constructed without a probe, so an
+unprobeable step never reaches a sequence. Resume means finding the **first unmet postcondition** and
+running from there.
+
+Three rules that are easy to get backwards, each learned the hard way:
+
+1. **A probe describes the postcondition, not the action.** "Did we run push?" needs a record we
+   wrote — the thing a crash destroys or leaves stale. "Does the remote have this branch?" asks the
+   thing itself. A probe that inspects our own records reintroduces the receipts D6.4/D6.5 refuses.
+   The ledger probes are not an exception: a CHG naming its `Branch:`, a ticked box, an ACC file are
+   the *deliverable*, read by the next session too. A receipt says "I did the thing"; the ledger *is*
+   the thing.
+2. **Unanswerable is not "not done".** An unreachable remote or a failing forge must raise, never
+   return `False`. Collapsing the two is what makes a resume push twice or open a second PR.
+3. **Nothing already true is ever re-applied** — before the frontier *or* after it. The first version
+   applied everything past the frontier blindly, and the test named for that case asserted the unsafe
+   behaviour, so it was hiding the hazard rather than catching it; **both review seats independently
+   named it their worst finding**. An effect found true *past* the frontier means the world is out of
+   causal order, usually the residue of an abandoned attempt: report it, do not silently redo it and
+   do not silently accept it.
+
+Verification bar for anything in this family: kill a **real process** with `os._exit` against a
+**real** repository. An in-process exception is not a stand-in — an exception unwinds, and unwinding
+is the courtesy a killed process does not extend.
+
+## KN-7 — One ask, one session; the question outlives it
+*tags: node-engine · source: CHG-20260822-04 task 6 · tier: pattern*
+
+Every node that asks a model gets its own session, opened and closed around that single ask. This is
+a **correctness** property, not an economy: continuity breeds bias, which is the same reason the
+shipped review panel runs phase 1 blind — *"a seat that reads first agrees first"*. A multi-seat
+review is several asks, so each seat is its own session; otherwise "three seats" is one model
+answering three times in one context.
+
+The engine owns the lifecycle so this is enforced rather than hoped for: open, ask once, close in a
+`finally`, and **a factory that hands back a session it already returned is refused** — that is the
+persistent case by definition. Two mistakes made while building this, both worth inheriting:
+
+- **Tell a session factory from a plain dispatcher by arity, not by duck-typing.** Both are usually
+  plain callables; sniffing for an `ask` attribute calls one with the other's arguments.
+- **`id()` is not identity.** Tracking sessions by `id()` broke on Python 3.13 and passed on 3.9 and
+  3.11 by allocation luck: every ask drops its session, so CPython is free to hand a fresh one a
+  recycled address. Hold the objects and compare with `is`. **This was the first thing the CI
+  version axis ever caught** — the OS axis was added after five Windows-only failures survived four
+  CHGs, and the same argument holds one axis over.
+
+The question is journalled **before** the session opens and marked answered after, so a dropped
+session costs the answer and not the question; what is pending is re-askable verbatim. Reconstructing
+a question later risks asking a subtly different one, and a subtly different question is how a rerun
+quietly stops being a rerun.

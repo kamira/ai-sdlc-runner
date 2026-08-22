@@ -528,3 +528,33 @@ forge(可注入的指令,只讀退出碼與 stdout 空否)、ledger(CHG 有沒�
 ### task 7 的 CI
 
 PR #17 · run 32583011810 —— 6/6 pass,逐 job 7–8 steps、0 失敗。
+
+---
+
+## 2026-08-22 — task 7 已 merge(`7ecacc6`);task 9 完成
+
+分支:`claude/chg-20260822-04-task9`(自 `origin/main` @ `7ecacc6`)
+下一步:**task 8 的完整清掃**,然後才是 ACC。
+
+- `logical.md`:模組表補 8 個新模組;Main flows 補 `runner elements` 與
+  `runner run --engine`(節點迴圈取代四階段);Dependency direction 加一條——
+  衍生鏈**單向**:store → elements → work order → ask,下游永不回寫。
+- `design.md`:Interface contracts 補 work order 封閉欄位集、Effect、Probe、閘門退出碼;
+  Design decisions 補三筆(解析 vs 著作+pin、缺能力資料硬錯誤、席數下限的顯式模式);
+  Patterns 補四條。
+- `knowledge.md`:**KN-5**(work-order 契約)、**KN-6**(effect 准入與 probe 形狀)、
+  **KN-7**(一問一 session,問題比 session 長壽)。`vocabulary.json` 先註冊 `node-engine` 標籤。
+
+三條 KN 都刻意把**踩過的坑**寫進去,而不只寫結論:子字串比對的 21 個偽陽性、
+`id()` 不是 identity、arity 而非 duck-typing 分辨 factory、以及「測試在掩護風險」那一次。
+
+### 一個重複踩到的操作坑(已改法)
+
+`gh pr checks --watch` 在推送後、checks 尚未註冊的空窗期會直接回
+「no checks reported」就結束——這輪踩了四次。改法:先等註冊再掛 watch,
+判準是輸出裡有沒有 job URL(退出碼分不出「pending」與「沒有 checks」):
+
+```
+until gh pr checks <n> 2>&1 | grep -q 'https://'; do sleep 5; done
+gh pr checks <n> --watch --interval 20
+```
