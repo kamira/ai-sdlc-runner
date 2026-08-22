@@ -115,12 +115,28 @@ class AskJournal:
 
     def pending(self) -> List[Dict[str, object]]:
         """Every ask written down but never answered — the re-ask list, in order."""
-        out = []
-        for path in sorted(self.dir.glob("*.json")):
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if payload.get("status") == "pending":
-                out.append(payload)
-        return out
+        return [e for e in self.entries() if e.get("status") == "pending"]
+
+    def entries(self) -> List[Dict[str, object]]:
+        """Every ask, answered or not, in the order they were asked."""
+        return [json.loads(path.read_text(encoding="utf-8"))
+                for path in sorted(self.dir.glob("*.json"))]
+
+    def answers(self) -> Dict[str, Mapping[str, object]]:
+        """``ask_id -> result`` for everything already answered.
+
+        This is what a resumed run consults, and until it existed the journal was write-only: a
+        second run restarted from `intake` and re-asked everything, overwriting the same files. The
+        test named `test_what_was_already_answered_is_not_re_asked` checked that statuses had been
+        *written*, not that anything was skipped — a test named for a behaviour nobody had built,
+        which is how the gap survived four rounds of review until a verifier read the caller.
+
+        Keyed by ask id rather than node id, because a node is asked more than once: the module loop
+        revisits `engineer_build` per module, and the second visit is a different question wearing
+        the same node's name.
+        """
+        return {e["ask_id"]: e["result"] for e in self.entries()
+                if e.get("status") == "answered" and "result" in e}
 
     def _write(self, ask_id: str, payload: Dict[str, object]) -> None:
         self._path(ask_id).write_bytes(
@@ -155,6 +171,8 @@ class RunReport:
     adjudications: List[Dict[str, object]] = field(default_factory=list)
     #: What each node's effects did — applied, already met, and anything found true out of order.
     effects: Dict[str, Dict[str, object]] = field(default_factory=dict)
+    #: Asks answered from the journal rather than by opening a session, on a resumed run.
+    resumed: List[str] = field(default_factory=list)
 
     def as_dict(self) -> Dict[str, object]:
         return {
@@ -168,6 +186,7 @@ class RunReport:
             "confirmations": list(self.confirmations),
             "adjudications": [dict(a) for a in self.adjudications],
             "effects": {k: dict(v) for k, v in self.effects.items()},
+            "resumed": list(self.resumed),
         }
 
 
@@ -193,12 +212,17 @@ class RunConfig:
     #: declared red line stops the run at every risk grade, whatever is confirmed and whatever mode
     #: is on — and an operation that declares nothing is refused rather than assumed safe.
     operations: Mapping[str, Sequence[Mapping[str, object]]] = field(default_factory=dict)
-    #: What to do at a node that does real work and declares no operations. ``refuse`` is the
+    #: What to do when this runner **could not verify** what a node does — it declares no
+    #: operations, or it names targets nothing recognises. ``refuse`` is the
     #: default and the only safe one: a plan that simply omits `operations` used to be checked
     #: against nothing at all, so "run a deploy without stopping" was a matter of saying less rather
     #: than saying something false. ``allow`` exists for dry runs and records itself as a relaxation
     #: — never silently.
     undeclared: str = "refuse"
+    #: Continue an interrupted run: skip what the journal already answered, re-ask only what it
+    #: does not have. Off by default — a run that silently continues somebody else's because a
+    #: directory happened to exist is worse than one that starts over.
+    resume: bool = False
     #: Gates a human has already confirmed. Without this a stopping verdict ends every run at the
     #: same place forever — an independent verifier found that medium and high risk could never get
     #: past the first gate, which made most of the matrix unreachable. A halt is a pause with a way
@@ -249,13 +273,20 @@ def _open(factory: SessionFactory, seat: Optional[str]):
 
 def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object],
          seat: Optional[str] = None, journal: Optional[AskJournal] = None,
-         ask_id: Optional[str] = None, node_id: str = ""):
+         ask_id: Optional[str] = None, node_id: str = "",
+         answered: Optional[Mapping[str, Mapping[str, object]]] = None):
     """Open a session, ask once, close it — the close guaranteed even if the ask raises.
 
     ``seen`` holds the session **objects**, not their ``id()``: an id is not an identity once the
     object is gone, and every ask drops its session. Tracking ids passed on 3.9 and 3.11 by
     allocation luck and failed on 3.13.
+
+    ``answered`` is what a resumed run already knows. A hit returns it **without opening a session
+    at all**, which is the point of writing the question down before asking it — and which the
+    previous version did not do: it wrote the record, then re-asked everything anyway.
     """
+    if answered and ask_id in answered:
+        return answered[ask_id]
     if journal is not None and ask_id is not None:
         journal.record(ask_id, node_id, seat, order)
     session = _open(factory, seat)
@@ -436,14 +467,29 @@ def _permanent_halt(node: graph.Node, cfg: "RunConfig", report: "RunReport") -> 
 
     for operation in declared or ():
         halt = policy.classify(operation)
+
+        # A target this runner cannot place is not evidence of anything, and it is certainly not
+        # evidence of safety. It falls under the same setting as a node that declared nothing,
+        # because it is the same fact about the world: *we could not verify what this does.*
+        unknown = policy.unverified(operation)
+        if halt is None and unknown and cfg.undeclared != "allow":
+            return (
+                f"{node.id!r} names target(s) this runner does not recognise: {list(unknown)}. "
+                f"They are declared ordinary, and nothing confirmed that — a red-line list finding "
+                f"nothing has said nothing. Name a target it knows, declare the operation's real "
+                f"kind, or pass undeclared='allow' to proceed on the plan's word, which is "
+                f"recorded.")
+
         if halt is None and policy.on_trust(operation):
             # Nothing about this was checked except its own prose: it declares `ordinary` and names
             # no targets. Not blocked — forcing every operation to name one buys ceremony, since an
             # empty list is as forgeable as a wrong `kind`. What is unacceptable is the trust being
             # invisible, so it goes in the report where an auditor reads it.
+            why = (f"no targets named" if not operation.get("targets")
+                   else f"target(s) not recognised: {list(policy.unverified(operation))}")
             report.on_trust.append(
                 f"{node.id}: {operation.get('description', '')!r} was taken on the plan's word — "
-                f"declared ordinary, no targets named, nothing verified")
+                f"declared ordinary, {why}, nothing verified")
         if halt is not None:
             what = operation.get("description", operation) if isinstance(operation, Mapping) \
                 else operation
@@ -538,6 +584,18 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
     # covers, because the operator confirmed *that* stop having seen it — an independent verifier
     # found that one `--confirm plan_confirmed`, given to unlock a revision loop, also waved through
     # the final approval on the way out. Confirming twice takes two.
+    # What a previous run already answered. `resume=False` (the default) ignores it, so an ordinary
+    # run is never silently continuing somebody else's — resuming is a decision, not a side effect
+    # of a journal directory happening to exist.
+    already: Dict[str, Mapping[str, object]] = {}
+    if cfg.resume:
+        if cfg.journal is None:
+            raise EngineError(
+                "resume=True needs a journal to resume from. Pass --ask-journal at the directory "
+                "the interrupted run wrote to; without it there is nothing to read and continuing "
+                "would silently re-ask everything.")
+        already = cfg.journal.answers()
+
     confirmations: Dict[str, int] = {}
     for gate in cfg.confirmed:
         if gate not in policy.GATES:
@@ -598,13 +656,19 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     result = _ask(
                         factory, _order_for(node, cfg, verdict, seat), opened, seat=seat,
                         journal=cfg.journal, ask_id=f"{len(report.asks):03d}-{node.id}-{seat}",
-                        node_id=node.id)
+                        node_id=node.id, answered=already)
+                    ask_key = f"{len(report.asks):03d}-{node.id}-{seat}"
+                    if ask_key in already:
+                        report.resumed.append(ask_key)
                     report.asks.append(Ask(node.id, node.role, seat, result))
                     answers.append(result)
             else:
                 result = _ask(
                     factory, _order_for(node, cfg, verdict), opened, journal=cfg.journal,
-                    ask_id=f"{len(report.asks):03d}-{node.id}", node_id=node.id)
+                    ask_id=f"{len(report.asks):03d}-{node.id}", node_id=node.id,
+                    answered=already)
+                if f"{len(report.asks):03d}-{node.id}" in already:
+                    report.resumed.append(f"{len(report.asks):03d}-{node.id}")
                 report.asks.append(Ask(node.id, node.role, None, result))
                 answers.append(result)
 

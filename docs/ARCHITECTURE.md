@@ -74,13 +74,23 @@ recorded in the run report.
 Six actions are never automated at any grade and no confirmation or mode relaxes them: production
 deploys, data migrations, hard deletes, moving money, changing secrets or permissions, publishing.
 
-Three layers decide, and each may only ever **add** a stop:
+Four layers decide, and each may only ever **add** a stop:
 
 1. **The targets** — the commands, paths and URLs the operation will act on. `rm -rf` in a command
    is not a phrasing choice and a path under `secrets/` is not an opinion, so these are read
    directly and **outrank the declaration**. A plan naming `kubectl apply -f prod/` has said
-   "production deploy" whatever it wrote in `kind`. This is the layer that stops the planner from
-   being the trust boundary.
+   "production deploy" whatever it wrote in `kind`.
+
+   Each target lands in one of **three** states: red line, recognised-ordinary, or **unrecognised** —
+   and the third is not the safe one. An earlier version had only two, so "no red-line pattern
+   matched" was read as "verified safe", and a verifier declared `dd if=/dev/zero of=/dev/sda`
+   `ordinary`, named it as a target, and watched the run finish with an empty report. A blacklist
+   that recognises nothing has *said* nothing. An unrecognised target stops the run by default, and
+   under `--undeclared allow` it proceeds **recorded**, never silent.
+
+   This layer narrows how far the planner is trusted. It does not remove the planner as a trust
+   boundary — no list of dangerous commands is ever finished, and what this list has not seen still
+   rests on the declaration. That is why the third state exists and why `on_trust` is a report line.
 2. **The declaration** — each operation declares its `kind` from a closed set of the six plus
    `ordinary`, and **an operation that declares nothing is refused**. A declared red line always
    halts.
@@ -90,15 +100,19 @@ Three layers decide, and each may only ever **add** a stop:
    — and a check that fires on two jobs in three gets switched off, which protects nothing at all.
    A phrase is listed only if it cannot plausibly describe safe work.
 
-Before any of that, the node's own **brief** is read — `instructions`, `objective`, `scope`. A work
-order saying *"deploy the new build to production, then wipe the users table"* used to run to
-completion because the operation beside it said `ordinary`: the words were in the text the engineer
-would act on and nothing looked at them. There is no way past this except changing what the node is
-told to do.
+Before any of that, the node's own **brief** is read — **every field of it**, not a chosen few, plus
+the paths it names (`input_artifacts`, `expected_outputs`, `workdir`) through the target rules. A
+work order saying *"deploy the new build to production, then wipe the users table"* used to run to
+completion because the operation beside it said `ordinary`; then a curated three-field version let
+the same sentence through in `done_criteria`. Choosing which fields to read has as many blind spots
+as the fields it omits. There is no way past this except changing what the node is told to do.
 
-An operation that declares `ordinary` and names no targets is taken on the plan's word. It is not
-blocked — an empty target list is exactly as forgeable as a wrong `kind` — but it lands in the run
-report under `on_trust`, so an auditor can see which steps nothing verified.
+An operation nothing could confirm — declared `ordinary`, and either naming no targets or naming
+ones this runner does not recognise — is taken on the plan's word. Under `--undeclared refuse` (the
+default) it stops; under `allow` it proceeds and lands in the run report under `on_trust`, so an
+auditor sees which steps nothing verified. The condition used to be simply "no targets", which meant
+naming any benign path switched the disclosure off — the same mechanism that hid the five silent
+passes.
 
 `--undeclared allow` exists for dry runs and records itself as a relaxation. It **never** covers a
 node that applies effects: a run that changes the world is not a dry run, whatever the flag says.
@@ -116,6 +130,11 @@ for every asking role. A dropped session costs the answer and not the question.
 `--seat-model` routes a named seat to a different command: the same question, different answerers,
 which is what makes cross-model review real. The routing lives in the CLI and never in the order.
 
+**Resuming.** `runner run --resume --ask-journal DIR` continues an interrupted run: what the journal
+already answered is not asked again, and the pending question is re-asked verbatim. Resuming is a
+decision — without the flag, a journal that happens to exist changes nothing, because a run silently
+continuing somebody else's is worse than one starting over.
+
 ## 6. The panel
 
 One or many seats, count set by the user above a floor of three. Each is asked separately and is
@@ -132,9 +151,11 @@ they made.
 ## 7. Interfaces
 
 - `runner flow` — print the flow. `runner policy` — print the governance. Neither runs anything.
-- `runner settings` — the screen that sets the review seat count and the high-risk bypass, persisted
-  to `config/settings.json`. `runner settings --show` prints them without a menu, so a bypass is
-  visible to somebody reading a log rather than sitting at a terminal.
+- `runner settings` — a **terminal** screen (curses, with a numbered fallback) that sets the review
+  seat count and the high-risk bypass, persisted to `config/settings.json`. `runner settings --show`
+  prints them without a menu, so a bypass is visible to somebody reading a log rather than sitting
+  at a terminal. It is a TUI, not a graphical interface — worth saying plainly, because the
+  requirement asked for a GUI and this is what exists.
 - `runner run --config <yaml> --plan <json> [--risk low|medium|high] [--seats N]
   [--high-risk-mode] [--confirm GATE ...] [--seat-model SEAT=COMMAND ...] [--ask-journal DIR]`
 - The plan carries `node_specs`, `decisions`, `risk`, `autonomy`, `operations` (each declaring its

