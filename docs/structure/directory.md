@@ -40,7 +40,10 @@ ai-sdlc-runner/
 │   ├── structure_scan.py      # structure analysis: scan + scaffold 4 structures + authority/pointers; CHG-08
 │   ├── decompose.py           # split store references into anchored, provenanced elements; CHG-20260822-04 task 1
 │   ├── dispatch.py            # derive checkpoint + role-loadout elements from shipped policy (task 2); emit_all + verify_elements three-state gate (task 4); CHG-20260822-04
-│   └── workorder.py           # render one node's work order: closed D5 schema, no harness-specific field, self-sufficient; CHG-20260822-04 task 5
+│   ├── workorder.py           # render one node's work order: closed D5 schema, no harness-specific field, self-sufficient; CHG-20260822-04 task 5
+│   ├── graph.py               # the node graph: the skill's shipped flow written as data, pinned to references/autopilot-loop#state-machine; CHG-20260822-04 task 6
+│   ├── effects.py             # ordered effects, each with a probe; nothing already true is re-applied; CHG-20260822-04 task 6 (D6)
+│   └── engine.py              # walk the graph behind an opt-in flag: one session per ask, questions journalled before asking; CHG-20260822-04 task 6
 ├── config/
 │   └── runner.yaml            # contract version, skill path, concurrency/depth limits
 ├── docs/
@@ -63,7 +66,10 @@ ai-sdlc-runner/
     ├── test_dispatch.py        # dispatch elements: policy coverage, no hand-written ids; CHG-20260822-04 task 2
     ├── test_elements_tree.py   # every store version has elements; committed tree regenerates byte-for-byte; CHG-20260822-04 task 3
     ├── test_elements_gate.py   # regeneration gate: match / drift / source-missing, each produced by breaking a real repo; CHG-20260822-04 task 4
-    └── test_workorder.py       # work-order schema is closed; sentinel proves no tool name escapes; 9/13 roles refuse to render; CHG-20260822-04 task 5
+    ├── test_workorder.py       # work-order schema is closed; sentinel proves no tool name escapes; 9/13 roles refuse to render; CHG-20260822-04 task 5
+    ├── test_graph.py           # the graph is the shipped flow: phrase pin, loop/branch survive, checkpoint + role coverage; CHG-20260822-04 task 6
+    ├── test_effects.py         # probeability is the admission rule; frontier resume; nothing already true is re-applied; CHG-20260822-04 task 6
+    └── test_engine.py          # opt-in flag, hard stops, one session per ask (closed after), question survives a dropped session; CHG-20260822-04 task 6
 ```
 
 ## Responsibility per directory

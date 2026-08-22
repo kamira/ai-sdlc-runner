@@ -439,3 +439,36 @@ task 6 為何要新的確認關卡:`Autonomy: high` 對它再次生效——它*
 
 註:codex 無法執行測試(唯讀沙箱沒有可用的 temporary directory,pytest 收集前即停),
 判定依原始碼與測試逐項審讀。這不減損上述兩項——第 1 項是讀 `run()` 就看得出來的。
+
+### 使用者再追加(2026-08-22,逐字)
+
+7. **每次詢問都是獨立建立一次 session,詢問完畢後就關閉 session,不要有持續的情況。**
+8. **本項目要允許多模型互審**,並**抗 session 失聯**——最糟情況下也要能**保留詢問的內容**,
+   待下次恢復時再詢問。目的:**抵抗模型依照先前的問答偷懶或者偏見**。
+9. **不只是在 review**——PM、QA、主管、被派工者**都要**能在 session 中斷時接續前一個命令。
+
+### 這三條怎麼變成機制(不是宣稱)
+
+- **session 生命週期改由引擎持有**:`open → ask → close`,close 放在 `finally`。
+  dispatcher 沒有機會把 session 留著跨 ask 用。**工廠若回傳曾經回傳過的 session,直接硬錯誤**
+  ——那正是「持續」的定義。純 callable 仍相容,被包成 one-shot,第二次 ask 會被拒。
+- **問題先寫下來再問**(`AskJournal`):order 在 session 開之前就落盤成 `pending`,答完才轉
+  `answered`。session 掉了,**損失的是答案不是問題**;下次恢復時 pending 的那筆可以**逐位元組
+  原樣再問**。已答的不會被重問。這是 D6 的紀律套到「問」這件事上。
+- **多模型互審**:路由(誰來答)住在 session factory,**不進工單**——D5 本來就把 model /
+  dispatch 設定排除在工單外。所以「同一個問題、不同的答題者」是結構保證,測試斷言三席拿到的
+  order 字串完全相同、答題者互異。
+- **第 9 條已由機制涵蓋**:journal 對**每一個詢問節點**生效,不只 review。測試逐角色驗過:
+  analyst(PM 那段)、lead-implementer(主管)、sub-implementer(被派工者)、verifier(QA),
+  各自在中斷時 pending 恰好一筆、node 與 role 正確,先前已答的全是 answered。
+
+### 順帶被測試逼出來的一個真缺陷
+
+分支決策原本是 `{node_id: 單一字串}`,**表達不了出貨的 per-task 迴圈**(要能說「task, task, none」)。
+靜態 map 會讓迴圈要嘛無限跑、要嘛只跑一次。已改成可給序列,逐次消耗;次數不夠就硬錯誤,
+**不猜迴圈何時結束**。
+
+### 現況
+
+`graph.py`(22 節點)、`effects.py`、`engine.py` + `test_graph`(21)、`test_effects`(12)、
+`test_engine`(36)。全套 **354 passed, 2 skipped**;doc-integrity exit 0。

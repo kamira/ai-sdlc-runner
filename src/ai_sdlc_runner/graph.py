@@ -41,8 +41,16 @@ meaning, so they are represented explicitly and tested:
   mechanism as resume: an already-ticked task is simply not the frontier.
 * the **review fail branch** — one fix pass, then re-review, and "second fail = halt" — is a bounded
   retry, not a repeat-until-green.
-* the **CHG-not-confirmed branch** — "no → requirement/modification governance first" — leaves the
-  runner's layer entirely, so it is a halt with a reason rather than something the runner drives.
+* the **CHG-not-confirmed branch** — "no → requirement/modification governance first" — loops back
+  into requirement analysis and structure design, which the runner **drives itself**: it is the agent
+  built on this flow, not a driver handing that stage to something else. (An earlier draft of this
+  paragraph called it a halt-with-reason while the node table already drove it; the review panel
+  caught the contradiction. The table was right.)
+
+* the **plan-check failure** — "exit 2 on failure — a bad plan never starts" — is a stop, on the same
+  footing as "second fail = halt". Both failure modes are stated inside the shipped block, so both
+  get a node; representing one and leaving the other as a prose note was the inconsistency the panel
+  found.
 """
 from __future__ import annotations
 
@@ -98,8 +106,11 @@ NODES: Tuple[Node, ...] = (
     Node(id="structure_design", kind=STEP, source_phrase="requirement/modification governance",
          role="analyst", checkpoints=("halt:structure_confirmed",), next="chg_confirmed",
          note="governance produces the CHG, then the flow re-enters the decision"),
-    Node(id="plan_check", kind=STEP, source_phrase="plan-check gate", role="lead-implementer",
-         next="confirm_gate", note="a bad plan never starts (exit 2)"),
+    Node(id="plan_check", kind=DECISION, source_phrase="plan-check gate", role="lead-implementer",
+         branches={"pass": "confirm_gate", "fail": "halt_bad_plan"},
+         note="the block states this gate's own failure mode; it gets a stop, like second-fail does"),
+    Node(id="halt_bad_plan", kind=TERMINAL, source_phrase="exit 2 on failure",
+         note="a bad plan never starts"),
     Node(id="confirm_gate", kind=STEP, source_phrase="confirm gate", role="lead-implementer",
          checkpoints=("autopilot:confirm_gate", "halt:before_implement"), next="next_task",
          note="feasibility and risk confirmed before any engineer is dispatched"),
