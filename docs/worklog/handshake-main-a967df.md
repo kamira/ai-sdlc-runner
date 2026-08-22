@@ -289,3 +289,52 @@ PR #14 · run 32559369266 —— **6/6 pass**(原本 5 個 job + 新增的 `elem
 
 值得記一筆:**元素樹是在 Windows 產生、在 ubuntu 驗證的**,跨平台 byte-compare 成立。
 `.gitattributes` 的 `eol=lf` 到此是雙向都驗過了。
+
+---
+
+## 2026-08-22 — task 4 已 merge(`7dd8f92`);task 5 建置完成
+
+分支:`claude/chg-20260822-04-task5`(自 `origin/main` @ `7dd8f92`)
+現在做:CHG-20260822-04 task 5/9 —— 收尾中(push → PR → CI → merge)
+下一步:**task 6(節點引擎 + 有序 effect 與 probe)**。**task 6 需要新的確認關卡**——
+`Autonomy` 欄的 halt 對它再次生效(它取代四階段路徑)。
+
+### 兩席一輪,三題全同(a / b / a),無分歧
+
+- **Q1 self-sufficiency 綁產物不綁 renderer**——與 A2 判決一致,不必回退。
+  fable 給了可操作形式:**工單裡出現不帶 path 與 anchor 的裸 element id 即違反**。
+- **Q2 缺能力資料的角色一律硬錯誤**(不是 default-deny)。
+- **Q3 task 5 只交付 schema + renderer**,node spec 由 task 6 供給。
+
+### 缺席檢查怎麼寫成機械可驗(task 2 教訓的正面回答)
+
+**不做子字串掃描。** 兩層:①封閉鍵集——斷言渲染輸出的鍵集**恰好等於** D5 白名單,
+缺席由「枚舉在場者」證明;②**哨兵注入**——把唯一字串塞進 `RoleSpec.tools`,
+斷言序列化後的工單全文不含它,精確值比對、零偽陽性,並加一條防「空過」的斷言。
+
+### 兩個角色資料的事實
+
+- `agents.py` 的 `tools` 清單是 **runner 寫死的 Claude Code 名字**,不是出貨資料。
+- fable 又抓到第四個旗標 `writes_docs`,是從 Notes 欄**散文子字串猜**出來的;
+  D5 只列三個旗標,所以它與 tools 一樣不得入單。
+
+### 13 個角色只有 4 個能渲染,這是刻意的
+
+沒有出貨能力資料的 9 個(`orchestrator`、`integrator`、`reviewer` + 6 個 `seat-*`)
+**渲染時硬錯誤並指名角色**。兩席獨立給出同一個理由:全 false **不是中性安全預設,
+是 runner 自己在寫授權政策**——`orchestrator` 顯然必須能 spawn,全 false 的工單
+「看起來受治理」實則錯的;而靜默收緊會讓節點做不了該做的事。兩個方向都有害時,不能猜。
+
+**已知後果照 `scripts/lib/` 的規格記錄下來**:在 skill 出貨機器可讀的能力資料之前,
+引擎無法派發那 9 個角色,**含審議席**。task 6 **不得**臨場補預設值繞過。
+有一條測試釘住 4 + 9 = 13,skill 一旦多出貨能力列就會失敗,強迫回頭重審而不是讓記錄過期。
+
+### 一處引註更正
+
+我在 brief 裡把「runner 只認表內的鍵,不認散文」記成出自 `role_refs.json`;
+fable 查證後指出那句在 **`review_seats.json`** 的 `_extending`,而 `role_refs.json`
+根本沒有 `_extending` 鍵。我複驗屬實。結論不變(散文仍不是資料),但引註錯了,已更正。
+
+### 閘門
+
+`pytest tests/` **285 passed, 2 skipped**;doc-integrity **exit 0**。
