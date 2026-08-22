@@ -74,3 +74,59 @@ def test_the_field_rule_is_prospective(tmp_path):
 def test_a_change_with_no_status_section_is_reported(tmp_path):
     assert any("no Status section" in p
                for p in ledger_check.check(_repo(tmp_path, HEADER)))
+
+
+# --------------------------------------------------------------------------------------
+# the vocabulary of "finished" is closed
+# --------------------------------------------------------------------------------------
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("status", ["accepted", "completed", "merged", "完成", "done", "shipped",
+                                    "closed", "已驗收", "released"])
+def test_every_way_of_saying_finished_needs_an_acceptance(tmp_path, status):
+    """The finding this closes: the lint knew only the word "built", so a change whose status said
+    "accepted" or "完成" passed with no ACC at all — a false green written in one word."""
+    repo = _repo(tmp_path, HEADER + f"\n## Status\n\n{status}\n")
+    problems = ledger_check.check(repo)
+    assert any("nothing saying it was checked" in p for p in problems), status
+
+
+@pytest.mark.parametrize("status", ["draft", "in progress", "blocked", "草稿", "進行中",
+                                    "superseded", "pending"])
+def test_an_unfinished_change_needs_nothing(tmp_path, status):
+    repo = _repo(tmp_path, HEADER + f"\n## Status\n\n{status}\n")
+    assert ledger_check.check(repo) == []
+
+
+def test_a_status_nobody_wrote_down_is_a_problem_not_a_pass(tmp_path):
+    """The escape hatch itself: treating an unrecognised word as "not finished" is how the previous
+    version let four different words through. An unknown status is now a failure that names the fix.
+    """
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\nfine\n")
+    problems = ledger_check.check(repo)
+    assert any("not a recognised one" in p for p in problems)
+    assert any("ledger_check.py" in p for p in problems)
+
+
+def test_the_commentary_after_the_status_does_not_decide_the_status(tmp_path):
+    """`draft — all 9 tasks built` is a draft. The status is the head of the line; the rest is
+    prose, and prose has changed this repo's document classification before."""
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\n**草稿 / draft — all 9 tasks built.**\n")
+    assert ledger_check.check(repo) == []
+
+
+def test_a_finished_status_with_commentary_still_needs_its_acceptance(tmp_path):
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\naccepted (see the ACC) — everything green.\n")
+    assert any("nothing saying it was checked" in p for p in ledger_check.check(repo))
+
+
+def test_a_status_that_reads_both_ways_is_refused(tmp_path):
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\ndraft done\n")
+    assert any("cannot act on it" in p for p in ledger_check.check(repo))
+
+
+def test_the_two_lists_do_not_overlap():
+    """A word on both lists would make every status using it ambiguous, forever."""
+    assert not set(ledger_check.DONE) & set(ledger_check.IN_PROGRESS)

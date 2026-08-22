@@ -113,12 +113,18 @@ GATES: Dict[str, Dict[str, str]] = {
     "acceptance":            {"low": AUTO, "medium": AUTO, "high": HALT_INDEPENDENT},
     # Opening a PR is reversible; closing one costs nothing.
     "pr":                    {"low": AUTO, "medium": AUTO, "high": AUTO},
-    # Merging is a one-way door. It stops earliest of anything here.
-    "merge":                 {"low": AUTO, "medium": HALT, "high": HALT},
+    # Merging is a one-way door, so it stops earliest of anything here — including at low risk,
+    # where it asks rather than halts. "Low risk" grades the change, not the door.
+    "merge":                 {"low": CONFIRM, "medium": HALT, "high": HALT},
 }
 
 #: Never automated, at any risk grade, and no configuration relaxes them. These are the actions whose
 #: worst case is not "redo the work" but "the work cannot be undone".
+#:
+#: Each entry pairs the description a person reads with the words that recognise it in an operation
+#: the flow is about to carry out. A list nothing checks is a paragraph — the previous version of
+#: this file printed these into the work order and never looked at them again, which an independent
+#: verifier found by writing a run that deployed to production without stopping.
 PERMANENT_HALTS: Tuple[str, ...] = (
     "production deploy or release",
     "data migration or irreversible schema change",
@@ -127,6 +133,37 @@ PERMANENT_HALTS: Tuple[str, ...] = (
     "changing secrets, credentials, access control or permissions",
     "publishing public content",
 )
+
+#: description -> the words that recognise it. Matching is deliberately generous: a false stop costs
+#: one question, a missed one costs the thing that cannot be undone.
+_HALT_WORDS: Dict[str, Tuple[str, ...]] = {
+    PERMANENT_HALTS[0]: ("deploy", "release to prod", "production", "prod push", "ship to prod",
+                         "上線", "部署"),
+    PERMANENT_HALTS[1]: ("migrate", "migration", "alter table", "drop column", "schema change",
+                         "backfill", "遷移"),
+    PERMANENT_HALTS[2]: ("delete", "drop table", "truncate", "rm -rf", "purge", "hard delete",
+                         "刪除", "清除"),
+    PERMANENT_HALTS[3]: ("money", "payment", "transfer funds", "charge", "refund", "invoice",
+                         "payout", "付款", "轉帳"),
+    PERMANENT_HALTS[4]: ("secret", "credential", "token", "api key", "password", "permission",
+                         "access control", "iam", "金鑰", "權限"),
+    PERMANENT_HALTS[5]: ("publish", "post to", "tweet", "announce", "send email", "broadcast",
+                         "發布", "公開"),
+}
+
+
+def permanent_halt(operation: str) -> Optional[str]:
+    """The permanent halt an operation trips, or ``None``.
+
+    ``operation`` is what the flow is about to do, in the words whoever planned it used. The return
+    value is the halt's own description, so the halt reason quotes the rule rather than the keyword
+    that happened to match.
+    """
+    text = operation.casefold()
+    for description, words in _HALT_WORDS.items():
+        if any(word in text for word in words):
+            return description
+    return None
 
 #: The review seats, in opening order — least negotiable first, so opening fewer means taking a
 #: prefix rather than picking favourites. A seat with `veto` cannot be outvoted: its subject is a

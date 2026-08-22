@@ -7,9 +7,11 @@ implementation was.
 
 Three checks, each on something that has actually gone wrong here:
 
-1. **A change that claims to be built has an acceptance record.** A CHG marked built with no ACC is
-   the false-green this repo keeps catching — work reported complete with nothing saying it was
-   checked.
+1. **A change that claims to be finished has an acceptance record.** A CHG marked done with no ACC
+   is the false-green this repo keeps catching — work reported complete with nothing saying it was
+   checked. The vocabulary of "finished" is **closed**: a status word neither list recognises is a
+   problem, not a pass. The previous version knew only "built", so "accepted", "merged" and "完成"
+   all escaped it silently.
 2. **Every change carries its required fields.** A ledger entry missing its branch, risk or status is
    one the next reader cannot act on.
 3. **A change's status is read from its status line, not from its prose.** The previous lint scanned
@@ -35,8 +37,19 @@ REQUIRED_FIELDS = ("Project", "Date", "Risk")
 #: same way the rules it replaces were.
 BRANCH_REQUIRED_FROM = "CHG-20260703-01"
 
-BUILT = ("built", "已建置", "implemented", "已實作")
-DRAFT = ("draft", "草稿")
+#: Statuses that mean the work is finished. Anything here needs a matching ACC.
+DONE = (
+    "built", "implemented", "accepted", "complete", "completed", "done", "merged", "shipped",
+    "closed", "released",
+    "已建置", "已實作", "已驗收", "已完成", "完成", "已合併", "已收尾",
+)
+
+#: Statuses that mean the work is not finished yet. Nothing is required of these.
+IN_PROGRESS = (
+    "draft", "in progress", "wip", "blocked", "halted", "paused", "pending", "under review",
+    "proposed", "superseded", "abandoned", "withdrawn",
+    "草稿", "進行中", "擱置", "停擺", "待審", "已作廢", "已取代",
+)
 
 
 def _status_line(text: str) -> str:
@@ -52,6 +65,23 @@ def _status_line(text: str) -> str:
         if line.strip():
             return line.strip()
     return ""
+
+
+def _status_word(line: str) -> str:
+    """The status itself, with the commentary after it cut off.
+
+    A status line here is conventionally ``<status> — <a sentence about it>``, and the sentence is
+    where the trouble lives: "draft — all 9 tasks built" is a draft, and reading the whole line makes
+    it read as both. The status is the **head** of the line; everything from the first dash, bracket
+    or full stop onward is prose, and prose does not decide status. That is the same lesson as
+    reading the Status section instead of the whole document, one level further in.
+    """
+    head = line.strip().strip("*_` ")
+    for cut in ("—", "–", " - ", " -- ", "(", "[", ",", ";", ".", "!"):
+        index = head.find(cut)
+        if index > 0:
+            head = head[:index]
+    return head.strip().strip("*_` ").lower()
 
 
 def _field_present(text: str, field: str) -> bool:
@@ -77,16 +107,33 @@ def check(repo: Path) -> List[str]:
         if missing:
             problems.append(f"{chg_id}: missing required field(s): {missing}")
 
-        status = _status_line(text).lower()
+        status = _status_word(_status_line(text))
         if not status:
             problems.append(f"{chg_id}: has no Status section")
             continue
 
-        is_draft = any(d in status for d in DRAFT)
-        claims_built = any(b in status.lower() for b in BUILT)
-        if claims_built and not is_draft and chg_id.replace("CHG-", "") not in accepted:
+        done = [w for w in DONE if w in status]
+        open_ = [w for w in IN_PROGRESS if w in status]
+
+        # The vocabulary is closed on purpose. An unrecognised status used to be treated as
+        # not-finished, so a change whose status said "accepted" or "完成" sailed past a lint that
+        # only knew the word "built" — the exact false-green this file exists to catch. Now a word
+        # nobody wrote down is a problem, and the fix is to add it to one of the two lists above,
+        # deliberately, rather than to discover years later which side it silently fell on.
+        if not done and not open_:
             problems.append(
-                f"{chg_id}: its status says the work is built, but docs/acceptance/ has no "
+                f"{chg_id}: status {status!r} is not a recognised one. Add the word to DONE or to "
+                f"IN_PROGRESS in tools/ledger_check.py — an unrecognised status is not a pass")
+            continue
+        if done and open_:
+            problems.append(
+                f"{chg_id}: status {status!r} reads as both finished ({done}) and unfinished "
+                f"({open_}); the next reader cannot act on it")
+            continue
+
+        if done and chg_id.replace("CHG-", "") not in accepted:
+            problems.append(
+                f"{chg_id}: its status says the work is finished, but docs/acceptance/ has no "
                 f"matching ACC — a change reported complete with nothing saying it was checked")
     return problems
 

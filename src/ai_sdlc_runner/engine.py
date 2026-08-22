@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Sequence
 
+from . import effects as effects_mod
 from . import graph, policy, workorder
 
 SessionFactory = Callable[[], "Session"]
@@ -145,6 +146,12 @@ class RunReport:
     relaxations: List[str] = field(default_factory=list)
     #: What the policy said at each node, so a halt can be audited afterwards.
     verdicts: Dict[str, Dict[str, object]] = field(default_factory=dict)
+    #: Gates the operator had already confirmed, recorded so an approval leaves a trace.
+    confirmations: List[str] = field(default_factory=list)
+    #: Every panel decision, with the seats' verdicts that produced it.
+    adjudications: List[Dict[str, object]] = field(default_factory=list)
+    #: What each node's effects did — applied, already met, and anything found true out of order.
+    effects: Dict[str, Dict[str, object]] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, object]:
         return {
@@ -154,6 +161,9 @@ class RunReport:
             "halt_reason": self.halt_reason,
             "relaxations": list(self.relaxations),
             "verdicts": {k: dict(v) for k, v in self.verdicts.items()},
+            "confirmations": list(self.confirmations),
+            "adjudications": [dict(a) for a in self.adjudications],
+            "effects": {k: dict(v) for k, v in self.effects.items()},
         }
 
 
@@ -169,6 +179,20 @@ class RunConfig:
     autonomy: Optional[str] = None
     review_seats: Optional[int] = None
     high_risk_mode: bool = False
+    #: The ordered effects a node carries out, looked up by node id. `record_module` says in the
+    #: flow that it ticks, commits and updates the worklog — "three ordered effects" — and until
+    #: this hook existed that sentence was a comment: the node did nothing at all. Each effect is
+    #: probed before it is applied and re-probed after, so a resumed run redoes nothing.
+    effects: Optional[Callable[[str], Sequence["effects_mod.Effect"]]] = None
+    #: What each node is about to actually do, in the planner's words, keyed by node id. This is
+    #: what `policy.PERMANENT_HALTS` is checked against — a node that says it deploys to production
+    #: stops there, at every risk grade, whatever is confirmed and whatever mode is on.
+    operations: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    #: Gates a human has already confirmed. Without this a stopping verdict ends every run at the
+    #: same place forever — an independent verifier found that medium and high risk could never get
+    #: past the first gate, which made most of the matrix unreachable. A halt is a pause with a way
+    #: back, not a wall.
+    confirmed: Sequence[str] = ()
     max_steps: int = 200
     journal: Optional[AskJournal] = None
 
@@ -256,6 +280,85 @@ def _choose(cfg: RunConfig, node: graph.Node, taken: Dict[str, int]) -> Optional
     return value[visit]
 
 
+def _run_effects(node: graph.Node, cfg: "RunConfig", report: "RunReport"):
+    """Carry out this node's ordered effects, if it has any, and record what happened.
+
+    Effects are applied through `effects.run`, which never re-applies one whose postcondition is
+    already true and re-probes every one it does apply. An effect that fails to establish its own
+    postcondition halts the run rather than letting the flow march past a step that did nothing.
+    """
+    if cfg.effects is None:
+        return None
+    sequence = cfg.effects(node.id)
+    if not sequence:
+        return None
+    try:
+        outcome = effects_mod.run(sequence)
+    except effects_mod.EffectError as exc:
+        report.halted_at = node.id
+        report.halt_reason = f"effect failed at {node.id!r}: {exc}"
+        return report
+    report.effects[node.id] = outcome.as_dict()
+    return None
+
+
+def _permanent_halt(node: graph.Node, cfg: "RunConfig") -> Optional[str]:
+    """The halt reason if this node's work trips a permanent halt, else ``None``.
+
+    Checked before the gate, and unaffected by `confirmed` and by high-risk mode: these are the
+    actions whose worst case is not "redo the work". Everything else in this file is a policy the
+    operator can turn down; this one is not.
+    """
+    for operation in cfg.operations.get(node.id, ()):
+        halt = policy.permanent_halt(operation)
+        if halt is not None:
+            return (
+                f"permanent halt at {node.id!r}: {operation!r} is {halt}. No risk grade, "
+                f"confirmation or mode relaxes this — a person does it.")
+    return None
+
+
+def _answered_branch(node: graph.Node, answers: List[Mapping[str, object]]) -> str:
+    """The branch the answer names, at a node where somebody was asked to decide.
+
+    A decision node whose branch comes from the plan while somebody is being asked is a question
+    whose answer changes nothing — which is exactly what an independent verifier demonstrated by
+    answering every ask with `fail` and still reaching the end of the flow.
+    """
+    if not answers:
+        raise EngineError(f"node {node.id!r} decides on its answer, but nothing answered")
+    answer = answers[-1]
+    branch = answer.get("branch") or answer.get("verdict") or answer.get("outcome")
+    if branch is None:
+        raise EngineError(
+            f"node {node.id!r} decides on its answer, but the answer named no branch. It must "
+            f"carry one of {sorted(node.branches)} as `branch`, `verdict` or `outcome`.")
+    if branch not in node.branches:
+        raise EngineError(
+            f"node {node.id!r} was answered {branch!r}, which is not one of {sorted(node.branches)}")
+    return str(branch)
+
+
+def _adjudicate(node: graph.Node, report: "RunReport", seats: int) -> str:
+    """Turn the seats' verdicts into one branch, through `policy.adjudicate`.
+
+    This is the requirement's own sentence made operational — *多數決才允許放行* — and it is what both
+    verifiers found missing: the seats were asked, and their answers routed nothing.
+    """
+    verdicts = {}
+    for ask in report.asks:
+        if ask.node_id == node.id and ask.seat:
+            answer = ask.result or {}
+            verdicts[ask.seat] = str(answer.get("verdict") or answer.get("outcome") or "")
+    if len(verdicts) != seats:
+        raise EngineError(
+            f"{node.id!r} opened {seats} seat(s) but collected {len(verdicts)} verdict(s) — a panel "
+            f"short of a seat has not reached the majority it was opened for")
+    outcome = policy.adjudicate(verdicts)
+    report.adjudications.append({"node_id": node.id, **outcome, "verdicts": dict(verdicts)})
+    return "pass" if outcome["outcome"] == "pass" else "fail"
+
+
 def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunReport:
     """Walk the flow from ``intake``, dispatching one work order per ask.
 
@@ -285,26 +388,62 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
         node = graph.BY_ID[node_id]
         report.visited.append(node.id)
 
+        tripped = _permanent_halt(node, cfg)
+        if tripped is not None:
+            report.halted_at = node.id
+            report.halt_reason = tripped
+            return report
+
         verdict = resolve_verdict(node, cfg.risk, cfg.autonomy)
         report.verdicts[node.id] = dict(verdict)
-        if policy.stops(str(verdict["verdict"])):
+
+        def _gate(phase: str):
+            """Stop here if the policy says so and nobody has confirmed it yet.
+
+            A gate the operator has already confirmed is **recorded** rather than silently skipped:
+            an approval that leaves no trace is one nobody can audit afterwards.
+            """
+            if node.gate_when != phase or not policy.stops(str(verdict["verdict"])):
+                return None
+            if node.gate in cfg.confirmed:
+                report.confirmations.append(
+                    f"{node.gate} = {verdict['verdict']} at risk {verdict['risk']}, "
+                    f"confirmed by the operator")
+                return None
             report.halted_at = node.id
             report.halt_reason = (
                 f"{verdict['gate']} = {verdict['verdict']} at risk {verdict['risk']} "
-                f"(per {verdict['source']})")
+                f"(per {verdict['source']}) — confirm it to continue")
             return report
 
+        stop = _gate("before")
+        if stop is not None:
+            return stop
+
+        answers: List[Mapping[str, object]] = []
         if node.role:
             if node.role == "seat":
                 for seat in policy.seat_names(seats):
-                    report.asks.append(Ask(node.id, node.role, seat, _ask(
+                    result = _ask(
                         factory, _order_for(node, cfg, verdict, seat), opened, seat=seat,
                         journal=cfg.journal, ask_id=f"{len(report.asks):03d}-{node.id}-{seat}",
-                        node_id=node.id)))
+                        node_id=node.id)
+                    report.asks.append(Ask(node.id, node.role, seat, result))
+                    answers.append(result)
             else:
-                report.asks.append(Ask(node.id, node.role, None, _ask(
+                result = _ask(
                     factory, _order_for(node, cfg, verdict), opened, journal=cfg.journal,
-                    ask_id=f"{len(report.asks):03d}-{node.id}", node_id=node.id)))
+                    ask_id=f"{len(report.asks):03d}-{node.id}", node_id=node.id)
+                report.asks.append(Ask(node.id, node.role, None, result))
+                answers.append(result)
+
+        stop = _gate("after")
+        if stop is not None:
+            return stop
+
+        stop = _run_effects(node, cfg, report)
+        if stop is not None:
+            return stop
 
         if node.kind == graph.TERMINAL:
             report.halted_at = node.id
@@ -312,7 +451,12 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             return report
 
         if node.branches:
-            choice = _choose(cfg, node, taken)
+            if node.role == "seat":
+                choice = _adjudicate(node, report, seats)
+            elif node.answer_decides:
+                choice = _answered_branch(node, answers)
+            else:
+                choice = _choose(cfg, node, taken)
             if choice is None:
                 raise EngineError(
                     f"node {node.id!r} branches on {sorted(node.branches)} but the run supplied no "

@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ai-sdlc-runner"
 version = "0.1.0"
-description = "External Python orchestrator that drives the ai-sdlc skill's semi-autonomous development loop. References (never copies) the upstream skill contract v1; locks major.minor per project."
+description = "A governed development agent: it walks an ordinary development flow (PM, lead, engineers, review panel, QA) and decides at every step whether to proceed or stop for a person. Its flow and its governance are its own — it depends on no external agent and holds no vendored contract."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "ai-sdlc-runner" }]
-# Standard library only by design: the runner stays a thin, dependency-light
-# driver. PyYAML is optional; runner.yaml is parsed by a tiny built-in reader
-# when PyYAML is absent, so the runner has zero hard runtime dependencies.
+# Standard library only by design. PyYAML is optional; runner.yaml is parsed by
+# a tiny built-in reader when PyYAML is absent, so there are zero hard runtime
+# dependencies and nothing to fetch before the governance can be read.
 dependencies = []
 
 [project.optional-dependencies]

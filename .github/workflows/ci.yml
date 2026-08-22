@@ -30,13 +30,13 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python-version: ["3.9", "3.13"]
     env:
-      # The skill's scripts emit UTF-8; without these, Windows raises a false-positive encoding error.
+      # The governance tables and work orders are UTF-8; without these, Windows raises a
+      # false-positive encoding error that looks like a real failure.
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
     steps:
-      # No `submodules:` key needed — there are none. `.gitmodules` declared an `ai-skills`
-      # submodule that was never wired up; CHG-20260822-02 deleted it (upstream archived 2026-08-04).
-      # The vendored `skills/` store is the only skill source and ships in the checkout.
+      # No `submodules:` key needed — there are none, and nothing is fetched at build time. The
+      # flow and the governance are both in this checkout, in source (CHG-20260823-01).
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5

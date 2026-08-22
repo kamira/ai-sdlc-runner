@@ -2,9 +2,9 @@
 
 - Project: ai-sdlc-runner
 - Version: v1.0
-- Date: 2026-06-17
+- Date: 2026-06-17, rewritten 2026-08-23 (CHG-20260823-01)
 - Status: Confirmed
-- Source requirement: `ai-sdlc-runner-build-guide.md` (the build guide is the requirement input for the first runner)
+- Source requirement: the user's statement of what the runner is, restated across CHG-20260823-01. The original `ai-sdlc-runner-build-guide.md` described an external driver for a skill, which is not what this is any more.
 
 ## 1. Background & Goals
 
@@ -58,122 +58,117 @@ discipline, now implemented here rather than borrowed.
 
 | Role | Concern |
 |------|---------|
-| Runner author (human-in-the-loop) | Builds the first runner via ai-sdlc four stages; approves at halt-points |
-| Upstream skill maintainer (`skill-ai-sdlc-autopilot`; formerly `ai-skills`, archived 2026-08-04) | Owns the contract surface (skill version, scripts, role table); publishes the versions vendored into `skills/` |
-| Governed-project teams | Future consumers whose projects the runner will drive via the §4 loop |
-| V1 verifier (independent role) | Accepts the runner against §6 criteria; read-only, no Agent tool |
+| The user | Gives the instruction the flow starts from, answers the gates that stop for a person, sets the review seat count, and receives the feedback that returns to PM |
+| Runner author (human-in-the-loop) | Builds and changes the runner under this repo's own governance; approves at halt points |
+| Independent verifier | Accepts a change against §7; never the person who implemented it on a high-risk change |
+| Governed-project teams | Future consumers whose work the runner drives through the §4 flow |
+
+The upstream skill maintainer is **no longer a stakeholder** (CHG-20260823-01). Nothing here reads,
+stores, or keeps step with a published skill; the flowchart informed the design and the design is
+finished.
 
 ## 4. Functional Requirements
 
-| ID | Requirement | Priority | Notes |
+The FR set was rewritten by CHG-20260823-01. The previous FR-1 … FR-13 described reading a skill's
+version, locking a contract against it, parsing its role table and subprocess-calling its
+`halt` script. All of that is gone with the dependency, and is left in git history rather than kept
+here as a list of strikethroughs — a requirements section made mostly of superseded rows is one
+nobody reads to the bottom of.
+
+| ID | Requirement | Priority | Where |
 |----|-------------|----------|-------|
-| FR-1 | `contract.read_skill_version(skill_path)` reads the skill version from SKILL.md frontmatter (`version` or `metadata.version`) | P0 | Version detected from file, not from a git tag |
-| ↳ | **(superseded, CHG-20260823-01: there is no skill version to read)** | | |
-| FR-2 | `contract.contract_key(ver)` reduces `"1.2.3"`→`(1,2)`, ignoring patch | P0 | Lock granularity is major.minor |
-| ↳ | **(superseded: nothing to lock a contract against)** | | |
-| FR-3 | `contract.resolve_contract(project, requested)` writes `<project>/.sdlc-lock.json` on first run; on later runs rejects a differing `(major,minor)` with a migrate prompt; same/unspecified continues the locked version | P0 | per-project lock |
-| ↳ | **(superseded: no per-project skill lock)** | | |
-| FR-4 | PATCH differences pass freely; `minor`/`major` bumps force explicit `migrate` | P0 | §5 semantics |
-| ↳ | **(superseded: no contract versions)** | | |
-| FR-5 | `contract.migrate(project, to_version)` re-reads ALL existing docs/CHG/ACC/structure under the new contract; any that fail to parse → stop, list incompatibilities, do NOT raise the lock; only if all pass, write the new lock | P0 | Validating upgrade, not forced |
-| ↳ | **(superseded: nothing to migrate between)** | | |
-| FR-6 | `agents.parse_role_table(skill_path)` parses the "Role startup spec" table in `references/agent-hierarchy.md` → `{role: {tools, can_spawn, writable, scope}}` | P0 | Read from skill, not hardcoded |
-| ↳ | **(superseded: roles are `policy.ROLES`, complete by construction)** | | |
-| FR-7 | `agents.spawn(role, scope, task)` starts an agent with that role's tools allowlist; **V1's tools must exclude `Agent`**; prompt carries "load ai-sdlc skill + your role & scope" | P0 | Role chain A1→I1(→I1.x)→V1 |
-| ↳ | **(superseded: dispatch carries a work order, and capabilities are abstract flags)** | | |
-| FR-8 | `gates.check_halt(gate, risk, action, autonomy)` subprocess-calls the skill's `halt_gate.py` and branches on exit code 0=AUTO / 10=HALT / else error; no risk matrix re-written in the runner | P0 | Calls skill script |
-| ↳ | **(superseded: gates are `policy.GATES`, consulted directly)** | | |
-| FR-9 | `gates.check_cross_repo_drift(...)` subprocess-calls the skill's `cross_repo_check.py` and branches on exit code | P1 | Calls skill script |
-| ↳ | **(superseded: no cross-repo skill drift to check)** | | |
-| FR-10 | `state` writes a checkpoint (`state.json`) at each stage boundary; `--resume` continues from the last checkpoint without re-running completed stages | P0 | Crash-resumable |
-| ↳ | **(superseded: resume is probe-driven (`effects.py`), not checkpoint-driven)** | | |
-| FR-11 | `orchestrator` runs four stages sequentially, each passing its halt gate, with shallow fan-out (depth ≤ 3, concurrency ≤ 4) inside the implement stage | P0 | §4 runtime spec |
-| ↳ | **(superseded: the four stages are replaced by the flow in `graph.py`)** | | |
-| FR-12 | `cli` exposes `run` / `migrate` / `status` subcommands | P0 | entry point `runner` |
-| ↳ | **(narrowed: `runner flow` / `runner policy` / `runner run`)** | | |
-| FR-13 | Runtime limits (nesting/concurrency) come from `config/runner.yaml` and are probed at startup; contract targets the skill's stable output, not Claude Code's current behavior | P0 | runtime isolation |
-| ↳ | **(narrowed: `config/runner.yaml` holds dispatch settings only)** | | |
-| FR-14 | `before_merge_or_release` and always-halt actions (deploy/release/migration/delete/money/secret/publish) always surface for human approval | P0 | red lines |
+| FR-1 | The governance is this repo's own and complete by construction: every role the flow names has capabilities, and every gate it consults has a verdict at each of the three risk grades | P0 | `policy.py`, asserted by `graph.validate()` |
+| FR-2 | The flow is data, validated for internal consistency: every edge lands, every node is reachable, no terminal has an outgoing edge | P0 | `graph.py` |
+| FR-3 | One node, one kind of work. Sub-steps inside a node are **effects** with probes, not nodes | P0 | `graph.py`, `effects.py` |
+| FR-4 | The gate stops the run — *before* the work where the work is the risk, *after* it where the point is to stop holding the result | P0 | `Node.gate_when`, `engine.walk` |
+| FR-5 | A halt is a pause with a way back: a named gate may be confirmed and the run continues, and the confirmation is recorded | P0 | `RunConfig.confirmed`, `RunReport.confirmations` |
+| FR-6 | Every asking node is its own session, opened per ask and closed after; a factory returning a session it already returned is refused | P0 | `engine._ask`, `_as_factory` |
+| FR-7 | The question is journalled as `pending` **before** its session opens and marked `answered` after, so a dropped session costs the answer and not the question — for every asking role, not only the seats | P0 | `engine.AskJournal` |
+| FR-8 | A work order carries the work and nothing about the harness: no tool list, no model, no allowlist, no prior answer. The schema is closed and a field outside it is refused | P0 | `workorder.WORK_ORDER_FIELDS` |
+| FR-9 | The review panel is one or many seats, each asked separately and blind to the others; the seat count is the user's, above a floor | P0 | `policy.SEATS`, `resolve_seats` |
+| FR-10 | The seats' verdicts are **adjudicated, not averaged**: a veto seat cannot be outvoted, a majority is needed to pass, and a tie does not pass. The engine routes on the result | P0 | `policy.adjudicate`, `engine._adjudicate` |
+| FR-11 | At a decision node where somebody is asked, **the answer decides the branch**. A branch taken from the plan while a model is being asked is a question whose answer changes nothing | P0 | `Node.answer_decides`, `engine._answered_branch` |
+| FR-12 | Six actions are never automated at any risk grade, and no confirmation or mode relaxes them. They are matched against what each node says it is about to do, and stop the run before dispatch | P0 | `policy.PERMANENT_HALTS`, `permanent_halt`, `engine._permanent_halt` |
+| FR-13 | The seat floor may be lowered only through an explicit high-risk mode, and the run records that it was | P0 | `policy.resolve_seats`, `RunReport.relaxations` |
+| FR-14 | Different seats may be answered by different models — the same question, different answerers. The routing lives in the CLI and never in the order | P0 | `cli.session_factory`, `--seat-model` |
+| FR-15 | Resume is probe-driven: nothing whose postcondition is already true is re-applied, everything applied is re-probed, and anything found true out of causal order is surfaced rather than redone or waved through | P0 | `effects.run` |
+| FR-16 | `runner flow` / `runner policy` print the flow and the governance without running anything, so what will happen can be read before it does | P1 | `cli.py` |
+| FR-17 | The ledger lint is this repo's own: required fields, and a **closed** vocabulary of status words so an unrecognised status is a failure rather than a silent pass | P0 | `tools/ledger_check.py` |
 
 ## 5. Non-Functional Requirements
 
 | Category | Requirement |
 |----------|-------------|
-| Performance | Conservative fan-out (depth ≤ 3, concurrency ≤ 4) to save tokens, even though the platform supports more |
-| Security | Least-privilege tool allowlists per role; V1 mechanically cannot spawn or edit code under review; red-line actions never auto-run |
-| Maintainability | **(Superseded, CHG-20260823-01: the source of truth is this repo's own `policy.py` and `graph.py`; there is no skill.)** ~~Single source of truth = skill; runner holds no duplicated governance **logic** — it does hold derived skill **text** under the §6 overrides, but only as machine output that CI regenerates and byte-compares, never as something a person may edit; runtime variability isolated in config |
-| Compatibility/Scale | Standard-library-only runner (PyYAML optional); Python ≥ 3.9; one-way dependency keeps the skill reusable without the runner |
+| Independence | No external agent, service, or published contract is required to run the flow. Nothing is fetched at build time or at run time; the governance is readable in two source files |
+| Correctness | Judged against the requirement, not against a file. There is no upstream table to match, so every governance value has its reason written beside it |
+| Honesty | No silent fallback anywhere. Missing configuration is a hard error naming what is missing; an unanswerable probe raises rather than returning False; an unrecognised status fails the lint |
+| Auditability | Every verdict, confirmation, relaxation, panel decision and effect outcome is in the run report. An approval that leaves no trace is one nobody can check afterwards |
+| Security | Least privilege per role as capability flags; the seats are read-only; the six permanent halts never auto-run |
+| Compatibility | Standard library only (PyYAML optional); Python ≥ 3.9; CI on `{ubuntu, windows} × py{3.9, 3.13}` |
 
 ## 6. Constraints & Assumptions
 
-- Constraints: never re-implement skill logic; never track `main`; never auto-run red-line actions.
-- **Override (CHG-20260617-05, user-approved):** the original "reference-not-copy via submodule" constraint (§1.2/§7) is **deliberately relaxed** — the skill is now vendored into a local offline store (`skills/v1.0.0`, `skills/v1.1.0`) as the primary source, so the runner runs fully offline. Mitigations: versions are extracted verbatim from the upstream skill repo's git tags (offline `git archive`, no fork), the submodule was retained as an optional fallback at the time (deleted in CHG-20260822-02), governance logic is still read from the store's own scripts/refs (not duplicated), and `runner check` flags newer versions. The runner never fetches the skill online.
-- Assumptions: ~~the user provides the `ai-skills` submodule~~ **(Superseded, CHG-20260822-02:** no submodule exists; the vendored `skills/` store is the only source**)**; the actual contract version is detected by reading SKILL.md; for offline verification the runner may point `skill_path` at a local skill cache (e.g. via `--skill-path`).
-- **(Superseded, CHG-20260703-01):** the offline store also vendors `skills/v1.12.1` (offline `git archive` of the published skill's main HEAD `605425e`, labelled ai-sdlc v1.12.1 in its SKILL.md frontmatter — v1.12.1 has no git tag). `config/runner.yaml`'s `contract_version` default was bumped to `"1.12.1"`; existing 1.0/1.1 per-project locks were untouched and still resolve against `skills/v1.0.0`/`skills/v1.1.0`.
-- **Current baseline (CHG-20260703-06):** the offline store now also vendors `skills/v1.16.0` (offline `git archive` of the published skill's main HEAD `b4d6ef3`, labelled ai-sdlc v1.16.0 in its SKILL.md frontmatter — v1.16.0 has no git tag). `config/runner.yaml`'s `contract_version` default is bumped to `"1.16.0"` so new projects lock at the current published skill; existing 1.0/1.1/1.12 per-project locks are untouched and still resolve against `skills/v1.0.0`/`skills/v1.1.0`/`skills/v1.12.1`.
-- **Current baseline (CHG-20260822-03):** the offline store now also vendors `skills/v1.64.0`
-  (offline `git archive` of the upstream skill's main HEAD `e3d27c3`, labelled ai-sdlc v1.64.0 in its
-  SKILL.md frontmatter — v1.64.0 has no git tag, so it is pinned by commit). This is a 48-minor jump
-  from v1.16.0 and is what makes the skill's machine-readable policy (`autopilot_policy.json`,
-  `review_seats.json`, `sentinel_policy.json`, …) available to the runner at all: v1.16.0 shipped 3
-  assets, v1.64.0 ships 26. `config/runner.yaml`'s `contract_version` default is bumped to `"1.64.0"`
-  so new projects lock at the current published skill; existing 1.0/1.1/1.12/1.16 per-project locks
-  are untouched and still resolve against their own store version (demonstrated, not assumed).
-- **Derived-artifact baseline (CHG-20260822-04) — a narrow, named extension of the CHG-20260617-05
-  override.** The runner now holds `elements/v<version>/`: the store's references split at their
-  stable `##`/`###` anchors, plus dispatch elements derived from the shipped policy JSONs. This is
-  **skill content living in this repo**, the same category as the vendored store itself, so it needs
-  the same kind of named override rather than an argument that it is somehow different — determinism
-  changes the drift risk, not the category. Scope of the extension, stated so it cannot creep:
-  **deterministically derived artifacts only**, regenerated by `src/ai_sdlc_runner/decompose.py` and
-  `dispatch.py` and byte-compared against the store in CI. Hand-copied or hand-edited skill text
-  stays excluded by §2. What the override does *not* cover, and stays runner-authored interpretation:
-  the segmentation heuristics (which headings are stable anchors; fenced-code headings are not),
-  the LF-normalised hash basis, the composition of loadouts as element ids, and the tighten-only
-  ordering on the four-valued autopilot axis. Each is named as a fork point in CHG-20260822-04.
-  (The CHG's own D3 cites "§7/§8" for the copying prohibition; the prohibition is actually the §2
-  out-of-scope line, and §8's closing line is what makes it inviolable. Corrected here rather than
-  in the merged CHG, which is left as the historical record.)
-- **Runner-authored fork points under the derived-artifact override (CHG-20260822-04) — the full
-  index.** The override covers deterministic derivation; it does **not** cover the judgements the
-  derivation rests on. Each is a place a different reader could have chosen otherwise, so each is
-  named here rather than left looking like it fell out of the data:
-
-  | # | Fork point | Where | Chosen because |
-  |---|------------|-------|----------------|
-  | 1 | A heading inside a fenced code block is **not** an anchor | `decompose.py` | 56 of 257 `^##?#` lines in the English references sit inside fences — document skeletons being *shown*. Splitting on them invents 56 elements and shreds the prose around them |
-  | 2 | The hash basis is **LF-normalised** content, not raw working-tree bytes | `decompose.py` | `.gitattributes` is `* text=auto`, so the store checks out CRLF on Windows and LF on Linux; a raw-bytes hash would hard-fail one leg of the CI matrix for a store nobody touched |
-  | 3 | The two checkpoint namespaces are **not de-duplicated** | `dispatch.py` | `before_merge_or_release` and `merge` are related, but the merge key exists in no shipped file — a human would have to write it, which is the hand-written node id the done-when forbids |
-  | 4 | A loadout's anchor set is the role's **whole shipped file set** | `dispatch.py` | Narrowing by policy-key name scores **0 true positives and 21 false positives** against the 402 real headings. A matcher that selects nothing while looking like a refinement is the KN-4 shape |
-  | 5 | Which policy file feeds which family | `dispatch.py` | Three lines, not derivable from the files themselves; a different reader could key families off something else |
-  | 6 | The tighten-only total order on the **four-valued** autopilot axis | *deferred* | `_doc` says "只准加嚴" without ordering `halt` against `halt_independent`, and no usable resolver ships (`scripts/autopilot_runner.py` cannot import — its `lib/` was not archived). Left undecided rather than invented |
-  | 7 | Loadouts name content element **ids**, not full records | `dispatch.py` | Inlining cost 265 KB of byte-identical duplication and made one role manifest larger than the biggest reference in the corpus. Found by measuring, corrected in task 3 |
-  | 8 | The node graph is **authored and pinned**, not parsed | `graph.py` | The shipped block has 19 arrows and at least two are prose. Either way a hand-written rule is needed; parsing changes the *direction* of failure — a misreading yields a wrong graph silently and the regeneration gate cannot see it |
-
-  Fork points 1–5 and 7–8 are implemented and pinned by tests; **6 is deliberately open** and is
-  recorded as such rather than resolved by guesswork.
-- **Governance baseline (CHG-20260706-01):** this repo's own ai-sdlc governance now carries the v1.17+ root entry anchor (`AGENTS.md`, SKILL.md template) and the pre-founded knowledge base skeleton (`docs/knowledge/knowledge.md` zero-entry INDEX + `vocabulary.json` seed), as enforced by the skill's `doc_integrity_check.py` (entry-anchor + knowledge-bootstrap lints).
-- **CI baseline (CHG-20260817-10):** this repo had no CI at all until 2026-08-17 (0 workflows, 0 Actions runs, no branch protection) — every prior change merged on locally-run, self-reported evidence, which is how the five Windows-only test failures fixed by CHG-20260817-09 survived four CHGs unnoticed. `.github/workflows/ci.yml` now runs the suite on `{ubuntu, windows} × py{3.9, 3.13}` (`fail-fast: false`) plus the `doc_integrity_check.py` gate, on every PR and every push to `main`. The **OS matrix is the load-bearing part** — the motivating defect was platform-conditional and a single-OS pipeline would have stayed green through all of it. CI is deliberately **not** gated on a coverage percentage: measuring the CHG-20260817-09 fix showed `executors.py` at 86% *before* and 85% *after*, because the broken tests were executing the code and dying inside it, so coverage counted the lines while no assertion ever ran.
-- ~~Open items: the canonical `ai-skills` repo URL and the existence of tag `v1.0.0` are the user's responsibility (build-guide §0); a missing/incorrect tag surfaces as a contract-version mismatch rather than silent drift.~~ **(Closed, CHG-20260822-02):** `ai-skills` was archived 2026-08-04 and succeeded by `skill-ai-sdlc-autopilot`; the runner no longer references either repo at runtime, so no tag is load-bearing. Versions are pinned by the vendored store.
+- **No skill content in this repo, and no skill read at runtime.** Not vendored, not derived, not
+  installed-and-read. Asserted by a test that scans source, tools, tests, packaging, the README and
+  CI — docstrings and comments included — and that is written so it scans itself.
+- **The flowchart is a design input.** "The published skill does it this way" is not a reason for a
+  value here; each has its own.
+- **Never auto-run a red line.** Deploy or release, data migration, hard delete, money, secrets or
+  permissions, publish. No risk grade, confirmation, or mode relaxes them.
+- **Session continuity is a hazard, not a convenience.** A model that can see the previous exchange
+  can coast on it; a reviewer who has already seen the answer is not a second opinion.
+- **CI baseline (CHG-20260817-10).** This repo had no CI at all until 2026-08-17 — every prior change
+  merged on locally-run, self-reported evidence, which is how five Windows-only failures survived
+  four changes unnoticed. The **OS matrix is the load-bearing part**; a single-OS pipeline would have
+  stayed green through all of it. The version axis has since caught its own defect: an identity check
+  written as `id(...)` passed on 3.9 and 3.11 by allocation luck and failed on 3.13.
+- CI is deliberately **not** gated on a coverage percentage: measuring the CHG-20260817-09 fix showed
+  `executors.py` at 86% before and 85% after, because the broken tests were executing the code and
+  dying inside it — coverage counted the lines while no assertion ever ran.
+- **Superseded history (CHG-20260823-01).** Everything the previous §6 recorded — the submodule, the
+  vendored `skills/` store, the four contract-version baselines, the derived `elements/` artifacts
+  and the eight runner-authored fork points that governed their generation — described a dependency
+  that no longer exists. It is in git history and in the changes that made it: CHG-20260617-05,
+  CHG-20260703-01/06, CHG-20260822-02/03/04.
 
 ## 7. Acceptance Criteria
 
-- ~~[ ] Submodule `ai-skills` is configured to pin tag `v1.0.0` (not main); `git submodule status` shows it once wired up by the provider.~~ **(Superseded, CHG-20260617-05; struck CHG-20260822-02):** the vendored offline store replaced the submodule as the skill source, so this criterion was already moot; it became permanently unsatisfiable when `ai-skills` was archived on 2026-08-04. Struck rather than rewritten — §6 already states the vendored-store requirement, and the original wording is kept legible as history. `git submodule status` is now empty by design.
-- [ ] `contract.py`: first run writes `.sdlc-lock.json`; a later run with a different `major.minor` is rejected with a migrate prompt; a different patch passes normally.
-- [ ] `gates.py`: `check_halt` actually subprocess-calls the skill's `halt_gate.py` and branches on exit code 0/10; no risk matrix re-written in the runner.
-- [ ] `agents.py`: parses the role table; `spawn("V1", ...)` yields tools that exclude `Agent`.
-- [ ] `orchestrator.py`: a stub-agent dry-run completes the four stages and correctly halts at one high-risk gate awaiting approval; `--resume` continues from a checkpoint.
-- [ ] `tests/test_contract.py`: covers lock comparison (patch passes, minor/major blocked) and the migrate-failure (incompatibility list) path.
-- [ ] Governance docs present: `docs/ai-guideline.md`, `docs/structure/*.md`, relevant `CHG-*.md`, `ACC-*.md`.
+- [ ] `policy.py`: every role in the flow has capabilities; every gate has a verdict at each risk
+      grade; the two status-word lists do not overlap; `adjudicate` refuses a tie.
+- [ ] `graph.py`: `validate()` passes — edges land, everything is reachable, every gate and role
+      exists in the policy, no node claims a gate phase without a gate.
+- [ ] `engine.py`: a stopping verdict halts; confirming that gate continues and is recorded; the
+      next gate still stops. Every ask opens and closes its own session. A dropped session leaves
+      exactly one `pending` question, for any asking role.
+- [ ] The seats' verdicts route the branch through `policy.adjudicate`: a majority against does not
+      pass, and one veto seat alone does not pass.
+- [ ] An answered decision node branches on **its answer** — answering `fail` reaches the failure
+      branch, and an answer naming no branch is an error naming the node.
+- [ ] An operation that trips a permanent halt stops the run even with every gate confirmed and
+      high-risk mode on.
+- [ ] `cli.py`: `--confirm`, `--review-seats`, `--high-risk-mode` and the plan's `operations` all
+      reach the engine; a seat model routes that seat elsewhere; a backend's JSON reply becomes the
+      answer; a failed backend leaves the question pending.
+- [ ] `tools/ledger_check.py` exits 0 on this repo, and fails on a status word neither list knows.
+- [ ] Suite green on `{ubuntu, windows} × py{3.9, 3.13}`, with every job reporting non-empty steps.
+- [ ] Governance docs present and current: this file, `docs/structure/*.md`, the round's `CHG-*.md`
+      and `ACC-*.md`.
 
 ## 8. AI Development Conventions
 
-- **Read, don't re-implement**: all governance truth (halt matrix, role definitions, CHG/ACC fields) is read from the skill or obtained by calling its scripts. The runner contains no duplicated *logic*. (Note: per the CHG-05 override, the skill *files* are now vendored into a local offline store rather than referenced via submodule; the no-duplicated-logic principle still holds.)
-- **Derived artifacts are generated, never edited** (CHG-20260822-04): `elements/v<version>/` is machine output, regenerated from `skills/v<version>/` and byte-compared in CI. Editing an element by hand is the same category as hand-copying skill markdown and is forbidden by §2; fix the generator or the store instead. The generator's segmentation and composition heuristics are runner-authored and each one is named as a fork point in that CHG.
-- **Calls, not re-implementations**: halt decisions via `subprocess` to `halt_gate.py`; cross-repo drift via `cross_repo_check.py`; roles by parsing `references/agent-hierarchy.md`.
-- **Contract targets the skill's stable output**, not Claude Code's current runtime. Nesting depth / concurrency live in `config/runner.yaml`, probed at startup; if the platform changes, change the runner, not the contract.
-- **Version lock is major.minor, patch-permissive**; version changes go through a validating `migrate` (re-read everything; upgrade only if all parse).
-- **Stages run sequentially, fan-out is shallow** (depth ≤ 3, concurrency ≤ 4) inside a stage only.
-- **V1 tool-layer lockdown**: the verifier never receives the `Agent` tool and is read-only on the code/structure under review (but may execute tests/CLI/GUI to verify).
-- **Red lines always halt**: deploy/release, data migration/irreversible schema, delete/drop, money, secrets/permissions, publish — never auto-run; always surface to a human.
-- **This repo is governed by ai-sdlc**: every change leaves a `CHG-*.md`; acceptance closes in the same round with an `ACC-*.md`. Docs are the source of truth (§1 principles and §7 prohibitions are inviolable guardrails).
+- **Own the governance.** The runner holds its policy and its flow. "Read, don't re-implement" was
+  this project's founding convention and it is now obsolete: there is nothing to read.
+- **A mechanism that nothing calls is not built.** This repo's recurring failure is building a
+  correct piece in isolation and never wiring it into what it governs — the engine that ignored its
+  own policy verdict, the `adjudicate` no caller reached, the `PERMANENT_HALTS` printed into an order
+  and never checked. Wiring is part of the task, and a test that exercises the wiring is the proof.
+- **A test that asserts the current behaviour proves nothing.** Two rounds passed their own suites
+  while deciding nothing. Write the test that fails when the mechanism is disconnected.
+- **Name what you interpreted.** Where the runner chose between readings, the choice is written down
+  where the code is, with what it was chosen over.
+- **Red lines always halt**, and the check is code, not a paragraph.
+- **This repo is governed by its own rules**: every change leaves a `CHG-*.md`, and acceptance closes
+  the same round with an `ACC-*.md` carrying evidence. On a high-risk change the verifier is not the
+  implementer.
+- **Never report green you did not see.** A job with no steps is not a pass; a document saying a task
+  is done is not the task being done. Both have happened here.

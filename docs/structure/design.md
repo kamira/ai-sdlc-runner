@@ -1,90 +1,82 @@
 # Design Structure
 
-Answers: FR-1..FR-14. Key components, their contracts, and design trade-offs.
+Answers: FR-1 … FR-17. Key components, their contracts, and the decisions behind them.
+
+**CHG-20260823-01 rewrote this file rather than amending it.** Two-thirds of the previous component
+table described modules that no longer exist, and most of the decision table argued about how to read
+a skill. What survives is what is still true, and it is repeated here rather than cited, because a
+design doc that points at deleted files is worse than no design doc.
 
 ## Key components
-| Component | Responsibility | External interface/contract |
-|-----------|----------------|------------------------------|
-| `contract.read_skill_version` | Read version from SKILL.md frontmatter | `(skill_path) -> str`; supports top-level `version:` and nested `metadata.version:` |
-| `contract.contract_key` | Reduce to lock key | `("1.2.3") -> (1, 2)` (ignores patch) |
-| `contract.resolve_contract` | Per-project lock resolution | `(project_dir, requested) -> str`; first run writes lock; mismatched (major,minor) → raise `MigrateRequired`; same/None → continue |
-| `contract.migrate` | Validating upgrade | `(project_dir, to_version) -> MigrateResult`; re-read all docs; all parse → raise lock; else list incompatibilities, keep lock |
-| `contract.detect_update` | Update detection | `(skill_path, expected=None, project_dir=None) -> UpdateInfo{local, baseline, kind, needs_migrate, latest_tag}`; baseline = project lock else expected; read-only |
-| `contract.available_version_tags` | Newer-tag signal | `(skill_path) -> list[str]` newest first; parses `ai-sdlc-vX.Y.Z`/`vX.Y.Z` git tags; `[]` if not a repo |
-| `skillstore.store_versions` / `resolve_path` | Offline store | list versions (newest first); resolve by exact version or major.minor (highest patch) or latest |
-| `skillstore.detect` | Store update | compare newest store version to project lock/expected (reuses `contract.detect_update`) |
-| `executors.from_config` | Backend factory | `(config, override_backend) -> Executor`; stub/command/api; defaults to stub |
-| `executors.build_request` / `parse_response` | API adapters | pure `(provider, …) -> (url, headers, body)` / `(provider, raw) -> str` for anthropic/openai/generic |
-| `Executor.run` | Agent call | `(AgentSpec) -> dict`; command via subprocess (in `spec.workdir`), api via urllib; key from env |
-| `CommandExecutor.extra_args` / `.extra_env` | Generic passthrough (CHG-20260703-02) | `extra_args: list[str]` appended to `argv`; `extra_env: dict[str,str]` merged into the subprocess env on top of the inherited one; both default empty (no-op); read from `executor.command.{extra_args,extra_env}` in config; `api`/`stub` unaffected |
-| `workspace.Workspace` | Multi-project model | `authority` + `consumers`; `save`/`load` (`.sdlc-workspace.json` at authority); `validate`; `manifest()` for cross_repo_check |
-| `structure_scan.analyze_workspace` | Structure pass | scan + scaffold four structures; multi → authority `docs/contracts/VERSION` + consumer `docs/authority.md` (`Pinned version: vX`) |
-| `agents.parse_role_table` | Parse role allowlist table | `(skill_path) -> {role: {tools, can_spawn, writable, scope}}` |
-| `agents.spawn` | Start a role-scoped agent | `(role, scope, task) -> AgentSpec`; V1 tools exclude `Agent`; prompt loads skill + role/scope |
-| `gates.check_halt` | Query halt contract | `(gate, risk, action=None, autonomy=None) -> Decision`; subprocess `halt_gate.py`; exit 0=AUTO,10=HALT,else error |
-| `gates.check_cross_repo_drift` | Query cross-repo drift | subprocess `cross_repo_check.py`; branch on exit code |
-| `state.save/load` | Checkpoint persistence | `state.json`: stage, completed items, per-agent product metrics |
-| `orchestrator.run` | Four-stage loop | sequential stages; per-stage gate; shallow fan-out; checkpoint per boundary |
-| `tui.select` | Interactive menu | `(title, options, input_fn=input) -> Optional[int]`; curses arrow-key menu, numbered fallback when non-TTY/`AI_SDLC_NO_CURSES` |
-| `tui._parse_choice` | Parse a numbered answer | `(raw, n) -> Optional[int]`; 1-based → 0-based; `q`/empty/out-of-range → None (pure, unit-tested) |
-| `cli.cmd_menu` | Menu loop | dispatches the chosen action to existing `cmd_run`/`cmd_migrate`/`cmd_status`; no governance logic of its own |
-| `orchestrator.run(on_event=…)` | Event emission | optional `on_event(dict)` sink; emits `stage`/`gate`/`agent`/`checkpoint`/`halt`/`done`; never affects control flow |
-| `dashboard.DashboardModel` | Panel data | `add(event)` / `from_saved(project)`; `status_panel`/`exec_log_panel`/`verify_panel`/`agent_panel(view)`; `status_panel`/`verify_panel` are memoized behind `_status_cache`/`_verify_cache` and only recompute on `refresh()` — `exec_log_panel`/`agent_panel` stay uncached (live in-memory events) (CHG-20260703-05) |
-| `dashboard.DashboardModel.refresh` | Cache invalidation | `() -> None`; clears `_status_cache`/`_verify_cache` to `None`; called on app start, `ResidentState.open_project`, and after `ResidentApp._start_run`'s `orchestrator.run(...)` returns — never per keystroke (CHG-20260703-05) |
-| `dashboard.render_snapshot` | Text render | `(model, agent_view, width) -> str`; CJK display-width aware borders; used off-TTY/tests; `view()` adds a curses viewer (t = toggle, q = quit) |
-| `tui.cycle_index` | Pure option-cycle core | `(idx, n, key, key_up, key_down) -> int`; wraps; unrecognized key is a no-op; no curses import (CHG-20260703-03) |
-| `tui._curses_select_on` | Embeddable arrow-key selector | `(stdscr, title, options) -> Optional[int]`; draws on a caller-owned `stdscr` (no nested `curses.wrapper`); `_curses_select`/`select()` now delegate to it (CHG-20260703-03) |
-| `dashboard.parse_command` | Resident input-box parser | `(raw) -> Command{kind, arg, error}`; `open\|run\|status\|check\|menu\|help\|quit\|task\|unknown\|noop`; pure, no I/O (CHG-20260703-03) |
-| `dashboard.render_layout` | 2-col bounded-height frame | `(model, width, height, agent_view, input_line, current_project) -> list[str]`; Status\|Verification top row always fully present; Execution log\|Agent log bottom row, each tail-truncated to fit `height`; pure (CHG-20260703-03) |
-| `dashboard.approve_decision` | Halt-gate answer → bool | `(selection) -> Optional[bool]`; accepts an `APPROVE_OPTIONS` index, a bool, or a y/n-ish string; unresolved/cancelled → `None` (caller treats as reject, never implicit approve) (CHG-20260703-03) |
-| `dashboard.ResidentApp` / `ResidentState` | Resident app glue | `ResidentApp.dispatch(raw, asker=...) -> bool` (False = quit); `_start_run` calls the unchanged `orchestrator.run(approver=..., on_event=model.add)`; `ResidentState.current_project`/`.model` track the open project (CHG-20260703-03) |
-| `dashboard.run_resident` | Resident entry point | `(project=None, config=None) -> int`; TTY-only (mirrors `_want_curses`); drives the curses loop until `/quit` (CHG-20260703-03) |
 
-## Interface / API contracts
-- **Lock file** `<project>/.sdlc-lock.json`: `{contract_major, contract_minor, contract_version, first_run, runner}`. Gate compares `(major, minor)`; `contract_version` is record-only.
-- **Halt decision**: `Decision{result: "AUTO"|"HALT", gate, risk, reason}`. HALT → `orchestrator.await_human_approval(...)`.
-- **AgentSpec**: `{role, tools: list[str], can_spawn: bool, writable, scope, prompt}`. Invariant: `"Agent" not in tools` when `role == "V1"`.
-- **Error behavior**: unknown gate/risk or exit codes other than 0/10 from the script → raise (conservative; never silently continue). Missing skill files → raise with a clear message.
-- **Work order** (CHG-20260822-04 D5) — the closed field set a dispatched node receives, and the only thing it receives: `node_id, element_id, store_version, role, scope, objective, done_criteria, sources, input_artifacts, expected_outputs, acceptance_predicate, policy_verdict, capabilities, idempotence_probes, workdir`. **Exactly these keys**, asserted on every render. `sources` carry path + anchor and never a body; `capabilities` are the three shipped booleans and never a tool name. What is excluded is the load-bearing part: concrete tools, allowlists, the skill-loading bootstrap line, session or prior-turn context, model and dispatch settings. A work order carrying any of them runs on one harness only, however short it is.
-- **Effect** (D6.2): `{name, probe, apply, postcondition}`. **Constructing one without a probe raises** — probeability is the admission criterion for being an effect at all, not a property to add later.
-- **Probe**: `() -> bool`, reading the world. Unanswerable **raises** rather than returning `False`: "I could not reach the remote" and "the branch is not there" are different facts, and merging them makes a resume push twice.
-- **Regeneration gate exit codes**: `0` match, `10` regenerable drift, `11` source missing. Two failures, two codes, because they call for different actions.
+| Component | Responsibility | Contract |
+|-----------|----------------|----------|
+| `policy.verdict` | Resolve one gate at one risk | `(gate, risk, autonomy=None) -> {gate, risk, verdict, source, tightened}`. Autonomy is **tighten-only**: a request to loosen is refused and the refusal is appended to `source`, so the attempt is visible |
+| `policy.adjudicate` | Turn seat verdicts into one outcome | `({seat: verdict}) -> {outcome, reason, ...}`. Veto first, then majority, and a tie does **not** pass |
+| `policy.resolve_seats` | How many seats open | `(requested, high_risk_mode) -> int`. Below the floor without the mode → the floor |
+| `policy.permanent_halt` | Does this operation cross a red line | `(operation) -> Optional[str]`, the halt's own description. Matching is deliberately generous: a false stop costs one question, a missed one costs the thing that cannot be undone |
+| `graph.validate` | The flow agrees with itself and with `policy` | Raises `GraphError` naming the node. Every edge lands, everything is reachable, every gate and role exists, no gate phase without a gate, no `answer_decides` without a role |
+| `engine.walk` | Drive one change through the flow | `(RunConfig, dispatcher, enabled=True) -> RunReport`. Opt-in: it **refuses** rather than quietly doing nothing, so "flag off" cannot be mistaken for "ran and found nothing" |
+| `engine.AskJournal` | The question outlives the session | `pending` written before the session opens; `answered` after. `pending()` returns what a resumed run must re-ask |
+| `workorder.render` | One node's order | `(node, node_spec, verdict, seat=None) -> dict`. **Exactly** the sixteen keys, asserted on every render |
+| `effects.run` | Bring a sequence to completion from wherever it is | Nothing already true is applied — before the frontier or after it. Everything applied is re-probed. Anything true out of causal order is **surfaced**, not redone and not waved through |
+| `cli.session_factory` | Where an ask goes | `(config, seat_models) -> factory(seat=None) -> Session`. One process per ask; `--seat-model` routes a named seat elsewhere |
+| `cli._Process` | One ask, one process | The order in as JSON on stdin, the JSON printed back **parsed** as the answer. A non-zero exit raises: a failed backend answered nothing, and the journal keeps the question pending |
+| `tools/ledger_check.check` | The ledger lint | `(repo) -> list[str]` of problems. Reads the Status **section**, and only the **head** of its line |
 
-## Design decisions & trade-offs
+## Interface contracts
+
+- **Work order** — the closed field set a dispatched node receives, and the only thing it receives:
+  `node_id, node_label, role, role_label, seat, scope, objective, instructions, done_criteria,
+  acceptance_predicate, input_artifacts, expected_outputs, policy_verdict, capabilities,
+  permanent_halts, idempotence_probes, workdir`. What is **excluded** is the load-bearing part:
+  concrete tools, allowlists, a bootstrap line, session or prior-turn context, model and dispatch
+  settings. An order carrying any of them runs on one harness only, however short it is.
+- **Answer** — a decision node's answer must name its branch, as `branch`, `verdict` or `outcome`.
+  An answer naming none is an error that names the node and lists the branches; an answer naming a
+  branch that does not exist is refused. Neither is defaulted.
+- **Effect** — `{name, probe, apply, postcondition}`. **Constructing one without a probe raises**:
+  probeability is the admission criterion for being an effect at all, not a property to add later.
+- **Probe** — `() -> bool`, reading the world. Unanswerable **raises** rather than returning `False`:
+  "I could not reach the remote" and "the branch is not there" are different facts, and merging them
+  makes a resume push twice.
+- **Error behaviour** — no silent fallback anywhere. An unknown gate, an untemplated node, a branch
+  the plan did not supply, a seat nobody defined, a status word neither list knows: each raises and
+  names what is missing.
+
+## Design decisions
+
 | Decision | Options | Rationale |
 |----------|---------|-----------|
-| Detect version from file vs git tag | file (SKILL.md) **vs** git tag | User chose file detection: a missing/wrong tag surfaces as a contract-version mismatch instead of silent drift; works without git plumbing |
-| Node graph: parse the shipped block vs write it down and pin it | parse **vs** author + pin | Authored + pinned. The shipped block has 19 arrows and at least two are prose (`operate → observe → pass` inside parentheses); a splitter emits them as nodes. Teaching it to skip parentheses is a hand-written rule about that block's typography either way — but parsing changes the **direction of failure**: a misreading yields a wrong graph silently and the regeneration gate cannot see it, because the store did not change. Authoring plus a phrase pin makes a mistake a red test. Named as a fork point |
-| Roles with no shipped capability data | default-deny **vs** hard error | Hard error naming the role. Defaulting is not a neutral safe default but the runner authoring an authorization policy: `orchestrator` plainly must be able to spawn, so an all-false order would look governed while being wrong, and over-tightening silently fails work that was supposed to happen. Both directions of the guess are harmful, which is when guessing is unavailable. 9 of 13 roles are affected and the gap is recorded, not papered over |
-| Seat count below the shipped floor | config value **vs** an explicit mode | An explicit mode, surfaced in the GUI with the cost written into the option, and recorded in the run when used. Relaxing a gate is the user's call, but a relaxation nobody can see themselves making is not one they made |
-| Offline local store, vendored into runner | submodule (online) **vs** local store | User override (CHG-05): run fully offline with v1.0.0 + v1.1.0 + v1.12.1 (+ v1.16.0, CHG-20260703-06, now the config default) on hand; submodule kept as optional fallback. **Deliberately relaxes §1.2/§7 (reference-not-copy)** — recorded in CHG-05 and the Guideline |
-| Version selected by project lock | config-fixed **vs** lock-driven | Each project uses the store version matching its lock; migrate switches it automatically |
-| Platform-agnostic execution backend | one vendor **vs** stub/command/api | Runtime concern (§1.7), config-driven; run via API or a subscription CLI without locking to a platform (CHG-06) |
-| API client | requests/httpx **vs** stdlib urllib | Keeps zero-dependency; keys from env, never config |
-| Reference skill via submodule | submodule **vs** copy/vendor | One-way dependency + no drift; copying is explicitly forbidden (§7) |
-| Call scripts vs re-implement | subprocess **vs** re-code matrix | Skill is the single source of truth; re-coding causes divergence (§1.3, §7) |
-| Lock major.minor, patch-permissive | lock full version **vs** major.minor | Patches (typo/bug/wording) shouldn't force migrate; interface changes (minor) should re-read (§5) |
-| Migrate is validating, not forced | force-upgrade **vs** validate-then-upgrade | Upgrade only if everything re-parses; otherwise stop and list incompatibilities (§5) |
-| Conservative fan-out (≤3/≤4) | use platform max (5) **vs** cap lower | Deliberately save tokens; runtime caps live in config, probed at startup (§1.5, §1.7) |
-| V1 tools exclude `Agent` | discipline **vs** tool-layer lock | Mechanically prevents "fix-while-verifying" and re-spawning (§1.6) |
-| Stdlib-only (PyYAML optional) | hard YAML dep **vs** tiny built-in reader | Keeps the runner a thin, low-dependency driver |
-| Interactive menu via stdlib `curses` | third-party TUI **vs** stdlib curses + numbered fallback | Zero new dependency; degrades gracefully off-TTY (CHG-20260617-02) |
-| Dashboard as terminal curses | HTML report **vs** curses TUI | Screenshot was a layout preview, not an HTML target; curses keeps it stdlib-only (CHG-20260617-03) |
-| Dashboard coupling via `on_event` | dashboard reads orchestrator **vs** orchestrator pushes events | Optional callback keeps orchestrator decoupled & backward-compatible; dashboard is read-only (CHG-20260617-03) |
-| Bare `runner` entry point | keep opening the menu **vs** default to the resident dashboard | User req 1: on a real TTY, bare `runner` (or `runner <project>`) opens the resident dashboard; off-TTY (pipes/CI) keeps the menu unchanged; every subcommand is unaffected either way (CHG-20260703-03) |
-| Project targeting in the resident app | positional arg per command **vs** a "current project" set by `/open` | User-confirmed: `/open <path>` sets one current project that tasks/`/run`/approvals target, plus `runner <project>` as a pre-open convenience; simpler than re-specifying a path on every command (CHG-20260703-03) |
-| v1 Q/A scope | task input + halt approval **vs** free-form agent Q&A | User-confirmed v1 scope is deliberately narrow (task/requirement input + HALT approve/reject only); a backend that surfaces agent questions is a later change (CHG-20260703-03) |
-| Run integration threading | single-thread (blocking) **vs** background thread | Stdlib-only, stub/fast runs in v1: `on_event` redraws inline, `approver` blocks synchronously; a slow real backend blocking the UI is an accepted, documented v1 limitation (CHG-20260703-03) |
-| Log growth in the resident view | unbounded scroll **vs** bounded tail | 2-col Execution log / Agent log each truncate to the last N lines (N scales with terminal height) so Status + Verification never get pushed off-screen (CHG-20260703-03) |
-| Reuse the arrow-key selector for halt answers | new selector **vs** embed `tui`'s | Extracted `tui._curses_select_on` to draw on the resident app's own `stdscr`; the resident loop never calls `tui.select()` (that would open a second, nested `curses.wrapper`) (CHG-20260703-03) |
-| Where to cache the resident panels' I/O | cache inside `DashboardModel` **vs** in the resident render loop | The snapshot path (`render_snapshot`/`from_saved`) calls panels once already; caching in the model with an explicit `refresh()` invalidator keeps that path's cold-cache-computes-once behavior identical while the resident loop reuses the warm cache across keystrokes (CHG-20260703-05) |
-| When to refresh the cache | per keystroke **vs** event-driven (open/after-run) **vs** a timer | Event-driven: `refresh()` on app start, `/open` (`ResidentState.open_project`), and after each run (`ResidentApp._start_run`); git dirty-state/ACC files only change on real actions, not on typing. A live timer refresh is a possible follow-up, not needed to remove the typing lag (CHG-20260703-05) |
+| Where the governance lives | read an installed skill **vs** own it | Own it. The user rejected reading explicitly (*不是讀 skill*): a runtime dependency on somebody else's file is the thing being removed, and the flowchart's value was the design, which is finished |
+| The flow as data | code **vs** a data table | Data. `runner flow` prints what will happen before it does, and `validate()` can check it against `policy` — neither is available if the flow is control flow |
+| Node boundaries | phases **vs** one kind of work each | One kind of work each, from the requirement's own sentence (*一個項目只做單一類型的工作*). Sub-steps inside a node are **effects** with probes, not nodes |
+| Where a gate is consulted | always before **vs** per node | Per node, `gate_when`. Before, where the work is the risk (merge, dispatch); after, where the point is to hold the result (review, QA, acceptance). Always-before made three gates unreachable — a review that halts before it runs is a review a high-risk change never gets |
+| A stopping verdict | ends the run **vs** may be confirmed | May be confirmed, per gate, and recorded. A halt that cannot be continued past makes most of the gate matrix dead: every medium-risk run ended at the same node forever |
+| `merge` at low risk | auto **vs** confirm | Confirm. A one-way door is a door whatever the change's grade; "low risk" grades the change, not the door |
+| Permanent halts | text in the order **vs** a check | A check, against what each node says it is about to do, before dispatch, relaxed by nothing. A list nothing reads is a paragraph — the first version printed all six into every order and never looked at them again |
+| Who decides a branch at an asked node | the plan **vs** the answer | The answer. A decision node whose branch comes from the plan while somebody is being asked is a question whose answer changes nothing, and it is possible to answer every ask `fail` and still reach the end |
+| Seat verdicts | averaged **vs** adjudicated | Adjudicated, in `policy`, so the rule lives in one place. Veto first, then majority, tie does not pass. Averaging turns a factual objection into a fraction |
+| Seat count below the floor | a config value **vs** an explicit mode | An explicit mode, surfaced in the GUI with the cost written into the option, and recorded in the run when used. Relaxing a gate is the user's call, but a relaxation nobody can see themselves making is not one they made |
+| Session lifetime | one per run **vs** one per ask | One per ask, opened and closed around it, and a factory that hands back a session it already returned is refused. Continuity breeds bias — a reviewer who has already seen the answer is not a second opinion |
+| Where the question is written | after the answer **vs** before the ask | Before. A dropped session then costs the answer and not the question; reconstructing a question later risks asking a subtly different one, and a subtly different question is how a rerun quietly stops being a rerun |
+| Resume | a checkpoint file **vs** probes | Probes. Resume asks the world what is already true rather than consulting a record of what we did; a record can be stale, and a stale record makes a resume push twice |
+| Seat identity in the order | prose only **vs** a field | A field. Adjudication counts verdicts by seat, so an answer nobody can attribute cannot be counted towards a majority |
+| The backend's reply | captured **vs** parsed | Parsed. The engine routes on what a review actually said; an answer left as a blob of stdout decides nothing, which made every real agent's verdict unroutable while the stub-backed tests stayed green |
+| The ledger's status vocabulary | open **vs** closed | Closed. Treating an unrecognised word as "not finished" let `accepted`, `merged`, `completed` and `完成` all pass with no acceptance record. An unknown status is now a failure that names its own fix |
+| Reading a document's status | the whole document **vs** the Status section **vs** its head | The head of the Status section's first line. Prose about status changed a document's classification three times in one session — once inside the sentence explaining the first time. `draft — all 9 tasks built` is a draft |
+| Stdlib only | a TUI/YAML dependency **vs** stdlib + fallbacks | Stdlib. Nothing is fetched before the governance can be read, and `curses`/PyYAML both degrade to a working fallback |
 
-## Patterns adopted
-- **Adapter / facade over the skill**: `gates` and `agents` adapt the skill's scripts and docs into typed Python results; the runner never owns the policy.
-- **Sequential pipeline with gates**: each stage is a checkpoint + halt-point, giving crash-resume and human gating at boundaries for free.
-- **Least privilege via allowlist**: roles get only the tools they need; V1 is the strictest.
-- **Derived, never authored** (CHG-20260822-04): `elements/` is machine output regenerated from `skills/` and byte-compared in CI. Editing one by hand is the same category as hand-copying skill markdown, and guideline §2/§8 forbid both. Where a heuristic *is* runner-authored — which headings are anchors, the LF hash basis, loadouts as ids, the tighten-only ordering on the four-valued axis — it is named as a fork point rather than left to look derived.
-- **One ask, one session** (CHG-20260822-04): the engine opens a session, asks once, closes it in a `finally`, and refuses a factory that hands back a session it already returned. Independence is a correctness property, not an optimisation — continuity breeds bias, which is the same reason the shipped review panel runs phase 1 blind.
-- **Write the question down before asking it**: the work order is journalled as `pending` before the session opens and marked `answered` after, so a dropped session costs the answer and not the question. Reconstructing a question later risks asking a subtly different one, and a subtly different question is how a rerun quietly stops being a rerun.
-- **Postconditions, not receipts** (D6.4/D6.5): resume asks the world what is already true rather than consulting a record of what we did. `state.json` degrades to a cache — stale or absent, it changes latency and nothing else.
+## Patterns
+
+- **A mechanism is not built until something calls it.** This repo's recurring failure: an engine
+  that ignored its own policy verdict, an `adjudicate` no caller reached, a `PERMANENT_HALTS` list
+  printed and never checked, three modules tested and imported by nobody. Each passed its own tests.
+  The pattern is the fix: wire it, and write the test that fails when it is unwired.
+- **One ask, one session**, closed in a `finally`.
+- **Write the question down before asking it.**
+- **Postconditions, not receipts.** Resume asks the world, not a record of what we did.
+- **Least privilege as capability flags**, not tool names — a role's authority is about what it may
+  do, and tool names belong to a harness.
+- **Name what you interpreted.** Where the runner chose between readings, the choice is written down
+  next to the code, with what it was chosen over.

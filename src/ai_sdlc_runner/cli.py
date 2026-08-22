@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from . import engine, graph, policy, tui
+from . import engine, graph, policy, ship, tui
 
 DEFAULT_CONFIG = "config/runner.yaml"
 
@@ -64,8 +64,21 @@ class _Stub(engine.Session):
         pass
 
 
+class CliError(Exception):
+    """Raised when a backend cannot be made to produce an answer."""
+
+
 class _Process(engine.Session):
-    """One process per ask: the work order on stdin, whatever it prints back as the answer."""
+    """One process per ask: the work order on stdin, the JSON it prints back as the answer.
+
+    The reply is **parsed**, not just captured. The engine routes on what a review or a confirmation
+    actually said, so an answer left as a blob of stdout is an answer that decides nothing — the
+    first version of this class returned exactly that, which made every real agent's verdict
+    unroutable while the stub-backed tests stayed green.
+
+    The agent's own keys win over the process metadata kept alongside them, so an agent that answers
+    ``{"verdict": "fail"}`` fails the node no matter what the exit code says.
+    """
 
     def __init__(self, argv: List[str], timeout: int):
         self.argv, self.timeout = argv, timeout
@@ -73,7 +86,18 @@ class _Process(engine.Session):
     def ask(self, order):
         proc = subprocess.run(self.argv, input=json.dumps(order, ensure_ascii=False),
                               capture_output=True, text=True, timeout=self.timeout)
-        return {"exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
+        if proc.returncode != 0:
+            raise CliError(
+                f"{self.argv[0]!r} exited {proc.returncode} answering {order['node_id']!r}: "
+                f"{proc.stderr.strip() or 'no stderr'}")
+        answer = {"exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
+        try:
+            parsed = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            return answer
+        if isinstance(parsed, dict):
+            answer.update(parsed)
+        return answer
 
     def close(self):
         pass
@@ -128,6 +152,41 @@ def cmd_policy(args: argparse.Namespace) -> int:
     return 0
 
 
+def effects_provider(plan: dict):
+    """The effects each node carries out, from the plan's ``ship`` block — or ``None``.
+
+    Only the `pr` node has a sequence today: record the intent, branch, commit, push, open the PR.
+    It is built by `ship.effects_for`, so the ordering and the probes live in one place rather than
+    being restated here. With no ``ship`` block the flow runs without side effects, which is what a
+    dry run wants.
+    """
+    settings = plan.get("ship")
+    if not settings:
+        return None
+
+    repo = settings["repo"]
+    chg_id = settings["chg_id"]
+    body = settings.get("chg_body")
+
+    def _write_chg() -> None:
+        if body is None:
+            raise ship.ShipError(
+                f"the plan ships {chg_id} but supplies no chg_body — the intent has to be written "
+                f"down before anything else happens, and this runner will not invent it")
+        path = Path(repo) / "docs" / "changes" / f"{chg_id}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+
+    sequence = ship.effects_for(
+        repo=repo, chg_id=chg_id, branch=settings["branch"], message=settings["message"],
+        write_chg=_write_chg, remote=settings.get("remote", "origin"))
+
+    def provider(node_id: str):
+        return sequence if node_id == "pr" else ()
+
+    return provider
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Walk the flow for one change."""
     config = load_config(args.config)
@@ -151,6 +210,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         autonomy=plan.get("autonomy"),
         review_seats=seats,
         high_risk_mode=high_risk,
+        operations=plan.get("operations", {}),
+        confirmed=tuple(args.confirm or ()),
+        effects=effects_provider(plan),
         journal=engine.AskJournal(args.ask_journal) if args.ask_journal else None,
     )
     seat_models = plan.get("seat_models") or {}
@@ -162,6 +224,14 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     for relaxation in report.relaxations:
         print(f"relaxation:    {relaxation}")
+    for line in report.confirmations:
+        print(f"confirmed:     {line}")
+    for decision in report.adjudications:
+        seat_line = ", ".join(f"{k}={v}" for k, v in sorted(decision["verdicts"].items()))
+        print(f"panel:         {decision['node_id']} → {decision['outcome']} ({seat_line})")
+    for node_id, outcome in report.effects.items():
+        print(f"effects:       {node_id} applied={outcome['applied']} "
+              f"already_met={outcome['already_met']}")
     print(f"visited:       {len(report.visited)} node(s)")
     print(f"asks:          {len(report.asks)}")
     print(f"stopped at:    {report.halted_at} — {report.halt_reason}")
@@ -186,6 +256,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help=f"how many review seats to open (default: the floor, {policy.SEAT_FLOOR})")
     pr.add_argument("--high-risk-mode", action="store_true",
                     help="allow fewer seats than the floor; the run records that it did")
+    pr.add_argument("--confirm", action="append", default=None, metavar="GATE",
+                    help="a gate you have already approved; repeatable. A halt is a pause with a "
+                         "way back, and every confirmation is recorded in the run's report.")
     pr.add_argument("--ask-journal", default=None,
                     help="directory to journal each question in before asking it")
     pr.set_defaults(func=cmd_run)

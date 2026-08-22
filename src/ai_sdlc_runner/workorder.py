@@ -33,6 +33,10 @@ WORK_ORDER_FIELDS = (
     "node_label",
     "role",
     "role_label",
+    # Which review seat this ask is for, or None. Part of the order rather than only of the prose,
+    # because the answer has to be attributable to a seat: adjudication counts verdicts by seat, and
+    # an answer nobody can attribute cannot be counted.
+    "seat",
     "scope",
     "objective",
     "instructions",
@@ -111,6 +115,7 @@ def render(node, node_spec: Mapping[str, object], verdict: Mapping[str, object],
         "node_label": node.label,
         "role": role.name,
         "role_label": role.label,
+        "seat": seat,
         "scope": node_spec["scope"],
         "objective": node_spec["objective"],
         "instructions": instructions,
