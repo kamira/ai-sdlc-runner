@@ -1,7 +1,7 @@
 """`requirements-dev.txt` must stay derived from `pyproject.toml`, and stay probe-readable.
 
 Why this file exists at all (CHG-20260822-01): the ai-sdlc entry handshake runs
-``toolchain_probe.sh``, which reads dev dependencies from ``requirements-dev.txt`` and nothing
+the CI install step, which reads dev dependencies from ``requirements-dev.txt`` and nothing
 else. This repo declares them in ``pyproject.toml``'s ``[project.optional-dependencies]``, so the
 probe returned ``NOT_RUN`` (exit 4) on every single session -- *the check did not run*, which the
 handshake protocol treats as stop-and-provision. ``requirements-dev.txt`` is the probe-facing view
@@ -31,7 +31,7 @@ PYPROJECT = REPO_ROOT / "pyproject.toml"
 REQUIREMENTS_DEV = REPO_ROOT / "requirements-dev.txt"
 
 # The probe's own unparsable-line patterns, mirrored: options/URLs/VCS/extras/env-markers/
-# line-continuations, plus any PEP 440 version specifier. See toolchain_probe.sh.
+# line-continuations, plus any PEP 440 version specifier.
 _NOT_A_BARE_NAME = re.compile(r"[<>=!~;\[\]@\\]|://|^-")
 
 
@@ -82,7 +82,7 @@ def _requirements_dev_lines():
 def test_requirements_dev_exists():
     """Absent file == probe returns NOT_RUN on every handshake. That is the bug, so assert it first."""
     assert REQUIREMENTS_DEV.is_file(), (
-        f"{REQUIREMENTS_DEV.name} is missing; toolchain_probe.sh will return NOT_RUN (exit 4) "
+        f"{REQUIREMENTS_DEV.name} is missing; the dev install has nothing to read "
         "for every entry handshake on this repo. See CHG-20260822-01."
     )
 
@@ -114,7 +114,7 @@ def test_requirements_dev_lines_are_bare_names(line):
     dependencies installed* -- and answering it requires giving it only what it can parse.
     """
     assert not _NOT_A_BARE_NAME.search(line), (
-        f"{line!r} is not a bare distribution name. toolchain_probe.sh treats version specifiers, "
+        f"{line!r} is not a bare distribution name. The dev install treats version specifiers, "
         "`-e`/`-r` options, URLs, extras and environment markers as UNPARSABLE and returns NOT_RUN "
         "-- i.e. this line would silently disable the toolchain gate. Keep version constraints in "
         "pyproject.toml. See CHG-20260822-01."

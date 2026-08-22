@@ -598,3 +598,41 @@ gh pr checks <n> --watch --interval 20
 
 **九個 task 全部打勾**,400 passed / 2 skipped,doc-integrity exit 0。
 但打勾與閘門綠**不等於已驗收**——ACC 是下一步,而且會明列未涵蓋項。
+
+---
+
+## 2026-08-22/23 — 獨立驗收第一輪:**退回**,四項已修
+
+九個 task 全 merge 後開驗收。風險 high → `halt_independent` → **不得自驗**,派兩席獨立驗收。
+
+### 兩席獨立指出同一個最嚴重項
+
+**引擎從不執行 policy 裁決。** `policy_verdict` 是呼叫端預解好貼進工單的資料,
+`walk` 對 `halt` / `confirm` / `halt_independent` 一律照走。Goal 明文承諾
+「halting only where the shipped policy says halt」——**沒有元件在做、沒有測試在測、也不在已知缺口清單**。
+
+已修:`engine.resolve_verdict` 自己問出貨 policy——`halt:*` 走 `gates.check_halt`(FR-8),
+`autopilot:*` 讀元素攜帶的逐字表(該軸沒有可用的出貨解析器)。多 checkpoint 的節點**全部判、最嚴的贏**,
+而這剛好讓 **fork point 6 永遠不必裁決**:halt 與 halt_independent 的先後只有在「其中一個會繼續」時才有意義,而沒有一個會繼續。
+
+### 另外三項
+
+1. **silent fallback 藏在自己禁止 silent fallback 的模組裡**——無 checkpoint 的節點被默默補上
+   `halt:before_implement`,多 checkpoint 只取第一個。已改成誠實回報「這個節點沒有政策閘」。
+2. **變數遮蔽讓每張工單都指錯元素**——`render` 在 sources 迴圈裡重新綁定 `element_id`,
+   於是每張工單帶的是**最後一個 source 的 id**,不是節點自己的。**從 task 5 起就錯,沒有測試抓到**,
+   因為舊測試只斷言 `node_id`。新增回歸測試。
+3. **帳本超額宣稱**:設計期的「Nothing in `src/` has been written」還在、task 6–9 沒有 record、
+   使用者追加的需求 9–16 與席數放寬裁決只活在 worklog、`cli.py` 有過期承諾。全部補進 CHG。
+
+### 一個驗收限制要記著
+
+codex 席**跑不了 pytest**(唯讀 sandbox 無可寫 temp),它明講「400 passed 不能算它驗過」——
+沒有把沒看到的東西report成 pass。fable 席跑了全部,還自己做破壞性抽驗。
+**ACC 會分別記錄兩席各自驗到什麼、沒驗到什麼。**
+
+### 第三次踩同一個坑
+
+`## Independent acceptance — first round: **not accepted**` ——`accepted` 是 lint 關鍵字,
+整份 CHG 又被判成懸空驗收。改寫標題後,**我在解釋這件事的註腳裡又寫了一次那個詞**,再掛一次。
+本 session 第三次。已改成不含觸發字的敘述。

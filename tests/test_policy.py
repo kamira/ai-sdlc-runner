@@ -1,0 +1,166 @@
+"""The governance this runner owns (CHG-20260823-01).
+
+Every value here used to be read out of a vendored skill, and the runner was forbidden to hold any of
+it. There is no skill: these are ours, and what they are checked against is the requirement rather
+than a file. Two properties carry most of the weight:
+
+* **Completeness is structural.** The old design inherited a table covering four of thirteen roles,
+  which is why nine could not be dispatched. Here the roles are the ones the flow uses, and that is
+  asserted rather than assumed.
+* **Nothing is defaulted.** An unknown gate, risk or role raises. A governance value that appears out
+  of nowhere when asked for something undefined is the silent fallback everything here refuses.
+"""
+from __future__ import annotations
+
+import pytest
+
+from ai_sdlc_runner import graph, policy
+
+
+# --------------------------------------------------------------------------------------
+# completeness
+# --------------------------------------------------------------------------------------
+
+def test_every_role_the_flow_uses_is_defined_with_capabilities():
+    """The failure that cannot recur: a node naming a role nothing describes."""
+    for role in graph.roles_used():
+        caps = policy.capabilities(role)
+        assert set(caps) == {"can_spawn", "can_write", "can_execute"}
+        assert all(isinstance(v, bool) for v in caps.values())
+
+
+def test_every_gate_the_flow_consults_is_defined_for_every_risk():
+    for gate in set(graph.gates_used()):
+        for risk in policy.RISKS:
+            assert policy.GATES[gate][risk] in (policy.AUTO, *policy.STOPPING)
+
+
+def test_nothing_is_defined_that_the_flow_never_uses():
+    """An unused gate or role is a governance value nobody can point at a decision for."""
+    assert set(graph.gates_used()) == set(policy.GATES)
+    assert set(graph.roles_used()) == set(policy.BY_ROLE)
+
+
+# --------------------------------------------------------------------------------------
+# the capability that carries weight
+# --------------------------------------------------------------------------------------
+
+def test_only_the_lead_dispatches():
+    """The requirement's shape: the lead dispatches engineers, and nobody else dispatches at all —
+    so the tree stays two deep and a reviewer cannot quietly become a builder."""
+    spawners = [r.name for r in policy.ROLES if r.can_spawn]
+    assert spawners == ["lead"]
+
+
+def test_qa_and_the_seats_cannot_write_what_they_judge():
+    """They may run things — that is how verification works — but not fix while verifying."""
+    for name in ("qa", "seat"):
+        caps = policy.capabilities(name)
+        assert caps["can_execute"] is True
+        assert caps["can_write"] is False
+        assert caps["can_spawn"] is False
+
+
+# --------------------------------------------------------------------------------------
+# the gates
+# --------------------------------------------------------------------------------------
+
+def test_merge_stops_earliest_because_it_is_a_one_way_door():
+    """The rule behind the grades, checked where it bites: merging stops at medium risk, while a
+    task review — cheap to redo — never stops at all."""
+    assert policy.GATES["merge"]["medium"] in policy.STOPPING
+    assert policy.GATES["task_review"]["high"] == policy.AUTO
+
+
+def test_high_risk_acceptance_wants_someone_other_than_the_builder():
+    assert policy.GATES["acceptance"]["high"] == policy.HALT_INDEPENDENT
+
+
+def test_anything_that_is_not_auto_stops():
+    assert policy.stops(policy.AUTO) is False
+    for value in policy.STOPPING:
+        assert policy.stops(value) is True
+
+
+def test_autonomy_may_tighten():
+    v = policy.verdict("task_review", "low", autonomy="halt")
+    assert v["verdict"] == "halt" and v["tightened"] is True
+
+
+def test_autonomy_may_not_loosen_and_the_attempt_is_reported():
+    """A request to relax a gate is worth seeing rather than silently dropping."""
+    v = policy.verdict("merge", "high", autonomy="auto")
+    assert v["verdict"] == policy.HALT
+    assert "refused" in v["source"]
+
+
+def test_an_unknown_gate_risk_or_role_raises_rather_than_defaulting():
+    with pytest.raises(policy.PolicyError):
+        policy.verdict("no_such_gate", "low")
+    with pytest.raises(policy.PolicyError):
+        policy.verdict("merge", "catastrophic")
+    with pytest.raises(policy.PolicyError):
+        policy.role("nobody")
+
+
+def test_the_verdict_shape_is_fixed():
+    """Fixed so a work order's closed schema can carry it without special cases."""
+    for autonomy in (None, "halt", "auto"):
+        v = policy.verdict("merge", "high", autonomy=autonomy)
+        assert set(v) == {"gate", "risk", "verdict", "source", "tightened"}
+
+
+# --------------------------------------------------------------------------------------
+# seats
+# --------------------------------------------------------------------------------------
+
+def test_seats_open_least_negotiable_first():
+    assert policy.seat_names(1) == ["conformance"]
+    assert policy.SEATS[0].veto is True
+
+
+def test_the_floor_holds_without_high_risk_mode():
+    with pytest.raises(policy.PolicyError) as exc:
+        policy.resolve_seats(1, high_risk_mode=False)
+    assert "high-risk mode" in str(exc.value)
+    assert policy.resolve_seats(1, high_risk_mode=True) == 1
+    assert policy.resolve_seats(None, high_risk_mode=False) == policy.SEAT_FLOOR
+
+
+def test_more_seats_than_exist_is_refused():
+    with pytest.raises(policy.PolicyError):
+        policy.seat_names(len(policy.SEATS) + 1)
+
+
+# --------------------------------------------------------------------------------------
+# adjudication — the reason the panel exists
+# --------------------------------------------------------------------------------------
+
+def test_a_veto_cannot_be_outvoted():
+    """Its subject is a matter of fact, and counting votes on a fact is how a panel talks itself out
+    of one."""
+    outcome = policy.adjudicate({"conformance": "fail", "defect": "pass", "risk": "pass"})
+    assert outcome["outcome"] == "fail"
+    assert outcome["vetoed"] == ["conformance"]
+
+
+def test_a_majority_passes():
+    assert policy.adjudicate(
+        {"conformance": "pass", "defect": "pass", "risk": "fail"})["outcome"] == "pass"
+
+
+def test_a_tie_does_not_pass():
+    """The panel exists to catch what one view would miss; an even split has caught it."""
+    outcome = policy.adjudicate({"conformance": "pass", "defect": "fail"})
+    assert outcome["outcome"] == "fail"
+    assert "tie" in outcome["reason"]
+
+
+def test_an_unknown_seat_is_refused():
+    with pytest.raises(policy.PolicyError):
+        policy.adjudicate({"nobody": "pass"})
+
+
+def test_no_verdicts_is_not_a_pass():
+    with pytest.raises(policy.PolicyError):
+        policy.adjudicate({})

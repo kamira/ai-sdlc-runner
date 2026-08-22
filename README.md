@@ -1,339 +1,169 @@
 # ai-sdlc-runner
 
-External Python orchestrator that drives the [`ai-sdlc`](https://github.com/kamira/skill-ai-sdlc-autopilot) skill's
-semi-autonomous development loop. **The skill stays pure (markdown + zero-dependency gate scripts);
-the runner is an external driver that references — never copies — the skill.** Dependency is one-way:
-the runner depends on the skill; the skill never depends on the runner.
+A governed development agent. It drives an ordinary development flow — PM plans, the lead judges
+feasibility, engineers build one small module each, the lead reviews, a panel cross-checks, QA
+verifies, the user's feedback returns to PM — and it decides, at every step, whether that step may
+proceed on its own or has to stop and ask a person.
+
+It depends on no other company's agent, and it holds no skill, prompt pack, or vendored contract.
+The flow and the governance are this repository's own, in two files anyone can read:
+
+| File | What it holds |
+| --- | --- |
+| [`policy.py`](src/ai_sdlc_runner/policy.py) | the governance: roles and their capabilities, ten gates × three risk grades, the never-automated actions, the review seats and how their verdicts are adjudicated |
+| [`graph.py`](src/ai_sdlc_runner/graph.py) | the flow: 23 nodes, one kind of work each, with the module loop, the bounded retry, and the feedback edge back to PM |
+
+Everything else serves those two: [`engine.py`](src/ai_sdlc_runner/engine.py) walks the flow and
+enforces the policy, [`workorder.py`](src/ai_sdlc_runner/workorder.py) renders the closed-schema
+order each ask is given, and [`cli.py`](src/ai_sdlc_runner/cli.py) connects them to real models.
 
 ## Install
 
 ```bash
-git clone https://github.com/kamira/ai-sdlc-runner.git
-cd ai-sdlc-runner
-pip install -e .                   # optional: .[yaml] for PyYAML, .[test] for pytest
+pip install -e ".[test]"
 ```
 
-**Offline by default.** The skill is vendored into a local store at `skills/` (`skills/v1.0.0`,
-`skills/v1.1.0`, `skills/v1.12.1`, `skills/v1.16.0`), and that is the primary source — the runner never
-fetches the skill online. `skills/v1.16.0` is the current baseline (`contract_version` default,
-CHG-20260703-06). It auto-selects the store version matching each project's lock (major.minor); after a `migrate` raises
-the lock, the next run uses the new version automatically. `runner check` lists the store versions and
-flags when a newer one is available.
-
-> There is **no submodule fallback** any more (CHG-20260822-02). The upstream repo the old
-> `ai-skills` submodule pointed at was archived on 2026-08-04 and succeeded by
-> [`skill-ai-sdlc-autopilot`](https://github.com/kamira/skill-ai-sdlc-autopilot), which also renamed
-> the skill's inner path; the submodule had never been wired up in the first place. The vendored
-> store is the only skill source — to use a checkout outside it, point `--skill-path` at that skill
-> root. The runner detects the actual contract version by reading the skill's `SKILL.md` frontmatter
-> either way.
+Standard library only. PyYAML is optional — `runner.yaml` is read by a small built-in parser when it
+is absent.
 
 ## Usage
 
-```bash
-runner                                    # on a TTY: the resident interactive dashboard (default)
-runner <project>                          # ...pre-opened on <project> (same resident dashboard)
-runner menu                               # the classic interactive menu, explicitly
-runner workspace --authority <main> --repo <p2> --repo <p3>   # register multi-project workspace
-runner analyze <main>                     # structure analysis across the workspace (before the loop)
-runner run <project>                      # drive the four-stage loop for a governed project
-runner run <project> --dashboard          # ...with the live multi-panel dashboard (one-shot)
-runner dashboard <project>                # open the dashboard over a project's saved state (snapshot)
-runner check [project]                    # detect whether the local skill has an update
-runner migrate <project> --to <version>   # validating contract upgrade (re-read all docs first)
-runner status <project>                   # show the per-project lock + run state
-```
-
-Options for `run`: `--contract-version` (defaults to config), `--skill-path` (override, e.g. a local
-skill cache for offline verification), `--risk {low,medium,high}`, `--resume`.
-
-### Resident interactive dashboard (default entry point, CHG-20260703-03)
-
-On a real TTY, bare `runner` (or `runner <project>` to pre-open one) launches straight into a
-**persistent, always-on control console** — it starts empty (no project, empty panels) and never
-exits on its own; `/quit` is the only way out. Off-TTY (pipes/CI/scripting, or `AI_SDLC_NO_CURSES=1`)
-bare `runner` keeps the previous behavior unchanged: the classic interactive menu (arrow-key list, or
-its numbered fallback). All subcommands above are unaffected either way.
-
-Layout: **狀態/Status** and **檢驗結果/Verification** on the top row (always fully visible), **執行日誌
-/Execution log** and **agent 行為日誌/Agent log** on the bottom row as **two bounded-height columns**
-(each truncated to its last N lines, N scaling with terminal height, so the top row is never pushed
-off), and a **bottom input box** for everything else:
-
-- `/open <path>` — set the **current project** (shown in Status); it's the target of tasks/`/run`/
-  approvals until you `/open` a different one.
-- Plain text (no leading `/`) — start a run on the current project, recording the text as the
-  requirement in the execution log. `/run [text]` does the same, explicitly.
-- `/status`, `/check`, `/menu` (also **F2**), `/help`, `/quit`.
-- With no current project, a task or `/run` shows a clear `no project; use /open <path>` line instead
-  of doing nothing silently.
-- The input box accepts **any language** (UTF-8, incl. CJK) — it reads whole characters via
-  `get_wch()` rather than one byte at a time, so typing Chinese/Japanese/Korean etc. works correctly
-  (CHG-20260703-04).
-- Per-keystroke redraws do **zero** `git`/disk I/O: the Status and Verification panels are cache-backed
-  and only recompute on real events — app start, `/open`, and after a run completes (CHG-20260703-05).
-
-**Halt-gate approvals are interactive and arrow-key selectable.** When a run reaches a HALT gate, the
-console presents `[Approve / Reject]` — ↑/↓ + Enter (or y/n) — and blocks for a human answer via the
-orchestrator's existing `approver` hook. **Red-line gates always require an explicit human Approve —
-there is no auto-approve path**, exactly as with every other entry point. Runs use the **stub backend**
-by default (offline) and execute **single-threaded**: the UI redraws as events stream in and blocks
-while waiting for an approval — a real, slow backend would block the console too (a documented v1
-limitation; threading is a follow-up). v1's Q/A scope is intentionally just (a) task/requirement input
-and (b) HALT-gate approve/reject — free-form agent Q&A is a later change.
-
-The **read-only paths are unchanged**: `runner run --dashboard` (live, one-shot) and `runner dashboard
-<project>` (saved-state snapshot) still show the original four-panel vertical layout and exit when you
-press `q` — they did not become resident. Both views show the same four panels: **狀態/Status** (git
-branch + dirty, stage progress, current stage + contract lock), **執行日誌/Execution log** (stage
-transitions + gate AUTO/HALT), **檢驗結果/Verification** (acceptance reports + latest V1 result), and
-**agent 行為日誌/Agent log** — consolidated by default, switchable to tabbed-per-agent (`--agent-view
-tabbed`, or `t` in the one-shot curses viewer, or the menu). All of it is read-only — a run launched
-from either the resident console or the classic menu still halts at every gate exactly the same way.
-
-**Multi-project workspace (cross-repo).** Register one or more projects and designate the **main
-(authority)** project, run a structure analysis, then run the loop:
+Print the flow, so you can see what will happen before anything does:
 
 ```bash
-runner workspace --authority ./main --repo ./svc-a --repo ./svc-b   # or interactive: runner workspace
-runner analyze ./main         # scan each repo, scaffold docs/structure/*, wire authority contract + pointers
-runner run ./main             # cross-repo consistency gate (drift → HALT) → four-stage loop
+runner flow
 ```
 
-The main project is the **authority** (holds the shared contract `docs/contracts/VERSION` + Guideline);
-each consumer keeps a `docs/authority.md` pointer pinned to that version. Before the loop, `runner run`
-calls the skill's `cross_repo_check.py` — a consumer behind the authority contract **halts** the run.
-Agents run inside their target repo (working directory). Single-project use needs none of this.
-
-**Execution backend (any AI platform).** The agent-execution backend is a runtime concern, not the
-contract — so the runner is **not tied to any AI platform**. Choose per run with `--backend` or in
-`config/runner.yaml`'s `executor` block:
-
-- `stub` (default) — no-op, offline/dry-run.
-- `command` — run any local CLI / **subscription** agent (e.g. a logged-in tool); the prompt is passed
-  via stdin or as an argument: `executor.command.argv: ["claude", "-p"]`, `prompt_via: stdin|arg`.
-- `api` — call an **HTTP API**: `executor.api.{provider: anthropic|openai|generic, base_url, model,
-  api_key_env}`. The API key is read from the named **environment variable**, never stored in config.
-
-**Pure-ai-sdlc isolation (CHG-20260703-02).** The `command` backend accepts a generic passthrough —
-`executor.command.extra_args` (list, appended to `argv` verbatim) and `executor.command.extra_env`
-(dict, merged into the subprocess environment on top of what's inherited). Both default to empty, so
-behavior is unchanged unless set. This keeps the runner platform-agnostic — no Claude-Code-specific
-flags are hardcoded — while still letting you constrain a spawned `claude -p` agent to load **only**
-the ai-sdlc skill:
-
-```yaml
-executor:
-  command:
-    argv: ["claude", "-p"]
-    extra_args: ["--settings", "config/pure-ai-sdlc.settings.json"]
-```
-
-`config/pure-ai-sdlc.settings.json` is a ready-made example Claude Code settings file
-(`disableBundledSkills: true` + the `everything-claude-code` / `code-review` / `feature-dev` /
-`claude-code-setup` plugins disabled). `api`/`stub` backends are unaffected — the fields are read only
-by the `command` backend.
+Print the governance table — every gate at every risk grade, the never-automated actions, and the
+review seats:
 
 ```bash
-runner run <project> --backend command     # drive agents via a subscription/CLI agent
-runner run <project> --backend api         # drive agents via an HTTP API (key from env)
+runner policy
 ```
 
-The backend only runs agent work — **halt gates and red-line stops apply identically** whichever
-backend you pick. Uses only the standard library (`urllib`/`subprocess`); no extra dependency.
+Walk the flow for real. `--risk` grades the change; `--seats` sets how many review seats open;
+`--confirm` names a gate you have already approved, and may be repeated:
 
-**Skill update detection.** `runner check [project]` reads the version at the local skill location
-(`skill_path`, overridable with `--skill-path`) and compares it to the project's lock (or the
-config-expected version): a **patch** difference passes freely, a **minor/major** difference reports
-that you should run `migrate` (exit 20), and it also surfaces any newer version tag found in the
-skill's git repo (e.g. `ai-sdlc-v1.1.0`). The same line appears in `status` and the dashboard Status
-panel. Detection is read-only — it never auto-migrates; the validating `migrate` stays explicit.
+```bash
+runner run --config runner.yaml --risk medium --seats 3 --confirm plan_confirmed
+```
 
-## How it works
+## The four rules the runner is built around
 
-- **Contract lock is per project, `major.minor`.** PATCH differences pass freely; a `minor`/`major`
-  bump forces an explicit, *validating* `migrate` (re-read every doc; raise the lock only if all
-  re-parse). The lock lives in the **governed project** as `.sdlc-lock.json` and travels with that
-  project's git — not to be confused with the project's own product version.
-- **No duplicated governance logic.** Halt-point decisions are obtained by `subprocess`-calling the
-  skill's `scripts/halt_gate.py` (exit `0`=AUTO, `10`=HALT); role definitions are parsed from the
-  skill's `references/agent-hierarchy.md`. The runner holds no risk matrix and no hardcoded role
-  table of its own.
-- **Stages run sequentially with shallow fan-out.** Four stages (requirement analysis → structure
-  design → implement → acceptance), each passing a halt gate, with a checkpoint at every boundary
-  (`--resume` continues from the last one). Fan-out is capped at depth ≤ 3 / concurrency ≤ 4 —
-  deliberately conservative to save tokens (the platform supports more). These runtime limits live
-  in `config/runner.yaml` and are probed at startup; the contract targets the skill's stable output,
-  not Claude Code's current runtime behavior.
-- **V1 verifier is locked down.** The independent acceptance agent is spawned with a tools allowlist
-  that **excludes `Agent`** (it cannot spawn or fix while verifying) and is read-only on the code
-  under review (but may run tests/CLI/GUI to verify).
-- **Red lines always halt.** Deploy/release, data migration/irreversible schema, delete/drop, money,
-  secrets/permissions, and publishing are never auto-run — they always surface for human approval.
+**One node, one kind of work.** Building something, verifying your own work, and having someone else
+review it are three different kinds of work, so they are three nodes. Opening a pull request and
+merging are two. Planning and confirming the plan are two — the second is where a person can still
+say no, cheaply.
 
-> **The skill without the runner is still a pure skill.** Installing the runner adds an external
-> driver; it does not modify or depend back on the skill.
+**Every asking node is its own session.** A session is opened for one ask and closed the moment it
+answers. Nothing is carried between asks, and a dispatcher that hands back a session it already
+returned is refused. This is deliberate: a model that can see the previous exchange can coast on it,
+and a reviewer who has already seen the answer is not a second opinion.
 
-## Architecture
+**The question survives the session.** Every ask is written down as `pending` *before* its session
+opens, and marked `answered` only after it returns. If the session drops — for the PM, the lead, an
+engineer, QA, or a review seat — the exact question is still on disk, and what was already answered
+is not asked again.
 
-For a full architecture & feature overview (module map, the four-stage loop, version lock, offline
-skill store, execution backends, guardrails, change history, and handover/extension notes), see
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+**Reviews decide.** A single model can be wrong in a way it cannot see, so the panel is several
+seats, each asked separately and each blind to the others. Their verdicts are adjudicated, not
+averaged: a veto seat cannot be outvoted, a majority is needed to pass, and a tie does not pass.
+
+## The gates
+
+Ten gates, three risk grades each. The rule behind every cell is the same: **a gate stops when
+getting it wrong is expensive to undo.** Reviewing a module is cheap to redo, so it never stops the
+run; merging is a one-way door, so it asks even on a low-risk change.
+
+`auto` proceeds. `confirm` asks. `halt` stops for a person. `halt_independent` stops for a person
+*and* forbids the implementer from being the one who verifies it.
+
+A halt is a pause with a way back, not a wall — `--confirm <gate>` continues past one, and the
+approval is recorded in the run report so it can be audited afterwards. Run `runner policy` for the
+current table.
+
+Six actions are never automated at any grade, and no confirmation or mode relaxes them: production
+deploys, data migrations, hard deletes, moving money, changing secrets or permissions, and
+publishing public content. They are checked against what each node says it is about to do, and they
+stop the run before the work is dispatched.
+
+## High-risk mode
+
+The review panel has a floor of three seats. A user who needs fewer can turn on high-risk mode and
+open one — and the run report records that the floor was bypassed, at what seat count. Bypassing a
+safeguard silently is the thing being prevented; bypassing it on the record is a decision someone
+made.
 
 ## Governance
 
-This repo is itself governed by ai-sdlc (dogfooding). See `docs/ai-guideline.md`,
-`docs/structure/*.md`, `docs/changes/CHG-*.md`, and `docs/acceptance/ACC-*.md`.
+This repository is developed under its own rules. Every change is written down as a `CHG` record in
+[`docs/changes/`](docs/changes) before the work starts, and closed by an `ACC` acceptance record in
+[`docs/acceptance/`](docs/acceptance) with evidence. [`tools/ledger_check.py`](tools/ledger_check.py)
+runs in CI and fails the build when a record is missing a required field, claims completion without
+an acceptance, or drifts from what was actually done.
 
 ---
 
-# ai-sdlc-runner（繁體中文）
+# ai-sdlc-runner(繁體中文)
 
-驅動 [`ai-sdlc`](https://github.com/kamira/skill-ai-sdlc-autopilot) skill 半自主開發迴圈的**外部 Python 編排器**。
-**skill 維持純淨(markdown + 零依賴 gate 腳本);runner 是外部驅動器,引用 skill 而非複製。**
-依賴為單向:runner 依賴 skill,skill 永不依賴 runner。
+一個**受治理的開發代理**。它跑一條普通的開發流程——PM 規劃 → 主管判斷可行性與風險 → 工程師各做一個
+小模組 → 自我驗證 → 主管 review → 審議席交叉複核 → QA 全面驗證 → 用戶回饋回到 PM——並在每一步判斷:
+這一步可以自己走,還是必須停下來問人。
 
-## 安裝
+它**不依賴其他公司提供的 agent**,repo 內也**不存放、不讀取任何 skill**。流程與治理都是本專案自有的,
+寫在兩個檔案裡:
 
-```bash
-git clone https://github.com/kamira/ai-sdlc-runner.git
-cd ai-sdlc-runner
-pip install -e .                   # 選用:.[yaml] 裝 PyYAML、.[test] 裝 pytest
-```
-
-**預設離線。** skill 已內置成本地 store(`skills/v1.0.0`、`skills/v1.1.0`、`skills/v1.12.1`、
-`skills/v1.16.0`),這是主要來源——runner **絕不從線上抓** skill。`skills/v1.16.0` 是目前預設基準
-(`contract_version` 預設值,CHG-20260703-06)。它會依每個專案的鎖(major.minor)自動選對應版本;`migrate` 升鎖後,下一次 run
-自動改用新版本。`runner check` 會列出 store 內版本並提示有無更新。
-
-> **已無 submodule fallback**(CHG-20260822-02)。舊 `ai-skills` submodule 指向的上游 repo 已於
-> 2026-08-04 封存,後繼為 [`skill-ai-sdlc-autopilot`](https://github.com/kamira/skill-ai-sdlc-autopilot),
-> 且 skill 內層路徑也一併改名;該 submodule 本來就從未 wire 起來過。vendored store 是唯一 skill 來源
-> ——要用 store 以外的 checkout,把 `--skill-path` 指到那個 skill root 即可。兩種來源 runner 都以讀
-> `SKILL.md` frontmatter 偵測實際契約版本。
+| 檔案 | 內容 |
+| --- | --- |
+| [`policy.py`](src/ai_sdlc_runner/policy.py) | 治理:角色與能力、10 個閘門 × 3 個風險等級、永久停點、審議席與裁決規則 |
+| [`graph.py`](src/ai_sdlc_runner/graph.py) | 流程:23 個節點,一個節點只做一種工作,含模組迴圈、有界重試、回饋回到 PM 的邊 |
 
 ## 用法
 
 ```bash
-runner                                    # 在 TTY 上:直接進入常駐互動儀表板(預設)
-runner <project>                          # ...並預先開啟 <project>(同一個常駐儀表板)
-runner menu                               # 顯式進入經典互動選單
-runner run <project>                      # 對受治理專案驅動四階段迴圈
-runner run <project> --dashboard          # ...同時開啟即時多面板儀表板(一次性)
-runner dashboard <project>                # 對專案已存的狀態開啟儀表板(快照)
-runner check [project]                    # 偵測本地 skill 位置是否有更新
-runner migrate <project> --to <version>   # 驗證式契約升版(先全部重讀 docs)
-runner status <project>                   # 顯示該專案的版本鎖與執行狀態
+runner flow      # 印出流程
+runner policy    # 印出治理表
+runner run --config runner.yaml --risk medium --seats 3
 ```
 
-`run` 的選項:`--contract-version`(預設取 config)、`--skill-path`(覆寫,如指向本地 skill 快取做離線
-驗證)、`--risk {low,medium,high}`、`--resume`。
+## 四條核心規則
 
-### 常駐互動儀表板(預設進入點,CHG-20260703-03)
+**一個節點只做一種工作。** 開發、自我驗證、被人 review 是三種工作,所以是三個節點;開 PR 和 merge 是
+兩個;規劃和確認方案是兩個——後者是人還能便宜地說「不」的地方。
 
-在真正的 TTY 上,不帶參數的 `runner`(或 `runner <project>` 預先開啟)會直接進入**常駐、持續運作的
-控制台**——空狀態啟動(無專案、面板皆空),且永不自行結束;只有 `/quit` 能離開。非 TTY(pipe/CI/
-腳本,或設定 `AI_SDLC_NO_CURSES=1`)時,不帶參數的 `runner` 行為維持不變:仍是經典互動選單(方向鍵
-清單,或其數字選單退化版)。上述所有子指令皆不受影響。
+**每個詢問節點都是獨立 session。** 一次詢問開一個 session,答完立刻關閉;session 之間不帶任何東西,
+把用過的 session 再交回來會被拒絕。目的很明確:能看到前一輪問答的模型會偷懶,而已經看過答案的人不算
+第二意見。
 
-版面配置:**狀態/Status** 與 **檢驗結果/Verification** 在上排(永遠完整可見),**執行日誌/Execution
-log** 與 **agent 行為日誌/Agent log** 在下排、以**兩欄、高度有界**方式呈現(各自截斷只顯示最後 N
-行,N 隨終端高度調整,確保上排永不被擠出畫面外),底部則是**輸入框**,可用來:
+**問題比 session 活得久。** 每次詢問在 session 開啟**之前**就先落盤成 `pending`,答完才標記
+`answered`。session 斷線時——不論斷的是 PM、主管、工程師、QA 還是審議席——原本的問題原封不動留在磁碟
+上,已經答過的不會再問一次。
 
-- `/open <path>` ——設定**目前專案**(顯示於狀態面板);在你 `/open` 別的專案之前,任務/`/run`/核准
-  都以它為對象。
-- 純文字(不帶開頭 `/`)——對目前專案啟動一次 run,並把該文字記錄成執行日誌裡的需求。`/run [文字]`
-  效果相同,只是更明確。
-- `/status`、`/check`、`/menu`(也可按 **F2**)、`/help`、`/quit`。
-- 尚無目前專案時,輸入任務或 `/run` 會清楚顯示 `no project; use /open <path>`,而不是靜默無反應。
-- 每次按鍵重繪皆**零** `git`/磁碟 I/O:狀態與檢驗結果面板皆有快取,只在真實事件(啟動、`/open`、
-  run 結束後)才重新計算(CHG-20260703-05)。
+**Review 要能決定事情。** 單一模型可能有它自己看不見的偏差,所以審議席是多席,各自獨立詢問、互相看不
+到彼此的答案。他們的判定會被**裁決**而不是平均:有否決權的席次不可被多數推翻,放行需要多數決,平手
+不算通過。
 
-**停點核准為互動式、方向鍵可選。** 當 run 抵達 HALT 停點,控制台會呈現 `[Approve / Reject]`——
-↑/↓ + Enter(或 y/n)——並透過既有的 orchestrator `approver` 掛勾阻塞等待人類作答。**紅線停點永遠
-需要人類明確按下 Approve——沒有自動核准的路徑**,與其他任何進入點完全一致。Run 預設使用 **stub
-後端**(離線),且**單執行緒**運作:事件即時串流時 UI 會重繪,等待核准時則會阻塞——真正、較慢的
-後端一樣會讓控制台阻塞(這是記錄在案的 v1 限制;多執行緒是後續改動)。v1 的問答範圍刻意只涵蓋
-(a) 任務/需求輸入與 (b) HALT 停點核准/拒絕——自由形式的 agent 問答留待未來的改動。
+## 閘門
 
-**唯讀路徑維持不變**:`runner run --dashboard`(即時、一次性)與 `runner dashboard <project>`
-(已存狀態快照)仍顯示原本的四面板直式版面,按 `q` 即結束——它們**沒有**變成常駐。兩種檢視都顯示
-同樣四個面板:**狀態/Status**(git 分支 + dirty、階段進度、目前階段 + 契約鎖)、**執行日誌/Execution
-log**(階段轉換 + 停點 AUTO/HALT)、**檢驗結果/Verification**(驗收報告 + 最新 V1 結果)、**agent
-行為日誌/Agent log**——預設統整在同一面板,可切換成分頁分 agent(`--agent-view tabbed`,或一次性
-curses 視圖中按 `t`,或從選單)。全部皆為唯讀——不論從常駐控制台或經典選單啟動 run,停點行為完全
-一致。
+10 個閘門 × 3 個風險等級。每一格背後只有一條規則:**出錯難以復原的地方才停**。一個模組的 review 重做
+很便宜,所以它永不停止流程;merge 是單向門,所以即使低風險也會問。
 
-**多專案 workspace(跨 repo)。** 註冊一個或多個專案、指定**主專案(authority)**,先做結構分析,再跑迴圈:
+`auto` 直接走、`confirm` 詢問、`halt` 停下來等人、`halt_independent` 停下來等人**而且**驗收者不得是
+實作者。
 
-```bash
-runner workspace --authority ./main --repo ./svc-a --repo ./svc-b   # 或互動式:runner workspace
-runner analyze ./main         # 掃描各 repo、scaffold docs/structure/*、建立 authority 契約與指標
-runner run ./main             # 跨 repo 一致性閘(漂移→停)→ 四階段迴圈
-```
+停下來是**可以續走的暫停**,不是牆:`--confirm <閘門>` 可以續走,而且該次核可會記進執行報告以供稽核。
 
-主專案是 **authority**(持有共享契約 `docs/contracts/VERSION` + Guideline);每個消費 repo 放 `docs/authority.md`
-指標並釘住該版本。跑迴圈前,`runner run` 會呼叫 skill 的 `cross_repo_check.py`——有消費 repo 落後於 authority
-契約就**停下**。各 agent 在自己的目標 repo 目錄內執行。單專案不需這些。
+六個動作在任何風險等級都不自動、任何確認或模式都不能放寬:上線部署、資料遷移、硬刪除、金流、變更金鑰
+或權限、對外發布。它們比對每個節點宣告要做的事,並在派工**之前**停住。
 
-**執行後端(不限任何 AI 平台)。** agent 執行後端屬於 runtime、不屬契約——所以 runner **不綁任何 AI 平台**。
-可用 `--backend` 或 `config/runner.yaml` 的 `executor` 區塊選擇:
+## 高風險模式
 
-- `stub`(預設)——無動作,離線/dry-run。
-- `command`——走任何本地 CLI /**訂閱**型 agent(例如已登入的工具);prompt 以 stdin 或參數傳入:
-  `executor.command.argv: ["claude", "-p"]`、`prompt_via: stdin|arg`。
-- `api`——呼叫 **HTTP API**:`executor.api.{provider: anthropic|openai|generic, base_url, model,
-  api_key_env}`。API 金鑰從指定的**環境變數**讀取,**絕不**寫進 config。
+審議席預設下限三席。需要更少的使用者可以開啟高風險模式並只開一席——而執行報告會記下「下限被規避,實際
+開了幾席」。要避免的是**無聲**繞過安全機制;留下紀錄地繞過,那是有人做的決定。
 
-**純 ai-sdlc 隔離(CHG-20260703-02)。** `command` 後端支援通用透傳——`executor.command.extra_args`
-(list,原樣附加到 `argv` 之後)與 `executor.command.extra_env`(dict,合併進 subprocess 環境變數、疊加在
-繼承的環境之上)。兩者預設皆為空,未設定時行為不變。這讓 runner 維持不綁平台——不在程式碼裡寫死任何
-Claude Code 專屬旗標——同時仍可把產生的 `claude -p` agent 限制為**只**載入 ai-sdlc skill:
+## 治理
 
-```yaml
-executor:
-  command:
-    argv: ["claude", "-p"]
-    extra_args: ["--settings", "config/pure-ai-sdlc.settings.json"]
-```
-
-`config/pure-ai-sdlc.settings.json` 是現成的 Claude Code settings 範例(`disableBundledSkills: true`,
-並停用 `everything-claude-code`、`code-review`、`feature-dev`、`claude-code-setup` 插件)。`api`/`stub`
-後端不受影響——這兩個欄位只有 `command` 後端會讀取。
-
-```bash
-runner run <專案> --backend command     # 用訂閱/CLI agent 驅動
-runner run <專案> --backend api         # 用 HTTP API 驅動(金鑰取自環境變數)
-```
-
-後端只負責跑 agent——**停點與紅線停下不論用哪個後端都一樣生效**。僅用標準庫(`urllib`/`subprocess`),無額外依賴。
-
-**Skill 更新偵測。** `runner check [project]` 讀取本地 skill 位置(`skill_path`,可用 `--skill-path` 覆寫)
-的版本,與該專案的鎖(或 config 預期版本)比對:**patch** 差異自由放行;**minor/major** 差異會提示你執行
-`migrate`(exit 20);並會回報 skill git repo 內有無更新的版本 tag(如 `ai-sdlc-v1.1.0`)。同一行也會出現在
-`status` 與儀表板的狀態面板。偵測為唯讀——絕不自動 migrate,驗證式 `migrate` 仍須顯式執行。
-
-## 運作方式
-
-- **版本鎖採 per-project 的 `major.minor`。** PATCH 差異自由放行;`minor`/`major` 跳號則強制走顯式的
-  **驗證式 `migrate`**(全部重讀,能全數解析才升鎖)。鎖檔 `.sdlc-lock.json` 屬於**受治理專案**、隨其
-  git 一起走,勿與該專案自身的產品版本混淆。
-- **不重複治理邏輯。** 停點判斷一律 `subprocess` 呼叫 skill 的 `scripts/halt_gate.py`(退出碼
-  `0`=AUTO、`10`=HALT);角色定義從 skill 的 `references/agent-hierarchy.md` 解析。runner 內**不寫死**
-  風險矩陣,也不寫死一份角色表。
-- **大項依序、淺扇出。** 四階段(需求分析 → 結構設計 → 實作 → 驗收)循序執行,每階段過停點閘,並在
-  每個邊界寫 checkpoint(`--resume` 可從上次接續)。扇出深度 ≤ 3、併發 ≤ 4——刻意保守以省 token
-  (平台其實支援更多)。這些 runtime 上限放在 `config/runner.yaml`、啟動時實測;契約對著 skill 的穩定
-  輸出,不對著 Claude Code 當前的 runtime 行為。
-- **V1 驗收者工具層鎖死。** 獨立驗收代理啟動時的工具 allowlist **不含 `Agent`**(無法再生子代理、也無法
-  邊驗邊改),且對受驗的碼唯讀(但可執行測試/CLI/GUI 來驗證)。
-- **紅線永遠停。** 部署/發佈、資料遷移/不可逆 schema、刪除/drop、金流、密鑰/權限、發布公開內容,一律
-  不自動執行——必須浮出給人核准。
-
-> **沒有 runner,skill 仍是那包純 skill。** 安裝 runner 只是加上外部驅動器,不會修改 skill、也不會反向
-> 依賴它。
-
-## 治理(dogfooding)
-
-本 repo 自身即受 ai-sdlc 治理。詳見 `docs/ai-guideline.md`、`docs/structure/*.md`、
-`docs/changes/CHG-*.md`、`docs/acceptance/ACC-*.md`。
+本 repo 以自己的規則開發:每個變更先在 [`docs/changes/`](docs/changes) 開 `CHG`,再由
+[`docs/acceptance/`](docs/acceptance) 的 `ACC` 帶證據收尾。
+[`tools/ledger_check.py`](tools/ledger_check.py) 在 CI 執行,缺欄位、沒有驗收就宣稱完成、或與實際做的
+事漂移,都會讓 build 失敗。

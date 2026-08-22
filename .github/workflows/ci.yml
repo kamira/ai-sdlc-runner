@@ -30,16 +30,13 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python-version: ["3.9", "3.13"]
     env:
-      # The skill's scripts emit UTF-8; without these, Windows raises a false-positive encoding error.
+      # The governance tables and work orders are UTF-8; without these, Windows raises a
+      # false-positive encoding error that looks like a real failure.
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
-      # The skill store is vendored in-repo, so the skill-cache tests can actually run instead of
-      # skipping. Unset, 7 tests silently skip.
-      AI_SDLC_SKILL_PATH: skills/v1.16.0
     steps:
-      # No `submodules:` key needed — there are none. `.gitmodules` declared an `ai-skills`
-      # submodule that was never wired up; CHG-20260822-02 deleted it (upstream archived 2026-08-04).
-      # The vendored `skills/` store is the only skill source and ships in the checkout.
+      # No `submodules:` key needed — there are none, and nothing is fetched at build time. The
+      # flow and the governance are both in this checkout, in source (CHG-20260823-01).
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -56,7 +53,7 @@ jobs:
         run: python -m pytest tests/ -q -rs
 
   doc-integrity:
-    name: doc-integrity (CHG/ACC + structure sync)
+    name: ledger (CHG/ACC + required fields)
     runs-on: ubuntu-latest
     env:
       PYTHONUTF8: "1"
@@ -71,32 +68,6 @@ jobs:
         with:
           python-version: "3.13"
 
-      # Stdlib-only, vendored in-repo: no install step needed.
+      # Stdlib-only and ours: no install step, and no skill to read it from.
       - name: Governance gate
-        run: python skills/v1.16.0/scripts/doc_integrity_check.py --repo .
-
-  elements:
-    name: elements (regeneration gate)
-    # Its own job, not a step inside another one, so the three states are legible from the checks
-    # list alone: a red here always means "the derived tree and the store disagree", never "some
-    # other lint failed". CHG-20260822-04 task 4.
-    runs-on: ubuntu-latest
-    env:
-      PYTHONUTF8: "1"
-      PYTHONIOENCODING: "utf-8"
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install
-        run: pip install -e .
-
-      # Exit codes are the contract: 0 match, 10 regenerable drift, 11 source missing. Both
-      # failures are hard; they are separate codes because they call for different actions —
-      # regenerate, versus recover the store the elements were derived from. The step prints the
-      # per-version verdict before exiting, so the log says which version and which files.
-      - name: Regeneration gate
-        run: runner elements --repo .
+        run: python tools/ledger_check.py --repo .

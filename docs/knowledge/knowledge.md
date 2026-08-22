@@ -10,18 +10,25 @@
 
 | id | tier | tags/scope | rule (one line) | status |
 |----|------|-----------|-----------------|--------|
-| KN-1 | pattern | contract / skill sourcing | `skills/` is the **only** skill source — a vendored `git archive` of the published skill's main HEAD, labelled by SKILL.md frontmatter, never copied from. The `ai-skills/` submodule fallback was deleted in CHG-20260822-02 (upstream archived 2026-08-04, succeeded by `skill-ai-sdlc-autopilot`). | active |
-| KN-2 | pattern | contract / version lock | Per-project `.sdlc-lock.json` locks major.minor; `runner.yaml` `contract_version` is a first-run default only; version bumps never touch existing locks; `migrate` is explicit & validating (patch=auto, minor/major=migrate-required), never silent auto-migrate. | active |
-| KN-3 | pattern | dashboard / TUI | Terminal-only stdlib `curses` with a numbered / non-TTY fallback; the vertical `render_snapshot` path is always preserved; panels are computed on real events and cached (no per-keystroke I/O); red-line gates still require explicit human approval. | active |
+| KN-1 | pattern | contract / skill sourcing | `skills/` is the **only** skill source — a vendored `git archive` of the published skill's main HEAD, labelled by SKILL.md frontmatter, never copied from. The `ai-skills/` submodule fallback was deleted in CHG-20260822-02 (upstream archived 2026-08-04, succeeded by `skill-ai-sdlc-autopilot`). | **superseded by CHG-20260823-01 — there is no store, and no skill** |
+| KN-2 | pattern | contract / version lock | Per-project `.sdlc-lock.json` locks major.minor; `runner.yaml` `contract_version` is a first-run default only; version bumps never touch existing locks; `migrate` is explicit & validating (patch=auto, minor/major=migrate-required), never silent auto-migrate. | **superseded by CHG-20260823-01 — no contract, no per-project lock** |
+| KN-3 | pattern | dashboard / TUI | Terminal-only stdlib `curses` with a numbered / non-TTY fallback; panels computed on real events and cached (no per-keystroke I/O); red-line gates still require explicit human approval. | **superseded by CHG-20260823-01 — the dashboard went with the four-stage path; only `tui`'s selector and high-risk confirmation remain** |
 | KN-4 | pattern | toolchain / handshake step 0 | `requirements-dev.txt` is a DERIVED, probe-facing view of `pyproject.toml`'s extras: **bare distribution names only** — the probe returns `NOT_RUN` (not PASS) for version ranges, `-e`/`-r` lines, URLs, extras and markers, so "adding the version floors back" silently disables the gate. | active |
-| KN-5 | pattern | node-engine / work order | A work order carries **exactly** the closed D5 field set and nothing else: no tool names, no allowlist, no skill-loading line, no session or prior-turn context, no model/dispatch settings. Bodies are never inlined — paths and anchors only — and a content element id never appears without the path and anchor it resolves to. Routing (which model answers) lives in the dispatcher, never in the order. | active |
+| KN-5 | pattern | node-engine / work order | A work order carries **exactly** the closed D5 field set and nothing else: no tool names, no allowlist, no skill-loading line, no session or prior-turn context, no model/dispatch settings. Bodies are never inlined — paths and anchors only — and a content element id never appears without the path and anchor it resolves to. Routing (which model answers) lives in the dispatcher, never in the order. | **still holds in substance; the order's fields changed with CHG-20260823-01** |
 | KN-6 | pattern | node-engine / idempotence | An operation may be an **effect** only if it leaves a probeable postcondition in the ledger, git or the forge; constructing one without a probe raises. Probes describe the **postcondition, not the action**, and read the world rather than any record the runner wrote. Unanswerable **raises** — never `False`. Nothing already true is re-applied, before or after the frontier. | active |
 | KN-7 | pattern | node-engine / sessions | Every **asking** node gets its own session: opened, asked once, closed in a `finally`; a factory that returns a session it already returned is refused. A multi-seat review is several asks, so each seat is its own session. The question is journalled **before** the session opens, so a dropped session costs the answer and not the question. | active |
+| KN-8 | pattern | governance / wiring | A mechanism is not built until something calls it. Three rounds here shipped a correct piece that nothing reached — an engine ignoring its own policy verdict, an `adjudicate` no caller invoked, a `PERMANENT_HALTS` list printed into every order and never checked — and each passed its own suite. The test that matters is the one that fails when the wire is cut. | active |
+| KN-9 | pattern | governance / vocabularies | A vocabulary that classifies must be **closed**: an unrecognised value is a failure, never a pass. The ledger lint knew only "built", so `accepted`, `merged`, `completed` and `完成` all sailed past it with no acceptance record. And read the **field**, not the prose around it — `draft — all 9 tasks built` is a draft. | active |
 
 <!-- Append DIR-n (user directives) / KN-n (observed patterns) as anchored sections below and add
      one INDEX row each; register any new tag in vocabulary.json first. -->
 
 ## KN-1 — Offline skill-store vendoring pattern
+
+> **Superseded by CHG-20260823-01.** There is no store and no skill: `skills/` and
+> `elements/` were deleted and nothing reads either. Kept as the record of why the
+> store existed and how it was pinned, which is what a later reader of the history
+> will need.
 *tags: contract · source: CHG-20260703-01, CHG-20260703-06, CHG-20260822-02, CHG-20260822-03 · tier: pattern*
 
 The runner sources the `ai-sdlc` skill **offline-first**. `skills/<version>/` is the PRIMARY store,
@@ -40,6 +47,10 @@ declaration. To use a skill checkout outside the store, pass `--skill-path` at i
 Adding a store version bumps `runner.yaml`'s `contract_version` default for *new* projects only.
 
 ## KN-2 — Per-project version-lock & migrate semantics
+
+> **Superseded by CHG-20260823-01.** There is no contract to lock and no per-project
+> lock file. The principle it protected — a version change is explicit and validating,
+> never silent — survives as the tighten-only rule in `policy.verdict`.
 *tags: contract · source: CHG-20260617-01, CHG-20260703-01, CHG-20260703-06 · tier: pattern*
 
 Version resolution is per governed project, not global. Each project carries its own
@@ -92,7 +103,13 @@ CI spans py3.9/3.13, so a pin would flip to `BLOCKED` on the next routine upgrad
 `>=6.0`/`>=7.0` — pip enforces those at install time. Still strictly more than `NOT_RUN`, which
 verified nothing.
 
-**Upstream fix still outstanding:** the probe should read `[project.optional-dependencies]` directly.
+**Still true, for a different reason (CHG-20260823-01).** The probe belongs to an entry handshake
+outside this repo, and this repo neither ships nor runs it any more. `requirements-dev.txt` is kept
+regardless, because the rule generalises: it is a derived, bare-names-only view of the pyproject
+extras, and `tests/test_requirements_dev_sync.py` still fails on any non-bare line or any drift. The
+edit that looks like an improvement is still the edit that breaks it.
+
+**Upstream fix, no longer ours:** the probe should read `[project.optional-dependencies]` directly.
 That belongs to **`kamira/skill-ai-sdlc-autopilot`** — successor to `ai-skills`, which was archived
 2026-08-04 — cloned locally as a sibling directory and still carrying the same unfixed probe. It is
 reachable but is a separate governance domain, and a fix there reaches this repo only once a fixed
@@ -180,3 +197,55 @@ The question is journalled **before** the session opens and marked answered afte
 session costs the answer and not the question; what is pending is re-askable verbatim. Reconstructing
 a question later risks asking a subtly different one, and a subtly different question is how a rerun
 quietly stops being a rerun.
+
+## KN-8 — A mechanism is not built until something calls it
+*tags: governance · source: CHG-20260822-04, CHG-20260823-01 · tier: pattern*
+
+This repo's most expensive recurring defect is not a wrong mechanism. It is a **right mechanism that
+nothing reaches**, shipped with a green suite:
+
+| Round | What was built | What actually called it |
+|---|---|---|
+| CHG-20260822-04 | the gate matrix, resolved per node | nothing — the engine walked past its own verdict |
+| CHG-20260823-01 | `policy.adjudicate`, veto and majority | nothing — the seats were asked and their answers routed nowhere |
+| CHG-20260823-01 | `policy.PERMANENT_HALTS` | nothing — all six were printed into every work order and never checked |
+| CHG-20260823-01 | `effects` / `probes` / `ship` | nothing — three modules with tests and no importer |
+
+Every one of them passed the tests written alongside it, because those tests exercised the mechanism
+directly. That is the trap: a unit test proves the piece works, and says nothing about whether the
+system consults it. All four were found by **independent verifiers**, not by the implementer and not
+by CI.
+
+Three habits follow, and they are cheap:
+
+1. **Write the test that fails when the wire is cut.** Not "adjudicate returns fail on a majority
+   against" — *"a majority against does not reach QA"*. The second one dies if the engine stops
+   calling it; the first does not.
+2. **Grep for the caller before ticking the box.** A symbol whose only references are its definition
+   and its own test file is not wired in, whatever the done-when says.
+3. **A comment describing behaviour is a claim.** `record_module`'s note said "three ordered
+   effects" while the node did nothing at all. Either make it true or delete the sentence.
+
+## KN-9 — Classifying vocabularies must be closed, and read the field not the prose
+*tags: governance · source: CHG-20260823-01 · tier: pattern*
+
+Two failures with one shape, both in the ledger lint, both silent:
+
+**Open vocabulary.** The lint knew four words for "finished" — `built`, `已建置`, `implemented`,
+`已實作` — and treated everything else as not-finished. So a change whose status said `accepted`,
+`merged`, `completed` or `完成` passed with no acceptance record at all: a false green written in one
+word, by someone doing nothing wrong. The fix is not more words. It is **closing the vocabulary**:
+list what means finished, list what means unfinished, and make anything else a failure that names
+its own remedy ("add the word to one of these two lists"). A classifier's default branch is where its
+escapes live.
+
+**Reading prose as data.** The same lint originally scanned whole documents for status words, so
+writing *about* acceptance in a paragraph changed the document's classification — it happened three
+times in one session, once inside the sentence explaining the first time. Narrowing it to the
+`## Status` section was not enough: `**草稿 / draft — all 9 tasks built.**` still read as both. The
+status is the **head** of that line; everything after the first dash, bracket or full stop is
+commentary, and commentary does not decide anything.
+
+Generalised: when a program classifies on text a person wrote, pin down exactly which span is the
+datum, make the set of legal values closed, and treat both "unknown value" and "two values at once"
+as errors that name the document.

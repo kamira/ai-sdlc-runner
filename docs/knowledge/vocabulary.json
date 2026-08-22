@@ -8,7 +8,17 @@
     "CHG",
     "ACC",
     "doc-integrity",
-    "process"
+    "process",
+    "wiring",
+    "接線",
+    "vocabulary",
+    "詞彙",
+    "classifier",
+    "adjudicate",
+    "審議",
+    "policy",
+    "false-green",
+    "假綠燈"
   ],
   "contract": [
     "合約",
@@ -40,12 +50,18 @@
     "節點引擎",
     "work order",
     "工單",
-    "dispatch element",
     "node graph",
     "session",
     "probe",
     "effect",
     "idempotence",
-    "elements"
+    "flow",
+    "流程圖",
+    "node",
+    "節點",
+    "seat",
+    "審議席",
+    "gate phase",
+    "answer_decides"
   ]
 }

@@ -1,115 +1,84 @@
 # Logical Structure
 
-Answers: FR-1..FR-14. Describes layers, responsibilities, and one-way dependencies.
+Answers: FR-1 … FR-17. Layers, responsibilities, and one-way dependencies.
 
-## Layers / modules
-| Layer/Module | Responsibility | Depends on |
-|--------------|----------------|------------|
-| `cli` | Parse `run`/`migrate`/`status`/`menu`/…; bare `runner` on a TTY opens the resident dashboard (off-TTY: the menu); `runner <project>` pre-opens it; load config; dispatch | `contract`, `orchestrator`, `state`, `tui`, `dashboard` |
-| `tui` | Interactive menu helper: arrow-key list (stdlib curses) with numbered fallback; collects a choice only. Also exposes an embeddable selector (`_curses_select_on`, drawn on a caller-owned `stdscr`) and a pure option-cycle core (`cycle_index`) for reuse inside another curses screen | (stdlib only) |
-| `dashboard` | Multi-panel view (狀態/執行日誌/檢驗結果/agent log); consumes orchestrator events + reads state/ACC/git; curses viewer + text snapshot (read-only, unchanged). Also: the **resident interactive console** (`ResidentApp`/`run_resident`, CHG-20260703-03) — a persistent, always-on control console with a 2-col bounded-height layout, a command parser (`/open`, `/run`, plain-text task, …), and an interactive halt-gate approver (arrow-key `[Approve/Reject]` via `tui`'s embeddable selector) | `contract`, `state` (read), `orchestrator` (drives runs via its existing `approver`/`on_event` hooks), `tui` (embeddable selector), git (stdlib only) |
-| `orchestrator` | Drive the four stages sequentially; per-stage halt gate; shallow fan-out in implement; checkpoint at each boundary | `contract`, `gates`, `agents`, `state` |
-| `executors` | Pluggable agent backend (stub / command-subscription / api); runs an `AgentSpec` (honoring `workdir`), returns output | (stdlib `urllib`, `subprocess`); injected into `orchestrator` |
-| `workspace` | Multi-project workspace: an authority (main) + consumer repos; persisted at the authority; validate/save/load | (stdlib) |
-| `structure_scan` | Structure-analysis pass: scan each repo, scaffold the four structures, set up authority `docs/contracts` + consumer `docs/authority.md` pointers | `workspace` |
-| `contract` | Read skill version (from file), compute major.minor key, resolve/write per-project lock, validating migrate, **detect updates** at the local skill location | (reads skill SKILL.md + git tags) |
-| `agents` | Parse the skill's role table; spawn agents with role-scoped tool allowlists | (reads skill agent-hierarchy.md) |
-| `skillstore` | Resolve the skill from the local offline store (`skills/v*`) by project lock; list/detect versions | `contract` (reads store SKILL.md) |
-| `gates` | Subprocess-call the skill's `halt_gate.py` / `cross_repo_check.py`; branch on exit code | (calls skill scripts) |
-| `state` | Load/save `state.json`; support `--resume` | — |
-| `config (runner.yaml)` | Hold runtime-variable limits & skill path | — |
-| `decompose` | Split a store version's references at their stable `##`/`###` anchors; provenance per element (generator, source path, source sha256, emitted sha256) | (reads `skills/v*/references`) |
-| `dispatch` | Derive checkpoint + role-loadout + situational elements from the shipped policy; `emit_all`; the three-state regeneration gate | `decompose`, `contract`, `skillstore` |
-| `workorder` | Render one node's work order: the closed D5 field set, capabilities from the shipped role table, no harness-specific field | `agents`, `decompose` |
-| `graph` | The node graph: the skill's shipped `## State machine` written as data, each node pinned to a literal phrase of it | (reads the emitted element tree) |
-| `effects` | Ordered effects, each admitted only if probeable; resume at the first unmet postcondition; nothing already true is re-applied | — |
-| `probes` | Postconditions read out of the world — git, the forge, the ledger. Unanswerable raises rather than returning "not done" | (calls `git`, a forge command; reads `docs/`) |
-| `ship` | The ordered ship sequence (intent → branch → commit → push → PR), each effect paired with its probe | `effects`, `probes` |
-| `engine` | Walk the graph behind an opt-in flag: one session per ask (opened, asked once, closed), the question journalled before it is asked, seats resolved against the shipped floor | `graph`, `workorder` |
+**CHG-20260823-01 rewrote this file rather than amending it.** The previous version described
+nineteen modules, twelve of which no longer exist: they were there to read a skill, call its scripts,
+lock a version against it, or derive artifacts from it. What is left is what the runner is.
+
+## Modules
+
+| Module | Responsibility | Depends on |
+|--------|----------------|------------|
+| `policy` | **The governance.** Five roles with capability flags; ten gates × three risk grades; the six permanent halts and the words that recognise them; the review seats and the rule that adjudicates their verdicts. Every value has its reason written beside it | — |
+| `graph` | **The flow.** 23 nodes, one kind of work each, with the module loop, the bounded retry and the feedback edge back to PM. `validate()` asserts it against `policy` | `policy` |
+| `engine` | Walks the flow: consults the gate, opens one session per ask and closes it, journals the question before asking, adjudicates the seats, routes on the answers, runs each node's effects | `graph`, `policy`, `workorder`, `effects` |
+| `workorder` | Renders one node's order — the closed schema, capabilities from `policy`, and nothing about the harness | `policy` |
+| `effects` | Ordered effects, each admitted only if probeable. Resume at the first unmet postcondition; nothing already true is re-applied; everything applied is re-probed | — |
+| `probes` | Postconditions read out of the world — git, the forge, the ledger. Unanswerable **raises** rather than returning "not done" | `git`, a forge command, `docs/` |
+| `ship` | The ordered ship sequence: intent → branch → commit → push → PR, each effect paired with its probe | `effects`, `probes` |
+| `cli` | `flow` / `policy` / `run`; loads the config; builds the session factory (one process per ask) and routes named seats to different commands | `engine`, `graph`, `policy`, `ship`, `tui` |
+| `tui` | The interactive selector, and the high-risk-mode confirmation that fronts the seat-floor bypass | stdlib only |
+| `tools/ledger_check` | This repo's own ledger lint: required fields, and a closed vocabulary of status words | stdlib only |
+
+Two modules were the whole of the previous design and are gone with the dependency: `contract`
+(version locking) and `gates` (subprocess to a skill script). Their responsibilities are now inside
+`policy`, which is a much shorter answer than either.
 
 ## Main flows
-1. **`runner run <project>`**: load config → `contract.resolve_contract` (lock gate; mismatch → tell user to migrate) → probe runtime caps → `state` load (`--resume`) → orchestrator runs stage 1..4, each calling `gates.check_halt`; implement stage spawns shallow I1.x; acceptance spawns independent V1 → checkpoint per stage → `before_merge_or_release` gate before delivery.
-2. **`runner migrate <project> --to <ver>`**: `contract.migrate` re-reads ALL docs/CHG/ACC/structure under the new contract; all parse → write new lock; any fail → print incompatibility list, keep old lock.
-3. **`runner status <project>`**: read `.sdlc-lock.json` + `state.json`; report locked contract, current stage, completed items, and a best-effort skill-update line.
-5. **`runner elements --repo .`**: re-derive every store version and compare with the committed `elements/` tree; three states with distinct exit codes — 0 match, 10 regenerable drift, 11 source missing. Both failures are hard; they are separate codes because they call for different actions.
-6. **`runner run <project> --engine --plan <file>`** *(opt-in, CHG-20260822-04)*: **the node loop that replaces the four stages.** Walk the shipped graph from `handshake`; at each asking node render a work order and dispatch it in **its own session, closed straight after**; write each question to the ask journal *before* asking it; resolve branches from the plan (a decision may be a sequence, consumed per visit, because the shipped per-task loop needs "task, task, none"); stop hard — naming the node or the role — where nothing may be guessed. The four-stage path in flow 1 is untouched until the flag's default flips, which is a separate later decision.
-7. **`runner check [project]`**: store-aware — lists the offline store versions and compares the newest to the project lock (or config-expected); classifies patch (auto) / minor / major (→ migrate) / older. Read-only; never auto-migrates.
 
-### Multi-project workspace (CHG-08)
-`runner workspace` registers an **authority (main)** project + consumer repos and persists a manifest at
-the authority (`.sdlc-workspace.json`). `runner analyze` runs a structure-analysis pass across the
-workspace: it scans each repo and scaffolds `docs/structure/{directory,logical,design,data}.md` (the
-`directory` doc from the real tree; the others seeded for the A1 stage), and for a multi-project
-workspace wires the skill's cross-repo model — authority `docs/contracts/VERSION` + each consumer's
-`docs/authority.md` pointer. `runner run <authority>` then gates on `cross_repo_check.py` (drift → halt)
-before the four-stage loop; the loop's agents carry a `workdir` so a CLI backend runs inside the target
-repo. Single-project use is unchanged (no workspace = the existing behavior).
+### `runner flow` and `runner policy`
 
-### Execution backend (CHG-06)
-The agent-execution backend is **runtime-isolated and platform-agnostic** (§1.7). `executors.from_config`
-builds one of: `stub` (offline/dry-run, default), `command` (any local CLI / subscription agent; prompt
-via stdin or arg), or `api` (HTTP; `anthropic`/`openai`/`generic` adapters; key from an env var). The CLI
-injects the chosen backend's `run` into `orchestrator.run(agent_executor=…)`. The backend does **not**
-affect gating — halt gates and red-line stops apply identically whichever backend runs the agents.
+Print the flow and the governance without running anything. Read before doing — the fastest check
+that what the runner will do is what you meant.
 
-The `command` backend additionally supports a generic `extra_args`/`extra_env` passthrough
-(CHG-20260703-02): `extra_args` (list) is appended to `argv`, `extra_env` (dict) is merged into the
-subprocess environment on top of what's inherited. Both default empty (no behavior change). This is
-what lets `command` drive a `claude -p` agent constrained to only the ai-sdlc skill via
-`config/pure-ai-sdlc.settings.json`, without the runner hardcoding any Claude-Code-specific flags.
-`api`/`stub` are unaffected — the fields exist only on `CommandExecutor`.
+### `runner run --plan <file>`
 
-### Skill resolution (CHG-05)
-The skill source is resolved **offline** in this order: explicit `--skill-path` → the local store
-(`skill_store`) version matching the project lock major.minor (or config-expected on first run, else
-the latest) → the fallback `skill_path` (the optional, not-pulled-by-default submodule). After a
-`migrate` raises the lock, the next run auto-selects the new version directory. The runner never
-fetches the skill online.
+The one flow the runner drives, and the loop the whole design is about:
 
-4. **`runner` (no subcommand) or `runner menu`**: `tui.select` shows an arrow-key list (curses) or a
-   numbered fallback; the chosen action prompts for project/version/risk and dispatches to the
-   existing `run`/`migrate`/`status` handlers. The menu adds no governance behavior — a "Run" from it
-   goes through the same orchestrator and still halts at `before_merge_or_release`.
-5. **`runner dashboard <project>` / `run --dashboard`**: the orchestrator emits events (stage, gate,
-   agent dispatch/result, checkpoint, halt) to an optional `on_event` sink; `dashboard.DashboardModel`
-   accumulates them and also reads `state.json`/`.sdlc-lock.json`/`docs/acceptance/`/git to render four
-   panels (狀態 = branch + progress + status; 執行日誌; 檢驗結果; agent log, merged or tabbed). Read-only:
-   the dashboard cannot alter the run; a dashboard-driven run still halts at the red-line gate.
+1. **intake** — the user's instruction arrives. Nobody is asked anything yet.
+2. **PM plans, PM confirms.** The confirmation node *asks* PM and branches on their answer, then
+   consults `plan_confirmed`. Two nodes, because planning and confirming are two kinds of work, and
+   the second is the cheapest place a person can still say no.
+3. **The lead judges feasibility and risk** — before anyone is dispatched, which is why the lead is
+   asked first. Its gate is consulted **before** the work: at high risk the lead is never asked,
+   because that is the point of stopping there.
+4. **PM signs off**, and the module loop opens.
+5. **Per module**: an engineer builds one small module → verifies its own work → the lead reviews
+   work it did not write. Pass records the module and returns to the loop; fail takes **one** fix
+   pass and **one** re-review, and a second failure halts. Never repeat-until-green.
+6. **The panel cross-checks the whole change.** One or many seats, each in its own session, each
+   blind to the others. `policy.adjudicate` turns their verdicts into one branch: veto first, then
+   majority, and a tie does not pass. Failing returns to the module loop with the panel's reasons.
+7. **QA tests and verifies** the whole change, then **acceptance**. Both gate *after* the work — a
+   review that halts before it runs is a review a high-risk change can never get.
+8. **PR, then merge.** Merge is gated **before**: a one-way door has to be stopped in front of, not
+   behind, so it asks at every risk grade.
+9. **Close out, then feedback returns to PM.** The flow closes rather than ends.
 
-### Resident interactive dashboard (CHG-20260703-03)
-6. **bare `runner` on a TTY, or `runner <project>`**: `dashboard.run_resident` opens a **persistent**
-   control console — empty start (no project, empty panels), never exits except on `/quit`. Its input
-   box is parsed by the pure `dashboard.parse_command` (`/open <path>` sets the *current project*;
-   plain text or `/run [text]` starts a run on it, recording the text into the exec feed; `/status`,
-   `/check`, `/menu`/F2, `/help`, `/quit`). The input box reads **wide characters** — any language,
-   incl. CJK — via `stdscr.get_wch()` (locale set once with `locale.setlocale(LC_ALL, "")`) routed
-   through the pure `dashboard.apply_key` helper, rather than the old byte-at-a-time `getch()` path
-   (CHG-20260703-04). Frames are built by the pure `dashboard.render_layout`: a
-   2-col bounded-height layout — Status | Verification always fully present on the top row; Execution
-   log | Agent log on the bottom row, each truncated to its last N lines (N derived from terminal
-   height) so the top row is never pushed off. A run started from the input box calls the **same**
-   `orchestrator.run` as every other entry point, passing an `on_event` sink that feeds the model (live
-   redraw) and an interactive `approver`: at a HALT gate the console presents `[Approve / Reject]`
-   (arrow-key, via `tui`'s embeddable `_curses_select_on` drawn on the app's own screen — never a
-   nested `tui.select()`/`curses.wrapper`) and blocks for the human answer, mapped to a boolean by the
-   pure `dashboard.approve_decision` (an unresolved/cancelled answer maps to reject, never to an
-   implicit approve). Single-threaded by design: the run is driven synchronously from the app. v1's
-   Q/A scope is intentionally limited to (a) task/requirement input and (b) HALT-gate approve/reject.
-   Off-TTY (pipes/CI/`AI_SDLC_NO_CURSES`), bare `runner` is unchanged (the existing menu / numbered
-   fallback) — no subcommand's behavior changes, and the read-only `dashboard`/`run --dashboard` paths
-   above are untouched.
+Cutting across all of it:
+
+- **The gate**, resolved from `policy` and either stopping or not. A stop is a pause with a way back:
+  `--confirm <gate>` continues past it and the confirmation is recorded.
+- **The permanent halts**, checked against what each node says it is about to do, before dispatch,
+  and relaxed by nothing.
+- **The ask journal**, written before each session opens.
+- **The effects**, run at the nodes that have them, probed before and after.
 
 ## Dependency direction
-One-directional: `cli → {orchestrator, tui, dashboard, engine}`; `orchestrator → {contract, gates, agents, state}`;
-`engine → {graph, workorder}`; `graph → (the emitted element tree)`; `workorder → {agents, decompose}`;
-`dispatch → {decompose, contract, skillstore}`; `ship → {effects, probes}`. The derived-artifact chain runs
-one way and only one way: **store → elements → work order → ask**. Nothing downstream writes back — an
-element is never edited, a work order never carries a prior answer, and a probe never reads a record the
-runner wrote for its own benefit. That is what lets any node be re-asked from a cold start;
-`dashboard → {contract, state}` (read-only) + git + `orchestrator` (the resident app drives runs via its
-existing `approver`/`on_event` hooks) + `tui` (its embeddable selector, not `tui.select()`). `tui`/
-`dashboard` add no third-party dependency. The orchestrator emits events to `dashboard` via an optional
-callback — `dashboard` never calls back into the orchestrator's control flow, and the resident app
-supplies no new governance: halt decisions still come from `gates`/`halt_gate.py` unchanged. The runner
-depends on the skill; **the skill never depends on the runner**. No module re-implements another's
-logic; governance truth flows from the skill outward (read/call), never duplicated inward.
+
+```
+cli → engine → {graph, workorder, effects} → policy
+ship → {effects, probes}
+```
+
+One way, and the ends are worth naming:
+
+- **`policy` depends on nothing.** It is the bottom of the stack, and it has to be: a governance
+  module that imports the thing it governs can be argued into agreeing with it.
+- **Nothing downstream writes back.** A work order never carries a prior answer; a probe never reads
+  a record the runner wrote for its own benefit. That is what lets any node be re-asked from a cold
+  start.
+- **Nothing points outside this repository.** The previous version of this section ended "the runner
+  depends on the skill; the skill never depends on the runner". There is no skill, so the sentence
+  has no second half — the dependency graph closes inside `src/`.
