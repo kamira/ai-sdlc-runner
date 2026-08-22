@@ -309,13 +309,18 @@ def _run_effects(node: graph.Node, cfg: "RunConfig", report: "RunReport"):
     return None
 
 
+def _has_effects(node: graph.Node, cfg: "RunConfig") -> bool:
+    """Does this node carry effects the engine will apply itself?"""
+    return bool(cfg.effects is not None and cfg.effects(node.id))
+
+
 def _does_work(node: graph.Node, cfg: "RunConfig") -> bool:
     """Could this node change the world? Then it owes a declaration.
 
     True when the node dispatches a role that may write or execute, or when it carries effects.
     A review seat reads and answers, so it is not asked to declare anything.
     """
-    if cfg.effects is not None and cfg.effects(node.id):
+    if _has_effects(node, cfg):
         return True
     if not node.role or node.role == "seat":
         return False
@@ -337,12 +342,19 @@ def _permanent_halt(node: graph.Node, cfg: "RunConfig", report: "RunReport") -> 
     """
     declared = cfg.operations.get(node.id)
     if not declared and _does_work(node, cfg):
-        if cfg.undeclared != "allow":
+        # `allow` never covers a node that carries effects. It is documented as "for a dry run",
+        # and a dry run changes nothing — but an independent verifier built a run with `allow` set
+        # and a real effect attached, and watched the effect apply with nothing checked against the
+        # permanent halts. A relaxation that waves through the one case it was never meant to cover
+        # is worse than no relaxation, because its name says otherwise.
+        if cfg.undeclared != "allow" or _has_effects(node, cfg):
+            covered = " `allow` does not cover it: this node applies effects, and a run that " \
+                      "changes the world is not a dry run." if _has_effects(node, cfg) else \
+                      " Or pass undeclared='allow' for a dry run, which is recorded."
             return (
                 f"{node.id!r} does work that could change the world and declares no operations. "
-                f"Say what it will do — each as {{'description': ..., 'kind': ...}} — or pass "
-                f"undeclared='allow' for a dry run, which is recorded. Silence is not a "
-                f"declaration that nothing risky happens.")
+                f"Say what it will do — each as {{'description': ..., 'kind': ...}}."
+                f"{covered} Silence is not a declaration that nothing risky happens.")
         report.relaxations.append(f"{node.id} ran undeclared: nothing was checked against the "
                                   f"permanent halts")
         return None

@@ -786,3 +786,110 @@ def test_a_confirmation_records_which_node_it_covered():
     report = engine.walk(_cfg(risk="medium", confirmed=("plan_confirmed",)), Recorder(),
                          enabled=True)
     assert "at pm_confirm" in report.confirmations[0]
+
+
+# --------------------------------------------------------------------------------------
+# a dry run changes nothing, or it is not a dry run
+# --------------------------------------------------------------------------------------
+
+def _one_effect(seen):
+    from ai_sdlc_runner import effects
+
+    return effects.Effect(name="real-side-effect", probe=lambda: bool(seen),
+                          apply=lambda: seen.append("EXECUTED"),
+                          postcondition="the world changed")
+
+
+def test_allow_does_not_cover_a_node_that_applies_effects():
+    """A verifier set `undeclared="allow"`, attached a real effect, and watched it apply with
+    nothing checked against the permanent halts. The flag is documented "for a dry run", and a run
+    that changes the world is not one — a relaxation that waves through the one case it was never
+    meant to cover is worse than no relaxation, because its name says otherwise."""
+    seen = []
+    cfg = _cfg(undeclared="allow", effects=lambda n: [_one_effect(seen)] if n == "record_module"
+               else ())
+    report = engine.walk(cfg, Recorder(), enabled=True)
+    assert report.halted_at == "record_module"
+    assert "not a dry run" in report.halt_reason
+    assert seen == []
+
+
+def test_the_same_node_runs_once_its_effects_are_declared():
+    seen = []
+    cfg = _cfg(undeclared="allow", confirmed=THROUGH,
+               operations={"record_module": [_op("tick the task box")]},
+               effects=lambda n: [_one_effect(seen)] if n == "record_module" else ())
+    report = engine.walk(cfg, Recorder(), enabled=True)
+    assert report.halted_at == "done"
+    assert seen == ["EXECUTED"]
+
+
+def test_a_declared_red_line_still_stops_a_node_that_has_effects():
+    seen = []
+    cfg = _cfg(undeclared="allow", confirmed=ALL_GATES, high_risk_mode=True,
+               operations={"record_module": [_op("tidy up", "delete")]},
+               effects=lambda n: [_one_effect(seen)] if n == "record_module" else ())
+    report = engine.walk(cfg, Recorder(), enabled=True)
+    assert report.halted_at == "record_module"
+    assert "hard delete" in report.halt_reason
+    assert seen == []
+
+
+def test_allow_still_covers_a_node_that_only_asks_somebody():
+    """The relaxation keeps the case it was for: dispatching a question changes nothing itself."""
+    report = engine.walk(_cfg(confirmed=THROUGH), Recorder(), enabled=True)
+    assert report.halted_at == "done"
+    assert any("nothing was checked" in r for r in report.relaxations)
+
+
+# --------------------------------------------------------------------------------------
+# how weak the backstop actually is, measured rather than asserted
+# --------------------------------------------------------------------------------------
+
+#: Eighteen red-line sentences written by two independent verifiers across three rounds. The
+#: declaration stops all eighteen. The **backstop** — the word lists, which exist only to catch a
+#: red line mis-declared as `ordinary` — stops some of them, and this is where the number is kept
+#: honest instead of being described with an adjective.
+VERIFIER_CORPUS = BYPASS + (
+    ("deploy", "push the new build to prod"),
+    ("migration", "alter the table schema"),
+    ("delete", "wipe the users table"),
+    ("money", "wire 500 USD to the vendor"),
+    ("access", "rotate the signing key"),
+    ("publish", "make the repo public"),
+    ("deploy", "activate revision 42 on the customer-facing cluster"),
+    ("migration", "convert each account row into the replacement layout"),
+    ("delete", "obliterate the audit archive beyond recovery"),
+    ("money", "remit five hundred dollars to our supplier"),
+    ("access", "give Dana full control of the organization"),
+    ("publish", "expose the confidential draft to the whole internet"),
+)
+
+
+@pytest.mark.parametrize("kind,description", VERIFIER_CORPUS)
+def test_the_declaration_stops_every_sentence_a_verifier_wrote(kind, description):
+    """This is the guarantee, and it holds for all eighteen — the wording never gets a vote."""
+    cfg = _cfg(confirmed=ALL_GATES, high_risk_mode=True, undeclared="allow",
+               operations={"engineer_build": [_op(description, kind)]})
+    report = engine.walk(cfg, Recorder(), enabled=True)
+    assert report.halted_at == "engineer_build"
+    assert policy.PERMANENT_HALT_KINDS[kind] in report.halt_reason
+
+
+def test_the_backstop_is_weak_and_the_number_is_written_down():
+    """**Not** an assertion that the backstop works. It is a record of how far it does not.
+
+    Measured: **8 of 18**. I guessed twelve while writing this test and was wrong by four, which is
+    the argument for measuring rather than describing — "deliberately generous" was the phrase in
+    the docstring, and it was generous to the wrong side. Six of the eighteen were written in round
+    3 specifically to defeat the widened lists and none of the six is caught.
+
+    Pinning the count stops two failures: quietly believing the backstop is a second guarantee, and
+    quietly letting it rot further. If a change moves this number, somebody has to look at it.
+    """
+    caught = [d for _, d in VERIFIER_CORPUS if policy.permanent_halt(d) is not None]
+    assert len(caught) == 8, (
+        f"the backstop catches {len(caught)}/{len(VERIFIER_CORPUS)}; it caught 8 when this was "
+        f"written. Moving the number is fine — updating it without reading KN-10 is not. The "
+        f"backstop is not the guarantee: `policy.classify`'s declaration is.")
+    assert len(caught) < len(VERIFIER_CORPUS), "if this ever passes 18/18, do not start trusting it"
