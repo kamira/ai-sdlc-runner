@@ -98,13 +98,22 @@ def test_a_partial_state_is_never_read_as_never_started():
     assert "chg" not in outcome.applied and "branch" not in outcome.applied
 
 
-def test_a_later_met_postcondition_does_not_let_an_earlier_one_be_skipped():
-    """Order is causal. A downstream postcondition that happens to be true — a stale branch from an
-    abandoned attempt, say — must not make the engine think the upstream effect can be skipped."""
+def test_a_later_met_postcondition_does_not_move_the_frontier_and_is_not_redone():
+    """Order is causal, so a downstream postcondition that happens to be true — the residue of an
+    abandoned attempt — must not make the engine think the upstream effect can be skipped.
+
+    It must equally **not** be applied again. Re-running an effect whose postcondition already holds
+    is a duplicate side effect: `gh pr create` against an existing PR is not idempotent in the world,
+    only in a test double. The review panel caught this — the first version of `run` applied
+    everything past the frontier unconditionally, and this test asserted that behaviour, so the test
+    was hiding the hazard rather than catching it. The state is reported as out of order instead:
+    neither silently redone nor silently accepted."""
     world = {"pr": True}
     outcome = effects.run(_seq(world))
     assert outcome.frontier == "chg"
-    assert outcome.applied == ["chg", "branch", "push", "pr"]
+    assert outcome.applied == ["chg", "branch", "push"]
+    assert "pr" not in outcome.applied
+    assert outcome.out_of_order == ["pr"]
 
 
 def test_find_frontier_short_circuits_at_the_first_unmet_probe():
@@ -162,4 +171,18 @@ def test_outcome_serialises_for_a_log():
         "frontier": "pr",
         "already_met": ["chg", "branch", "push"],
         "applied": ["pr"],
+        "out_of_order": [],
     }
+
+
+def test_an_effect_already_true_is_never_applied_even_far_past_the_frontier():
+    """The general form of the defect: nothing already true is ever applied, at any position."""
+    applied = []
+    world = {"chg": True, "pr": True}
+    seq = _seq(world)
+    seq = [effects.Effect(name=e.name, probe=e.probe,
+                          apply=(lambda e=e: (applied.append(e.name), e.apply())[1]),
+                          postcondition=e.postcondition) for e in seq]
+    outcome = effects.run(seq)
+    assert applied == ["branch", "push"]
+    assert outcome.out_of_order == ["pr"]

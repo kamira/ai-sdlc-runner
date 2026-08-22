@@ -407,3 +407,35 @@ task 6 為何要新的確認關卡:`Autonomy: high` 對它再次生效——它*
 出貨政策有風險分級的席數下限:高風險**六席全開且強制**、中風險**至少五席**、低風險不開;
 決策不少於 5 席、驗證不少於 3 席。而全案原則是「只准加嚴」。
 所以使用者設定**可以往上加席,不得低於該風險等級的出貨下限**——除非使用者另行指示。
+
+### 席數下限的裁決(使用者,2026-08-22)
+
+**預設有強制下限**(依出貨政策:高風險六席全開、中風險至少五席、決策不少於 5 席、驗證不少於 3 席),
+**但允許使用者開啟「高風險模式」來規避這個限制,在 GUI 上設定。**
+
+這是對出貨政策的**放寬**,而 halt policy 規定放寬需人預先核准——使用者就是那個人,已核可。
+實作要點,比照出貨對 `--allow-no-ci` / `--allow-untested` 的處置
+(「prints a warning and is written to the handshake file」):
+
+- 預設路徑強制下限,不可繞過。
+- 高風險模式是**顯式開關**,在 GUI(`tui.py` / `dashboard.py`)設定,不是設定檔裡一個安靜的欄位。
+- **開啟這件事本身要寫進帳本**(worklog + 該次 run 的紀錄),含當時的風險等級與實際席數。
+  沒有留痕的繞過正是本 repo 反覆抓到的那一類。
+
+### 審議席 phase 1:codex 回了**兩票否決**,兩票都成立,已照收
+
+1. **副作用缺陷席 — 否決(真 bug)**:`effects.run` 找到 frontier 後,對其後所有 effect
+   **無條件 apply**,不再各自探測。真實世界會重複副作用(`gh pr create` 對已存在的 PR)。
+   更糟的是**我自己的測試 `test_a_later_met_postcondition_...` 正是在斷言這個行為**——
+   測試在掩護風險而不是抓它。而且它與 `effects.run` 自己的 docstring 直接矛盾。
+   **已修**:任何 postcondition 已為真的 effect 一律不再 apply(frontier 前後都是);
+   frontier 之後卻已為真的,列入新的 `out_of_order` 回報——不靜默重做、也不靜默放行。
+   新增一條一般化測試(已為真的 effect 在任何位置都不被 apply)。
+2. **測試強度席 — 否決(範圍)**:task 6 要交付的是 **node engine**,目前只有圖資料 +
+   靜態 `validate()` + 獨立的 effect helper。沒有節點走訪、沒有 branch/loop 執行、
+   沒有 work-order 接線、沒有 opt-in flag;而且硬停測試只直接呼叫 `capabilities_for`,
+   **沒有走圖派發**,所以沒證明執行時真的硬停。`Effect` 也還沒落實 D6.1 的 ledger-first。
+   **照收:引擎確實還沒做。**
+
+註:codex 無法執行測試(唯讀沙箱沒有可用的 temporary directory,pytest 收集前即停),
+判定依原始碼與測試逐項審讀。這不減損上述兩項——第 1 項是讀 `run()` 就看得出來的。

@@ -76,12 +76,16 @@ class EffectOutcome:
     frontier: Optional[str] = None            # first effect whose probe was unmet, if any
     already_met: List[str] = field(default_factory=list)
     applied: List[str] = field(default_factory=list)
+    #: Effects found already true *after* the frontier — the world is not in causal order. Usually
+    #: the residue of an abandoned attempt. Neither redone nor waved through: surfaced.
+    out_of_order: List[str] = field(default_factory=list)
 
     def as_dict(self) -> Dict[str, object]:
         return {
             "frontier": self.frontier,
             "already_met": list(self.already_met),
             "applied": list(self.applied),
+            "out_of_order": list(self.out_of_order),
         }
 
 
@@ -102,11 +106,16 @@ def find_frontier(effects: Sequence[Effect]) -> Optional[int]:
 def run(effects: Sequence[Effect], dry_run: bool = False) -> EffectOutcome:
     """Bring the sequence to completion from wherever it actually is.
 
-    Every effect before the frontier is left alone — it is already done, and re-running it is at best
-    wasted work and at worst a duplicate side effect. From the frontier onward each effect is applied
-    and then **re-probed**: an effect that runs without establishing its own postcondition is a bug
-    in that effect, and failing loudly here is what stops the engine from marching past a step that
-    silently did nothing.
+    No effect whose postcondition is already true is ever applied — before the frontier or after it.
+    Re-running one is at best wasted work and at worst a **duplicate side effect**, which is the
+    accident D6 exists to prevent; "resume from the frontier" says where to start looking, not that
+    everything past it may be redone blindly. An effect found true *after* the frontier is reported
+    in ``out_of_order``: the world is not in causal order, usually because an earlier attempt was
+    abandoned, and that is worth a human's attention rather than a silent redo or a silent pass.
+
+    Each effect that *is* applied is then **re-probed**: one that runs without establishing its own
+    postcondition is a bug in that effect, and failing loudly is what stops the engine from marching
+    past a step that silently did nothing.
 
     ``dry_run`` probes and reports without applying, which is how a caller inspects the frontier
     before deciding to act.
@@ -123,6 +132,17 @@ def run(effects: Sequence[Effect], dry_run: bool = False) -> EffectOutcome:
         return outcome
 
     for effect in effects[start:]:
+        # Re-probe each one rather than applying everything past the frontier blindly. An effect
+        # whose postcondition is *already* true must not be applied again: `gh pr create` against
+        # an existing PR is a duplicate side effect, and "resume from the frontier" was never a
+        # licence to redo work that is demonstrably done.
+        if effect.probe():
+            # Met, but something earlier was not — the world is out of causal order, which usually
+            # means an abandoned earlier attempt left this behind. Reported rather than silently
+            # accepted or silently redone: both of those turn a suspicious state into a confident one.
+            outcome.already_met.append(effect.name)
+            outcome.out_of_order.append(effect.name)
+            continue
         effect.apply()
         if not effect.probe():
             raise EffectError(
