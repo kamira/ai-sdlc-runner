@@ -15,11 +15,16 @@ implement → acceptance), stopping at gated halt-points for human approval.
 Core positioning: **the skill stays pure (markdown + zero-dependency gate scripts); the runner is
 an external driver. The skill does not know the runner exists.** Dependency is strictly one-way.
 
-Success = a runner that (a) references — never copies — the skill via a pinned submodule, (b) reads
-all governance logic (halt-points, role definitions, CHG/ACC fields) from the skill rather than
-re-implementing it, (c) locks the contract at `major.minor` per governed project with a validating
-`migrate`, (d) runs the four stages sequentially with shallow per-stage fan-out, and (e) mechanically
-locks down the V1 verifier's tool layer. This repo is itself governed by ai-sdlc (dogfooding).
+Success = a runner that (a) ~~references — never copies — the skill via a pinned submodule~~
+**(superseded twice: CHG-20260617-05 replaced the submodule with a vendored store, CHG-20260822-02
+deleted the submodule declaration, and CHG-20260822-04 added deterministically derived elements —
+the runner now *holds* skill text, under the named §6 overrides; what it still never does is
+hand-copy or hand-edit it)**, (b) reads all governance logic (halt-points, role definitions, CHG/ACC
+fields) from the skill rather than re-implementing it, (c) locks the contract at `major.minor` per
+governed project with a validating `migrate`, (d) runs the four stages sequentially with shallow
+per-stage fan-out — **and, behind the opt-in `--engine` flag (CHG-20260822-04), walks the skill's own
+shipped node graph instead; the four-stage default is unchanged until a separate later decision
+flips it** — and (e) mechanically locks down the V1 verifier's tool layer. This repo is itself governed by ai-sdlc (dogfooding).
 
 ## 2. Scope
 
@@ -74,7 +79,7 @@ locks down the V1 verifier's tool layer. This repo is itself governed by ai-sdlc
 |----------|-------------|
 | Performance | Conservative fan-out (depth ≤ 3, concurrency ≤ 4) to save tokens, even though the platform supports more |
 | Security | Least-privilege tool allowlists per role; V1 mechanically cannot spawn or edit code under review; red-line actions never auto-run |
-| Maintainability | Single source of truth = skill; runner holds no duplicated governance logic; runtime variability isolated in config |
+| Maintainability | Single source of truth = skill; runner holds no duplicated governance **logic** — it does hold derived skill **text** under the §6 overrides, but only as machine output that CI regenerates and byte-compares, never as something a person may edit; runtime variability isolated in config |
 | Compatibility/Scale | Standard-library-only runner (PyYAML optional); Python ≥ 3.9; one-way dependency keeps the skill reusable without the runner |
 
 ## 6. Constraints & Assumptions
@@ -107,6 +112,24 @@ locks down the V1 verifier's tool layer. This repo is itself governed by ai-sdlc
   (The CHG's own D3 cites "§7/§8" for the copying prohibition; the prohibition is actually the §2
   out-of-scope line, and §8's closing line is what makes it inviolable. Corrected here rather than
   in the merged CHG, which is left as the historical record.)
+- **Runner-authored fork points under the derived-artifact override (CHG-20260822-04) — the full
+  index.** The override covers deterministic derivation; it does **not** cover the judgements the
+  derivation rests on. Each is a place a different reader could have chosen otherwise, so each is
+  named here rather than left looking like it fell out of the data:
+
+  | # | Fork point | Where | Chosen because |
+  |---|------------|-------|----------------|
+  | 1 | A heading inside a fenced code block is **not** an anchor | `decompose.py` | 56 of 257 `^##?#` lines in the English references sit inside fences — document skeletons being *shown*. Splitting on them invents 56 elements and shreds the prose around them |
+  | 2 | The hash basis is **LF-normalised** content, not raw working-tree bytes | `decompose.py` | `.gitattributes` is `* text=auto`, so the store checks out CRLF on Windows and LF on Linux; a raw-bytes hash would hard-fail one leg of the CI matrix for a store nobody touched |
+  | 3 | The two checkpoint namespaces are **not de-duplicated** | `dispatch.py` | `before_merge_or_release` and `merge` are related, but the merge key exists in no shipped file — a human would have to write it, which is the hand-written node id the done-when forbids |
+  | 4 | A loadout's anchor set is the role's **whole shipped file set** | `dispatch.py` | Narrowing by policy-key name scores **0 true positives and 21 false positives** against the 402 real headings. A matcher that selects nothing while looking like a refinement is the KN-4 shape |
+  | 5 | Which policy file feeds which family | `dispatch.py` | Three lines, not derivable from the files themselves; a different reader could key families off something else |
+  | 6 | The tighten-only total order on the **four-valued** autopilot axis | *deferred* | `_doc` says "只准加嚴" without ordering `halt` against `halt_independent`, and no usable resolver ships (`scripts/autopilot_runner.py` cannot import — its `lib/` was not archived). Left undecided rather than invented |
+  | 7 | Loadouts name content element **ids**, not full records | `dispatch.py` | Inlining cost 265 KB of byte-identical duplication and made one role manifest larger than the biggest reference in the corpus. Found by measuring, corrected in task 3 |
+  | 8 | The node graph is **authored and pinned**, not parsed | `graph.py` | The shipped block has 19 arrows and at least two are prose. Either way a hand-written rule is needed; parsing changes the *direction* of failure — a misreading yields a wrong graph silently and the regeneration gate cannot see it |
+
+  Fork points 1–5 and 7–8 are implemented and pinned by tests; **6 is deliberately open** and is
+  recorded as such rather than resolved by guesswork.
 - **Governance baseline (CHG-20260706-01):** this repo's own ai-sdlc governance now carries the v1.17+ root entry anchor (`AGENTS.md`, SKILL.md template) and the pre-founded knowledge base skeleton (`docs/knowledge/knowledge.md` zero-entry INDEX + `vocabulary.json` seed), as enforced by the skill's `doc_integrity_check.py` (entry-anchor + knowledge-bootstrap lints).
 - **CI baseline (CHG-20260817-10):** this repo had no CI at all until 2026-08-17 (0 workflows, 0 Actions runs, no branch protection) — every prior change merged on locally-run, self-reported evidence, which is how the five Windows-only test failures fixed by CHG-20260817-09 survived four CHGs unnoticed. `.github/workflows/ci.yml` now runs the suite on `{ubuntu, windows} × py{3.9, 3.13}` (`fail-fast: false`) plus the `doc_integrity_check.py` gate, on every PR and every push to `main`. The **OS matrix is the load-bearing part** — the motivating defect was platform-conditional and a single-OS pipeline would have stayed green through all of it. CI is deliberately **not** gated on a coverage percentage: measuring the CHG-20260817-09 fix showed `executors.py` at 86% *before* and 85% *after*, because the broken tests were executing the code and dying inside it, so coverage counted the lines while no assertion ever ran.
 - ~~Open items: the canonical `ai-skills` repo URL and the existence of tag `v1.0.0` are the user's responsibility (build-guide §0); a missing/incorrect tag surfaces as a contract-version mismatch rather than silent drift.~~ **(Closed, CHG-20260822-02):** `ai-skills` was archived 2026-08-04 and succeeded by `skill-ai-sdlc-autopilot`; the runner no longer references either repo at runtime, so no tag is load-bearing. Versions are pinned by the vendored store.

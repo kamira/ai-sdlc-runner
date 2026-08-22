@@ -74,7 +74,8 @@ ai-sdlc-runner/
     ├── test_engine.py          # opt-in flag, hard stops, one session per ask (closed after), question survives a dropped session; CHG-20260822-04 task 6
     ├── test_engine_cli.py      # `run --engine` end to end; the GUI toggle is the only way below the seat floor; CHG-20260822-04 task 6
     ├── test_probes.py          # real git repo + real bare remote + a real forge process; unanswerable is never 'absent'; CHG-20260822-04 task 7
-    └── test_kill_resume.py     # a real subprocess killed with os._exit at every boundary; resume runs only what is left; CHG-20260822-04 task 7
+    ├── test_kill_resume.py     # a real subprocess killed with os._exit at every boundary; resume runs only what is left; CHG-20260822-04 task 7
+    └── test_guideline_truthful.py  # the guideline's claims re-checked against the code and the store, not re-read; CHG-20260822-04 task 8
 ```
 
 ## Responsibility per directory
