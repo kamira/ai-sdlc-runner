@@ -32,7 +32,8 @@ ai-sdlc-runner/
 │   ├── executors.py           # pluggable agent backends: stub | command(subscription) | api; CHG-06
 │   ├── workspace.py           # multi-project workspace: authority(main) + consumers, persisted; CHG-08
 │   ├── structure_scan.py      # structure analysis: scan + scaffold 4 structures + authority/pointers; CHG-08
-│   └── decompose.py           # split store references into anchored, provenanced elements; CHG-20260822-04 task 1
+│   ├── decompose.py           # split store references into anchored, provenanced elements; CHG-20260822-04 task 1
+│   └── dispatch.py            # derive checkpoint + role-loadout elements from shipped policy; CHG-20260822-04 task 2
 ├── config/
 │   └── runner.yaml            # contract version, skill path, concurrency/depth limits
 ├── docs/
@@ -51,7 +52,8 @@ ai-sdlc-runner/
     ├── test_tui.py            # interactive menu (curses + numbered fallback); CHG-02
     ├── test_dashboard.py      # multi-panel dashboard view; CHG-03
     ├── test_requirements_dev_sync.py  # requirements-dev.txt stays derived from pyproject + probe-readable; CHG-20260822-01
-    └── test_decompose.py       # decomposer: determinism, anchor traceability, provenance; CHG-20260822-04 task 1
+    ├── test_decompose.py       # decomposer: determinism, anchor traceability, provenance; CHG-20260822-04 task 1
+    └── test_dispatch.py        # dispatch elements: policy coverage, no hand-written ids; CHG-20260822-04 task 2
 ```
 
 ## Responsibility per directory
