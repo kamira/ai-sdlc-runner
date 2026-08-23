@@ -373,6 +373,16 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"visited:       {len(report.visited)} node(s)")
     print(f"asks:          {len(report.asks)}")
     print(f"stopped at:    {report.halted_at} — {report.halt_reason}")
+
+    # Say which kind of stop this was. The report has been able to distinguish them since task 1;
+    # printing the distinction is what makes it usable from here, and leaving it out would be a
+    # field the operator cannot see -- decorative data with an audience.
+    print(f"state:         {report.state}")
+    if report.state == engine.SUSPENDED and report.suspended:
+        stop = report.suspended
+        print(f"waiting for:   a decision on {stop['gate']} at {stop['node_id']}")
+        print(f"continue with: --resume --confirm {stop['gate']}"
+              + (f"  (run {stop['run_id']})" if stop.get("run_id") else ""))
     return 0
 
 
