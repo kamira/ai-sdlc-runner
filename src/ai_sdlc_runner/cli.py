@@ -124,14 +124,36 @@ class _Process(engine.Session):
         pass
 
 
-def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = None):
-    """Build the factory the engine opens a session from, routing by seat where asked."""
+def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = None,
+                    registry: Optional["models_mod.Registry"] = None):
+    """Build the factory the engine opens a session from, routing by seat or by model.
+
+    Three ways to name a backend, and they are tried most-specific first: the **model** a node's mode
+    picked, then the **seat**, then the default. Routing lives here and never in the work order —
+    which is what makes a panel meaningful, because the order every voice receives is identical and
+    only the answerer differs.
+
+    A model id the registry does not have is an **error**. Falling back to the default would mean a
+    panel of three quietly answered three times by one backend, which is the shape of failure this
+    whole change exists to make impossible.
+    """
     seat_models = seat_models or {}
     default = config.get("agent_command")
     timeout = int(config.get("agent_timeout", 600))
 
-    def factory(seat: Optional[str] = None):
-        argv = seat_models.get(seat) or default
+    def factory(seat: Optional[str] = None, model: Optional[str] = None):
+        argv = None
+        if model and registry is not None:
+            entry = registry.get(model)          # raises if it is not a model this project has
+            if entry.transport != models_mod.CLI:
+                raise CliError(
+                    f"model {model!r} is {entry.transport!r}, and this runner dispatches by running "
+                    f"a command. An api model needs a backend that speaks to it — there is none "
+                    f"yet, and pretending otherwise would send the work to the default and report "
+                    f"it as {model!r}.")
+            argv = list(entry.command)
+        if argv is None:
+            argv = seat_models.get(seat) or default
         if not argv:
             return _Stub()
         return _Process(list(argv) if isinstance(argv, list) else str(argv).split(), timeout)
@@ -329,6 +351,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         operations=plan.get("operations", {}),
         confirmed=tuple(args.confirm or ()),
         rulings=tuple(_rulings(args.rule or ())),
+        node_models=plan.get("node_models", {}),
         effects=effects_provider(plan),
         ordinary_commands=saved.ordinary_commands,
         undeclared=args.undeclared,
@@ -394,6 +417,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"waiting for:   a decision on {stop['gate']} at {stop['node_id']}")
             print(f"continue with: --resume --confirm {stop['gate']}"
                   + (f"  (run {stop['run_id']})" if stop.get("run_id") else ""))
+    for line in report.dispatches:
+        print(f"dispatched:    {line}")
     for line in report.rulings:
         print(f"ruled:         {line}")
     return 0
@@ -451,6 +476,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
             operations=plan.get("operations", {}),
             confirmed=approvals,
             rulings=rulings,
+            node_models=plan.get("node_models", {}),
             effects=effects_provider(plan),
             ordinary_commands=saved.ordinary_commands,
             undeclared=args.undeclared,
@@ -461,17 +487,18 @@ def cmd_serve(args: argparse.Namespace) -> int:
     # The same factory `run` uses, so the console dispatches exactly the way the command line does.
     # A console that answered through a different path would be a second runner wearing the first
     # one's governance.
-    config = load_config(args.config)
-    factory = session_factory(config, dict(plan.get("seat_models") or {}))
-    operator = server.Operator.mint(Path(args.token_dir))
-    runner = server.Runner(walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
-                           make_config=make_config)
     registry_path = Path(args.models or (Path(args.token_dir) / "models.json"))
     try:
         registry = models_mod.load(registry_path)
     except models_mod.ModelError as exc:
         print(f"error: {exc}")
         return 2
+
+    config = load_config(args.config)
+    factory = session_factory(config, dict(plan.get("seat_models") or {}), registry=registry)
+    operator = server.Operator.mint(Path(args.token_dir))
+    runner = server.Runner(walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
+                           make_config=make_config)
     try:
         httpd = server.serve(runner, operator, port=args.port,
                              registry=registry, registry_path=registry_path)

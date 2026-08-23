@@ -59,6 +59,7 @@
   ul.log li{display:grid;grid-template-columns:150px 74px 1fr;gap:10px;padding:5px 0;border-top:1px solid var(--line);font-size:12.5px}
   ul.log li .id{font-family:var(--mono);font-size:11.5px}
   ul.log li .who{font-size:10.5px;color:var(--faint);font-family:var(--mono)}
+  ul.log li.dispatch{color:var(--dim)} ul.log li.dispatch .id{color:var(--wait)}
   ul.log li.seat{background:color-mix(in srgb,var(--accent) 6%,transparent)}
   ul.log li.seat .who{color:var(--accent)}
   .err{color:var(--stop);font-family:var(--mono);font-size:12px;white-space:pre-wrap}
@@ -134,12 +135,22 @@ function drawFlow() {
 function drawLog() {
   var log = (state && state.log) || [];
   $("#log").innerHTML = "";
+  // Where the work went, above the asks. A pool picking at random is only acceptable because the
+  // choice is visible afterwards, and "visible" has to mean on the screen somebody is looking at.
+  ((state && state.dispatches) || []).forEach(function (d) {
+    var li = document.createElement("li");
+    li.className = "dispatch";
+    li.innerHTML = '<span class="id">dispatch</span><span class="who"></span><span></span>';
+    li.lastChild.textContent = d;
+    $("#log").appendChild(li);
+  });
   log.forEach(function (a) {
     var li = document.createElement("li");
     if (a.seat) li.className = "seat";
     li.innerHTML = '<span class="id"></span><span class="who"></span><span class="what"></span>';
     li.querySelector(".id").textContent = a.node_id;
-    li.querySelector(".who").textContent = a.seat ? "seat:" + a.seat : a.role;
+    li.querySelector(".who").textContent =
+      a.seat ? "seat:" + a.seat : (a.model || a.role);
     var n = flow.filter(function (x) { return x.id === a.node_id; })[0];
     li.querySelector(".what").textContent = n ? n.label : "";
     $("#log").appendChild(li);

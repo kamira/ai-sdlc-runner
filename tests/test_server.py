@@ -393,3 +393,36 @@ def test_only_the_stream_may_take_the_token_from_the_query_string(live):
     call, _, operator = live
     status, _ = call("GET", f"/flow?token={operator.token}", token="")
     assert status == 401
+
+
+def test_the_snapshot_carries_where_the_work_was_dispatched(tmp_path):
+    """"At random" is a claim, and a console that cannot show it cannot let anyone check it."""
+    dispatched = {}
+
+    def factory(seat=None, model=None):
+        class S(engine.Session):
+            def ask(self, order):
+                dispatched[order["node_id"]] = model
+                if seat:
+                    return {"verdict": "pass"}
+                branch = {"pm_confirm": "yes", "pm_signoff": "yes",
+                          "lead_task_review": "pass", "re_review": "pass",
+                          "qa_accept": "pass"}.get(order["node_id"])
+                return {"verdict": branch} if branch else {"ok": True}
+
+            def close(self):
+                pass
+        return S()
+
+    runner = server.Runner(
+        walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
+        make_config=lambda i, a, r: engine.RunConfig(
+            node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+            decisions={"next_module": ["module", "none", "none"], "feedback": "done"},
+            risk="low", undeclared="allow", confirmed=a, rulings=r,
+            node_models={"engineer_build": ["opus", "codex", "gemini"]}))
+
+    out = runner.start("do it", 0)
+    assert out["dispatches"], "the snapshot must say where the pool sent the work"
+    assert any("dispatched to" in d for d in out["dispatches"])
+    assert dispatched["engineer_selfverify"] == dispatched["engineer_build"]

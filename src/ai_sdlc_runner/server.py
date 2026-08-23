@@ -144,6 +144,9 @@ class RunState:
             "suspended": dict(report.suspended) if report and report.suspended else None,
             "confirmations": list(report.confirmations) if report else [],
             "rulings": list(report.rulings) if report else [],
+            # Where a pool sent the work, and which model a follows reused. The console has to be
+            # able to show this or "chosen at random" is a claim nobody can check.
+            "dispatches": list(report.dispatches) if report else [],
             "adjudications": [dict(a) for a in report.adjudications] if report else [],
             "log": list(self.log),
         }
@@ -248,8 +251,8 @@ class Runner:
             self.state.report = report
             self.state.state = report.state
             self.state.version += 1
-            self.state.log = [{"node_id": a.node_id, "role": a.role, "seat": a.seat}
-                              for a in report.asks]
+            self.state.log = [{"node_id": a.node_id, "role": a.role, "seat": a.seat,
+                               "model": a.model} for a in report.asks]
             self._publish()
             return self.state.snapshot()
 
