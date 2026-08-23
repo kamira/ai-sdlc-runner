@@ -150,6 +150,10 @@ class Ask:
     role: str
     seat: Optional[str] = None
     result: Optional[Mapping[str, object]] = None
+    #: Which model answered, where the node named one. A panel's whole value is that the voices
+    #: differ, and a record that cannot say which model said what has kept the votes and thrown
+    #: away the thing being voted on.
+    model: Optional[str] = None
 
 
 #: What a returned report **is**. Before task 1 there was no way to tell: a gate halt set
@@ -248,6 +252,10 @@ class RunReport:
     effects: Dict[str, Dict[str, object]] = field(default_factory=dict)
     #: Asks answered from the journal rather than by opening a session, on a resumed run.
     resumed: List[str] = field(default_factory=list)
+    #: Which model a pool sent the work to, and which model a follows reused. Recorded because
+    #: "at random" is only acceptable if the choice is afterwards visible: an unrecorded random
+    #: dispatch is indistinguishable from a preference nobody declared.
+    dispatches: List[str] = field(default_factory=list)
     #: Ties a person broke, and which way. Kept apart from ``confirmations`` because they answer a
     #: different question — "which branch" rather than "may this pass a gate" — and merging them
     #: would make the audit trail say a gate was confirmed when nobody confirmed anything.
@@ -270,6 +278,7 @@ class RunReport:
             "effects": {k: dict(v) for k, v in self.effects.items()},
             "resumed": list(self.resumed),
             "rulings": list(self.rulings),
+            "dispatches": list(self.dispatches),
         }
 
 
@@ -319,6 +328,15 @@ class RunConfig:
     #: always meant — or a ``Decision`` naming the node and run it answers for. Both spend from the
     #: same ledger; see ``Decision``.
     confirmed: Sequence[object] = ()
+    #: ``node id -> model ids``. What a node's mode does with the list is `graph.Node.mode`'s job,
+    #: not this field's: the same three ids mean three adjudicated voices on a ``model_panel`` and a
+    #: pool of three on a ``pool``. A node with nothing here is asked once, however it is declared.
+    node_models: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    #: The seed a pool dispatches with. Random on purpose — any cleverer rule is the runner deciding
+    #: which model is better at a task it has not seen — but *reproducible* on purpose too, because
+    #: "which model built this" has to be answerable afterwards, and a run nobody can repeat is a
+    #: run nobody can investigate.
+    dispatch_seed: int = 0
     #: A person's answers to ties — see ``Ruling``. Empty by default: a run with no rulings stops
     #: at the first undecided panel, which is the honest behaviour when nobody has been asked yet.
     rulings: Sequence["Ruling"] = ()
@@ -368,11 +386,15 @@ def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
     return workorder.render(node, spec, verdict, seat=seat)
 
 
-def _open(factory: SessionFactory, seat: Optional[str]):
-    """Open a session, letting a factory route by seat if it accepts one.
+def _open(factory: SessionFactory, seat: Optional[str], model: Optional[str] = None):
+    """Open a session, letting a factory route by seat or by model if it accepts one.
 
     Routing — which model answers — lives in the factory and never in the order, which is what makes
     cross-model review meaningful: **the same question, different answerers.**
+
+    A factory that takes neither still works and gets one backend for everything. That is not a
+    silent fallback: a caller who wired no routing has no models to route to, and the panel-diversity
+    note says out loud when every voice came back from the same place.
     """
     import inspect
 
@@ -380,13 +402,19 @@ def _open(factory: SessionFactory, seat: Optional[str]):
         params = inspect.signature(factory).parameters
     except (TypeError, ValueError):                      # pragma: no cover - exotic callables
         return factory()
-    return factory(seat=seat) if "seat" in params else factory()
+    kwargs = {}
+    if "seat" in params:
+        kwargs["seat"] = seat
+    if "model" in params:
+        kwargs["model"] = model
+    return factory(**kwargs) if kwargs else factory()
 
 
 def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object],
          seat: Optional[str] = None, journal: Optional[AskJournal] = None,
          ask_id: Optional[str] = None, node_id: str = "",
-         answered: Optional[Mapping[str, Mapping[str, object]]] = None):
+         answered: Optional[Mapping[str, Mapping[str, object]]] = None,
+         model: Optional[str] = None):
     """Open a session, ask once, close it — the close guaranteed even if the ask raises.
 
     ``seen`` holds the session **objects**, not their ``id()``: an id is not an identity once the
@@ -401,7 +429,7 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
         return answered[ask_id]
     if journal is not None and ask_id is not None:
         journal.record(ask_id, node_id, seat, order)
-    session = _open(factory, seat)
+    session = _open(factory, seat, model)
     if any(previous is session for previous in seen):
         raise EngineError(
             "the session factory returned a session it already returned: every ask opens its own "
@@ -414,6 +442,40 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
     if journal is not None and ask_id is not None:
         journal.answered(ask_id, result)
     return result
+
+
+def _dispatch_from(configured: Sequence[str], cfg: "RunConfig", node: graph.Node,
+                   nth_ask: int) -> str:
+    """Which model in the pool does this piece of work. Random, and reproducible.
+
+    **Random on purpose.** Any cleverer rule would be the runner deciding which model is better at a
+    task it has not seen, and it would quietly become a ranking nobody wrote down — the same thing
+    this design refuses when it forbids inferring a node's mode from its name.
+
+    **Reproducible on purpose too**, which is not a contradiction: the choice is arbitrary with
+    respect to the *work*, not with respect to the *record*. Seeded by the run and by which ask this
+    is, so the same run dispatches the same way twice — a resumed run reaches the same engineer, and
+    "which model built this" stays answerable after the fact.
+    """
+    import random
+
+    # A string, not a tuple: `random.Random` accepts only None/int/float/str/bytes, and a tuple
+    # raises. Composed from all three so two nodes -- and two visits to the same node in the module
+    # loop -- do not march in lockstep through the pool.
+    picker = random.Random(f"{cfg.dispatch_seed}:{node.id}:{nth_ask}")
+    return picker.choice(list(configured))
+
+
+def _followed_model(node: graph.Node, report: "RunReport") -> Optional[str]:
+    """The model that answered the node this one follows — its most recent visit.
+
+    Most recent, not first: the module loop revisits `engineer_build` once per module, and a
+    self-verification that reused the model from *module one* would be checking work it never saw.
+    """
+    for ask in reversed(report.asks):
+        if ask.node_id == node.follows and ask.model:
+            return ask.model
+    return None
 
 
 def _choose(cfg: RunConfig, node: graph.Node, taken: Dict[str, int]) -> Optional[str]:
@@ -889,8 +951,43 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             return _finish(stop, confirmations)
 
         answers: List[Mapping[str, object]] = []
+        panel_outcome: Optional[str] = None
         if node.role:
-            if node.mode == graph.SEAT_PANEL:
+            configured = list(cfg.node_models.get(node.id) or ())
+
+            if node.mode == graph.MODEL_PANEL and len(configured) > 1:
+                # Task 4. N voices on ONE question, each its own session, blind to each other --
+                # the same independence rule the seats have, for the same reason.
+                before = len(opened)
+                verdicts: Dict[str, str] = {}
+                for model in configured:
+                    ask_id = f"{len(report.asks):03d}-{node.id}-{model}"
+                    result = _ask(factory, _order_for(node, cfg, verdict), opened,
+                                  journal=cfg.journal, ask_id=ask_id, node_id=node.id,
+                                  answered=already, model=model)
+                    if ask_id in already:
+                        report.resumed.append(ask_id)
+                    report.asks.append(Ask(node.id, node.role, None, result, model=model))
+                    answers.append(result)
+                    verdicts[model] = str(result.get("verdict") or result.get("outcome") or "")
+                if len(verdicts) != len(configured):
+                    # The failure an independent seat named: three configured, fewer asked, and
+                    # nothing saying so. Refused rather than adjudicated on a short panel.
+                    raise EngineError(
+                        f"{node.id!r} was configured with {len(configured)} model(s) and collected "
+                        f"{len(verdicts)} verdict(s). A panel short of a voice has not reached the "
+                        f"majority it was opened for, and two models answering under one name is "
+                        f"not a panel at all.")
+                outcome = policy.adjudicate(verdicts, voices="models")
+                report.adjudications.append(
+                    {"node_id": node.id, **outcome, "verdicts": dict(verdicts)})
+                _note_panel_diversity(node, report, opened[before:])
+                # The panel's outcome is what routes. `answer_decides` reads ONE answer, and reading
+                # one of several voices would silently make a panel into whichever model happened to
+                # be asked first -- a vote held and then ignored.
+                panel_outcome = str(outcome["outcome"])
+
+            elif node.mode == graph.SEAT_PANEL:
                 panel_sessions: List[object] = []
                 before = len(opened)
                 for seat in policy.seat_names(seats):
@@ -906,13 +1003,31 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 panel_sessions = opened[before:]
                 _note_panel_diversity(node, report, panel_sessions)
             else:
+                # Task 5. A pool picks one; a follows reuses whoever answered the node it names;
+                # everything else asks whatever it is configured with. All three are ONE ask -- the
+                # difference is only which backend opens it, which is exactly why calling a pool a
+                # vote would have misdescribed what happened.
+                model: Optional[str] = None
+                if node.mode == graph.POOL and configured:
+                    model = _dispatch_from(configured, cfg, node, len(report.asks))
+                    report.dispatches.append(
+                        f"{node.id}: {node.main} dispatched to {model} "
+                        f"(one of {len(configured)}, chosen at random)")
+                elif node.mode == graph.FOLLOWS:
+                    model = _followed_model(node, report)
+                    if model:
+                        report.dispatches.append(
+                            f"{node.id}: follows {node.follows}, answered by {model}")
+                elif configured:
+                    model = configured[0]
+
+                ask_id = f"{len(report.asks):03d}-{node.id}"
                 result = _ask(
                     factory, _order_for(node, cfg, verdict), opened, journal=cfg.journal,
-                    ask_id=f"{len(report.asks):03d}-{node.id}", node_id=node.id,
-                    answered=already)
-                if f"{len(report.asks):03d}-{node.id}" in already:
-                    report.resumed.append(f"{len(report.asks):03d}-{node.id}")
-                report.asks.append(Ask(node.id, node.role, None, result))
+                    ask_id=ask_id, node_id=node.id, answered=already, model=model)
+                if ask_id in already:
+                    report.resumed.append(ask_id)
+                report.asks.append(Ask(node.id, node.role, None, result, model=model))
                 answers.append(result)
 
         stop = _gate("after")
@@ -930,7 +1045,9 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             return _finish(report, confirmations)
 
         if node.branches:
-            if node.mode == graph.SEAT_PANEL:
+            if panel_outcome is not None:
+                choice = panel_outcome
+            elif node.mode == graph.SEAT_PANEL:
                 choice = _adjudicate(node, report, seats)
             elif node.answer_decides:
                 choice = _answered_branch(node, answers)
