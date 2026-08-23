@@ -22,3 +22,13 @@ as a museum piece.
 
 Open it in a browser, or read it at
 https://claude.ai/code/artifact/2e387693-6720-4d06-a803-62cfc8e8d0a7
+
+## Review artefacts
+
+| File | What it is |
+|---|---|
+| `review-round-1-brief.md` | The brief both seats answered in round 1 of CHG-20260823-11 — kept so a later round can be compared against the same seven questions rather than a remembered version of them. |
+
+The verdicts themselves live in the change record's **Review round 1** section, separated into what
+both seats found and what one found. Those are different strengths of claim and collapsing them would
+throw away the only thing two independent reviewers buy you.
