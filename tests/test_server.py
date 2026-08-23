@@ -321,3 +321,75 @@ def test_a_failing_walk_reports_stopped_rather_than_looking_idle():
     out = runner.start("do it", 0)
     assert out["state"] == engine.STOPPED
     assert "fell over" in out["error"]
+
+
+def test_a_second_runner_cannot_bind_the_same_port(tmp_path):
+    """One project, one runner — enforced, not asserted.
+
+    `ThreadingHTTPServer` sets `allow_reuse_address`, which on Windows lets a second process bind a
+    port the first already holds. Both then answer and which one gets a connection is undefined.
+    Found live: a second `serve` during a test left the console reading answers from the process
+    that had been replaced — a stale build serving requests, with nothing saying so.
+    """
+    first = server.serve(_runner(), server.Operator.mint(tmp_path / "a"), port=0)
+    try:
+        port = first.server_address[1]
+        with pytest.raises(server.ServerError, match="already there"):
+            server.serve(_runner(), server.Operator.mint(tmp_path / "b"), port=port)
+    finally:
+        first.server_close()
+
+
+def test_the_console_shell_loads_without_a_token(tmp_path):
+    """A browser cannot attach a header to a navigation, so the shell must load without one.
+
+    It carries no data, no state and no governance — it is markup that asks the server what is true,
+    and every one of those questions needs the token. This is the one route that does not.
+    """
+    operator = server.Operator.mint(tmp_path)
+    httpd = server.serve(_runner(), operator, port=0)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    port = httpd.server_address[1]
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=10) as resp:
+            body = resp.read().decode("utf-8")
+            assert resp.status == 200
+            assert resp.headers["Content-Type"].startswith("text/html")
+            assert "Content-Security-Policy" in resp.headers
+        assert "<title>runner</title>" in body
+        assert operator.token not in body, (
+            "the page must not carry the token — it arrives in the URL fragment, which browsers "
+            "never send anywhere, so a served page is not a place a credential can leak from")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_the_shell_is_still_refused_to_a_rebinding_host(tmp_path):
+    """Exempt from the token, not from the Host check. Skipping both would be a hole, not a shell."""
+    operator = server.Operator.mint(tmp_path)
+    httpd = server.serve(_runner(), operator, port=0)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    port = httpd.server_address[1]
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/")
+        req.add_header("Host", "evil.example.com")
+        try:
+            urllib.request.urlopen(req, timeout=10)
+            assert False, "a rebinding host was served the console"
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 403
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_only_the_stream_may_take_the_token_from_the_query_string(live):
+    """EventSource has no way to set a header — that is why the exception exists, and why it is one.
+
+    A query string reaches access logs, so it is the weaker place to carry a credential. Allowing it
+    generally would move every request to the weaker place for the convenience of one.
+    """
+    call, _, operator = live
+    status, _ = call("GET", f"/flow?token={operator.token}", token="")
+    assert status == 401

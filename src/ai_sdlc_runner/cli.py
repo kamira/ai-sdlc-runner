@@ -481,9 +481,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     host, port = httpd.server_address[0], httpd.server_address[1]
     print(f"listening on   http://{host}:{port} — this machine only, no external connections")
-    print(f"operator token {operator.token}")
-    print(f"           in  {operator.token_path} (readable by you alone)")
-    print("send it as the X-Operator-Token header on every request.")
+    # The fragment is never sent to a server and never lands in a Referer, so one openable link can
+    # carry the credential without it being logged anywhere on the way.
+    print(f"open           http://{host}:{port}/#token={operator.token}")
+    print(f"token also in  {operator.token_path} (readable by you alone)")
+    print("for the API, send it as the X-Operator-Token header.")
     leaving = registry.leaving()
     print(f"models         {len(registry)} registered, {len(leaving)} of which leave this machine"
           + (f": {', '.join(m.id + ' (' + m.reach + ')' for m in leaving)}" if leaving else ""))

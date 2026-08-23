@@ -1,0 +1,234 @@
+<meta charset="utf-8">
+<title>runner</title>
+<!--
+  The operator console (CHG-20260823-11 task 11).
+
+  Four things and deliberately nothing else: an instruction box, where the run is, the whole flow,
+  and the log. Configuration lives on its own tabs; this screen is what you watch.
+
+  THE TOKEN COMES IN THE URL FRAGMENT. A fragment is never sent to a server and never appears in a
+  Referer header, so `runner serve` can print one ready-to-open link without the credential
+  travelling anywhere it can be logged. The page moves it into sessionStorage and rewrites the
+  address bar immediately, so a screenshot of the browser does not carry it either.
+
+  This file holds NO governance. It draws what the server says and sends back what a person clicked.
+  Every verdict, every adjudication, every gate is decided on the other side of the wire — and the
+  version number in each answer is what stops two tabs from both being right.
+-->
+<style>
+  :root {
+    --ink:#191817; --dim:#57534e; --faint:#8a827a; --line:#e0dbd4; --soft:#efebe6;
+    --bg:#fbf9f7; --card:#ffffff; --go:#2f6f4f; --stop:#a03528; --wait:#a3701c; --accent:#3b5a8f;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme=light]) {
+      --ink:#eae6e1; --dim:#a9a29a; --faint:#7d766e; --line:#33302c; --soft:#242220;
+      --bg:#171614; --card:#1d1b19; --go:#7fb894; --stop:#e0806f; --wait:#d9a441; --accent:#8fadd8;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 ui-sans-serif,system-ui,sans-serif}
+  header{display:flex;align-items:baseline;gap:14px;padding:12px 18px;border-bottom:1px solid var(--line)}
+  header b{font-size:15px;letter-spacing:.02em}
+  header .st{font-family:var(--mono);font-size:12px;padding:2px 8px;border-radius:99px;background:var(--soft)}
+  header .st.suspended{color:var(--wait)} header .st.running{color:var(--accent)}
+  header .st.finished{color:var(--go)} header .st.stopped{color:var(--stop)}
+  header .grow{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--faint)}
+  main{display:grid;grid-template-columns:270px 1fr;gap:0;height:calc(100vh - 49px)}
+  aside{border-right:1px solid var(--line);overflow:auto;padding:12px}
+  section{overflow:auto;padding:16px 18px}
+  h2{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--faint);margin:0 0 8px;font-weight:600}
+  .node{display:flex;gap:8px;align-items:baseline;padding:3px 6px;border-radius:4px;font-size:12.5px}
+  .node .id{font-family:var(--mono);font-size:11.5px}
+  .node .role{margin-left:auto;font-size:10px;color:var(--faint);font-family:var(--mono)}
+  .node.done{color:var(--faint)} .node.done .id{text-decoration:line-through}
+  .node.here{background:var(--soft);font-weight:600;outline:1px solid var(--wait)}
+  .node.gate .id::after{content:"◆";color:var(--wait);margin-left:5px;font-size:9px}
+  textarea{width:100%;font:13px/1.5 inherit;padding:9px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);resize:vertical}
+  button{font:inherit;padding:6px 13px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);cursor:pointer}
+  button.p{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .ask{border:1px solid var(--wait);border-radius:8px;padding:12px 14px;margin:0 0 16px;background:var(--card)}
+  .ask h3{margin:0 0 6px;font-size:14px;color:var(--wait)}
+  .ask p{margin:0 0 10px;color:var(--dim)}
+  .ask .row{display:flex;gap:8px;flex-wrap:wrap}
+  .voices{font-family:var(--mono);font-size:11.5px;color:var(--dim);margin:0 0 10px}
+  .voices .no{color:var(--stop)} .voices .yes{color:var(--go)}
+  ul.log{list-style:none;margin:0;padding:0}
+  ul.log li{display:grid;grid-template-columns:150px 74px 1fr;gap:10px;padding:5px 0;border-top:1px solid var(--line);font-size:12.5px}
+  ul.log li .id{font-family:var(--mono);font-size:11.5px}
+  ul.log li .who{font-size:10.5px;color:var(--faint);font-family:var(--mono)}
+  ul.log li.seat{background:color-mix(in srgb,var(--accent) 6%,transparent)}
+  ul.log li.seat .who{color:var(--accent)}
+  .err{color:var(--stop);font-family:var(--mono);font-size:12px;white-space:pre-wrap}
+  .muted{color:var(--faint)}
+</style>
+
+<header>
+  <b>runner</b>
+  <span class="st" id="state">—</span>
+  <span id="where" class="muted"></span>
+  <span class="grow" id="meta"></span>
+</header>
+
+<main>
+  <aside>
+    <h2>the flow</h2>
+    <div id="flow"></div>
+  </aside>
+  <section>
+    <div id="ask"></div>
+    <h2>your instruction</h2>
+    <textarea id="instruction" rows="3" placeholder="what should this runner build?"></textarea>
+    <div style="margin:8px 0 20px"><button class="p" id="start">start the run</button></div>
+    <h2>the log</h2>
+    <ul class="log" id="log"></ul>
+    <p class="err" id="err"></p>
+  </section>
+</main>
+
+<script>
+// --- the token, out of the URL and out of sight ------------------------------------------------
+(function () {
+  var m = /token=([^&]+)/.exec(location.hash);
+  if (m) {
+    sessionStorage.setItem("runner-token", decodeURIComponent(m[1]));
+    history.replaceState(null, "", location.pathname);
+  }
+})();
+var TOKEN = sessionStorage.getItem("runner-token") || "";
+
+var $ = function (s) { return document.querySelector(s); };
+var flow = [], state = null;
+
+function api(method, path, body) {
+  return fetch(path, {
+    method: method,
+    headers: { "X-Operator-Token": TOKEN, "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined
+  }).then(function (r) {
+    return r.json().then(function (j) {
+      if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+      return j;
+    });
+  });
+}
+
+// --- drawing ---------------------------------------------------------------------------------
+function drawFlow() {
+  var here = state && state.at, seen = (state && state.visited) || [];
+  $("#flow").innerHTML = "";
+  flow.forEach(function (n) {
+    var el = document.createElement("div");
+    el.className = "node" + (n.id === here ? " here" : seen.indexOf(n.id) >= 0 ? " done" : "")
+                 + (n.gate ? " gate" : "");
+    el.innerHTML = '<span class="id"></span><span class="role"></span>';
+    el.querySelector(".id").textContent = n.id;
+    el.querySelector(".role").textContent = n.role || "runner";
+    el.title = n.label + (n.gate ? "  ·  gate: " + n.gate : "") + "  ·  " + n.mode;
+    $("#flow").appendChild(el);
+  });
+}
+
+function drawLog() {
+  var log = (state && state.log) || [];
+  $("#log").innerHTML = "";
+  log.forEach(function (a) {
+    var li = document.createElement("li");
+    if (a.seat) li.className = "seat";
+    li.innerHTML = '<span class="id"></span><span class="who"></span><span class="what"></span>';
+    li.querySelector(".id").textContent = a.node_id;
+    li.querySelector(".who").textContent = a.seat ? "seat:" + a.seat : a.role;
+    var n = flow.filter(function (x) { return x.id === a.node_id; })[0];
+    li.querySelector(".what").textContent = n ? n.label : "";
+    $("#log").appendChild(li);
+  });
+}
+
+function drawAsk() {
+  var box = $("#ask"); box.innerHTML = "";
+  if (!state || state.state !== "suspended" || !state.suspended) return;
+  var s = state.suspended;
+  var el = document.createElement("div"); el.className = "ask";
+
+  if (s.undecided) {
+    // A tie and a gate are different questions, so they get different controls. Offering "confirm"
+    // here would be offering something that cannot answer what is being asked.
+    el.innerHTML = "<h3>Nobody decided</h3><p></p><div class='voices'></div><div class='row'></div>";
+    el.querySelector("p").textContent =
+      s.reason + " The runner will not pick a side — this one is yours.";
+    var v = el.querySelector(".voices");
+    Object.keys(s.verdicts || {}).sort().forEach(function (name) {
+      var d = document.createElement("div");
+      d.className = s.verdicts[name] === "pass" ? "yes" : "no";
+      d.textContent = name + ": " + s.verdicts[name];
+      v.appendChild(d);
+    });
+    (s.branches || []).forEach(function (branch) {
+      var b = document.createElement("button");
+      if (branch === "pass") b.className = "p";
+      b.textContent = branch;
+      b.onclick = function () {
+        act("/run/decide", { node_id: s.node_id, branch: branch });
+      };
+      el.querySelector(".row").appendChild(b);
+    });
+  } else {
+    el.innerHTML = "<h3>Waiting for you</h3><p></p><div class='row'></div>";
+    el.querySelector("p").textContent = state.reason;
+    var ok = document.createElement("button");
+    ok.className = "p";
+    ok.textContent = "approve " + s.gate;
+    ok.onclick = function () {
+      act("/run/gate", { gate: s.gate, node_id: s.node_id });
+    };
+    el.querySelector(".row").appendChild(ok);
+  }
+  box.appendChild(el);
+}
+
+function act(path, body) {
+  $("#err").textContent = "";
+  body.version = state.version;   // what stops two tabs from both being right
+  api("POST", path, body).then(apply).catch(fail);
+}
+
+function apply(s) {
+  state = s;
+  $("#state").textContent = s.state;
+  $("#state").className = "st " + s.state;
+  $("#where").textContent = s.at ? "at " + s.at : "";
+  $("#meta").textContent = "v" + s.version + " · " + (s.log || []).length + " asks";
+  $("#start").disabled = (s.state === "running" || s.state === "suspended");
+  $("#err").textContent = s.error || "";
+  drawFlow(); drawLog(); drawAsk();
+}
+
+function fail(e) { $("#err").textContent = e.message; }
+
+$("#start").onclick = function () {
+  $("#err").textContent = "";
+  api("POST", "/run", { instruction: $("#instruction").value, version: state.version })
+    .then(apply).catch(fail);
+};
+
+// --- go --------------------------------------------------------------------------------------
+api("GET", "/flow")
+  .then(function (f) { flow = f.nodes; return api("GET", "/run"); })
+  .then(function (s) {
+    apply(s);
+    // The snapshot came first, so the stream can only ever move us forward from a known state.
+    var es = new EventSource("/run/events?token=" + encodeURIComponent(TOKEN));
+    es.onmessage = function (m) { apply(JSON.parse(m.data)); };
+  })
+  .catch(function (e) {
+    // Say which of the two it is. "401" on its own sends people looking for a bug in the server,
+    // when the usual cause is a link opened without its fragment.
+    $("#state").textContent = TOKEN ? "refused" : "no token";
+    $("#state").className = "st stopped";
+    $("#err").textContent = (TOKEN ? e.message : "This page was opened without an operator token.") +
+      "\n\nOpen the link `runner serve` printed, fragment and all:" +
+      "\n    http://" + location.host + "/#token=…";
+  });
+</script>
