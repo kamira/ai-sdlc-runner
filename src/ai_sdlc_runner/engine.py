@@ -152,10 +152,56 @@ class Ask:
     result: Optional[Mapping[str, object]] = None
 
 
+#: What a returned report **is**. Before task 1 there was no way to tell: a gate halt set
+#: ``halted_at``, and so did every TERMINAL node including ``done`` — so "stopped for a decision"
+#: and "ran to the end" were the same shape, and an independent seat found that the one property
+#: task 1 rests on did not exist.
+FINISHED = "finished"    #: reached a terminal node; the flow ended where it was designed to
+SUSPENDED = "suspended"  #: stopped at a gate, and a decision can continue it
+STOPPED = "stopped"      #: stopped, and no decision continues it — a permanent halt, or nobody decided
+STATES = (FINISHED, SUSPENDED, STOPPED)
+
+
+@dataclass
+class Approval:
+    """One approval of one gate, aimed at one stop.
+
+    **This is the same ledger as ``confirmed``, not a second one beside it.** The question task 1
+    was blocked on was whether a resumed gate decision spends the existing confirmation counter or
+    opens a parallel mechanism, and the answer is the former: two overlapping approval ledgers with
+    slightly different audit semantics is the one failure here that would be **silent** — a gate
+    opening on an approval one ledger spent and the other never saw, with no way to reconstruct who
+    approved what afterwards. So a decision is a confirmation that knows where it belongs.
+
+    ``node_id`` and ``run_id`` are what make refusing a stale or misdirected answer possible.
+    Leaving both out gives exactly today's behaviour: an untargeted confirmation, spendable at the
+    first stop on that gate — which is what every existing caller passes and why they still work.
+    """
+
+    gate: str
+    #: The node this answers for. ``None`` means "any stop on this gate", as ``--confirm`` has
+    #: always meant.
+    node_id: Optional[str] = None
+    #: The run this answers for — see ``RunConfig.run_id``. ``None`` means "any run", which is the
+    #: right default for an approval given up-front on the command line, and the wrong one for an
+    #: answer typed into a console after a stop.
+    run_id: Optional[str] = None
+
+    def __str__(self) -> str:
+        where = f" at {self.node_id}" if self.node_id else ""
+        which = f" of run {self.run_id}" if self.run_id else ""
+        return f"{self.gate}{where}{which}"
+
+
 @dataclass
 class RunReport:
     visited: List[str] = field(default_factory=list)
     asks: List[Ask] = field(default_factory=list)
+    #: ``finished`` / ``suspended`` / ``stopped`` — see ``STATES``. The distinction task 1 exists
+    #: to create: a caller can tell a run that ended from one waiting for an answer.
+    state: str = FINISHED
+    #: When suspended: what is being waited for, and what would have to match to continue it.
+    suspended: Optional[Dict[str, object]] = None
     halted_at: Optional[str] = None
     halt_reason: str = ""
     #: Recorded, not just honoured: every relaxation the run was granted.
@@ -182,6 +228,8 @@ class RunReport:
         return {
             "visited": list(self.visited),
             "asks": [{"node_id": a.node_id, "role": a.role, "seat": a.seat} for a in self.asks],
+            "state": self.state,
+            "suspended": dict(self.suspended) if self.suspended else None,
             "halted_at": self.halted_at,
             "halt_reason": self.halt_reason,
             "relaxations": list(self.relaxations),
@@ -236,9 +284,31 @@ class RunConfig:
     #: same place forever — an independent verifier found that medium and high risk could never get
     #: past the first gate, which made most of the matrix unreachable. A halt is a pause with a way
     #: back, not a wall.
-    confirmed: Sequence[str] = ()
+    #:
+    #: Entries may be a plain gate name — "any stop on this gate", which is what ``--confirm`` has
+    #: always meant — or a ``Decision`` naming the node and run it answers for. Both spend from the
+    #: same ledger; see ``Decision``.
+    confirmed: Sequence[object] = ()
     max_steps: int = 200
     journal: Optional[AskJournal] = None
+
+    @property
+    def run_id(self) -> Optional[str]:
+        """What identifies this run, and **who mints it**: the journal does.
+
+        The second question task 1 was blocked on. The answer invents no new authority, because
+        there is already exactly one durable identity here — the journal directory is what a
+        resumed run reads, and a run without one cannot be resumed at all (``resume=True`` without
+        a journal is already refused). So the run id *is* the journal's resolved path, and a run
+        with no journal has no id and cannot be sent a targeted decision.
+
+        Deriving it rather than generating one keeps the two facts from drifting: a minted id would
+        need storing somewhere, and the only durable somewhere is the directory it would be stored
+        beside.
+        """
+        if self.journal is None:
+            return None
+        return str(self.journal.dir.resolve())
 
 
 def resolve_verdict(node: graph.Node, risk: str, autonomy: Optional[str] = None) -> Dict[str, object]:
@@ -592,6 +662,20 @@ def _finish(report: "RunReport", confirmations: Dict[str, int]) -> "RunReport":
     report.confirmations.extend(
         f"{gate} was confirmed {n} more time(s) than the run stopped at it"
         for gate, n in sorted(unspent.items()))
+
+    # Every exit passes through here, so this is the one place that can promise the caller a report
+    # says what it is. A state outside the closed set would leave "is this waiting for me?"
+    # unanswerable, which is the question task 1 exists to make answerable.
+    if report.state not in STATES:
+        raise EngineError(
+            f"a run ended in state {report.state!r}, which is not one of {list(STATES)} — a report "
+            f"that cannot say whether it is waiting for a decision is the ambiguity this state "
+            f"exists to remove")
+    if (report.state == SUSPENDED) != (report.suspended is not None):
+        raise EngineError(
+            f"a {report.state!r} report {'carries' if report.suspended else 'lacks'} suspension "
+            f"details — the two must agree, or a caller reading one and not the other gets a "
+            f"different answer about whether the run can continue")
     return report
 
 
@@ -633,8 +717,33 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 "would silently re-ask everything.")
         already = cfg.journal.answers()
 
+    # One ledger. Untargeted entries stay a per-gate count, exactly as before; targeted ones are
+    # held alongside and spent first, so a decision aimed at the stop it answers is preferred over
+    # a blanket approval that happens to fit.
+    targeted: List[Approval] = []
     confirmations: Dict[str, int] = {}
-    for gate in cfg.confirmed:
+    for entry in cfg.confirmed:
+        if isinstance(entry, Approval):
+            if entry.gate not in policy.GATES:
+                raise EngineError(
+                    f"approval for gate {entry.gate!r} does not exist. This runner's gates are "
+                    f"{sorted(policy.GATES)}.")
+            if entry.node_id is not None and entry.node_id not in graph.BY_ID:
+                raise EngineError(
+                    f"approval {entry} names node {entry.node_id!r}, which is not in the flow — an "
+                    f"answer aimed at a node nobody has cannot be spent anywhere, and holding it "
+                    f"would leave you believing a gate was confirmed")
+            if entry.run_id is not None and entry.run_id != cfg.run_id:
+                # Stale tab, or an answer to a different run. Refusing loudly is the whole reason
+                # the decision carries a run id: silently spending it would open a gate on an
+                # approval given for something else.
+                raise EngineError(
+                    f"approval {entry} is for another run — this run is "
+                    f"{cfg.run_id or 'un-identified (no journal)'}. An answer from a stale view "
+                    f"must not open a gate here.")
+            targeted.append(entry)
+            continue
+        gate = entry
         if gate not in policy.GATES:
             # Silently ignoring it is the worst option available: the operator believes they
             # confirmed something, the run stops anyway, and nothing says why. A verifier found
@@ -655,6 +764,10 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
 
         tripped = _permanent_halt(node, cfg, report)
         if tripped is not None:
+            # STOPPED, never SUSPENDED: a permanent halt is the one stop no decision continues, and
+            # a caller that could not tell it from a gate would offer somebody a button that does
+            # nothing -- or worse, appear to accept an approval for something unapprovable.
+            report.state = STOPPED
             report.halted_at = node.id
             report.halt_reason = tripped
             return _finish(report, confirmations)
@@ -670,12 +783,41 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             """
             if node.gate_when != phase or not policy.stops(str(verdict["verdict"])):
                 return None
+
+            # A decision naming this node is spent first: it is the more specific answer, and
+            # preferring the blanket one would let a targeted approval survive its own stop and open
+            # some later gate nobody meant it for.
+            for i, approval in enumerate(targeted):
+                if approval.gate != node.gate:
+                    continue
+                if approval.node_id is not None and approval.node_id != node.id:
+                    continue
+                targeted.pop(i)
+                report.confirmations.append(
+                    f"{node.gate} = {verdict['verdict']} at risk {verdict['risk']} at {node.id}, "
+                    f"decided by the operator ({approval})")
+                return None
+
             if confirmations.get(node.gate, 0) > 0:
                 confirmations[node.gate] -= 1
                 report.confirmations.append(
                     f"{node.gate} = {verdict['verdict']} at risk {verdict['risk']} at {node.id}, "
                     f"confirmed by the operator")
                 return None
+
+            # Suspended, not finished. The stop is still a *return* -- no waiting happens inside the
+            # walk, so "alive and stopped" never exists and cannot be mistaken for "alive and
+            # continuing". What is new is that the report says which of the two it is, and carries
+            # what an answer would have to match.
+            report.state = SUSPENDED
+            report.suspended = {
+                "node_id": node.id,
+                "gate": node.gate,
+                "gate_when": node.gate_when,
+                "verdict": verdict["verdict"],
+                "risk": verdict["risk"],
+                "run_id": cfg.run_id,
+            }
             report.halted_at = node.id
             report.halt_reason = (
                 f"{verdict['gate']} = {verdict['verdict']} at risk {verdict['risk']} "
@@ -722,6 +864,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             return _finish(stop, confirmations)
 
         if node.kind == graph.TERMINAL:
+            report.state = FINISHED
             report.halted_at = node.id
             report.halt_reason = node.note or node.label
             return _finish(report, confirmations)
@@ -740,6 +883,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 # person is task 13; until that exists, stopping IS the handling, and stopping is
                 # the same return every other halt in this engine already is.
                 last = report.adjudications[-1] if report.adjudications else {}
+                report.state = STOPPED
                 report.halted_at = node.id
                 report.halt_reason = (
                     f"{node.id} reached no decision — {last.get('reason', 'the panel was split')}. "
