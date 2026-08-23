@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from . import attachments as attach_mod
 from . import engine, models as models_mod, graph, policy, settings as settings_mod, ship, tui, workorder
 
 DEFAULT_CONFIG = "config/runner.yaml"
@@ -477,8 +478,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
     # caller that could walk around that by never asking for it.
     journal = engine.AskJournal(args.ask_journal or (Path(args.token_dir) / "asks"))
 
-    def make_config(instruction, approvals, rulings):
-        del instruction              # the plan is the work; the instruction is what a person typed
+    store = attach_mod.Store(args.attachments or (Path(args.token_dir) / "attachments"))
+
+    def make_config(instructions, approvals, rulings, artifacts):
         return engine.RunConfig(
             node_specs=plan.get("node_specs", {}),
             decisions=plan.get("decisions", {}),
@@ -490,6 +492,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
             confirmed=approvals,
             rulings=rulings,
             node_models=plan.get("node_models", {}),
+            artifacts=artifacts,
+            instructions=instructions,
             effects=effects_provider(plan),
             ordinary_commands=saved.ordinary_commands,
             undeclared=args.undeclared,
@@ -511,7 +515,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     factory = session_factory(config, dict(plan.get("seat_models") or {}), registry=registry)
     operator = server.Operator.mint(Path(args.token_dir))
     runner = server.Runner(walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
-                           make_config=make_config)
+                           make_config=make_config, store=store)
     try:
         httpd = server.serve(runner, operator, port=args.port,
                              registry=registry, registry_path=registry_path)
@@ -521,6 +525,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     host, port = httpd.server_address[0], httpd.server_address[1]
     print(f"journal        {journal.dir} — the run's identity, and what a resume reads")
+    print(f"attachments    {store.dir} — content-addressed; the filename never becomes a path")
     print(f"listening on   http://{host}:{port} — this machine only, no external connections")
     # The fragment is never sent to a server and never lands in a Referer, so one openable link can
     # carry the credential without it being logged anywhere on the way.
@@ -571,6 +576,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="where the ask journal lives — also the run's identity. Defaults to "
                          "<token-dir>/asks. It is not optional: without it every approval re-walks "
                          "the flow from the start, re-asking everything.")
+    pv.add_argument("--attachments", default=None,
+                    help="where attachments are stored (default <token-dir>/attachments). Stored "
+                         "under their content hash, never under the name they arrived with — see "
+                         "attachments.py for why that is a safety property and not tidiness.")
     pv.add_argument("--models", default=None,
                     help="path to the model registry (default <token-dir>/models.json)")
     pv.add_argument("--settings", default=None, help="path to settings.json")

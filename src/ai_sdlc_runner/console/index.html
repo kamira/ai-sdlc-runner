@@ -55,6 +55,12 @@
   .ask .row{display:flex;gap:8px;flex-wrap:wrap}
   .voices{font-family:var(--mono);font-size:11.5px;color:var(--dim);margin:0 0 10px}
   .voices .no{color:var(--stop)} .voices .yes{color:var(--go)}
+  .carry{border:1px solid var(--line);border-radius:6px;margin:0 0 18px;overflow:hidden;background:var(--card)}
+  .carry .ch{display:flex;gap:8px;padding:6px 10px;font-size:11.5px;font-weight:600;background:var(--soft)}
+  .carry .ch .n{margin-left:auto;font-family:var(--mono);font-size:10px;font-weight:400;color:var(--faint)}
+  .carry .cr{display:grid;grid-template-columns:60px 1fr;gap:9px;padding:5px 10px;border-top:1px solid var(--line);font-size:12.5px}
+  .carry .cr .cm{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .carry .cr.no .cm{color:var(--stop)}
   ul.log{list-style:none;margin:0;padding:0}
   ul.log li{display:grid;grid-template-columns:150px 74px 1fr;gap:10px;padding:5px 0;border-top:1px solid var(--line);font-size:12.5px}
   ul.log li .id{font-family:var(--mono);font-size:11.5px}
@@ -82,7 +88,10 @@
     <div id="ask"></div>
     <h2>your instruction</h2>
     <textarea id="instruction" rows="3" placeholder="what should this runner build?"></textarea>
-    <div style="margin:8px 0 20px"><button class="p" id="start">start the run</button></div>
+    <div style="margin:8px 0 20px" class="ask .row">
+      <button class="p" id="start">start the run</button>
+      <button id="more">add to the brief</button></div>
+    <div id="brief"></div>
     <h2>the log</h2>
     <ul class="log" id="log"></ul>
     <p class="err" id="err"></p>
@@ -157,6 +166,42 @@ function drawLog() {
   });
 }
 
+function drawBrief() {
+  var box = $("#brief"); box.innerHTML = "";
+  var asked = (state && state.instructions) || [];
+  var files = (state && state.attachments) || [];
+  if (!asked.length && !files.length) return;
+  var el = document.createElement("div"); el.className = "carry";
+  var h = document.createElement("div"); h.className = "ch";
+  h.textContent = "the brief so far";
+  var n = document.createElement("span"); n.className = "n";
+  n.textContent = asked.length + " instruction(s), " + files.length + " attachment(s)";
+  h.appendChild(n); el.appendChild(h);
+  asked.forEach(function (text, i) {
+    var row = document.createElement("div"); row.className = "cr";
+    var a = document.createElement("div"); a.className = "cm"; a.textContent = (i + 1) + ".";
+    var b = document.createElement("div"); b.className = "cw"; b.textContent = text;
+    row.appendChild(a); row.appendChild(b); el.appendChild(row);
+  });
+  files.forEach(function (f) {
+    var row = document.createElement("div"); row.className = "cr";
+    var a = document.createElement("div"); a.className = "cm"; a.textContent = "file";
+    var b = document.createElement("div"); b.className = "cw";
+    // The filename, because that is what a person recognises. It is data here and nowhere near a
+    // path -- the runner only ever handles the content hash.
+    b.textContent = f.filename + "  (" + f.media_type + ", " + f.size + " bytes)";
+    row.appendChild(a); row.appendChild(b); el.appendChild(row);
+  });
+  ((state && state.attachments_missing) || []).forEach(function (id) {
+    var row = document.createElement("div"); row.className = "cr no";
+    var a = document.createElement("div"); a.className = "cm"; a.textContent = "missing";
+    var b = document.createElement("div"); b.className = "cw";
+    b.textContent = id + " is in the manifest and not in the store";
+    row.appendChild(a); row.appendChild(b); el.appendChild(row);
+  });
+  box.appendChild(el);
+}
+
 function drawAsk() {
   var box = $("#ask"); box.innerHTML = "";
   if (!state || state.state !== "suspended" || !state.suspended) return;
@@ -212,6 +257,8 @@ function apply(s) {
   $("#where").textContent = s.at ? "at " + s.at : "";
   $("#meta").textContent = "v" + s.version + " · " + (s.log || []).length + " asks";
   $("#start").disabled = (s.state === "running" || s.state === "suspended");
+  $("#more").disabled = (s.state === "running");
+  drawBrief();
   $("#err").textContent = s.error || "";
   drawFlow(); drawLog(); drawAsk();
 }

@@ -47,6 +47,7 @@ from urllib.parse import parse_qs, urlsplit
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional
 
+from . import attachments as attach_mod
 from . import engine, graph, models as models_mod, policy
 
 #: The only addresses this server will bind. Not a default — a rule. A runner that can merge
@@ -122,13 +123,20 @@ class RunState:
 
     state: str = IDLE
     version: int = 0
-    instruction: str = ""
+    #: Every instruction, in the order they arrived. The blueprint is rarely finished when a run
+    #: starts; a second instruction is an event, not an edit of the first, and a work order that can
+    #: say *when* something was asked for is most of what makes a late change reviewable.
+    instructions: List[str] = field(default_factory=list)
     report: Optional[engine.RunReport] = None
     #: Answers accumulated across suspensions. A resumed walk replays from `intake` carrying these,
     #: which is why they are kept rather than applied and forgotten.
     approvals: List[engine.Approval] = field(default_factory=list)
     rulings: List[engine.Ruling] = field(default_factory=list)
     log: List[Dict[str, object]] = field(default_factory=list)
+    #: What the operator handed over, and anything the store has since lost. A brief that has
+    #: quietly lost a document is worse than one that says so.
+    attachments: List["attach_mod.Attachment"] = field(default_factory=list)
+    missing: List[str] = field(default_factory=list)
     error: str = ""
 
     def snapshot(self) -> Dict[str, object]:
@@ -136,7 +144,9 @@ class RunState:
         return {
             "state": self.state,
             "version": self.version,
-            "instruction": self.instruction,
+            "instructions": list(self.instructions),
+            "attachments": [a.as_dict() for a in self.attachments],
+            "attachments_missing": list(self.missing),
             "error": self.error,
             "at": report.halted_at if report else None,
             "reason": report.halt_reason if report else "",
@@ -155,9 +165,11 @@ class RunState:
 class Runner:
     """Owns the one run. Every state change bumps the version and wakes the listeners."""
 
-    def __init__(self, walk: Callable[..., engine.RunReport], make_config: Callable[[str], object]):
+    def __init__(self, walk: Callable[..., engine.RunReport], make_config: Callable[..., object],
+                 store: Optional["attach_mod.Store"] = None):
         self._walk = walk
         self._make_config = make_config
+        self._store = store
         self._lock = threading.RLock()
         self._listeners: List["queue.Queue[str]"] = []
         self.state = RunState()
@@ -188,9 +200,56 @@ class Runner:
                     f"a run is already {self.state.state}; one project, one runner, one run at a "
                     f"time. Answer or abandon the one in front of you first.")
             self.state = RunState(state="running", version=self.state.version + 1,
-                                  instruction=instruction)
+                                  instructions=[instruction] if instruction else [])
+            self._refresh_attachments()
             self._publish()
         return self._advance()
+
+    def instruct(self, version: int, instruction: str) -> Dict[str, object]:
+        """Add an instruction to a run already under way.
+
+        The blueprint gets finished while the work happens — that is the normal case, not a failure
+        of planning. So a second instruction is **added**, never merged into the first: every work
+        order from here on carries both, numbered, and a reviewer can see that something arrived
+        late rather than being handed a brief that looks as though it was always complete.
+
+        Only at a stop. Editing the brief underneath a walk that is mid-flight would mean two nodes
+        in one run answering different questions with nothing recording which was which.
+        """
+        if not instruction.strip():
+            raise ServerError("an empty instruction says nothing; there is nothing to add")
+        with self._lock:
+            self._require_version(version)
+            if self.state.state not in (engine.SUSPENDED, IDLE, engine.FINISHED, engine.STOPPED):
+                raise ServerError(
+                    f"this run is {self.state.state}. An instruction can be added when it is "
+                    f"waiting or finished — changing the brief under a walk in flight would have "
+                    f"two nodes answering different questions with nothing saying which was which.")
+            self.state.instructions.append(instruction.strip())
+            self._refresh_attachments()
+            self.state.version += 1
+            self._publish()
+            return self.state.snapshot()
+
+    def attach(self, version: int, filename: str, data: bytes) -> Dict[str, object]:
+        if self._store is None:
+            raise ServerError("this runner has no attachment store")
+        with self._lock:
+            self._require_version(version)
+            try:
+                self._store.add(filename, data, instruction=len(self.state.instructions))
+            except attach_mod.AttachmentError as exc:
+                raise ServerError(str(exc))
+            self._refresh_attachments()
+            self.state.version += 1
+            self._publish()
+            return self.state.snapshot()
+
+    def _refresh_attachments(self) -> None:
+        if self._store is None:
+            return
+        self.state.attachments = self._store.all()
+        self.state.missing = self._store.missing()
 
     def approve(self, version: int, gate: str, node_id: Optional[str]) -> Dict[str, object]:
         with self._lock:
@@ -237,9 +296,11 @@ class Runner:
     def _advance(self) -> Dict[str, object]:
         """Run the walk to its next return. **Nothing blocks inside it** — task 1's guarantee."""
         try:
-            report = self._walk(self._make_config(self.state.instruction,
+            report = self._walk(self._make_config(tuple(self.state.instructions),
                                                   tuple(self.state.approvals),
-                                                  tuple(self.state.rulings)))
+                                                  tuple(self.state.rulings),
+                                                  tuple(self._store.order_paths())
+                                                  if self._store else ()))
         except Exception as exc:                   # the run failed; say so rather than look idle
             with self._lock:
                 self.state.state = engine.STOPPED
@@ -351,6 +412,9 @@ def make_handler(runner: Runner, operator: Operator,
                 reg = held["registry"]
                 self._json(200, {**reg.as_dict(),
                                  "leaving": [m.id for m in reg.leaving()]})
+            elif path == "/attachments":
+                self._json(200, {"attachments": [a.as_dict() for a in runner.state.attachments],
+                                 "missing": list(runner.state.missing)})
             elif path == "/whoami":
                 self._json(200, {"operator": operator.name})
             else:
@@ -381,6 +445,15 @@ def make_handler(runner: Runner, operator: Operator,
                         models_mod.save(held["registry"], registry_path)
                     reg = held["registry"]
                     out = {**reg.as_dict(), "leaving": [m.id for m in reg.leaving()]}
+                elif self.path == "/run/instruct":
+                    out = runner.instruct(version, str(body.get("instruction") or ""))
+                elif self.path == "/attachments":
+                    import base64
+                    try:
+                        raw = base64.b64decode(str(body.get("data") or ""), validate=True)
+                    except Exception as exc:
+                        raise ServerError(f"the attachment body is not valid base64: {exc}")
+                    out = runner.attach(version, str(body.get("filename") or ""), raw)
                 elif self.path == "/run/decide":
                     out = runner.rule(version, str(body.get("node_id") or ""),
                                       str(body.get("branch") or ""))
@@ -389,6 +462,14 @@ def make_handler(runner: Runner, operator: Operator,
                     return
             except ServerError as exc:
                 self._json(409, {"error": str(exc)})
+                return
+            except Exception as exc:
+                # Anything unforeseen still gets an answer. Without this the handler thread dies,
+                # the socket closes, and the client sees `RemoteDisconnected` — a failure with no
+                # message, which sends whoever is debugging it to the network rather than to the
+                # traceback. Found live: a missing store directory took down the request instead of
+                # reporting itself.
+                self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
                 return
             self._json(200, out)
 
