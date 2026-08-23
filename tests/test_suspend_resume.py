@@ -63,8 +63,10 @@ def test_a_gate_stop_is_suspended_and_says_what_would_continue_it():
     assert report.suspended["node_id"] == report.halted_at
     assert report.suspended["gate"] == graph.BY_ID[report.halted_at].gate
     # Everything a caller needs to construct an answer, without re-deriving it from the flow.
-    for key in ("node_id", "gate", "gate_when", "verdict", "risk", "run_id"):
+    for key in ("node_id", "undecided", "gate", "gate_when", "verdict", "risk",
+                "branches", "run_id"):
         assert key in report.suspended
+    assert report.suspended["undecided"] is False, "a gate is not a tie, and says so"
 
 
 def test_finished_and_suspended_are_not_the_same_shape():
@@ -200,7 +202,7 @@ def test_nothing_waits_inside_the_walk():
 def test_the_suspended_report_is_returned_not_yielded():
     source = inspect.getsource(engine.walk)
     marker = source.index("report.state = SUSPENDED")
-    assert "return _finish(report, confirmations)" in source[marker:marker + 900]
+    assert "return _finish(report, confirmations)" in source[marker:marker + 1400]
 
 
 def test_a_report_cannot_claim_a_state_the_engine_does_not_know():

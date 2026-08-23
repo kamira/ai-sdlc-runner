@@ -69,6 +69,10 @@ def test_the_suspension_says_what_an_answer_would_have_to_look_like():
     stop = report.suspended
     assert stop["undecided"] is True
     assert stop["gate"] is None, "a tie is not a gate — it has no gate to confirm"
+    # Same keys as a gate suspension, so a client reads one shape rather than two.
+    for key in ("node_id", "undecided", "gate", "gate_when", "verdict", "risk",
+                "branches", "run_id"):
+        assert key in stop
     assert stop["branches"] == ["fail", "pass"]
     assert stop["verdicts"], "the person needs to see who said what"
     assert "reason" in stop

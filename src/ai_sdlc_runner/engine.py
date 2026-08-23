@@ -865,10 +865,17 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             report.state = SUSPENDED
             report.suspended = {
                 "node_id": node.id,
+                # Both kinds of suspension carry the same keys, so a caller never has to know which
+                # shape it is holding before it can read one. A gate has no branches to choose
+                # between and a tie has no gate to confirm, and each says so rather than omitting
+                # the field -- a missing key and a false one read the same way only until they do
+                # not.
+                "undecided": False,
                 "gate": node.gate,
                 "gate_when": node.gate_when,
                 "verdict": verdict["verdict"],
                 "risk": verdict["risk"],
+                "branches": [],
                 "run_id": cfg.run_id,
             }
             report.halted_at = node.id
@@ -949,8 +956,11 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     report.state = SUSPENDED
                     report.suspended = {
                         "node_id": node.id,
-                        "gate": None,
                         "undecided": True,
+                        "gate": None,
+                        "gate_when": None,
+                        "verdict": policy.UNDECIDED,
+                        "risk": cfg.risk,
                         "branches": sorted(node.branches),
                         "reason": last.get("reason", "the panel was split"),
                         "verdicts": dict(last.get("verdicts") or {}),
