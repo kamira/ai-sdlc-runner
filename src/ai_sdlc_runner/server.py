@@ -46,7 +46,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional
 
-from . import engine, graph, policy
+from . import engine, graph, models as models_mod, policy
 
 #: The only addresses this server will bind. Not a default — a rule. A runner that can merge
 #: branches has no business listening where anything but this machine can reach it, and making that
@@ -253,8 +253,12 @@ class Runner:
             return self.state.snapshot()
 
 
-def make_handler(runner: Runner, operator: Operator):
+def make_handler(runner: Runner, operator: Operator,
+                 registry: Optional["models_mod.Registry"] = None,
+                 registry_path: Optional[Path] = None):
     """The HTTP surface. Refuses before it reads, in the order the threat model requires."""
+
+    held = {"registry": registry if registry is not None else models_mod.Registry()}
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "ai-sdlc-runner"
@@ -316,6 +320,13 @@ def make_handler(runner: Runner, operator: Operator):
                 self._json(200, runner.state.snapshot())
             elif self.path == "/run/events":
                 self._stream()
+            elif self.path == "/models":
+                # The console is local only; the models need not be, and the operator should never
+                # have to read a hostname to find that out. `leaving` is the answer to "what goes
+                # out from here", stated rather than derivable.
+                reg = held["registry"]
+                self._json(200, {**reg.as_dict(),
+                                 "leaving": [m.id for m in reg.leaving()]})
             elif self.path == "/whoami":
                 self._json(200, {"operator": operator.name})
             else:
@@ -336,6 +347,16 @@ def make_handler(runner: Runner, operator: Operator):
                 elif self.path == "/run/gate":
                     out = runner.approve(version, str(body.get("gate") or ""),
                                          body.get("node_id"))
+                elif self.path == "/models":
+                    try:
+                        held["registry"] = held["registry"].add(
+                            models_mod._model_from(dict(body.get("model") or {})))
+                    except models_mod.ModelError as exc:
+                        raise ServerError(str(exc))
+                    if registry_path is not None:
+                        models_mod.save(held["registry"], registry_path)
+                    reg = held["registry"]
+                    out = {**reg.as_dict(), "leaving": [m.id for m in reg.leaving()]}
                 elif self.path == "/run/decide":
                     out = runner.rule(version, str(body.get("node_id") or ""),
                                       str(body.get("branch") or ""))
@@ -374,7 +395,8 @@ def make_handler(runner: Runner, operator: Operator):
 
 
 def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
-          port: int = 8765) -> ThreadingHTTPServer:
+          port: int = 8765, registry: Optional["models_mod.Registry"] = None,
+          registry_path: Optional[Path] = None) -> ThreadingHTTPServer:
     """Build the server, refusing any host that is not this machine.
 
     The refusal is here rather than in the caller because a bind address is exactly the kind of thing
@@ -385,4 +407,5 @@ def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
             f"refusing to bind {host!r}. This runner merges branches and answers gates; it listens "
             f"on {LOOPBACK[0]} and nowhere else. If another machine needs to see it, put something "
             f"in front of it that you have decided to trust — do not widen this.")
-    return ThreadingHTTPServer((host, port), make_handler(runner, operator))
+    return ThreadingHTTPServer(
+        (host, port), make_handler(runner, operator, registry, registry_path))

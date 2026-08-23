@@ -1,0 +1,287 @@
+"""models.py — the model registry (CHG-20260823-11 task 8).
+
+The console is **local only**: nothing outside this machine may reach it. The models it dispatches to
+are the opposite — a run is useful precisely because it can call out, to a vendor's API or to
+something on the network. Inbound closed, outbound open, and the two are not in tension: one is about
+who may drive this runner, the other about where its work is done.
+
+## What this module exists to prevent
+
+Both reaches are allowed. What is *not* allowed is the operator having to **infer** which one they
+picked. "This work order leaves the machine" is a fact about a configuration, and a registry that
+records `endpoint` and leaves the reader to notice the hostname has made that fact into a detail.
+
+So every model carries a **reach** — ``local``, ``internal`` or ``external`` — computed from what it
+actually is, and the console shows it. The point is not to discourage external models. It is that
+choosing one should be a decision somebody made rather than one they discover later, in the same way
+this repository refuses to let a node's *name* decide how its models are read.
+
+## Keys are named, never held
+
+An API model stores the **name of an environment variable**, never a value. Two reasons, and the
+second is the one that bites: a key in a config file reaches a screenshot, a bug report, a pasted
+snippet, and a git history that does not forget. The name is checked to *look* like a variable name,
+which is also what catches somebody pasting the key itself into the field — the shape refuses it
+before a human has to notice.
+
+An endpoint carrying a secret in its query string is refused for the same reason with a sharper edge:
+query strings land in access logs and proxy logs, which are the two places nobody remembers to
+inspect.
+"""
+from __future__ import annotations
+
+import ipaddress
+import json
+import re
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Tuple
+from urllib.parse import urlsplit
+
+CLI = "cli"      #: a command run on this machine
+API = "api"      #: an HTTP endpoint
+TRANSPORTS = (CLI, API)
+
+LOCAL = "local"        #: a subprocess here, or an endpoint on loopback
+INTERNAL = "internal"  #: reachable on a private network — a self-hosted model, not the internet
+EXTERNAL = "external"  #: a public endpoint; work orders leave this network
+REACHES = (LOCAL, INTERNAL, EXTERNAL)
+
+#: An environment variable's name, not its value. `sk-ant-...` fails this, which is the point.
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+#: Query keys that mean a secret is in the URL. Not exhaustive by design — see `_secret_in_query`.
+_SECRET_KEYS = ("key", "token", "secret", "password", "apikey", "api_key", "access_token", "sig")
+
+
+class ModelError(Exception):
+    """Refused. A registry that accepted this would be describing something else."""
+
+
+def _secret_in_query(endpoint: str) -> Optional[str]:
+    """A secret in the query string, if there is one.
+
+    Matching on the *key* rather than trying to recognise a secret's shape: shapes differ per vendor
+    and change without notice, while somebody writing ``?api_key=`` has told you what it is.
+    """
+    query = urlsplit(endpoint).query
+    if not query:
+        return None
+    for pair in query.split("&"):
+        name = pair.split("=", 1)[0].strip().lower()
+        if name in _SECRET_KEYS:
+            return name
+    return None
+
+
+def reach_of(transport: str, endpoint: str = "") -> str:
+    """Where a model actually is. Computed, never declared.
+
+    Asking the operator to label this themselves would put the one fact worth being sure about
+    behind the one place a mistake is invisible — a model labelled ``internal`` pointing at a public
+    host is a configuration that reads as safe and is not.
+    """
+    if transport == CLI:
+        return LOCAL
+    host = (urlsplit(endpoint).hostname or "").lower()
+    if not host:
+        raise ModelError("an api model needs an endpoint before its reach can be known")
+    if host in ("localhost", "localhost.localdomain"):
+        return LOCAL
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        # A name. A single label (`gpu-box`) or an explicitly local suffix is a network name; a
+        # dotted public name is not. Unresolvable is treated as external, because guessing the
+        # generous answer about where data goes is the wrong way to be wrong.
+        if "." not in host or host.endswith((".local", ".internal", ".lan", ".home.arpa")):
+            return INTERNAL
+        return EXTERNAL
+    if address.is_loopback:
+        return LOCAL
+    if address.is_private or address.is_link_local:
+        return INTERNAL
+    return EXTERNAL
+
+
+@dataclass(frozen=True)
+class Model:
+    """One model the runner can dispatch to."""
+
+    id: str
+    vendor: str
+    #: The vendor's own identifier — `claude-opus-5`, `gpt-5`, whatever the endpoint expects.
+    name: str
+    transport: str
+    #: `cli` only: argv. A list, not a string, so nothing is re-split by a shell that was never run.
+    command: Tuple[str, ...] = ()
+    #: `api` only.
+    endpoint: str = ""
+    #: `api` only: the **name** of an environment variable holding the key. Never the key.
+    key_env: str = ""
+    note: str = ""
+
+    @property
+    def reach(self) -> str:
+        return reach_of(self.transport, self.endpoint)
+
+    @property
+    def leaves_this_machine(self) -> bool:
+        return self.reach != LOCAL
+
+    def as_dict(self) -> Dict[str, object]:
+        payload = asdict(self)
+        payload["command"] = list(self.command)
+        payload["reach"] = self.reach
+        payload["leaves_this_machine"] = self.leaves_this_machine
+        return payload
+
+
+def validate(model: Model) -> Model:
+    """Every refusal this registry makes, in one place so none of them is optional."""
+    if not model.id or not _ENV_NAME.match(model.id.replace("-", "_")):
+        raise ModelError(
+            f"model id {model.id!r} is not a plain name. It is used as a key in config and on the "
+            f"wire; something that needs quoting will be quoted differently in two places.")
+    if not model.vendor:
+        raise ModelError(f"model {model.id!r} names no vendor — which API this speaks is not "
+                         f"derivable from the endpoint, and guessing it would be inventing one")
+    if not model.name:
+        raise ModelError(f"model {model.id!r} names no model at the vendor")
+    if model.transport not in TRANSPORTS:
+        raise ModelError(f"model {model.id!r} has unknown transport {model.transport!r}; this "
+                         f"runner speaks {list(TRANSPORTS)}")
+
+    if model.transport == CLI:
+        if not model.command:
+            raise ModelError(f"cli model {model.id!r} has no command to run")
+        if model.endpoint or model.key_env:
+            raise ModelError(
+                f"cli model {model.id!r} carries an endpoint or a key name it cannot use. A field "
+                f"nothing reads is one somebody will later assume was honoured.")
+        return model
+
+    if not model.endpoint:
+        raise ModelError(f"api model {model.id!r} has no endpoint")
+    scheme = urlsplit(model.endpoint).scheme
+    if scheme not in ("http", "https"):
+        raise ModelError(
+            f"model {model.id!r} has endpoint scheme {scheme or '(none)'}; this runner speaks http "
+            f"and https")
+    leaked = _secret_in_query(model.endpoint)
+    if leaked:
+        raise ModelError(
+            f"model {model.id!r} puts {leaked!r} in the endpoint's query string. Query strings land "
+            f"in access logs and proxy logs, which are the two places nobody thinks to inspect. Put "
+            f"the key in an environment variable and name it in `key_env`.")
+    if model.command:
+        raise ModelError(f"api model {model.id!r} carries a command it cannot use")
+    if model.key_env and not _ENV_NAME.match(model.key_env):
+        raise ModelError(
+            f"model {model.id!r} has key_env {model.key_env!r}, which is not the name of an "
+            f"environment variable. If that is the key itself: this registry stores the **name** of "
+            f"the variable holding it, so the key never reaches a file, a screenshot or a git "
+            f"history.")
+    if model.reach not in REACHES:                  # pragma: no cover - only a bug reaches this
+        raise ModelError(
+            f"model {model.id!r} computed reach {model.reach!r}, which is not one of {list(REACHES)}"
+            f" — a reach nobody can read is worse than no reach at all")
+    if model.reach == EXTERNAL and not model.key_env:
+        # Not a guess about the vendor's auth: an unauthenticated public endpoint is more likely a
+        # half-finished entry than a real one, and half-finished is worth stopping on.
+        raise ModelError(
+            f"model {model.id!r} reaches a public endpoint with no key named. If it genuinely needs "
+            f"no key, say so in `note` and name the variable anyway — an empty one is fine.")
+    return model
+
+
+@dataclass
+class Registry:
+    """The models this project may use, and nothing about which node uses which."""
+
+    models: Tuple[Model, ...] = ()
+
+    def __post_init__(self) -> None:
+        seen = set()
+        for model in self.models:
+            validate(model)
+            if model.id in seen:
+                raise ModelError(f"two models are called {model.id!r}")
+            seen.add(model.id)
+
+    def __iter__(self):
+        return iter(self.models)
+
+    def __len__(self) -> int:
+        return len(self.models)
+
+    def get(self, model_id: str) -> Model:
+        for model in self.models:
+            if model.id == model_id:
+                return model
+        raise ModelError(f"no model {model_id!r}; this project has {[m.id for m in self.models]}")
+
+    def add(self, model: Model) -> "Registry":
+        return Registry(models=self.models + (validate(model),))
+
+    def remove(self, model_id: str) -> "Registry":
+        self.get(model_id)
+        return Registry(models=tuple(m for m in self.models if m.id != model_id))
+
+    def leaving(self) -> List[Model]:
+        """Every model whose work orders leave this machine, so the console can say so plainly."""
+        return [m for m in self.models if m.leaves_this_machine]
+
+    def as_dict(self) -> Dict[str, object]:
+        return {"models": [m.as_dict() for m in self.models]}
+
+
+def _model_from(payload: Dict[str, object]) -> Model:
+    unknown = set(payload) - {f for f in Model.__dataclass_fields__}
+    if unknown:
+        raise ModelError(
+            f"model {payload.get('id')!r} has field(s) this runner does not know: "
+            f"{sorted(unknown)}. Ignoring them would let a setting look configured and do nothing.")
+    return Model(
+        id=str(payload.get("id") or ""),
+        vendor=str(payload.get("vendor") or ""),
+        name=str(payload.get("name") or ""),
+        transport=str(payload.get("transport") or ""),
+        command=tuple(payload.get("command") or ()),
+        endpoint=str(payload.get("endpoint") or ""),
+        key_env=str(payload.get("key_env") or ""),
+        note=str(payload.get("note") or ""),
+    )
+
+
+def load(path: str | Path) -> Registry:
+    """Read the registry. A missing file is an empty one; a malformed file is an error.
+
+    The same rule `settings.py` uses, for the same reason: falling back to empty on a typo would make
+    "you have no models" and "your file has a comma in the wrong place" the same message.
+    """
+    file = Path(path)
+    if not file.exists():
+        return Registry()
+    text = file.read_text(encoding="utf-8").strip()
+    if not text:
+        return Registry()
+    try:
+        payload = json.loads(text)
+    except ValueError as exc:
+        raise ModelError(f"{file} is not valid JSON: {exc}")
+    entries = payload.get("models") if isinstance(payload, dict) else payload
+    if not isinstance(entries, list):
+        raise ModelError(f"{file} should hold a list of models, or an object with a 'models' list")
+    return Registry(models=tuple(_model_from(e) for e in entries))
+
+
+def save(registry: Registry, path: str | Path) -> None:
+    file = Path(path)
+    file.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"models": [
+        {k: v for k, v in m.as_dict().items()
+         if k not in ("reach", "leaves_this_machine")}     # both are computed; storing them would
+        for m in registry.models]}                          # let a stale label outlive the truth
+    file.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8")

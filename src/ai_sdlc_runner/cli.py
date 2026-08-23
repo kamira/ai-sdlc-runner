@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from . import engine, graph, policy, settings as settings_mod, ship, tui, workorder
+from . import engine, models as models_mod, graph, policy, settings as settings_mod, ship, tui, workorder
 
 DEFAULT_CONFIG = "config/runner.yaml"
 
@@ -466,8 +466,15 @@ def cmd_serve(args: argparse.Namespace) -> int:
     operator = server.Operator.mint(Path(args.token_dir))
     runner = server.Runner(walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
                            make_config=make_config)
+    registry_path = Path(args.models or (Path(args.token_dir) / "models.json"))
     try:
-        httpd = server.serve(runner, operator, port=args.port)
+        registry = models_mod.load(registry_path)
+    except models_mod.ModelError as exc:
+        print(f"error: {exc}")
+        return 2
+    try:
+        httpd = server.serve(runner, operator, port=args.port,
+                             registry=registry, registry_path=registry_path)
     except server.ServerError as exc:
         print(f"error: {exc}")
         return 2
@@ -477,6 +484,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
     print(f"operator token {operator.token}")
     print(f"           in  {operator.token_path} (readable by you alone)")
     print("send it as the X-Operator-Token header on every request.")
+    leaving = registry.leaving()
+    print(f"models         {len(registry)} registered, {len(leaving)} of which leave this machine"
+          + (f": {', '.join(m.id + ' (' + m.reach + ')' for m in leaving)}" if leaving else ""))
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -516,6 +526,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="what to do with a working node that declares no operations")
     pv.add_argument("--ask-journal", metavar="DIR",
                     help="where to write the ask journal; also the run's identity")
+    pv.add_argument("--models", default=None,
+                    help="path to the model registry (default <token-dir>/models.json)")
     pv.add_argument("--settings", default=None, help="path to settings.json")
     pv.set_defaults(func=cmd_serve)
 
