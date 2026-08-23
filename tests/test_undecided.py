@@ -143,24 +143,30 @@ def test_the_engine_refuses_an_outcome_it_cannot_route(monkeypatch):
         engine._adjudicate(node, report, seats=1)
 
 
-def test_an_undecided_panel_stops_the_walk_rather_than_taking_a_branch():
+def test_an_undecided_panel_does_not_take_a_branch_by_itself():
+    """Updated by task 13, which gave the stop somewhere to go.
+
+    When this was written the walk *stopped* at an undecided panel and that was the whole handling.
+    Task 13 turned the stop into a suspension a person can answer. What has not changed, and is what
+    this test was always protecting, is that **the runner never picks the branch itself**.
+    """
     source = inspect.getsource(engine.walk)
     assert "policy.UNDECIDED" in source, "the walk must recognise the third outcome"
-    assert "will not pick a side" in source, (
+    assert "will not pick a" in source, (
         "an undecided stop should say nobody decided — reporting it as a failure would send the "
         "work back on a judgement the panel never made")
 
 
 def test_the_undecided_stop_is_a_return_like_every_other_halt():
-    """No new stopping mechanism was introduced here.
+    """No new stopping mechanism, in task 2 or in task 13.
 
-    Task 1 is where a gate learns to suspend and resume. This task must not quietly get there first
-    by inventing a second way to stop — every halt in this engine is a returned report, and this one
-    is too.
+    Every halt in this engine is a returned report. Task 2 must not have reached task 1's suspend
+    early by inventing a second way to stop, and task 13 must not have reached it by blocking — so
+    the marker still has to be followed by a plain return.
     """
     source = inspect.getsource(engine.walk)
-    marker = source.index("will not pick a side")
-    after = source[marker:marker + 400]
+    marker = source.index("will not pick a")
+    after = source[marker:marker + 500]
     assert "return _finish(report, confirmations)" in after
 
 
