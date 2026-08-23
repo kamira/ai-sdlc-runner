@@ -149,11 +149,22 @@ def test_a_majority_passes():
         {"conformance": "pass", "defect": "pass", "risk": "fail"})["outcome"] == "pass"
 
 
-def test_a_tie_does_not_pass():
-    """The panel exists to catch what one view would miss; an even split has caught it."""
+def test_a_tie_does_not_pass_and_does_not_fail_either():
+    """A tie decides nothing, and *nothing* is a third answer.
+
+    **This test changed deliberately in CHG-20260823-11 task 2.** It used to assert a tie returns
+    ``fail``, and it was not wrong — the rule it asserted was the rule. The rule changed, and the
+    reason is worth more than the diff: ``fail`` sends the work back, and sending work back is a
+    judgement. An even split has made no judgement. Calling it a failure meant the runner deciding
+    on the panel's behalf while reporting that the panel had decided.
+
+    What is preserved is the property the old name was protecting — **a tie still does not pass**.
+    That was never the part in question.
+    """
     outcome = policy.adjudicate({"conformance": "pass", "defect": "fail"})
-    assert outcome["outcome"] == "fail"
-    assert "tie" in outcome["reason"]
+    assert outcome["outcome"] == policy.UNDECIDED
+    assert outcome["outcome"] != policy.PASS
+    assert "decides nothing" in str(outcome["reason"])
 
 
 def test_an_unknown_seat_is_refused():

@@ -569,7 +569,12 @@ def _adjudicate(node: graph.Node, report: "RunReport", seats: int) -> str:
             f"short of a seat has not reached the majority it was opened for")
     outcome = policy.adjudicate(verdicts)
     report.adjudications.append({"node_id": node.id, **outcome, "verdicts": dict(verdicts)})
-    return "pass" if outcome["outcome"] == "pass" else "fail"
+    reached = str(outcome["outcome"])
+    if reached not in policy.OUTCOMES:
+        raise EngineError(
+            f"{node.id!r} adjudicated to {reached!r}, which is not an outcome this engine knows how "
+            f"to route. An unrecognised outcome is not a failure and must not be treated as one.")
+    return reached
 
 
 def _finish(report: "RunReport", confirmations: Dict[str, int]) -> "RunReport":
@@ -728,6 +733,18 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 choice = _answered_branch(node, answers)
             else:
                 choice = _choose(cfg, node, taken)
+            if choice == policy.UNDECIDED:
+                # Nobody decided, so the runner does not decide either. It stops, and the reason
+                # says what happened rather than dressing it as a failure -- a failure would send
+                # the work back, which is a judgement the panel did not reach. Routing this to a
+                # person is task 13; until that exists, stopping IS the handling, and stopping is
+                # the same return every other halt in this engine already is.
+                last = report.adjudications[-1] if report.adjudications else {}
+                report.halted_at = node.id
+                report.halt_reason = (
+                    f"{node.id} reached no decision — {last.get('reason', 'the panel was split')}. "
+                    f"The runner will not pick a side")
+                return _finish(report, confirmations)
             if choice is None:
                 raise EngineError(
                     f"node {node.id!r} branches on {sorted(node.branches)} but the run supplied no "
