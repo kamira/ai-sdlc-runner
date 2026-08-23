@@ -158,7 +158,7 @@ class Ask:
 #: task 1 rests on did not exist.
 FINISHED = "finished"    #: reached a terminal node; the flow ended where it was designed to
 SUSPENDED = "suspended"  #: stopped at a gate, and a decision can continue it
-STOPPED = "stopped"      #: stopped, and no decision continues it — a permanent halt, or nobody decided
+STOPPED = "stopped"      #: stopped, and nothing continues it — a permanent halt, or an effect that failed
 STATES = (FINISHED, SUSPENDED, STOPPED)
 
 
@@ -194,6 +194,31 @@ class Approval:
 
 
 @dataclass
+class Ruling:
+    """A person's answer to a tie: **which branch**, at a node whose panel decided nothing.
+
+    A separate thing from ``Approval``, deliberately, and the reason matters because task 1's answer
+    was "one ledger, not two". The hazard there was two mechanisms answering the **same** question —
+    an approval one ledger spends and the other never sees, so a gate opens untraceably. These
+    answer *different* questions and cannot substitute for each other: an approval says *may this
+    proceed past a gate*, a ruling says *which way*. A ruling can never open a gate and an approval
+    can never pick a branch, so there is no spend either one could miss.
+
+    It carries the same staleness checks for the same reason: an answer from a view of the run that
+    has moved on must be refused rather than quietly applied.
+    """
+
+    node_id: str
+    #: The branch the person chose. Must be one the node actually offers.
+    branch: str
+    run_id: Optional[str] = None
+
+    def __str__(self) -> str:
+        which = f" of run {self.run_id}" if self.run_id else ""
+        return f"{self.node_id} → {self.branch}{which}"
+
+
+@dataclass
 class RunReport:
     visited: List[str] = field(default_factory=list)
     asks: List[Ask] = field(default_factory=list)
@@ -223,6 +248,10 @@ class RunReport:
     effects: Dict[str, Dict[str, object]] = field(default_factory=dict)
     #: Asks answered from the journal rather than by opening a session, on a resumed run.
     resumed: List[str] = field(default_factory=list)
+    #: Ties a person broke, and which way. Kept apart from ``confirmations`` because they answer a
+    #: different question — "which branch" rather than "may this pass a gate" — and merging them
+    #: would make the audit trail say a gate was confirmed when nobody confirmed anything.
+    rulings: List[str] = field(default_factory=list)
 
     def as_dict(self) -> Dict[str, object]:
         return {
@@ -240,6 +269,7 @@ class RunReport:
             "single_model_panels": list(self.single_model_panels),
             "effects": {k: dict(v) for k, v in self.effects.items()},
             "resumed": list(self.resumed),
+            "rulings": list(self.rulings),
         }
 
 
@@ -289,6 +319,9 @@ class RunConfig:
     #: always meant — or a ``Decision`` naming the node and run it answers for. Both spend from the
     #: same ledger; see ``Decision``.
     confirmed: Sequence[object] = ()
+    #: A person's answers to ties — see ``Ruling``. Empty by default: a run with no rulings stops
+    #: at the first undecided panel, which is the honest behaviour when nobody has been asked yet.
+    rulings: Sequence["Ruling"] = ()
     max_steps: int = 200
     journal: Optional[AskJournal] = None
 
@@ -755,6 +788,26 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 f"nothing, and passing it silently would leave you believing otherwise.")
         confirmations[gate] = confirmations.get(gate, 0) + 1
 
+    # Same up-front checks as approvals, and for the same reason: an answer that cannot be applied
+    # anywhere must say so now, not be held and silently never spent.
+    unspent_rulings: List[Ruling] = []
+    for ruling in cfg.rulings:
+        if ruling.node_id not in graph.BY_ID:
+            raise EngineError(
+                f"ruling {ruling} names a node that is not in the flow — a branch chosen at a node "
+                f"nobody has cannot be taken anywhere")
+        offered = graph.BY_ID[ruling.node_id].branches
+        if ruling.branch not in offered:
+            raise EngineError(
+                f"ruling {ruling} chooses a branch {ruling.node_id!r} does not offer; it offers "
+                f"{sorted(offered)}. A branch nobody wrote down is not a decision this run can take")
+        if ruling.run_id is not None and ruling.run_id != cfg.run_id:
+            raise EngineError(
+                f"ruling {ruling} is for another run — this run is "
+                f"{cfg.run_id or 'un-identified (no journal)'}. A tie broken in a stale view must "
+                f"not route this one.")
+        unspent_rulings.append(ruling)
+
     node_id: Optional[str] = "intake"
     for _ in range(cfg.max_steps):
         if node_id is None:
@@ -877,18 +930,38 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             else:
                 choice = _choose(cfg, node, taken)
             if choice == policy.UNDECIDED:
-                # Nobody decided, so the runner does not decide either. It stops, and the reason
-                # says what happened rather than dressing it as a failure -- a failure would send
-                # the work back, which is a judgement the panel did not reach. Routing this to a
-                # person is task 13; until that exists, stopping IS the handling, and stopping is
-                # the same return every other halt in this engine already is.
                 last = report.adjudications[-1] if report.adjudications else {}
-                report.state = STOPPED
-                report.halted_at = node.id
-                report.halt_reason = (
-                    f"{node.id} reached no decision — {last.get('reason', 'the panel was split')}. "
-                    f"The runner will not pick a side")
-                return _finish(report, confirmations)
+                ruled = next((r for r in unspent_rulings if r.node_id == node.id), None)
+                if ruled is not None:
+                    # A person decided. It is recorded as *theirs* — the panel is not credited with
+                    # a verdict it never reached, which is the whole distinction `undecided` exists
+                    # to draw.
+                    unspent_rulings.remove(ruled)
+                    report.rulings.append(
+                        f"{node.id} was undecided ({last.get('reason', 'the panel was split')}) "
+                        f"and a person chose {ruled.branch!r}")
+                    choice = ruled.branch
+                else:
+                    # Nobody decided, so the runner does not decide either -- it suspends and says
+                    # what an answer would have to look like. Not `stopped`: a person CAN continue
+                    # this, and reporting it as unresumable would hide a live decision from the one
+                    # party entitled to make it.
+                    report.state = SUSPENDED
+                    report.suspended = {
+                        "node_id": node.id,
+                        "gate": None,
+                        "undecided": True,
+                        "branches": sorted(node.branches),
+                        "reason": last.get("reason", "the panel was split"),
+                        "verdicts": dict(last.get("verdicts") or {}),
+                        "run_id": cfg.run_id,
+                    }
+                    report.halted_at = node.id
+                    report.halt_reason = (
+                        f"{node.id} reached no decision — "
+                        f"{last.get('reason', 'the panel was split')}. The runner will not pick a "
+                        f"side; choose {' or '.join(sorted(node.branches))}")
+                    return _finish(report, confirmations)
             if choice is None:
                 raise EngineError(
                     f"node {node.id!r} branches on {sorted(node.branches)} but the run supplied no "

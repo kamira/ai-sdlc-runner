@@ -328,6 +328,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         high_risk_mode=high_risk,
         operations=plan.get("operations", {}),
         confirmed=tuple(args.confirm or ()),
+        rulings=tuple(_rulings(args.rule or ())),
         effects=effects_provider(plan),
         ordinary_commands=saved.ordinary_commands,
         undeclared=args.undeclared,
@@ -380,10 +381,40 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"state:         {report.state}")
     if report.state == engine.SUSPENDED and report.suspended:
         stop = report.suspended
-        print(f"waiting for:   a decision on {stop['gate']} at {stop['node_id']}")
-        print(f"continue with: --resume --confirm {stop['gate']}"
-              + (f"  (run {stop['run_id']})" if stop.get("run_id") else ""))
+        if stop.get("undecided"):
+            # A tie and a gate are different questions, so they get different sentences. Offering
+            # "--confirm" here would be offering a control that cannot answer what is being asked.
+            print(f"waiting for:   somebody to break a tie at {stop['node_id']}")
+            print(f"               {stop.get('reason', 'the panel was split')}")
+            for voice, verdict in sorted((stop.get("verdicts") or {}).items()):
+                print(f"               {voice}: {verdict}")
+            print(f"continue with: --resume --rule {stop['node_id']}="
+                  f"{'|'.join(stop.get('branches') or [])}")
+        else:
+            print(f"waiting for:   a decision on {stop['gate']} at {stop['node_id']}")
+            print(f"continue with: --resume --confirm {stop['gate']}"
+                  + (f"  (run {stop['run_id']})" if stop.get("run_id") else ""))
+    for line in report.rulings:
+        print(f"ruled:         {line}")
     return 0
+
+
+def _rulings(raw):
+    """Parse ``NODE=BRANCH`` arguments, refusing anything malformed.
+
+    Guessing here would be the worst option: a mistyped ruling that silently becomes a different
+    branch is a person's decision being changed without them knowing, at the one place in the flow
+    where the whole point is that a person decided.
+    """
+    out = []
+    for item in raw:
+        node_id, sep, branch = item.partition("=")
+        if not sep or not node_id or not branch:
+            raise SystemExit(
+                f"--rule expects NODE=BRANCH; got {item!r}. Say which node's tie you are breaking "
+                f"and which way.")
+        out.append(engine.Ruling(node_id=node_id, branch=branch))
+    return out
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -416,6 +447,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "question, different answerers — which is what cross-model review means.")
     pr.add_argument("--high-risk-mode", action="store_true",
                     help="allow fewer seats than the floor; the run records that it did")
+    pr.add_argument("--rule", action="append", default=None, metavar="NODE=BRANCH",
+                    help="break a tie: the branch you choose at a node whose panel decided "
+                         "nothing; repeatable. Separate from --confirm on purpose — a gate asks "
+                         "whether the run may proceed, a tie asks which way, and one cannot answer "
+                         "the other. Recorded as yours, not as a verdict the panel reached.")
     pr.add_argument("--confirm", action="append", default=None, metavar="GATE",
                     help="a gate you have already approved; repeatable. A halt is a pause with a "
                          "way back, and every confirmation is recorded in the run's report.")
