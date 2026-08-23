@@ -27,8 +27,16 @@ https://claude.ai/code/artifact/2e387693-6720-4d06-a803-62cfc8e8d0a7
 
 | File | What it is |
 |---|---|
-| `review-round-1-brief.md` | The brief both seats answered in round 1 of CHG-20260823-11 — kept so a later round can be compared against the same seven questions rather than a remembered version of them. |
+| `review-round-1-brief.md` | The brief both seats answered in round 1 of CHG-20260823-11. |
+| `review-round-2-brief.md` | The brief for round 2 — judging the corrections round 1 forced. |
+| `reviews/` | Every seat's verdict, whole. See its README for provenance. |
 
-The verdicts themselves live in the change record's **Review round 1** section, separated into what
-both seats found and what one found. Those are different strengths of claim and collapsing them would
-throw away the only thing two independent reviewers buy you.
+The briefs are kept because a later round has to be comparable against the same questions rather
+than a remembered version of them — and because round 2 caught a real defect by reading round 1's
+brief: it had **handed both seats** the alternative they then agreed on, which the record reported as
+independent convergence.
+
+The verdicts are in `reviews/`. The change record summarises them, separated into what both seats
+found and what one found — different strengths of claim, and collapsing them throws away the only
+thing two independent reviewers buy you. **Where a summary and a verdict disagree, the verdict is
+right.**
