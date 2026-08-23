@@ -417,6 +417,76 @@ def _rulings(raw):
     return out
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Start the console's back end. **Local only** — see `server.py` for why that is three rules.
+
+    The token is printed once, here, on the operator's own terminal. Printing it is the point: what
+    makes "whoever holds it is the operator" a true statement is that it reaches somebody who can
+    read this machine's filesystem, and nobody else.
+    """
+    from . import server
+
+    if not args.plan:
+        print("error: serve needs --plan <file>, the same one `run` takes. A console with no plan "
+              "behind it would accept an instruction and quietly answer nothing.")
+        return 2
+    plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+    try:
+        saved = settings_mod.load(args.settings)
+    except settings_mod.SettingsError as exc:
+        print(f"error: {exc}")
+        return 2
+
+    journal = engine.AskJournal(args.ask_journal) if args.ask_journal else None
+
+    def make_config(instruction, approvals, rulings):
+        del instruction              # the plan is the work; the instruction is what a person typed
+        return engine.RunConfig(
+            node_specs=plan.get("node_specs", {}),
+            decisions=plan.get("decisions", {}),
+            risk=args.risk or plan.get("risk", "high"),
+            autonomy=plan.get("autonomy"),
+            review_seats=saved.review_seats,
+            high_risk_mode=saved.high_risk_mode,
+            operations=plan.get("operations", {}),
+            confirmed=approvals,
+            rulings=rulings,
+            effects=effects_provider(plan),
+            ordinary_commands=saved.ordinary_commands,
+            undeclared=args.undeclared,
+            resume=bool(journal),
+            journal=journal,
+        )
+
+    # The same factory `run` uses, so the console dispatches exactly the way the command line does.
+    # A console that answered through a different path would be a second runner wearing the first
+    # one's governance.
+    config = load_config(args.config)
+    factory = session_factory(config, dict(plan.get("seat_models") or {}))
+    operator = server.Operator.mint(Path(args.token_dir))
+    runner = server.Runner(walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
+                           make_config=make_config)
+    try:
+        httpd = server.serve(runner, operator, port=args.port)
+    except server.ServerError as exc:
+        print(f"error: {exc}")
+        return 2
+
+    host, port = httpd.server_address[0], httpd.server_address[1]
+    print(f"listening on   http://{host}:{port} — this machine only, no external connections")
+    print(f"operator token {operator.token}")
+    print(f"           in  {operator.token_path} (readable by you alone)")
+    print("send it as the X-Operator-Token header on every request.")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print()
+        print("stopped. Nothing was decided for you; a suspended run is still suspended.")
+    finally:
+        httpd.server_close()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="runner",
                                 description="A governed development flow, driven end to end.")
@@ -435,6 +505,19 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--show", action="store_true",
                     help="print the current settings instead of opening the screen")
     ps.set_defaults(func=cmd_settings)
+
+    pv = sub.add_parser("serve", help="run the console's back end, on this machine only")
+    pv.add_argument("--plan", help="the plan file, same as `run` takes")
+    pv.add_argument("--port", type=int, default=8765, help="loopback port (default 8765)")
+    pv.add_argument("--token-dir", default=".runner",
+                    help="where the operator token is written (default .runner)")
+    pv.add_argument("--risk", choices=policy.RISKS, help="override the plan's risk grade")
+    pv.add_argument("--undeclared", choices=("refuse", "allow"), default="refuse",
+                    help="what to do with a working node that declares no operations")
+    pv.add_argument("--ask-journal", metavar="DIR",
+                    help="where to write the ask journal; also the run's identity")
+    pv.add_argument("--settings", default=None, help="path to settings.json")
+    pv.set_defaults(func=cmd_serve)
 
     pr = sub.add_parser("run", help="walk the flow for one change")
     pr.add_argument("--plan", default=None, help="JSON plan: node_specs, decisions, risk")

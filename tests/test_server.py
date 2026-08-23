@@ -1,0 +1,323 @@
+"""Tasks 10, 14, 15 and 16 — the back end, local only.
+
+Four tasks in one module because they are one server, and splitting them would have produced three
+that cannot be demonstrated: task 10's own done-when is "a reload mid-run rebuilds the view", which
+needs task 14's snapshot; and a snapshot two browsers can race is task 16's problem, not a separate
+one.
+
+## What "local only" is being tested as
+
+Not a bind address. Binding to loopback stops the *network*; it does not stop a **browser**, because
+any page the operator visits can issue requests to `http://127.0.0.1:<port>`. So the tests below
+check three separate refusals, and each stops a different attack:
+
+* a non-loopback `Host` — DNS rebinding, where the socket is local and the origin is not
+* a cross-origin `Origin` — the ordinary case of a page that is not ours
+* a missing or wrong token — the one that actually holds, because a cross-origin page can *send* a
+  request but cannot *read a file on disk*
+
+The third is also task 15's answer. The identity is what the caller **proved it could read**, never
+a name it typed into a body — which was the "button captioned Accept (as verifier), moved one layer
+down and called enforcement" that an independent seat refused.
+"""
+import json
+import threading
+import urllib.error
+import urllib.request
+
+import pytest
+
+from ai_sdlc_runner import engine, graph, policy, server
+from test_flow import DECISIONS, SPEC
+
+
+# --- a runner whose walk is the real engine ------------------------------------------------
+
+def _make_config(instruction, approvals, rulings, *, seat_verdicts=None, risk="high"):
+    del instruction
+    return engine.RunConfig(
+        node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+        decisions={"next_module": ["module", "none", "none"], "feedback": "done"},
+        risk=risk, undeclared="allow", confirmed=approvals, rulings=rulings,
+        review_seats=len(seat_verdicts) if seat_verdicts else None,
+        high_risk_mode=bool(seat_verdicts))
+
+
+def _dispatch(seat_verdicts=None):
+    def dispatch(order):
+        if order.get("seat"):
+            return {"verdict": (seat_verdicts or {}).get(order["seat"], "pass")}
+        branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
+                  "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])
+        return {"verdict": branch} if branch else {"ok": True}
+    return dispatch
+
+
+def _runner(seat_verdicts=None, risk="high"):
+    dispatch = _dispatch(seat_verdicts)
+    return server.Runner(
+        walk=lambda cfg: engine.walk(cfg, dispatch, enabled=True),
+        make_config=lambda i, a, r: _make_config(i, a, r, seat_verdicts=seat_verdicts, risk=risk))
+
+
+@pytest.fixture
+def live(tmp_path):
+    """A real server on a real loopback socket — the refusals are HTTP behaviour, not method calls."""
+    operator = server.Operator.mint(tmp_path)
+    runner = _runner()
+    httpd = server.serve(runner, operator, port=0)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    port = httpd.server_address[1]
+
+    def call(method, path, body=None, token=None, host=None, origin=None):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}", method=method,
+            data=json.dumps(body).encode("utf-8") if body is not None else None)
+        req.add_header("X-Operator-Token", operator.token if token is None else token)
+        req.add_header("Host", host or f"127.0.0.1:{port}")
+        if origin:
+            req.add_header("Origin", origin)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
+
+    yield call, runner, operator
+    httpd.shutdown()
+
+
+# --- local only ------------------------------------------------------------------------------
+
+def test_it_refuses_to_bind_anything_but_loopback():
+    """The refusal lives in the server so it cannot be 'temporarily' widened by a caller."""
+    with pytest.raises(server.ServerError, match="refusing to bind"):
+        server.serve(_runner(), server.Operator("t", "me", __import__("pathlib").Path(".")),
+                     host="0.0.0.0")
+
+
+def test_binding_loopback_is_allowed(tmp_path):
+    httpd = server.serve(_runner(), server.Operator.mint(tmp_path), port=0)
+    try:
+        assert httpd.server_address[0] == "127.0.0.1"
+    finally:
+        httpd.server_close()
+
+
+@pytest.mark.parametrize("host", ["evil.example.com", "evil.example.com:8765", "10.0.0.5"])
+def test_a_non_loopback_host_header_is_refused(live, host):
+    """DNS rebinding: the socket is local, the origin is not, and the Host header is the tell."""
+    call, _, _ = live
+    status, body = call("GET", "/run", host=host)
+    assert status == 403
+    assert "loopback" in body["error"]
+
+
+def test_a_cross_origin_request_is_refused(live):
+    call, _, _ = live
+    status, body = call("GET", "/run", origin="https://evil.example.com")
+    assert status == 403
+    assert "cross-origin" in body["error"]
+
+
+def test_our_own_origin_is_accepted(live):
+    call, _, _ = live
+    status, _ = call("GET", "/run", origin="http://127.0.0.1:8765")
+    assert status == 200
+
+
+# --- task 15: the identity is proved, not asserted ---------------------------------------------
+
+def test_no_token_is_refused(live):
+    call, _, _ = live
+    status, body = call("GET", "/run", token="")
+    assert status == 401
+    assert "operator token" in body["error"]
+
+
+def test_a_wrong_token_is_refused(live):
+    call, _, _ = live
+    status, _ = call("GET", "/run", token="not-the-token")
+    assert status == 401
+
+
+def test_the_token_is_on_disk_and_that_is_what_makes_local_only_hold(live):
+    """A cross-origin page can send a request. It cannot read a file."""
+    call, _, operator = live
+    assert operator.token_path.exists()
+    assert operator.token_path.read_text(encoding="utf-8").strip() == operator.token
+    status, body = call("GET", "/whoami")
+    assert status == 200 and body["operator"]
+
+
+def test_the_identity_cannot_be_chosen_by_the_caller(live):
+    """Task 15's actual requirement: no name in a body becomes the recorded operator."""
+    call, _, operator = live
+    status, body = call("GET", "/whoami")
+    assert body["operator"] == operator.name
+    # There is no route that accepts an identity; the only way to be somebody is to hold the token.
+    status, _ = call("POST", "/whoami", {"operator": "somebody else", "version": 0})
+    assert status == 404
+
+
+# --- task 14: the snapshot ----------------------------------------------------------------------
+
+def test_the_snapshot_is_readable_before_anything_runs(live):
+    call, _, _ = live
+    status, body = call("GET", "/run")
+    assert status == 200
+    assert body["state"] == server.IDLE
+    assert body["version"] == 0
+
+
+def test_a_reload_mid_run_rebuilds_the_view(live):
+    """Task 10's done-when, which had no endpoint behind it until task 14."""
+    call, _, _ = live
+    status, started = call("POST", "/run", {"instruction": "do it", "version": 0})
+    assert status == 200
+    assert started["state"] == engine.SUSPENDED
+
+    status, reloaded = call("GET", "/run")
+    assert status == 200
+    assert reloaded["state"] == engine.SUSPENDED
+    assert reloaded["at"] == started["at"]
+    assert reloaded["suspended"] == started["suspended"]
+    assert reloaded["version"] == started["version"]
+
+
+def test_the_flow_endpoint_carries_every_node_including_the_failure_paths(live):
+    """The mock-up shipped 18 of 23, all omissions on failure paths. The API does not repeat that."""
+    call, _, _ = live
+    status, body = call("GET", "/flow")
+    assert status == 200
+    ids = {n["id"] for n in body["nodes"]}
+    assert len(ids) == len(graph.NODES) == 23
+    for failure_path in ("fix_pass", "re_review", "halt_second_fail",
+                         "review_failed", "acceptance_failed"):
+        assert failure_path in ids
+    assert body["gates"].keys() == policy.GATES.keys()
+
+
+def test_the_flow_endpoint_carries_the_execution_mode(live):
+    call, _, _ = live
+    _, body = call("GET", "/flow")
+    by_id = {n["id"]: n for n in body["nodes"]}
+    assert by_id["engineer_build"]["mode"] == graph.POOL
+    assert by_id["engineer_build"]["main"] == "lead"
+    assert by_id["engineer_selfverify"]["follows"] == "engineer_build"
+    assert by_id["lead_review"]["mode"] == graph.SEAT_PANEL
+
+
+# --- task 16: one run, one version --------------------------------------------------------------
+
+def test_an_answer_must_name_the_version_it_answers(live):
+    call, _, _ = live
+    status, body = call("POST", "/run", {"instruction": "do it"})
+    assert status == 409
+    assert "version" in body["error"]
+
+
+def test_a_stale_version_is_refused(live):
+    """The stale tab: it is answering a state this run has moved past."""
+    call, _, _ = live
+    _, started = call("POST", "/run", {"instruction": "do it", "version": 0})
+    stop = started["suspended"]
+
+    status, body = call("POST", "/run/gate",
+                        {"version": 0, "gate": stop["gate"], "node_id": stop["node_id"]})
+    assert status == 409
+    assert "moved" in body["error"]
+
+
+def test_a_double_click_does_not_spend_two_approvals(live):
+    """The exact 'advance twice' an independent seat named."""
+    call, _, _ = live
+    _, started = call("POST", "/run", {"instruction": "do it", "version": 0})
+    stop = started["suspended"]
+    answer = {"version": started["version"], "gate": stop["gate"], "node_id": stop["node_id"]}
+
+    first_status, first = call("POST", "/run/gate", answer)
+    second_status, second = call("POST", "/run/gate", dict(answer))
+
+    assert first_status == 200
+    assert second_status == 409, "the second click was accepted — that is two approvals from one"
+    assert "moved" in second["error"]
+
+
+def test_the_version_advances_on_every_change(live):
+    call, _, _ = live
+    _, before = call("GET", "/run")
+    _, started = call("POST", "/run", {"instruction": "do it", "version": before["version"]})
+    assert started["version"] > before["version"]
+
+
+# --- answering the right question ---------------------------------------------------------------
+
+def test_a_gate_answer_is_refused_where_a_tie_is_waiting(tmp_path):
+    """A gate asks whether the run may proceed; a tie asks which way. Neither answers the other."""
+    names = policy.seat_names(2)
+    runner = _runner(seat_verdicts={names[0]: "pass", names[1]: "fail"}, risk="low")
+    runner.start("do it", 0)
+    assert runner.state.state == engine.SUSPENDED
+    assert runner.state.report.suspended["undecided"] is True
+
+    with pytest.raises(server.ServerError, match="a tie to break"):
+        runner.approve(runner.state.version, "lead_review", "lead_review")
+
+
+def test_a_ruling_is_refused_where_a_gate_is_waiting():
+    runner = _runner()
+    runner.start("do it", 0)
+    assert runner.state.report.suspended["undecided"] is not True
+    with pytest.raises(server.ServerError, match="a gate to approve"):
+        runner.rule(runner.state.version, "lead_review", "pass")
+
+
+def test_answering_when_nothing_is_waiting_is_refused():
+    runner = _runner(risk="low")
+    with pytest.raises(server.ServerError, match="nothing waiting"):
+        runner.approve(0, "merge", "merge")
+
+
+def test_a_second_run_cannot_start_over_a_suspended_one():
+    """One project, one runner — and a suspended run is not a free slot."""
+    runner = _runner()
+    runner.start("do it", 0)
+    with pytest.raises(server.ServerError, match="already"):
+        runner.start("something else", runner.state.version)
+
+
+# --- the walk still never blocks ----------------------------------------------------------------
+
+def test_the_server_waits_and_the_walk_does_not():
+    """Task 1's guarantee, checked from the side that does the waiting.
+
+    The server holds a suspended run for as long as nobody answers. The engine does not: the walk
+    that produced the suspension already returned, so there is no live frame to lose.
+    """
+    import inspect
+
+    runner = _runner()
+    runner.start("do it", 0)
+    assert runner.state.state == engine.SUSPENDED
+
+    source = inspect.getsource(server.Runner._advance)
+    for blocking in ("time.sleep", "input(", ".join()"):
+        assert blocking not in source
+
+    # And answering it continues the same run rather than starting a new one.
+    stop = runner.state.report.suspended
+    out = runner.approve(runner.state.version, stop["gate"], stop["node_id"])
+    assert out["at"] != stop["node_id"]
+
+
+def test_a_failing_walk_reports_stopped_rather_than_looking_idle():
+    """A crash must not leave the console showing a runner that is quietly doing nothing."""
+    def boom(cfg):
+        raise RuntimeError("the dispatcher fell over")
+
+    runner = server.Runner(walk=boom, make_config=lambda i, a, r: None)
+    out = runner.start("do it", 0)
+    assert out["state"] == engine.STOPPED
+    assert "fell over" in out["error"]
