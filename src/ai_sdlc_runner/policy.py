@@ -639,13 +639,54 @@ def resolve_seats(requested: Optional[int], high_risk_mode: bool) -> int:
     return requested
 
 
-def adjudicate(verdicts: Mapping[str, str]) -> Dict[str, object]:
-    """Turn the seats' verdicts into one outcome: veto first, then majority.
+#: The three outcomes a panel can reach. ``undecided`` is not a kind of failure — it is the absence
+#: of a decision, and the difference is the whole of CHG-20260823-11's second design decision: a
+#: failure sends the work back, which is a judgement nobody made.
+PASS = "pass"
+FAIL = "fail"
+UNDECIDED = "undecided"
+OUTCOMES = (PASS, FAIL, UNDECIDED)
 
-    A veto seat's ``fail`` cannot be outvoted — its subject is a matter of fact, and counting votes
-    on a fact is how a panel talks itself out of one. Everything else is a majority, and a tie does
-    not pass: the panel exists to catch what one view would miss, so an even split has caught it.
+
+def adjudicate(verdicts: Mapping[str, str], *, voices: str = "seats") -> Dict[str, object]:
+    """Turn a panel's verdicts into one outcome: veto first, then majority, and a tie decides nothing.
+
+    ``voices`` says **what kind of panel this is**, and it is a parameter rather than something
+    inferred from the names because the two kinds adjudicate differently:
+
+    ``"seats"``
+        The review seats. Each answers a *different* question, and one of them — conformance — holds
+        a **veto**: its subject is a matter of fact, and counting votes on a fact is how a panel
+        talks itself out of one. Every name must be a seat this policy defines.
+
+    ``"models"``
+        N models on **one** question (``graph.MODEL_PANEL``). **No voice vetoes.** A veto belongs to
+        a seat because that seat owns a subject; a model panel has no per-voice subject — every
+        voice answers the same question — so there is nothing for a veto to be *about*. Giving one
+        model a veto would be giving it authority for being itself, which is the ranking nobody
+        wrote down that this design refuses elsewhere. Majority, and that is all.
+
+    **A tie is ``undecided``, not ``fail``.** An even split has not decided anything, and returning
+    ``fail`` would send the work back on nobody's judgement. Callers must handle three outcomes;
+    ``engine._adjudicate`` used to collapse everything that was not ``pass`` into ``fail``, which
+    would have turned this whole change into a no-op that still went green.
     """
+    if voices not in ("seats", "models"):
+        raise PolicyError(f"unknown panel kind {voices!r}")
+    if voices == "models":
+        if not verdicts:
+            raise PolicyError("no verdicts to adjudicate")
+        passes = sum(1 for v in verdicts.values() if v == PASS)
+        if passes * 2 > len(verdicts):
+            return {"outcome": PASS, "vetoed": [],
+                    "reason": f"{passes}/{len(verdicts)} voices passed"}
+        if passes * 2 == len(verdicts):
+            return {"outcome": UNDECIDED, "vetoed": [],
+                    "reason": f"{passes}/{len(verdicts)} voices passed — an even split decides "
+                              f"nothing, so this is a person's to call"}
+        return {"outcome": FAIL, "vetoed": [],
+                "reason": f"only {passes}/{len(verdicts)} voices passed"}
+
     unknown = [s for s in verdicts if s not in BY_SEAT]
     if unknown:
         raise PolicyError(f"unknown seat(s): {sorted(unknown)}")
@@ -656,9 +697,13 @@ def adjudicate(verdicts: Mapping[str, str]) -> Dict[str, object]:
     if vetoed:
         return {"outcome": "fail", "reason": f"veto from {sorted(vetoed)}", "vetoed": sorted(vetoed)}
 
-    passes = sum(1 for v in verdicts.values() if v == "pass")
+    passes = sum(1 for v in verdicts.values() if v == PASS)
     if passes * 2 > len(verdicts):
-        return {"outcome": "pass", "reason": f"{passes}/{len(verdicts)} seats passed", "vetoed": []}
-    return {"outcome": "fail",
-            "reason": f"only {passes}/{len(verdicts)} seats passed; a tie does not pass",
+        return {"outcome": PASS, "reason": f"{passes}/{len(verdicts)} seats passed", "vetoed": []}
+    if passes * 2 == len(verdicts):
+        return {"outcome": UNDECIDED, "vetoed": [],
+                "reason": f"{passes}/{len(verdicts)} seats passed — an even split decides nothing, "
+                          f"so this is a person's to call"}
+    return {"outcome": FAIL,
+            "reason": f"only {passes}/{len(verdicts)} seats passed",
             "vetoed": []}
