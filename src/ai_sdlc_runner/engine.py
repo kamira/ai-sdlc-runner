@@ -683,7 +683,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
 
         answers: List[Mapping[str, object]] = []
         if node.role:
-            if node.role == "seat":
+            if node.mode == graph.SEAT_PANEL:
                 panel_sessions: List[object] = []
                 before = len(opened)
                 for seat in policy.seat_names(seats):
@@ -722,7 +722,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             return _finish(report, confirmations)
 
         if node.branches:
-            if node.role == "seat":
+            if node.mode == graph.SEAT_PANEL:
                 choice = _adjudicate(node, report, seats)
             elif node.answer_decides:
                 choice = _answered_branch(node, answers)
