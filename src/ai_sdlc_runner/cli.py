@@ -462,7 +462,20 @@ def cmd_serve(args: argparse.Namespace) -> int:
         print(f"error: {exc}")
         return 2
 
-    journal = engine.AskJournal(args.ask_journal) if args.ask_journal else None
+    # A journal is NOT optional here, and defaulting it is not a convenience -- it is the thing that
+    # makes a suspended run resumable at all.
+    #
+    # Found by running a three-module project through the console: every gate approval re-walked the
+    # flow from `intake`, because without a journal `resume` is False and nothing is skipped. The
+    # demo's agent happened to be idempotent, so the only trace was a review seeing modules that had
+    # not been built yet at the point it was asked. A real agent would have rebuilt every module and
+    # re-opened every PR, once per gate.
+    #
+    # It is also task 1's second answer arriving as a constraint: the run id IS the journal, so a
+    # server without one cannot validate the `run_id` on a targeted approval — the staleness check
+    # is simply dead. The engine already refuses `resume=True` with no journal; `serve` was the one
+    # caller that could walk around that by never asking for it.
+    journal = engine.AskJournal(args.ask_journal or (Path(args.token_dir) / "asks"))
 
     def make_config(instruction, approvals, rulings):
         del instruction              # the plan is the work; the instruction is what a person typed
@@ -480,7 +493,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
             effects=effects_provider(plan),
             ordinary_commands=saved.ordinary_commands,
             undeclared=args.undeclared,
-            resume=bool(journal),
+            resume=True,
             journal=journal,
         )
 
@@ -507,6 +520,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         return 2
 
     host, port = httpd.server_address[0], httpd.server_address[1]
+    print(f"journal        {journal.dir} — the run's identity, and what a resume reads")
     print(f"listening on   http://{host}:{port} — this machine only, no external connections")
     # The fragment is never sent to a server and never lands in a Referer, so one openable link can
     # carry the credential without it being logged anywhere on the way.
@@ -554,7 +568,9 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("--undeclared", choices=("refuse", "allow"), default="refuse",
                     help="what to do with a working node that declares no operations")
     pv.add_argument("--ask-journal", metavar="DIR",
-                    help="where to write the ask journal; also the run's identity")
+                    help="where the ask journal lives — also the run's identity. Defaults to "
+                         "<token-dir>/asks. It is not optional: without it every approval re-walks "
+                         "the flow from the start, re-asking everything.")
     pv.add_argument("--models", default=None,
                     help="path to the model registry (default <token-dir>/models.json)")
     pv.add_argument("--settings", default=None, help="path to settings.json")
