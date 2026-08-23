@@ -1,0 +1,1382 @@
+<title>Runner Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&display=swap">
+
+<style>
+  :root{
+    --bg:#EEF1F5;--surface:#FFFFFF;--surface-2:#F6F8FA;--surface-3:#EDF1F5;
+    --ink:#141920;--muted:#586170;--faint:#8A93A1;--line:#D6DCE4;--line-soft:#E6EAF0;
+    --accent:#37567C;--accent-soft:#E2EAF4;--go:#2C6A4E;--go-soft:#E0EFE7;
+    --wait:#87590E;--wait-soft:#FBEDD3;--stop:#A0392E;--stop-soft:#F9E2DF;
+    --idle:#98A1AD;--idle-soft:#EBEEF2;
+    --shadow:0 1px 2px rgba(16,22,32,.05),0 4px 16px rgba(16,22,32,.05);--r:6px;
+    --sans:"IBM Plex Sans",system-ui,-apple-system,Segoe UI,sans-serif;
+    --serif:"IBM Plex Serif",Georgia,serif;--mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  }
+  @media (prefers-color-scheme:dark){:root:not([data-theme=light]){
+    --bg:#0E1117;--surface:#171B22;--surface-2:#1D222A;--surface-3:#232932;
+    --ink:#E3E8EF;--muted:#939BAA;--faint:#6C7585;--line:#272D37;--line-soft:#20252D;
+    --accent:#84A5CE;--accent-soft:#1D2C3B;--go:#68B389;--go-soft:#152E1E;
+    --wait:#D3A657;--wait-soft:#2F2510;--stop:#E17A6D;--stop-soft:#351F1C;
+    --idle:#6C7585;--idle-soft:#1E232B;--shadow:0 1px 2px rgba(0,0,0,.45),0 6px 22px rgba(0,0,0,.35);}}
+  :root[data-theme=dark]{
+    --bg:#0E1117;--surface:#171B22;--surface-2:#1D222A;--surface-3:#232932;
+    --ink:#E3E8EF;--muted:#939BAA;--faint:#6C7585;--line:#272D37;--line-soft:#20252D;
+    --accent:#84A5CE;--accent-soft:#1D2C3B;--go:#68B389;--go-soft:#152E1E;
+    --wait:#D3A657;--wait-soft:#2F2510;--stop:#E17A6D;--stop-soft:#351F1C;
+    --idle:#6C7585;--idle-soft:#1E232B;--shadow:0 1px 2px rgba(0,0,0,.45),0 6px 22px rgba(0,0,0,.35);}
+
+  *{box-sizing:border-box}
+  html,body{min-width:1180px}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:13.5px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  h1,h2,h3,h4{font-family:var(--serif);font-weight:600;margin:0;text-wrap:balance}
+  code,.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  button{font:inherit;color:inherit;cursor:pointer}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+  select,input[type=text],input[type=number],input[type=password]{background:var(--surface-2);color:var(--ink);border:1px solid var(--line);border-radius:var(--r);padding:5px 8px;font:inherit;font-size:12.5px;font-family:var(--mono)}
+  select:focus,input:focus{border-color:var(--accent);outline:none}
+  label.lbl{display:block;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);font-weight:600;margin-bottom:3px}
+
+  header.top{display:flex;align-items:center;gap:18px;padding:10px 22px;background:var(--surface);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:30}
+  .brand h1{font-size:15px}
+  .bound{display:flex;align-items:center;gap:7px;padding:3px 10px;background:var(--surface-2);border:1px solid var(--line);border-radius:20px;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+  .bound b{color:var(--ink);font-weight:600}.bound .lock{color:var(--faint);font-size:10px}
+  nav.tabs{display:flex;gap:2px;margin-left:auto}
+  nav.tabs button{background:transparent;border:1px solid transparent;padding:5px 13px;border-radius:var(--r);font-size:12.5px;color:var(--muted)}
+  nav.tabs button:hover{background:var(--surface-2);color:var(--ink)}
+  nav.tabs button[aria-selected=true]{background:var(--accent-soft);color:var(--accent);border-color:var(--accent);font-weight:600}
+  .theme-btn{background:transparent;border:1px solid var(--line);border-radius:var(--r);padding:5px 9px;font-size:11.5px;color:var(--muted)}
+
+  main{padding:16px 22px 60px;max-width:1720px;margin:0 auto}
+  .panel[hidden]{display:none}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
+  .card+.card{margin-top:13px}
+  .card>h3{font-family:var(--sans);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:600;padding:9px 14px;border-bottom:1px solid var(--line-soft);display:flex;align-items:center;gap:8px}
+  .card>h3 .count{margin-left:auto;font-family:var(--mono);letter-spacing:0;text-transform:none;font-size:11px}
+  .card .body{padding:12px 14px}.card .body.flush{padding:0}.card .body.tight{padding:5px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:13px;align-items:start}
+  .btn{background:var(--accent);color:#fff;border:1px solid var(--accent);border-radius:var(--r);padding:6px 15px;font-weight:500;font-size:12.5px}
+  :root[data-theme=dark] .btn{color:#0D1117}
+  @media (prefers-color-scheme:dark){:root:not([data-theme=light]) .btn{color:#0D1117}}
+  .btn:hover{filter:brightness(1.08)}.btn[disabled]{opacity:.45;cursor:not-allowed;filter:none}
+  .btn.ghost{background:transparent;color:var(--muted);border-color:var(--line)}
+  .btn.ghost:hover{color:var(--ink);border-color:var(--muted);filter:none}
+  .btn.approve{background:var(--go);border-color:var(--go)}.btn.reject{background:var(--stop);border-color:var(--stop)}
+  .btn.sm{padding:3px 10px;font-size:11.5px}.btn.lg{padding:9px 22px;font-size:13.5px}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.row.spread{justify-content:space-between}
+  .note{font-size:12px;color:var(--muted);margin:0}.note b{color:var(--ink)}
+  .hint{font-size:11.5px;color:var(--muted);line-height:1.45}
+  .pill{font-family:var(--mono);font-size:11px;padding:3px 9px;border-radius:20px;border:1px solid var(--line);color:var(--muted);background:var(--surface-2)}
+  .pill b{color:var(--ink);font-weight:600}
+
+  /* ---- input box */
+  .ask-box{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:14px 16px;margin-bottom:13px}
+  .ask-box textarea{width:100%;min-height:58px;resize:vertical;padding:11px 13px;background:var(--surface-2);color:var(--ink);border:1px solid var(--line);border-radius:var(--r);font:inherit;font-size:14px}
+  .ask-box textarea:focus{border-color:var(--accent);outline:none}
+  .ask-box .under{display:flex;align-items:center;gap:9px;margin-top:9px;flex-wrap:wrap}.ask-box .under .grow{margin-left:auto}
+  .ask-box.drag textarea{border-color:var(--accent);background:var(--accent-soft)}
+  .atts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .att{display:flex;align-items:center;gap:7px;padding:4px 9px;border:1px solid var(--line);border-radius:var(--r);background:var(--surface-2);font-size:11.5px}
+  .att .ic{font-size:13px;line-height:1}
+  .att .nm{font-family:var(--mono);font-size:11px}
+  .att .sz{font-family:var(--mono);font-size:10px;color:var(--faint)}
+  .att button{background:none;border:0;color:var(--faint);padding:0;line-height:1;font-size:13px}
+  .att button:hover{color:var(--stop)}
+  .attbtn{background:transparent;border:1px dashed var(--line);color:var(--muted);border-radius:var(--r);padding:5px 12px;font-size:12px}
+  .attbtn:hover{border-color:var(--accent);color:var(--accent)}
+
+  /* ---- where */
+  .where{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:12px 16px 13px;margin-bottom:13px}
+  .where .hd{display:flex;align-items:baseline;gap:12px;margin-bottom:10px}
+  .where .hd h2{font-size:16px}.where .hd .now{font-family:var(--mono);font-size:12.5px;color:var(--accent);font-weight:600}
+  .where .hd .state{margin-left:auto;font-family:var(--mono);font-size:11.5px;padding:2px 10px;border-radius:20px;background:var(--idle-soft);color:var(--muted)}
+  .where .hd .state[data-s=running]{background:var(--accent-soft);color:var(--accent)}
+  .where .hd .state[data-s=waiting]{background:var(--wait-soft);color:var(--wait)}
+  .where .hd .state[data-s=stopped]{background:var(--stop-soft);color:var(--stop)}
+  .where .hd .state[data-s=done]{background:var(--go-soft);color:var(--go)}
+  .rail{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}
+  .ph{padding:7px 10px 8px;border-radius:5px;background:var(--surface-2);border:1px solid var(--line-soft)}
+  .ph .n{font-size:9.5px;font-family:var(--mono);color:var(--faint)}.ph .t{font-size:12.5px;font-weight:500}
+  .ph .s{font-size:10px;font-family:var(--mono);color:var(--faint)}
+  .ph[data-p=done]{background:var(--go-soft);border-color:var(--go)}.ph[data-p=done] .t,.ph[data-p=done] .n{color:var(--go)}
+  .ph[data-p=now]{background:var(--accent-soft);border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}.ph[data-p=now] .t,.ph[data-p=now] .n{color:var(--accent)}.ph[data-p=now] .t{font-weight:600}
+  .ph[data-p=wait]{background:var(--wait-soft);border-color:var(--wait)}.ph[data-p=wait] .t,.ph[data-p=wait] .n{color:var(--wait)}
+  .ph[data-p=stop]{background:var(--stop-soft);border-color:var(--stop)}.ph[data-p=stop] .t,.ph[data-p=stop] .n{color:var(--stop)}
+
+  /* ---- flow + log */
+  .main2{display:grid;grid-template-columns:270px minmax(0,1fr);gap:13px;align-items:start}
+  .spine{list-style:none;margin:0;padding:5px 0}
+  .spine li{display:grid;grid-template-columns:20px 1fr;gap:9px;align-items:start;padding:2.5px 13px 2.5px 11px}
+  .spine li .dot{width:8px;height:8px;border-radius:50%;margin:6px auto 0;background:var(--idle-soft);border:1.5px solid var(--idle);position:relative}
+  .spine li:not(:last-child) .dot::after{content:"";position:absolute;left:50%;top:calc(100% + 2px);width:1.5px;height:calc(100% + 9px);background:var(--line);transform:translateX(-50%)}
+  .spine li .nm{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+  .spine li .who{font-size:10px;color:var(--faint);font-family:var(--mono)}.spine li .who .mdl{color:var(--accent)}
+  .spine li .xn{color:var(--accent);font-weight:600}
+  .spine li[data-state=done] .dot{background:var(--go);border-color:var(--go)}.spine li[data-state=done] .nm{color:var(--ink)}
+  .spine li[data-state=active] .dot{background:var(--accent);border-color:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}.spine li[data-state=active] .nm{color:var(--accent);font-weight:600}
+  .spine li[data-state=wait] .dot{background:var(--wait);border-color:var(--wait);box-shadow:0 0 0 4px var(--wait-soft)}.spine li[data-state=wait] .nm{color:var(--wait);font-weight:600}
+  .spine li[data-state=stop] .dot{background:var(--stop);border-color:var(--stop);box-shadow:0 0 0 4px var(--stop-soft)}.spine li[data-state=stop] .nm{color:var(--stop);font-weight:600}
+  .spine li .gate{font-family:var(--mono);font-size:9px;padding:0 4px;border-radius:3px;margin-left:5px;background:var(--idle-soft);color:var(--faint)}
+
+  .logtools{display:flex;align-items:center;gap:6px;margin-left:auto}
+  .logtools button{font-family:var(--mono);font-size:10.5px;padding:2px 8px;border-radius:12px;border:1px solid var(--line);background:var(--surface-2);color:var(--muted)}
+  .logtools button[aria-pressed=true]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
+  .log{list-style:none;margin:0;padding:0}
+  .log li{border-bottom:1px solid var(--line-soft);padding:9px 14px;display:grid;grid-template-columns:60px 1fr;gap:11px;align-items:start}
+  .log li:last-child{border-bottom:0}
+  .log li .ts{font-family:var(--mono);font-size:10.5px;color:var(--faint);padding-top:2px}
+  .log .hd{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+  .log .node{font-family:var(--mono);font-size:12px;font-weight:600}
+  .log .who{font-size:11px;padding:1px 7px;border-radius:11px;font-family:var(--mono)}
+  .who.agent{background:var(--accent-soft);color:var(--accent)}
+  .who.subagent{background:var(--idle-soft);color:var(--muted)}
+  .who.seat{background:var(--surface-3);color:var(--muted);border:1px solid var(--line)}
+  .who.runner{background:transparent;color:var(--faint);border:1px dashed var(--line)}
+  .log .mdl{font-family:var(--mono);font-size:10px;color:var(--accent)}
+  .log .via{font-family:var(--mono);font-size:9px;color:var(--faint);border:1px solid var(--line);border-radius:3px;padding:0 4px}
+  .log .dur{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--faint)}
+  .log .msg{font-size:12.5px;color:var(--muted);margin-top:3px}
+  .log .out{font-family:var(--mono);font-size:11.5px;color:var(--ink);background:var(--surface-2);border:1px solid var(--line-soft);border-radius:4px;padding:6px 9px;margin-top:5px;white-space:pre-wrap;word-break:break-word}
+  .log li.sub{background:linear-gradient(90deg,var(--surface-3) 0 3px,transparent 3px)}
+  .log li.sub .hd{padding-left:14px;position:relative}
+  .log li.sub .hd::before{content:"↳";position:absolute;left:0;color:var(--faint);font-family:var(--mono);font-size:11px}
+  .log li[data-k=retry]{background:var(--wait-soft)}.log li[data-k=retry] .msg{color:var(--wait)}
+  .log li[data-k=halt]{background:var(--stop-soft)}.log li[data-k=halt] .msg{color:var(--stop)}
+  .log li[data-k=gate]{background:var(--wait-soft)}.log li[data-k=gate] .msg{color:var(--wait)}
+  .log .tag{font-family:var(--mono);font-size:9px;text-transform:uppercase;padding:1px 6px;border-radius:3px;background:var(--idle-soft);color:var(--muted)}
+  .log .tag.confirm{background:var(--wait-soft);color:var(--wait)}
+  .log .tag.panel{background:var(--accent-soft);color:var(--accent)}
+  .empty{padding:26px 14px;color:var(--faint);font-size:12px;text-align:center}
+  .gate-prompt{border:1.5px solid var(--wait);border-radius:var(--r);background:var(--wait-soft);padding:14px 16px;margin:11px 14px}
+  .gate-prompt.stopgate{border-color:var(--stop);background:var(--stop-soft)}
+  .gate-prompt h3{font-family:var(--serif);font-size:15px}
+  .gate-prompt .why{font-size:12.5px;color:var(--muted);margin:5px 0 10px}
+  .vline{font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:6px 9px;margin-bottom:10px}
+  .voices{display:flex;gap:7px;flex-wrap:wrap;margin-top:6px}
+  .vbadge{display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:20px;padding:2px 10px;font-family:var(--mono);font-size:11px;background:var(--surface-2);color:var(--muted)}
+  .vbadge .v{font-size:10px;padding:0 6px;border-radius:9px;background:var(--idle-soft);color:var(--faint)}
+  .vbadge[data-v=pass] .v{background:var(--go-soft);color:var(--go)}
+  .vbadge[data-v=fail] .v{background:var(--stop-soft);color:var(--stop)}
+  .vbadge[data-v="…"] .v{background:var(--accent-soft);color:var(--accent)}
+  .vbadge .veto{font-size:9px;color:var(--stop)}
+
+  /* ---- tables + config */
+  table.t{width:100%;border-collapse:collapse;font-size:12.5px}
+  table.t th,table.t td{text-align:left;padding:7px 12px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+  table.t th{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--faint);font-weight:600;background:var(--surface-2)}
+  table.t td.m{font-family:var(--mono);font-size:11.5px}table.t td.d{color:var(--muted);font-size:11.5px}
+  .grp td{background:var(--surface-3)!important;font-family:var(--sans);font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:600;padding:5px 12px}
+  .opt{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line-soft)}
+  .opt:last-child{border-bottom:0}.opt .lab{font-weight:500;font-size:12.5px}.opt .ctl{margin-left:auto;flex-shrink:0}
+  .seatpick{display:flex;gap:4px}
+  .seatpick button{font-family:var(--mono);width:30px;height:27px;border-radius:4px;border:1px solid var(--line);background:var(--surface-2);color:var(--muted);font-size:12px}
+  .seatpick button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  :root[data-theme=dark] .seatpick button[aria-pressed=true]{color:#0D1117}
+  .toggle{width:40px;height:23px;border-radius:12px;border:1px solid var(--line);background:var(--surface-2);position:relative;padding:0}
+  .toggle::after{content:"";position:absolute;top:2px;left:2px;width:17px;height:17px;border-radius:50%;background:var(--faint);transition:transform .14s,background .14s}
+  .toggle[aria-pressed=true]{background:var(--stop-soft);border-color:var(--stop)}
+  .toggle[aria-pressed=true]::after{transform:translateX(17px);background:var(--stop)}
+  .warnbox{margin-top:9px;padding:8px 11px;border-radius:var(--r);font-size:11.5px;background:var(--stop-soft);color:var(--stop);border:1px solid var(--stop)}
+  .warnbox.calm{background:var(--idle-soft);color:var(--muted);border-color:var(--line)}
+  .warnbox.good{background:var(--go-soft);color:var(--go);border-color:var(--go)}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .chip{font-family:var(--mono);font-size:11px;padding:3px 8px;border-radius:4px;background:var(--surface-2);border:1px solid var(--line);display:flex;align-items:center;gap:6px}
+  .chip button{background:none;border:0;color:var(--faint);padding:0;line-height:1;font-size:13px}.chip button:hover{color:var(--stop)}
+  .stepper{display:flex;align-items:center;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--surface-2)}
+  .stepper button{width:26px;height:26px;background:transparent;border:0;color:var(--muted);font-family:var(--mono)}
+  .stepper .v{width:38px;text-align:center;font-family:var(--mono);font-size:12.5px;font-weight:600}
+  .rec{list-style:none;margin:0;padding:0}
+  .rec li{padding:7px 14px;border-bottom:1px solid var(--line-soft);font-size:11.5px;display:flex;gap:8px}
+  .rec .tag{font-family:var(--mono);font-size:9px;text-transform:uppercase;padding:1px 6px;border-radius:3px;background:var(--stop-soft);color:var(--stop);height:fit-content}
+  .rec .txt{color:var(--muted)}
+  pre{margin:0;padding:11px 13px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r);overflow-x:auto;font-family:var(--mono);font-size:11px;line-height:1.6}
+  .split{display:grid;grid-template-columns:1fr auto 1fr;gap:13px;align-items:center;margin:2px 0 12px}
+  .side{border:1px solid var(--line);border-radius:var(--r);padding:11px 13px;background:var(--surface-2)}
+  .side h4{font-family:var(--sans);font-size:12px;font-weight:600;margin-bottom:5px}
+  .side ul{margin:0;padding-left:16px;font-size:11.5px;color:var(--muted)}.side li{margin:2px 0}
+  .arrow{text-align:center;color:var(--faint);font-family:var(--mono);font-size:11px}
+
+  /* ---- model registry */
+  .mreg{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:11px}
+  .mcard{border:1px solid var(--line);border-radius:var(--r);background:var(--surface-2);padding:11px 13px;position:relative}
+  .mcard.off{opacity:.5}
+  .mcard .top{display:flex;align-items:baseline;gap:8px;margin-bottom:2px}
+  .mcard .nm{font-family:var(--mono);font-size:13px;font-weight:600}
+  .mcard .vend{font-size:10.5px;padding:1px 7px;border-radius:11px;background:var(--surface-3);color:var(--muted);border:1px solid var(--line)}
+  .mcard .via{margin-left:auto;font-family:var(--mono);font-size:9.5px;padding:1px 6px;border-radius:3px}
+  .via-cli{background:var(--accent-soft);color:var(--accent)}
+  .via-api{background:var(--go-soft);color:var(--go)}
+  .mcard .id{font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:5px}
+  .mcard .conn{font-family:var(--mono);font-size:10.5px;color:var(--faint);word-break:break-all;line-height:1.45}
+  .mcard .acts{display:flex;gap:6px;margin-top:9px}
+  .mcard .acts button{font-size:11px;padding:2px 9px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:var(--muted)}
+  .mcard .acts button:hover{color:var(--ink);border-color:var(--muted)}
+  .mcard .acts .del:hover{color:var(--stop);border-color:var(--stop)}
+  .addform{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;align-items:end}
+  .addform .wide{grid-column:span 2}
+  .addform .full{grid-column:1/-1}
+
+  /* ---- multiselect */
+  .msel{display:flex;flex-wrap:wrap;gap:4px;border:1px solid var(--line);border-radius:var(--r);padding:4px 5px;background:var(--surface-2);min-height:30px;cursor:pointer}
+  .msel:hover{border-color:var(--muted)}
+  .msel .mm{font-family:var(--mono);font-size:10.5px;padding:1px 7px;border-radius:11px;background:var(--accent-soft);color:var(--accent)}
+  .msel .inh{font-family:var(--mono);font-size:10.5px;color:var(--faint);font-style:italic;padding:1px 4px}
+  .msel .xn{font-family:var(--mono);font-size:10px;color:var(--go);font-weight:600;padding:1px 6px;border-radius:11px;background:var(--go-soft)}
+  .msel .xp{font-family:var(--mono);font-size:10px;color:var(--wait);font-weight:600;padding:1px 6px;border-radius:11px;background:var(--wait-soft)}
+  .spine li .xp{color:var(--wait);font-weight:600}
+  .log .who.main{background:var(--wait-soft);color:var(--wait)}
+  .log .vd{font-family:var(--mono);font-size:10px;padding:1px 7px;border-radius:11px;font-weight:600}
+  .vd-pass{background:var(--go-soft);color:var(--go)} .vd-fail{background:var(--stop-soft);color:var(--stop)}
+  .log li.dissent{background:var(--stop-soft)}
+  .adj{border:1px solid var(--line);border-radius:5px;margin-top:6px;overflow:hidden}
+  .adj .ah{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:11.5px;font-weight:600;background:var(--surface-3)}
+  .adj .ah .oc{margin-left:auto;font-family:var(--mono);font-size:10.5px;padding:1px 9px;border-radius:11px}
+  .adj.pass .ah .oc{background:var(--go-soft);color:var(--go)} .adj.fail .ah .oc{background:var(--stop-soft);color:var(--stop)}
+  .adj .vr{display:grid;grid-template-columns:118px 52px 1fr;gap:9px;padding:6px 10px;border-top:1px solid var(--line-soft);font-size:11.5px;align-items:baseline}
+  .adj .vr .vn{font-family:var(--mono);font-weight:600}
+  .adj .vr .vw{color:var(--muted)}
+  .adj .vr.f{background:var(--stop-soft)} .adj .vr.f .vw{color:var(--stop)}
+  .adj .rule{padding:7px 10px;border-top:1px solid var(--line-soft);font-size:11.5px;color:var(--muted);background:var(--surface-2)}
+  .adj .rule b{color:var(--ink)}
+  .adj .round{font-family:var(--mono);font-size:10px;color:var(--faint);margin-left:6px;font-weight:400}
+  .log li[data-k=rerun]{background:var(--accent-soft)} .log li[data-k=rerun] .msg{color:var(--accent)}
+  .carry{border:1px solid var(--accent);border-radius:5px;margin-top:6px;overflow:hidden}
+  .carry .ch{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:11.5px;font-weight:600;background:var(--accent-soft);color:var(--accent)}
+  .carry .ch .n{margin-left:auto;font-family:var(--mono);font-size:10px;font-weight:400;color:var(--muted)}
+  .carry .cr{display:grid;grid-template-columns:96px 1fr;gap:9px;padding:6px 10px;border-top:1px solid var(--line-soft);font-size:12px;align-items:baseline}
+  .carry .cr .cm{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--stop)}
+  .carry .cr .cw{color:var(--muted)}
+  .carry .ask{border:0;background:var(--surface-2);border-top:1px solid var(--line-soft);border-radius:0;padding:7px 10px;margin:0;font-size:12px;color:var(--ink)}
+  .carry .ft{padding:6px 10px;border-top:1px solid var(--line-soft);background:var(--surface-2);font-size:11px;color:var(--muted)}
+  .brief{border:1px solid var(--accent);border-radius:5px;margin-top:6px;overflow:hidden}
+  .brief .bh{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:11.5px;font-weight:600;background:var(--accent-soft);color:var(--accent)}
+  .brief .bh .kept{margin-left:auto;font-family:var(--mono);font-size:10px;font-weight:400;color:var(--muted)}
+  .brief ol{margin:0;padding:8px 10px 9px 28px;font-size:12.5px;color:var(--ink)}
+  .brief li{margin:3px 0}
+  .brief .ft{padding:6px 10px;border-top:1px solid var(--line-soft);background:var(--surface-2);font-size:11px;color:var(--muted)}
+  .brief .apx{border-top:1px solid var(--line-soft);background:var(--surface-2)}
+  .brief .apx .ah2{padding:5px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--faint);font-weight:600;display:flex;gap:8px;align-items:center}
+  .brief .apx .ah2 .sec{margin-left:auto;font-family:var(--mono);font-size:9.5px;text-transform:none;letter-spacing:0}
+  .brief .apx .ar{display:grid;grid-template-columns:88px 34px 1fr;gap:8px;padding:4px 10px;font-size:11px;color:var(--faint);align-items:baseline}
+  .brief .apx .ar .am{font-family:var(--mono);font-size:10.5px}
+  .brief .apx .ar .av{font-family:var(--mono);font-size:9.5px}
+  .brief .apx .ar.no .av{color:var(--stop)} .brief .apx .ar.yes .av{color:var(--go)}
+  .carry .cr.yes .cm{color:var(--go)} .carry .cr.no .cm{color:var(--stop)}
+  .carry .side-h{padding:5px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:600;background:var(--surface-2);border-top:1px solid var(--line-soft)}
+  .carry .side-h.no{color:var(--stop)} .carry .side-h.yes{color:var(--go)}
+  .adj.undecided .ah .oc{background:var(--wait-soft);color:var(--wait)}
+  .adj .vr.u{background:var(--wait-soft)} .adj .vr.u .vw{color:var(--wait)}
+  .undec{border:1.5px solid var(--wait);border-radius:var(--r);background:var(--wait-soft);padding:14px 16px;margin:11px 14px}
+  .undec h3{font-family:var(--serif);font-size:15px;margin-bottom:4px}
+  .undec .plain{font-size:13.5px;color:var(--ink);margin:6px 0 10px;line-height:1.5}
+  .undec .sides{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:11px}
+  .undec .sd{background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:9px 11px}
+  .undec .sd h4{font-family:var(--sans);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}
+  .undec .sd.yes h4{color:var(--go)} .undec .sd.no h4{color:var(--stop)}
+  .undec .sd ul{margin:0;padding-left:15px;font-size:12px;color:var(--muted)} .undec .sd li{margin:3px 0}
+  .undec .sd .wm{font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+  .picker{position:absolute;z-index:60;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:7px;min-width:280px}
+  .picker .opt2{display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:4px;font-family:var(--mono);font-size:11.5px}
+  .picker .opt2:hover{background:var(--surface-2)}
+  .picker .opt2 input{margin:0}
+  .picker .opt2 .vd{margin-left:auto;font-size:9.5px;color:var(--faint)}
+  .picker .ft{border-top:1px solid var(--line-soft);margin-top:5px;padding-top:6px;font-size:11px;color:var(--muted)}
+</style>
+
+<header class="top">
+  <div class="brand"><h1>Runner Console</h1></div>
+  <div class="bound" title="one project, one runner"><span class="lock">⛓</span><b id="hdr-proj">slugify</b><span id="hdr-path">~/code/slugify</span></div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" aria-selected="true" data-tab="console">Console</button>
+    <button role="tab" aria-selected="false" data-tab="project">Project</button>
+    <button role="tab" aria-selected="false" data-tab="models">Models</button>
+    <button role="tab" aria-selected="false" data-tab="nodes">Node → models</button>
+    <button role="tab" aria-selected="false" data-tab="panel">Review panel</button>
+    <button role="tab" aria-selected="false" data-tab="api">Front / back</button>
+  </nav>
+  <button class="theme-btn" id="theme">◐</button>
+</header>
+
+<main>
+  <!-- ============================ CONSOLE -->
+  <section class="panel" id="panel-console">
+    <div class="ask-box">
+      <textarea id="instr" spellcheck="false" placeholder="What do you want done?">make slugify handle unicode and punctuation</textarea>
+      <div class="under">
+        <label class="hint">risk <select id="risk" style="margin-left:5px"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option></select></label>
+        <label class="hint">panel <select id="pmode" style="margin-left:5px"><option value="agree">unanimous</option><option value="split" selected>split — majority</option><option value="tie">tie — undecided</option><option value="veto">veto fires</option></select></label>
+        <span class="pill" id="p-default">default <b>—</b></span>
+        <span class="pill" id="p-retry">retries <b>2</b></span>
+        <span class="pill" id="p-seats">seats <b>3</b></span>
+        <button class="attbtn" id="att-btn">📎 Attach spec, mock-up, screenshot…</button>
+        <input type="file" id="att-in" multiple hidden>
+        <span class="grow"></span>
+        <button class="btn ghost" id="reset">Reset</button>
+        <button class="btn lg" id="run">Start</button>
+      </div>
+      <div class="atts" id="atts"></div>
+      <p class="hint" id="att-note" hidden style="margin-top:7px">
+        These travel with the instruction as <code>input_artifacts</code>, so <b>every node's work order
+        carries them</b> — the reviewer sees the same spec the engineer built from. Uploaded to the
+        project, not pasted into a prompt.</p>
+    </div>
+
+    <div class="where">
+      <div class="hd"><h2 id="w-phase">Not started</h2><span class="now" id="w-node">—</span><span class="state" id="w-state" data-s="idle">idle</span></div>
+      <div class="rail" id="rail"></div>
+    </div>
+
+    <div class="main2">
+      <div class="card"><h3>Flow <span class="count" id="spine-count">0 / 19</span></h3>
+        <div class="body tight"><ul class="spine" id="spine"></ul></div></div>
+      <div class="card">
+        <h3>Agent log <span class="count" id="log-count">0</span>
+          <span class="logtools">
+            <button data-f="all" aria-pressed="true">all</button><button data-f="agent" aria-pressed="false">agents</button>
+            <button data-f="subagent" aria-pressed="false">sub-agents</button><button data-f="seat" aria-pressed="false">voices</button>
+            <button data-f="event" aria-pressed="false">events</button>
+          </span></h3>
+        <div id="gate-slot"></div>
+        <div class="body flush"><ul class="log" id="log">
+          <li class="empty" style="grid-template-columns:1fr;border:0">Nothing yet. Every ask, retry and verdict appears here — agents, the sub-agents they dispatch, and every model voice.</li>
+        </ul></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ PROJECT -->
+  <section class="panel" id="panel-project" hidden>
+    <div class="grid2">
+      <div>
+        <div class="card"><h3>The project this runner drives</h3><div class="body">
+          <p class="hint" style="margin-bottom:11px"><b style="color:var(--ink)">One project, one runner.</b> Set once and held for the life of the runner.</p>
+          <div class="opt"><div><div class="lab">Name</div></div><div class="ctl"><input type="text" id="cfg-name" value="slugify" size="18"></div></div>
+          <div class="opt"><div><div class="lab">Path</div><div class="hint">Every node's working directory.</div></div><div class="ctl"><input type="text" id="cfg-path" value="~/code/slugify" size="24"></div></div>
+          <div class="opt"><div><div class="lab">Ask journal</div><div class="hint">Questions written here before they are asked. Survives a crash.</div></div><div class="ctl"><input type="text" id="cfg-journal" value=".runner/journal" size="24"></div></div>
+          <div class="opt"><div><div class="lab">Rebind</div><div class="hint">Only with no run in flight. Starts a fresh journal.</div></div><div class="ctl"><button class="btn ghost">Rebind…</button></div></div>
+        </div></div>
+        <div class="card"><h3>Calling a model</h3><div class="body">
+          <div class="opt"><div><div class="lab">Default model</div><div class="hint">Used by every node with nothing of its own.</div></div><div class="ctl"><select id="cfg-default"></select></div></div>
+          <div class="opt"><div><div class="lab">Retries per ask</div><div class="hint">Retried this many times before the ask is left pending.</div></div><div class="ctl"><div class="stepper" id="st-retry"><button data-d="-1">−</button><span class="v">2</span><button data-d="1">+</button></div></div></div>
+          <div class="opt"><div><div class="lab">Backoff</div><div class="hint">Doubles each attempt.</div></div><div class="ctl"><div class="stepper" id="st-backoff"><button data-d="-1">−</button><span class="v">2s</span><button data-d="1">+</button></div></div></div>
+          <div class="opt"><div><div class="lab">Timeout per ask</div></div><div class="ctl"><div class="stepper" id="st-timeout"><button data-d="-1">−</button><span class="v">600s</span><button data-d="1">+</button></div></div></div>
+          <div class="warnbox calm" style="margin-top:11px">Retries exhausted → the run <b>stops</b> and the question stays <code>pending</code>. Resuming re-asks only that one.</div>
+        </div></div>
+      </div>
+      <div>
+        <div class="card"><h3>Vouched commands</h3><div class="body">
+          <p class="hint">Commands you confirm are ordinary work in <b style="color:var(--ink)" id="v-proj">this project</b>.</p>
+          <div class="row" style="margin-top:9px"><input type="text" id="vouch-in" placeholder="pytest" size="14"><button class="btn ghost" id="vouch-add">Add</button></div>
+          <div class="chips" id="chips"></div><div id="vouchwarn"></div>
+        </div></div>
+        <div class="card"><h3>Never automated — not configurable</h3><div class="body flush"><ul class="rec" id="halts"></ul></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ MODELS (registry) -->
+  <section class="panel" id="panel-models" hidden>
+    <div class="card">
+      <h3>Add a model <span class="count">vendor · id · how it is reached</span></h3>
+      <div class="body">
+        <div class="addform">
+          <div><label class="lbl">Vendor</label><select id="f-vendor" style="width:100%"></select></div>
+          <div><label class="lbl">Access</label><select id="f-access" style="width:100%"><option value="cli">CLI — a local command</option><option value="api">API — an HTTP endpoint</option></select></div>
+          <div class="wide"><label class="lbl">Model id</label><input type="text" id="f-model" style="width:100%" placeholder="claude-opus-5"></div>
+          <div class="wide"><label class="lbl">Display name</label><input type="text" id="f-name" style="width:100%" placeholder="opus (reviewer)"></div>
+          <div class="wide" id="w-cli"><label class="lbl">Command</label><input type="text" id="f-cmd" style="width:100%" placeholder="claude -p --model claude-opus-5"></div>
+          <div class="wide" id="w-ep" hidden><label class="lbl">Endpoint</label><input type="text" id="f-ep" style="width:100%" placeholder="https://api.anthropic.com/v1/messages"></div>
+          <div class="wide" id="w-key" hidden><label class="lbl">API key — environment variable</label><input type="text" id="f-key" style="width:100%" placeholder="ANTHROPIC_API_KEY"></div>
+          <div class="full row spread">
+            <p class="hint" id="f-hint">Presets fill the rest in; every field stays editable.</p>
+            <button class="btn" id="f-add">Add model</button>
+          </div>
+        </div>
+        <div id="f-warn"></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Registry <span class="count" id="reg-count"></span></h3>
+      <div class="body"><div class="mreg" id="mreg"></div></div>
+    </div>
+  </section>
+
+  <!-- ============================ NODE → MODELS -->
+  <section class="panel" id="panel-nodes" hidden>
+    <div class="card">
+      <h3>Which model answers which node <span class="count" id="n-count"></span></h3>
+      <div class="body" style="padding-bottom:4px">
+        <div class="row spread">
+          <p class="hint" style="max-width:78ch">
+            Pick <b style="color:var(--ink)">one</b> model and the node is asked once. Pick <b style="color:var(--ink)">several</b>
+            and it becomes a panel: each model is asked <em>separately, in its own session, blind to the others</em>, and their
+            answers are <b style="color:var(--ink)">adjudicated</b> — veto first, then majority, and a tie does not pass. The same rule
+            the review seats already use, applied wherever you want it.
+          </p>
+          <div class="row"><button class="btn ghost" id="m-reset">All to inherit</button><button class="btn ghost" id="m-diverse">Cross-check the reviewers</button></div>
+        </div>
+      </div>
+      <div class="body flush">
+        <table class="t"><thead><tr><th style="width:22%">Node</th><th style="width:12%">Role</th><th style="width:34%">Models</th><th style="width:9%">Retries</th><th>Asked for</th></tr></thead><tbody id="nbody"></tbody></table>
+      </div>
+    </div>
+    <div class="card"><h3>What this configuration means</h3><div class="body"><div id="n-effect"></div></div></div>
+  </section>
+
+  <!-- ============================ PANEL -->
+  <section class="panel" id="panel-panel" hidden>
+    <div class="grid2">
+      <div class="card"><h3>Seats</h3><div class="body">
+        <div class="opt"><div><div class="lab">How many seats</div><div class="hint">Named reviewers with a question each. The floor is 3.</div></div>
+          <div class="ctl seatpick" id="seatpick"><button aria-pressed="false">1</button><button aria-pressed="false">2</button><button aria-pressed="true">3</button><button aria-pressed="false">4</button></div></div>
+        <div class="opt"><div><div class="lab">High-risk mode</div><div class="hint">The only way below the floor. Every run records it.</div></div>
+          <div class="ctl"><button class="toggle" id="hrm" aria-pressed="false" aria-label="high-risk mode"></button></div></div>
+        <div id="floorwarn"></div>
+        <div class="opt" style="margin-top:4px"><div><div class="lab">Re-run when undecided</div>
+          <div class="hint">A tie is put to the panel again — fresh sessions, but each voice is told <b>what every reviewer said, for and against, and which model said it</b>.</div></div>
+          <div class="ctl"><button class="toggle" id="rerun" aria-pressed="true" aria-label="re-run undecided"></button></div></div>
+        <div class="opt"><div><div class="lab">How many times</div>
+          <div class="hint">After this many, it goes to you regardless.</div></div>
+          <div class="ctl"><div class="stepper" id="st-rerun"><button data-d="-1">−</button><span class="v">2</span><button data-d="1">+</button></div></div></div>
+        <div id="rerunnote"></div>
+        <div class="warnbox calm" style="margin-top:11px">Seats differ from a multi-model node in one way: each seat has its
+          <b>own question</b>. Two models on the same question is a second opinion; four seats is four different questions.
+          Both are adjudicated the same way.</div>
+      </div></div>
+      <div class="card"><h3>Each seat, and who answers it</h3><div class="body flush"><div id="seatcfg"></div></div></div>
+    </div>
+  </section>
+
+  <!-- ============================ API -->
+  <section class="panel" id="panel-api" hidden>
+    <div class="card"><h3>Where the line falls</h3><div class="body">
+      <div class="split">
+        <div class="side"><h4>Front end — any language</h4><ul>
+          <li>Draws the flow, the position, the log</li><li>Collects the instruction, the configuration and the gate answers</li>
+          <li>Holds <em>no</em> governance: never decides a verdict, never adjudicates</li>
+          <li>Can be closed and reopened mid-run</li></ul></div>
+        <div class="arrow">── HTTP + SSE ──▶</div>
+        <div class="side"><h4>Back end — the existing runner</h4><ul>
+          <li><code>policy.py</code>, <code>graph.py</code> unchanged</li>
+          <li>Owns every decision, halt, <b>adjudication</b>, retry and record</li>
+          <li>Bound to <b>one project</b>; writes its ask journal there</li>
+          <li>Holds the API keys — the browser never sees one</li></ul></div>
+      </div>
+      <p class="note"><b>Change 1 — the gate blocks.</b> Today a gate halts and the process exits. A console needs it to
+        wait: a new <code>Approver</code> the engine calls at a stopping verdict.</p>
+      <p class="note" style="margin-top:6px"><b>Change 2 — retries in the dispatcher.</b> An attempt that never answers is a
+        lost session, already handled. Retrying is the backend's job, and it is logged.</p>
+      <p class="note" style="margin-top:6px"><b>Change 3 — any node can be a panel.</b> <code>engine._adjudicate</code> already
+        does veto → majority → tie-fails for the review seats. Multi-model on a node is the same call with a different set of
+        voices, so this is a generalisation of code that exists rather than new governance.</p>
+    </div></div>
+
+    <div class="grid2" style="margin-top:13px">
+      <div class="card"><h3>Endpoints</h3><div class="body flush"><table class="t">
+        <tr><th>Method</th><th>Path</th><th>Does</th></tr>
+        <tr><td class="m">GET/PUT</td><td class="m">/project</td><td class="d">The one bound project. PUT refused mid-run.</td></tr>
+        <tr><td class="m">GET/POST</td><td class="m">/models</td><td class="d">The registry. POST adds one: vendor, id, access, command or endpoint, key env var.</td></tr>
+        <tr><td class="m">DELETE</td><td class="m">/models/:id</td><td class="d">Refused while a node still selects it.</td></tr>
+        <tr><td class="m">POST</td><td class="m">/models/:id/test</td><td class="d">One throwaway call, to check the command runs or the endpoint answers.</td></tr>
+        <tr><td class="m">GET/PUT</td><td class="m">/config/nodes</td><td class="d">Per node: the model <em>list</em>, and a retry override.</td></tr>
+        <tr><td class="m">GET/PUT</td><td class="m">/config/panel</td><td class="d">Seat count, high-risk mode, per-seat model, re-run-on-undecided and its limit.</td></tr>
+        <tr><td class="m">POST</td><td class="m">/attachments</td><td class="d">multipart. Stored in the project, returned as paths. They become <code>input_artifacts</code> on every work order.</td></tr>
+        <tr><td class="m">POST</td><td class="m">/run</td><td class="d">Start from the instruction + attachment paths. One at a time.</td></tr>
+        <tr><td class="m">GET</td><td class="m">/run/events</td><td class="d">SSE: position, asks, retries, voices, adjudications.</td></tr>
+        <tr><td class="m">POST</td><td class="m">/run/gate</td><td class="d">Answer the gate it is waiting on.</td></tr>
+        <tr><td class="m">POST</td><td class="m">/run/decide</td><td class="d">Break a tie the panel could not resolve. Recorded with who decided.</td></tr>
+        <tr><td class="m">GET</td><td class="m">/run/objections/:node</td><td class="d">The reviewers' original wording. Also appended to the work order under the brief, so it rarely needs fetching.</td></tr>
+      </table></div></div>
+      <div class="card"><h3>A multi-model node on the wire</h3><div class="body">
+<pre>event: position {"phase":"build","node":"lead_task_review"}
+event: voices   {"node":"lead_task_review","n":3,
+                 "models":["opus","codex","gemini"]}
+
+event: ask      {"node":"lead_task_review","voice":"opus",
+                 "via":"cli","ms":910,"out":"…"}
+event: ask      {"node":"lead_task_review","voice":"codex",
+                 "via":"cli","ms":1240,"out":"…"}
+event: ask      {"node":"lead_task_review","voice":"gemini",
+                 "via":"api","ms":760,"out":"…"}
+
+event: rerun    {"node":"lead_task_review","round":2,
+                 "carry":[{"model":"codex","v":"fail",
+                           "why":"regex is greedy on a---b"},
+                          {"model":"opus","v":"pass",
+                           "why":"matches the brief"}]}
+
+event: adjudicated {"node":"lead_task_review",
+                    "outcome":"undecided",
+                    "plain":"2 said yes, 2 said no. Nobody has
+                             the casting vote.",
+                    "voices":[{"name":"codex","v":"fail",
+                               "why":"regex is greedy on a---b"}]}
+          ← BLOCKED until POST /run/decide</pre>
+        <p class="note" style="margin-top:9px">Three sessions, three models, one decision — and the disagreement is in the
+          record rather than averaged away.</p>
+      </div></div>
+    </div>
+
+    <div class="card" style="margin-top:13px"><h3>What each side may not do</h3><div class="body flush"><table class="t">
+      <tr><th style="width:38%">Rule</th><th>Why</th></tr>
+      <tr><td class="d"><b>The front end never adjudicates.</b> It shows the voices; the server decides the outcome.</td>
+          <td class="d">Anything a browser can decide, a browser can be made to decide wrongly.</td></tr>
+      <tr><td class="d"><b>API keys never reach the browser.</b> The registry stores an env var name, not a secret.</td>
+          <td class="d">A key in a page is a key in a screenshot, a bug report and a cache.</td></tr>
+      <tr><td class="d"><b>Closing the tab does not stop a run.</b></td><td class="d">A gate waits on a person, not a socket.</td></tr>
+      <tr><td class="d"><b>Model choice cannot relax a gate.</b></td><td class="d">Who answers is configuration. Whether the answer passes is not.</td></tr>
+      <tr><td class="d"><b>The six red lines are not reachable from the API.</b></td><td class="d">A UI that could would be a UI worth attacking.</td></tr>
+    </table></div></div>
+  </section>
+</main>
+
+<script>
+(function(){
+"use strict";
+var $=function(s){return document.querySelector(s)},
+    el=function(t,c,x){var n=document.createElement(t);if(c)n.className=c;if(x!==undefined)n.textContent=x;return n};
+
+/* ---------------------------------------------------------- vendor presets */
+var VENDORS={
+  anthropic:{label:"Anthropic",cli:"claude -p --model {id}",ep:"https://api.anthropic.com/v1/messages",key:"ANTHROPIC_API_KEY",
+    ids:["claude-opus-5","claude-sonnet-5","claude-haiku-4-5-20251001"]},
+  openai:{label:"OpenAI",cli:"codex exec --model {id}",ep:"https://api.openai.com/v1/responses",key:"OPENAI_API_KEY",
+    ids:["gpt-5","gpt-5-mini","o3"]},
+  google:{label:"Google",cli:"gemini -m {id}",ep:"https://generativelanguage.googleapis.com/v1beta/models/{id}:generateContent",key:"GEMINI_API_KEY",
+    ids:["gemini-2.5-pro","gemini-2.5-flash"]},
+  xai:{label:"xAI",cli:"grok -m {id}",ep:"https://api.x.ai/v1/chat/completions",key:"XAI_API_KEY",ids:["grok-4"]},
+  deepseek:{label:"DeepSeek",cli:"",ep:"https://api.deepseek.com/v1/chat/completions",key:"DEEPSEEK_API_KEY",ids:["deepseek-chat","deepseek-reasoner"]},
+  mistral:{label:"Mistral",cli:"",ep:"https://api.mistral.ai/v1/chat/completions",key:"MISTRAL_API_KEY",ids:["mistral-large-latest"]},
+  ollama:{label:"Local / Ollama",cli:"ollama run {id}",ep:"http://localhost:11434/api/chat",key:"",ids:["qwen2.5-coder:32b","llama3.3"]},
+  custom:{label:"Custom",cli:"",ep:"",key:"",ids:[]}
+};
+var REG=[
+  {id:"m1",name:"opus",vendor:"anthropic",model:"claude-opus-5",access:"cli",cmd:"claude -p --model claude-opus-5",on:true},
+  {id:"m2",name:"sonnet",vendor:"anthropic",model:"claude-sonnet-5",access:"cli",cmd:"claude -p --model claude-sonnet-5",on:true},
+  {id:"m3",name:"codex",vendor:"openai",model:"gpt-5",access:"cli",cmd:"codex exec --model gpt-5",on:true},
+  {id:"m4",name:"gemini",vendor:"google",model:"gemini-2.5-pro",access:"api",ep:"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",key:"GEMINI_API_KEY",on:true},
+  {id:"m5",name:"local",vendor:"ollama",model:"qwen2.5-coder:32b",access:"cli",cmd:"ollama run qwen2.5-coder:32b",on:false}
+];
+var seq=6;
+function byId(i){for(var k=0;k<REG.length;k++)if(REG[k].id===i)return REG[k];return null}
+function live(){return REG.filter(function(m){return m.on})}
+
+var PHASES=[{t:"Plan",nodes:["intake","pm_plan","pm_confirm"]},{t:"Assess",nodes:["lead_assess","pm_signoff"]},
+  {t:"Build",nodes:["next_module","engineer_build","engineer_selfverify","lead_task_review","record_module","next_module2"]},
+  {t:"Review",nodes:["lead_review"]},{t:"Verify",nodes:["qa_verify","qa_accept"]},
+  {t:"Ship",nodes:["pr","merge","close_out","feedback","done"]}];
+var NODES=[
+  {id:"intake",who:"runner",label:"the instruction arrives",msg:"instruction accepted; nobody asked yet"},
+  {id:"pm_plan",role:"pm",who:"agent",kind:"work",label:"PM turns it into a plan",asks:"a plan: scope, modules, done-criteria"},
+  {id:"pm_confirm",role:"pm",who:"agent",kind:"verdict",gate:"plan_confirmed",label:"PM confirms the plan",asks:"yes / no on the plan"},
+  {id:"lead_assess",role:"lead",who:"agent",kind:"verdict",gate:"feasibility_confirmed",label:"lead judges feasibility and risk",asks:"feasible? what could go wrong?"},
+  {id:"pm_signoff",role:"pm",who:"agent",kind:"verdict",gate:"before_dispatch",label:"PM signs off",asks:"yes / no on the assessment"},
+  {id:"next_module",who:"runner",label:"take the next unbuilt module",msg:"frontier: 1 module unbuilt"},
+  {id:"engineer_build",role:"engineer",who:"subagent",kind:"pool",main:"lead",label:"an engineer builds one module",asks:"the change itself"},
+  {id:"engineer_selfverify",role:"engineer",who:"subagent",kind:"follows",follows:"engineer_build",gate:"self_verify",label:"the engineer verifies its own work",asks:"does it do what was asked?"},
+  {id:"lead_task_review",role:"lead",who:"agent",kind:"verdict",gate:"task_review",label:"the lead reviews that module",asks:"pass / fail on work it did not write"},
+  {id:"record_module",who:"runner",label:"record the module as done",msg:"ticked, committed, worklog updated"},
+  {id:"next_module2",who:"runner",label:"take the next unbuilt module",msg:"frontier: none left"},
+  {id:"lead_review",role:"seat",who:"seat",kind:"verdict",gate:"lead_review",label:"review seats cross-check",asks:"one verdict per seat, blind to the others"},
+  {id:"qa_verify",role:"qa",who:"agent",kind:"work",gate:"qa_verify",label:"QA tests and verifies",asks:"run it for real"},
+  {id:"qa_accept",role:"qa",who:"agent",kind:"verdict",gate:"acceptance",label:"acceptance",asks:"pass / fail on the whole change"},
+  {id:"pr",role:"lead",who:"agent",kind:"work",gate:"pr",label:"open the pull request",asks:"write it up and open it"},
+  {id:"merge",role:"lead",who:"agent",kind:"work",gate:"merge",label:"merge",asks:"merge it"},
+  {id:"close_out",who:"runner",label:"close out",msg:"status, links, what was learned"},
+  {id:"feedback",who:"runner",label:"feedback returns to PM",msg:"no further feedback"},
+  {id:"done",who:"runner",label:"nothing further was asked for",msg:"flow closed"}];
+var GATES={plan_confirmed:{low:"auto",medium:"confirm",high:"halt"},feasibility_confirmed:{low:"auto",medium:"confirm",high:"halt"},
+  before_dispatch:{low:"auto",medium:"confirm",high:"halt"},self_verify:{low:"auto",medium:"auto",high:"auto"},
+  task_review:{low:"auto",medium:"auto",high:"auto"},lead_review:{low:"auto",medium:"auto",high:"halt"},
+  qa_verify:{low:"auto",medium:"auto",high:"halt"},acceptance:{low:"auto",medium:"auto",high:"halt_independent"},
+  pr:{low:"auto",medium:"auto",high:"confirm"},merge:{low:"confirm",medium:"halt",high:"halt"}};
+var SEATS=[{name:"conformance",veto:true,q:"Does it do what the order said, and only that?"},
+  {name:"defect",veto:false,q:"What is wrong that a test would not catch?"},
+  {name:"risk",veto:false,q:"What could this break that nobody mentioned?"},
+  {name:"idiom",veto:false,q:"Does it read like the code around it?"}];
+var HALTS=[["deploy","production deploy or release"],["migration","data migration or irreversible schema change"],
+  ["delete","deleting data, dropping a table, any hard delete"],["money","moving money"],
+  ["access","changing secrets, credentials, access control or permissions"],["publish","publishing public content"]];
+var OUT={pm_plan:'{ modules:1, scope:"src/slugify.py" }',pm_confirm:'{ verdict:"yes" }',
+  lead_assess:'{ feasible:true, risk:"low", watch:"NFKD changes length" }',pm_signoff:'{ verdict:"yes" }',
+  engineer_build:'{ changed:["src/slugify.py","tests/test_slugify.py"] }',engineer_selfverify:'{ tests:"3 passed" }',
+  lead_task_review:'{ verdict:"pass" }',qa_verify:'{ suite:"3 passed", manual:"CJK, emoji, 2000 chars" }',
+  qa_accept:'{ verdict:"pass" }',pr:'{ url:"…/pull/1" }',merge:'{ sha:"deadbeef" }'};
+
+var DISSENT={
+  conformance:"The order said one module. This also renames two unrelated helpers — out of scope.",
+  defect:"`collapse` runs before `strip`, so a trailing punctuation mark leaves a dangling dash.",
+  risk:"NFKD changes string length; the slice at line 41 still assumes the pre-normalised index.",
+  idiom:"Reads fine, matches the file around it.",
+  opus:"Matches the brief; the new cases cover the change.",
+  codex:"The regex is greedy — `a--b` collapses to `a-b` but `a---b` does not.",
+  gemini:"Normalisation happens after the lowercase, so Turkish dotless i round-trips wrongly.",
+  sonnet:"No objection.", local:"No objection."};
+function reasonFor(name,v){ return DISSENT[name] || (v==="fail"?"Objects, without a stated reason.":"No objection."); }
+var CFG={def:"m2",retries:2,rerun:true,reruns:2,backoff:2,timeout:600,node:{},seat:{},seats:3,hrm:false,vouched:["git","pytest","ruff","npm"]};
+var REFUSED=["python","python3","node","sh","bash","rm","mv","dd","curl","wget","env","xargs","ssh","sudo","eval","exec","chmod","chown"];
+function modelsFor(id){var v=CFG.node[id];return (v&&v.length)?v.filter(function(m){return byId(m)&&byId(m).on}):[CFG.def]}
+function seatModel(n){return CFG.seat[n]||CFG.def}
+function nameOf(id){var m=byId(id);return m?m.name:"?"}
+function viaOf(id){var m=byId(id);return m?m.access:"cli"}
+function retriesFor(id){return CFG.node[id+"__r"]!==undefined?CFG.node[id+"__r"]:CFG.retries}
+
+/* ---------------------------------------------------------- chrome */
+document.querySelectorAll("nav.tabs button").forEach(function(b){
+  b.addEventListener("click",function(){
+    document.querySelectorAll("nav.tabs button").forEach(function(o){o.setAttribute("aria-selected",o===b?"true":"false")});
+    ["console","project","models","nodes","panel","api"].forEach(function(t){$("#panel-"+t).hidden=t!==b.dataset.tab});
+  });
+});
+$("#theme").addEventListener("click",function(){
+  var c=document.documentElement.getAttribute("data-theme");
+  var d=c?c==="dark":matchMedia("(prefers-color-scheme:dark)").matches;
+  document.documentElement.setAttribute("data-theme",d?"light":"dark");
+});
+
+/* ---------------------------------------------------------- registry UI */
+(function(){var s=$("#f-vendor");Object.keys(VENDORS).forEach(function(k){
+  var o=document.createElement("option");o.value=k;o.textContent=VENDORS[k].label;s.appendChild(o)})})();
+function preset(){
+  var v=VENDORS[$("#f-vendor").value],a=$("#f-access").value,id=$("#f-model").value||(v.ids[0]||"");
+  if(!$("#f-model").value&&v.ids[0]) $("#f-model").value=v.ids[0];
+  id=$("#f-model").value;
+  $("#w-cli").hidden=a!=="cli"; $("#w-ep").hidden=a!=="api"; $("#w-key").hidden=a!=="api";
+  if(a==="cli") $("#f-cmd").value=(v.cli||"").replace("{id}",id);
+  else { $("#f-ep").value=(v.ep||"").replace("{id}",id); $("#f-key").value=v.key||""; }
+  $("#f-hint").textContent = a==="cli"
+    ? "A local command. The work order goes in on stdin; whatever it prints is the answer."
+    : "An HTTP endpoint. The key is read from that environment variable on the server — it never reaches the browser.";
+  if(v.cli===""&&a==="cli") $("#f-hint").textContent="This vendor has no CLI here — write the command yourself, or switch to API.";
+}
+["f-vendor","f-access","f-model"].forEach(function(i){$("#"+i).addEventListener("change",preset)});
+$("#f-vendor").addEventListener("change",function(){$("#f-model").value="";preset()});
+preset();
+$("#f-add").addEventListener("click",function(){
+  var w=$("#f-warn");w.innerHTML="";
+  var name=$("#f-name").value.trim()||$("#f-model").value.trim(), model=$("#f-model").value.trim(), a=$("#f-access").value;
+  if(!model){w.appendChild(el("div","warnbox","A model id is required — it is what the vendor is actually asked for."));return}
+  if(REG.some(function(m){return m.name===name})){w.appendChild(el("div","warnbox","There is already a model called “"+name+"”. Names are how nodes refer to them, so they have to be distinct."));return}
+  if(a==="cli"&&!$("#f-cmd").value.trim()){w.appendChild(el("div","warnbox","A CLI model needs a command to run."));return}
+  if(a==="api"&&!$("#f-ep").value.trim()){w.appendChild(el("div","warnbox","An API model needs an endpoint."));return}
+  REG.push({id:"m"+(seq++),name:name,vendor:$("#f-vendor").value,model:model,access:a,
+    cmd:$("#f-cmd").value.trim(),ep:$("#f-ep").value.trim(),key:$("#f-key").value.trim(),on:true});
+  $("#f-name").value="";$("#f-model").value="";preset();refreshAll();
+});
+function drawReg(){
+  var g=$("#mreg");g.innerHTML="";
+  REG.forEach(function(m){
+    var c=el("div","mcard"+(m.on?"":" off"));
+    var t=el("div","top");
+    t.appendChild(el("span","nm",m.name));
+    t.appendChild(el("span","vend",VENDORS[m.vendor]?VENDORS[m.vendor].label:m.vendor));
+    t.appendChild(el("span","via via-"+m.access,m.access.toUpperCase()));
+    c.appendChild(t);
+    c.appendChild(el("div","id",m.model));
+    var conn=el("div","conn");
+    conn.textContent = m.access==="cli" ? "$ "+m.cmd : m.ep + (m.key? "   ·   key: $"+m.key : "");
+    c.appendChild(conn);
+    var used=NODES.filter(function(n){return (CFG.node[n.id]||[]).indexOf(m.id)>=0}).length
+           + SEATS.filter(function(s){return CFG.seat[s.name]===m.id}).length
+           + (CFG.def===m.id?1:0);
+    var a=el("div","acts");
+    var tb=el("button","","Test");
+    tb.addEventListener("click",function(){ tb.textContent="…"; setTimeout(function(){tb.textContent="✓ answered in 740ms"},700); });
+    var ob=el("button","",m.on?"Disable":"Enable");
+    ob.addEventListener("click",function(){m.on=!m.on;refreshAll()});
+    var db=el("button","del","Delete");
+    db.addEventListener("click",function(){
+      if(used){ alert("“"+m.name+"” is still selected by "+used+" place(s). Clear those first — a node pointing at a model that is gone is a node that cannot be asked."); return; }
+      REG=REG.filter(function(x){return x!==m}); refreshAll();
+    });
+    a.appendChild(tb);a.appendChild(ob);a.appendChild(db);
+    if(used){ var u=el("span","hint"," used in "+used); u.style.marginLeft="auto"; u.style.alignSelf="center"; a.appendChild(u); }
+    c.appendChild(a); g.appendChild(c);
+  });
+  $("#reg-count").textContent=REG.length+" model(s) · "+live().length+" enabled";
+}
+
+/* ---------------------------------------------------------- multiselect */
+var openPicker=null;
+function closePicker(){ if(openPicker){openPicker.remove();openPicker=null;} }
+document.addEventListener("click",function(e){ if(openPicker && !openPicker.contains(e.target)) closePicker(); });
+function multiSelect(nodeId){
+  var box=el("div","msel");
+  var cur=CFG.node[nodeId]||[];
+  function paint(){
+    box.innerHTML="";
+    var c=CFG.node[nodeId]||[];
+    if(!c.length){ box.appendChild(el("span","inh","inherit — "+nameOf(CFG.def))); }
+    else {
+      c.forEach(function(id){ var m=byId(id); if(!m)return;
+        var s=el("span","mm",m.name); if(!m.on) s.style.opacity=".45"; box.appendChild(s); });
+      if(c.length>1){
+        var nd=NODES.filter(function(x){return x.id===nodeId})[0]||{};
+        var b2 = nd.kind==="pool" ? el("span","xp","×"+c.length+" pool") : el("span","xn","×"+c.length+" adjudicated");
+        box.appendChild(b2);
+      }
+    }
+  }
+  paint();
+  box.addEventListener("click",function(e){
+    e.stopPropagation(); closePicker();
+    var p=el("div","picker"); openPicker=p;
+    REG.forEach(function(m){
+      var row=el("label","opt2");
+      var cb=document.createElement("input"); cb.type="checkbox";
+      cb.checked=(CFG.node[nodeId]||[]).indexOf(m.id)>=0; cb.disabled=!m.on;
+      cb.addEventListener("change",function(){
+        var a=(CFG.node[nodeId]||[]).slice();
+        if(cb.checked){ if(a.indexOf(m.id)<0)a.push(m.id); } else { a=a.filter(function(x){return x!==m.id}); }
+        if(a.length) CFG.node[nodeId]=a; else delete CFG.node[nodeId];
+        paint(); refreshAll();
+      });
+      row.appendChild(cb);
+      row.appendChild(document.createTextNode(m.name));
+      var vd=el("span","vd",(VENDORS[m.vendor]?VENDORS[m.vendor].label:m.vendor)+" · "+m.access.toUpperCase()+(m.on?"":" · disabled"));
+      row.appendChild(vd); p.appendChild(row);
+    });
+    var nd2=NODES.filter(function(x){return x.id===nodeId})[0]||{};
+    var ft=el("div","ft", nd2.kind==="pool"
+      ? "Two or more → a pool. The "+(nd2.main||"main")+" dispatches each module to one of them; one does the work."
+      : "Two or more → each is asked separately and their answers are adjudicated.");
+    p.appendChild(ft);
+    document.body.appendChild(p);
+    var r=box.getBoundingClientRect();
+    p.style.left=(r.left+window.scrollX)+"px"; p.style.top=(r.bottom+window.scrollY+4)+"px";
+  });
+  return box;
+}
+
+/* ---------------------------------------------------------- node table */
+function drawNodes(){
+  var b=$("#nbody");b.innerHTML="";
+  var asking=NODES.filter(function(n){return n.role});
+  PHASES.forEach(function(p){
+    var rows=asking.filter(function(n){return p.nodes.indexOf(n.id)>=0});
+    if(!rows.length)return;
+    var g=document.createElement("tr");g.className="grp";
+    var gt=document.createElement("td");gt.colSpan=5;gt.textContent=p.t;g.appendChild(gt);b.appendChild(g);
+    rows.forEach(function(n){
+      var tr=document.createElement("tr");
+      var c1=document.createElement("td");c1.className="m";c1.textContent=n.id;tr.appendChild(c1);
+      var c2=document.createElement("td");c2.className="d";
+      var kindTxt = n.kind==="pool" ? "sub of "+n.main : n.kind==="follows" ? "follows build" : (n.kind||"");
+      c2.textContent=n.role+(kindTxt?" · "+kindTxt:"");tr.appendChild(c2);
+      var c3=document.createElement("td");
+      if(n.role==="seat"){ var s=el("span","inh","set per seat →  Review panel"); s.style.fontFamily="var(--mono)"; s.style.fontSize="11px"; c3.appendChild(s); }
+      else if(n.kind==="follows"){ var s2=el("span","inh","whichever model built it"); s2.style.fontFamily="var(--mono)"; s2.style.fontSize="11px"; c3.appendChild(s2); }
+      else c3.appendChild(multiSelect(n.id));
+      tr.appendChild(c3);
+      var c4=document.createElement("td");
+      if(n.role==="seat"){c4.className="d";c4.textContent="—";}
+      else{var ip=document.createElement("input");ip.type="number";ip.min="0";ip.max="9";ip.style.width="50px";
+        ip.value=CFG.node[n.id+"__r"]!==undefined?CFG.node[n.id+"__r"]:"";ip.placeholder=String(CFG.retries);
+        ip.addEventListener("change",function(){if(this.value==="")delete CFG.node[n.id+"__r"];else CFG.node[n.id+"__r"]=parseInt(this.value,10);refreshAll()});c4.appendChild(ip);}
+      tr.appendChild(c4);
+      var c5=document.createElement("td");c5.className="d";c5.textContent=n.asks||"";tr.appendChild(c5);
+      b.appendChild(tr);
+    });
+  });
+  var panels=NODES.filter(function(n){return n.role&&n.role!=="seat"&&n.kind!=="pool"&&n.kind!=="follows"&&modelsFor(n.id).length>1}).length;
+  var pools=NODES.filter(function(n){return n.kind==="pool"&&modelsFor(n.id).length>1}).length;
+  $("#n-count").textContent=(pools?pools+" pool":"")+(pools&&panels?" · ":"")+(panels?panels+" adjudicated":"")||"all single-model";
+  nodeEffect();
+}
+function nodeEffect(){
+  var box=$("#n-effect");box.innerHTML="";
+  var lines=[];
+  var panels=NODES.filter(function(n){return n.role&&n.role!=="seat"&&n.kind!=="pool"&&n.kind!=="follows"&&modelsFor(n.id).length>1});
+  var pools =NODES.filter(function(n){return n.kind==="pool"&&modelsFor(n.id).length>1});
+
+  if(pools.length) lines.push(["good","POOL — "+pools.map(function(n){
+    return n.id+": "+n.main+" dispatches to one of "+modelsFor(n.id).map(nameOf).join(", ")}).join("; ")+
+    ", chosen at random. One does the work; the others are simply available. Not a panel, nothing adjudicated. "+
+    "Random is deliberate: any cleverer rule would be the runner deciding which model is better at a task it has "+
+    "not seen, and it would quietly become a ranking nobody wrote down."]);
+
+  if(panels.length) lines.push(["good","ADJUDICATED — "+panels.map(function(n){
+    return n.id+" ×"+modelsFor(n.id).length}).join(", ")+
+    ". Each voice is asked separately, in its own session, blind to the others; the outcome is adjudicated, not averaged."]);
+
+  if(!pools.length&&!panels.length) lines.push(["calm",
+    "Every node asks exactly one model. A single model cannot see its own blind spots, and nothing here is cross-checked."]);
+
+  var undefinedRule=panels.filter(function(n){return n.kind==="work"});
+  if(undefinedRule.length) lines.push(["warn","⚠ "+undefinedRule.map(function(n){return n.id}).join(", ")+
+    " produce work rather than a verdict, and have no main/sub structure to make a pool of. Several models there would "+
+    "mean several candidate outputs and no rule for choosing — that rule is not designed. Either give the node one model, "+
+    "or say what should happen."]);
+
+  var b=modelsFor("engineer_build"),r=modelsFor("lead_task_review");
+  var overlap=b.filter(function(x){return r.indexOf(x)>=0});
+  lines.push([overlap.length&&r.length===1&&b.length===1?"warn":"good",
+    (overlap.length&&r.length===1&&b.length===1)
+      ? "The lead reviews on the same model that built it ("+nameOf(overlap[0])+"). Independent session, same blind spots."
+      : "The build pool and the reviewing voices are not one model — the review is a second opinion, not an echo."]);
+
+  var sm={};SEATS.slice(0,CFG.seats).forEach(function(s2){sm[seatModel(s2.name)]=1});
+  lines.push([Object.keys(sm).length>1?"good":"warn",Object.keys(sm).length>1
+    ? "The review panel spans "+Object.keys(sm).length+" models."
+    : "All "+CFG.seats+" seats on "+nameOf(Object.keys(sm)[0])+" — sessions independent, model not. The run will say so."]);
+
+  lines.forEach(function(l){
+    var d=el("div","warnbox"+(l[0]==="good"?" good":l[0]==="calm"?" calm":""));
+    d.textContent=l[1];box.appendChild(d);});
+}
+$("#m-reset").addEventListener("click",function(){CFG.node={};refreshAll()});
+$("#m-diverse").addEventListener("click",function(){
+  CFG.node["lead_task_review"]=["m1","m3","m4"];
+  CFG.node["qa_accept"]=["m1","m3"];
+  CFG.seat={conformance:"m1",defect:"m3",risk:"m4",idiom:"m2"};
+  refreshAll();
+});
+
+/* ---------------------------------------------------------- rail + spine */
+function drawRail(cur,state){
+  var r=$("#rail");r.innerHTML="";
+  var cp=cur===null?-1:PHASES.findIndex(function(p){return p.nodes.indexOf(NODES[cur].id)>=0});
+  PHASES.forEach(function(p,i){
+    var d=el("div","ph");d.dataset.p=i<cp?"done":(i===cp?(state||"now"):"idle");
+    d.appendChild(el("div","n","0"+(i+1)));d.appendChild(el("div","t",p.t));
+    d.appendChild(el("div","s",p.nodes.length+" nodes"));r.appendChild(d);
+  });
+  if(cur===null){$("#w-phase").textContent="Not started";$("#w-node").textContent="—";}
+  else{$("#w-phase").textContent=PHASES[cp]?PHASES[cp].t:"—";$("#w-node").textContent=NODES[cur].id;}
+}
+function drawSpine(){
+  var s=$("#spine");s.innerHTML="";
+  NODES.forEach(function(n,i){
+    var li=el("li");li.dataset.state="idle";li.dataset.i=i;
+    li.appendChild(el("div","dot"));
+    var b=el("div"),nm=el("div","nm",n.id);
+    if(n.gate)nm.appendChild(el("span","gate",n.gate));
+    b.appendChild(nm);
+    var w=el("div","who");
+    if(n.role==="seat"){ w.appendChild(document.createTextNode("seat · ")); w.appendChild(el("span","xn","×"+CFG.seats)); }
+    else if(n.role){
+      var ms=modelsFor(n.id);
+      w.appendChild(document.createTextNode(n.role+" · "));
+      if(n.kind==="follows"){ w.appendChild(el("span","mdl","same as build")); }
+      else {
+        w.appendChild(el("span","mdl",ms.map(nameOf).join(", ")));
+        if(ms.length>1) w.appendChild(el("span",n.kind==="pool"?"xp":"xn"," ×"+ms.length+(n.kind==="pool"?" pool":"")));
+      }
+    } else w.textContent="runner";
+    b.appendChild(w);li.appendChild(b);s.appendChild(li);
+  });
+  $("#spine-count").textContent="0 / "+NODES.length;
+}
+
+/* ---------------------------------------------------------- log + run */
+var LOG=[],FILTER="all",t0=0,S=null,timer=null;
+function stamp(){var s=Math.floor((Date.now()-t0)/1000);return s<60?"+"+s+"s":"+"+Math.floor(s/60)+"m"+(s%60)+"s"}
+function logAdd(o){LOG.push(o);renderLog()}
+function renderLog(){
+  var ul=$("#log");ul.innerHTML="";
+  var rows=LOG.filter(function(o){ if(FILTER==="all")return true;
+    if(FILTER==="event")return o.who==="runner"; return o.who===FILTER; });
+  $("#log-count").textContent=LOG.length+(FILTER==="all"?"":" · "+rows.length+" shown");
+  if(!rows.length){var e=el("li","empty","Nothing matches this filter.");e.style.cssText="grid-template-columns:1fr;border:0";ul.appendChild(e);return}
+  rows.forEach(function(o){
+    var li=el("li",(o.who==="subagent"?"sub":"")+(o.verdict==="fail"?" dissent":""));if(o.kind)li.dataset.k=o.kind;
+    li.appendChild(el("div","ts",o.ts));
+    var b=el("div"),hd=el("div","hd");
+    hd.appendChild(el("span","node",o.node));
+    if(o.who)hd.appendChild(el("span","who "+o.who,o.who==="seat"?("voice:"+o.role):(o.role||o.who)));
+    if(o.model)hd.appendChild(el("span","mdl",o.model));
+    if(o.via)hd.appendChild(el("span","via",o.via.toUpperCase()));
+    if(o.verdict)hd.appendChild(el("span","vd vd-"+o.verdict,o.verdict));
+    if(o.tag)hd.appendChild(el("span","tag "+o.tag,o.tag));
+    if(o.dur)hd.appendChild(el("span","dur",o.dur));
+    b.appendChild(hd);
+    if(o.msg)b.appendChild(el("div","msg",o.msg));
+    if(o.out)b.appendChild(el("div","out",o.out));
+    if(o.carry && o.carry.length){
+      var C=el("div","carry");
+      var no2=o.carry.filter(function(r){return r.v==="fail"}), yes2=o.carry.filter(function(r){return r.v!=="fail"});
+      var ch=el("div","ch"); ch.appendChild(document.createTextNode("Carried into the next round"));
+      ch.appendChild(el("span","n",no2.length+" against · "+yes2.length+" for, all attributed"));
+      C.appendChild(ch);
+      [["no","Said it should go back",no2],["yes","Said it is fine",yes2]].forEach(function(g){
+        if(!g[2].length) return;
+        C.appendChild(el("div","side-h "+g[0],g[1]));
+        g[2].forEach(function(r){
+          var row=el("div","cr "+g[0]);
+          row.appendChild(el("div","cm",r.model));
+          row.appendChild(el("div","cw",r.why));
+          C.appendChild(row);
+        });
+      });
+      if(o.carryAsk) C.appendChild(el("div","ask",o.carryAsk));
+      C.appendChild(el("div","ft","Both sides, and every one named — “somebody objected” is not something "+
+        "a reviewer can weigh, and sending only the objections would be a thumb on the scale. The cost is "+
+        "anchoring: a voice shown that codex objected may defer to codex. Taken on purpose, because a panel "+
+        "that ties twice is short of information, not of independence."));
+      b.appendChild(C);
+    }
+    if(o.brief){
+      var B=el("div","brief");
+      var bh=el("div","bh"); bh.appendChild(document.createTextNode("Brief for the next round"));
+      bh.appendChild(el("span","kept",o.brief.from+" objection(s) → "+o.brief.items.length+" item(s)"));
+      B.appendChild(bh);
+      var ol=document.createElement("ol");
+      o.brief.items.forEach(function(t){var li=document.createElement("li");li.textContent=t;ol.appendChild(li)});
+      B.appendChild(ol);
+      B.appendChild(el("div","ft","This is the instruction. Work from it."));
+      if(o.brief.verbatim && o.brief.verbatim.length){
+        var apx=el("div","apx");
+        var ah2=el("div","ah2"); ah2.appendChild(document.createTextNode("Appendix — what was actually said"));
+        ah2.appendChild(el("span","sec","reference, not the instruction"));
+        apx.appendChild(ah2);
+        o.brief.verbatim.forEach(function(r){
+          var ar=el("div","ar "+(r.v==="fail"?"no":"yes"));
+          ar.appendChild(el("div","am",r.model));
+          ar.appendChild(el("div","av",r.v==="fail"?"no":"yes"));
+          ar.appendChild(el("div","aw",r.why));
+          apx.appendChild(ar);
+        });
+        apx.appendChild(el("div","ft","Carried in the work order under the brief, so it is there when the "+
+          "summary reads wrong — but it is not what the engineer works from. A summary is where an "+
+          "objection gets softened; the words it replaced should not need fetching."));
+        B.appendChild(apx);
+      }
+      b.appendChild(B);
+    }
+    if(o.adj){
+      var A=el("div","adj "+o.adj.outcome);
+      var ah=el("div","ah"); ah.appendChild(document.createTextNode("Adjudication"));
+      if(o.adj.round>1) ah.appendChild(el("span","round","round "+o.adj.round));
+      var oc=el("span","oc",o.adj.outcome==="pass"?"PASSES":o.adj.outcome==="undecided"?"NO DECISION":"DOES NOT PASS");
+      ah.appendChild(oc); A.appendChild(ah);
+      o.adj.rows.forEach(function(r){
+        var row=el("div","vr"+(r.v==="fail"?(o.adj.outcome==="undecided"?" u":" f"):""));
+        var vn=el("div","vn",r.name); if(r.veto) vn.appendChild(el("span","veto"," ⊘veto"));
+        row.appendChild(vn);
+        row.appendChild(el("div","vd vd-"+r.v,r.v));
+        var vw=el("div","vw",r.why); row.appendChild(vw);
+        A.appendChild(row);
+      });
+      var ru=el("div","rule"); ru.innerHTML=o.adj.rule; A.appendChild(ru);
+      b.appendChild(A);
+    }
+    if(o.voices){var st=el("div","voices");o.voices.forEach(function(v){
+      var sb=el("span","vbadge");sb.dataset.v=v.v;sb.appendChild(document.createTextNode(v.name));
+      if(v.veto)sb.appendChild(el("span","veto","⊘"));sb.appendChild(el("span","v",v.v));st.appendChild(sb)});b.appendChild(st)}
+    li.appendChild(b);ul.appendChild(li);
+  });
+}
+document.querySelectorAll(".logtools button").forEach(function(b){
+  b.addEventListener("click",function(){
+    document.querySelectorAll(".logtools button").forEach(function(o){o.setAttribute("aria-pressed",o===b?"true":"false")});
+    FILTER=b.dataset.f;renderLog();});
+});
+function mark(i,st){var li=$('.spine li[data-i="'+i+'"]');if(li)li.dataset.state=st}
+function setState(s){$("#w-state").textContent=s;$("#w-state").dataset.s=s}
+function reset(){
+  if(timer){clearTimeout(timer);timer=null}S=null;LOG=[];
+  drawSpine();drawRail(null);setState("idle");$("#gate-slot").innerHTML="";
+  $("#log").innerHTML='<li class="empty" style="grid-template-columns:1fr;border:0">Nothing yet. Every ask, retry and verdict appears here — agents, the sub-agents they dispatch, and every model voice.</li>';
+  $("#log-count").textContent="0";$("#run").disabled=false;$("#run").textContent="Start";
+}
+function step(){
+  if(!S||S.waiting)return; if(S.i>=NODES.length)return finish();
+  var n=NODES[S.i];
+  mark(S.i,"active");drawRail(S.i,"now");setState("running");
+  S.visited++;$("#spine-count").textContent=S.visited+" / "+NODES.length;
+  if(n.role==="seat")return voices(n,SEATS.slice(0,CFG.seats).map(function(s){return {name:s.name,model:seatModel(s.name),veto:s.veto,q:s.q}}),"seat");
+  if(!n.role){ logAdd({ts:stamp(),node:n.id,who:"runner",kind:"record",msg:n.msg||n.label});
+    timer=setTimeout(function(){mark(S.i,"done");S.i++;step()},340); return; }
+  if(n.kind==="follows"){ return askOne(n, S.builtBy || modelsFor(n.id)[0]); }
+  var ms=modelsFor(n.id);
+  if(n.kind==="pool"){
+    // The main dispatches. One sub-agent does the work; the rest of the pool is simply available.
+    var pick = ms[Math.floor(Math.random()*ms.length)];
+    S.builtBy = pick;
+    if(ms.length>1) logAdd({ts:stamp(),node:n.id,who:"main",role:n.main,
+      msg:"dispatching this module to "+nameOf(pick)+" — chosen at random from a pool of "+ms.length+": "+
+          ms.map(nameOf).join(", ")+". One does the work; this is a dispatch, not a vote."});
+    return askOne(n,pick);
+  }
+  if(ms.length>1) return voices(n, ms.map(function(m){return {name:nameOf(m),model:m,veto:false,q:n.asks}}), n.who);
+  askOne(n,ms[0]);
+}
+function askOne(n,mid){
+  var ms=300+Math.floor(Math.random()*1100);
+  if(Math.random()<0.18&&retriesFor(n.id)>0){
+    logAdd({ts:stamp(),node:n.id,who:n.who,role:n.role,model:nameOf(mid),via:viaOf(mid),kind:"retry",
+      msg:"attempt 1 of "+(retriesFor(n.id)+1)+" timed out after "+CFG.timeout+"s — retrying in "+CFG.backoff+"s"});
+    S.retries++;
+  }
+  logAdd({ts:stamp(),node:n.id,who:n.who,role:n.role,model:nameOf(mid),via:viaOf(mid),
+    dur:ms+"ms · session closed",msg:n.asks,out:OUT[n.id]||"{ ok:true }"});
+  S.asks++;
+  var v=n.gate?GATES[n.gate][S.risk]:"auto";
+  if(v!=="auto"){timer=setTimeout(function(){gate(n,v)},500);return}
+  timer=setTimeout(function(){mark(S.i,"done");S.i++;step()},500);
+}
+function voices(n,list,who,round,carried){
+  round=round||1;
+  var mode=$("#pmode").value;
+  // Who dissents, given the mode the operator chose. Deterministic so both outcomes are reachable.
+  var fails={};
+  if(list.length>1){
+    if(round>1){
+      // Round 2 has seen what was objected to and by whom, so it converges more often than a blind
+      // re-roll would. It can still tie — and if it does after reading each other, no further round
+      // will help, which is exactly when it goes to a person.
+      list.forEach(function(v){ if(Math.random()<0.22) fails[v.name]=true; });
+    }
+    else if(mode==="split"){ list.slice(1).forEach(function(v,i){ if(i<Math.ceil((list.length-1)/2)) fails[v.name]=true; }); }
+    else if(mode==="tie"){ list.slice(0,Math.floor(list.length/2)).forEach(function(v){ fails[v.name]=true; }); }
+    else if(mode==="veto"){ fails[list[0].name]=true; }
+  }
+  var state=list.map(function(v){return {name:v.name,veto:v.veto,v:"—"}});
+  logAdd({ts:stamp(),node:n.id,who:"runner",kind:"record",
+    msg:(round>1?"round "+round+": ":"")+"opening "+list.length+" voice(s) — each its own session, blind to the others"+
+        (round>1?". Each one is told what was raised last round, and by which model":""),
+    voices:state, carry:carried});
+  var k=0, results=[];
+  (function nx(){
+    if(k>=list.length){
+      var models={};list.forEach(function(v){models[v.model]=1});
+      var failed=results.filter(function(r){return r.v==="fail"});
+      var vetoed=results.filter(function(r){return r.veto&&r.v==="fail"});
+      var passed=results.length-failed.length;
+      var outcome, rule;
+      if(vetoed.length){
+        outcome="fail";
+        rule="<b>"+vetoed[0].name+"</b> can block on its own, and it said no. The other "+passed+
+             " said yes, but that does not override it.";
+      } else if(passed>failed.length){
+        outcome="pass";
+        rule="<b>"+passed+" of "+results.length+"</b> said yes. That is a majority, so it goes through.";
+      } else if(passed===failed.length){
+        outcome="undecided";
+        rule="<b>"+passed+" said yes, "+failed.length+" said no.</b> Nobody has the casting vote, so the "+
+             "runner will not pick one. This is yours to call.";
+      } else {
+        outcome="fail";
+        rule="<b>"+failed.length+" of "+results.length+"</b> said no. Not enough support to go through.";
+      }
+
+      if(Object.keys(models).length===1&&list.length>1)
+        logAdd({ts:stamp(),node:n.id,who:"runner",kind:"record",tag:"trust",
+          msg:"every voice answered by "+nameOf(list[0].model)+" — the sessions were independent, the model was not"});
+
+      if(outcome==="undecided"){
+        if(CFG.rerun && round < CFG.reruns+1){
+          var objections=results.map(function(r){
+            return {model:r.model,name:r.name,why:r.why,v:r.v}; });
+          logAdd({ts:stamp(),node:n.id,who:"runner",kind:"rerun",
+            msg:"no decision on round "+round+" — putting it to the panel again ("+round+" of "+
+                (CFG.reruns+1)+" allowed), with what both sides said",
+            carry:objections, carryAsk:"Round "+(round+1)+": this is what each reviewer said last round, "+
+              "for and against. Weigh both. Is each objection really a problem, and does it need "+
+              "changing? Answer for yourself — you have not seen what the others say this round."});
+          timer=setTimeout(function(){ voices(n,list,who,round+1,objections); },800);
+          return;
+        }
+        return undecided(n,results,round);
+      }
+      if(outcome==="fail"){
+        logAdd({ts:stamp(),node:n.id,who:"runner",kind:"halt",msg:"did not pass — back into the module loop"});
+        return sendBack(n,failed,"the panel",results);
+      }
+      var g=n.gate?GATES[n.gate][S.risk]:"auto";
+      if(g!=="auto"){timer=setTimeout(function(){gate(n,g)},560);return}
+      timer=setTimeout(function(){mark(S.i,"done");S.i++;step()},560);return;
+    }
+    var vc=list[k];state[k].v="…";renderLog();
+    timer=setTimeout(function(){
+      var verdict = fails[vc.name] ? "fail" : "pass";
+      var why = reasonFor(vc.name,verdict);
+      state[k].v=verdict;
+      results.push({name:vc.name,model:nameOf(vc.model),veto:vc.veto,v:verdict,why:why});
+      logAdd({ts:stamp(),node:n.id,who:who==="seat"?"seat":"agent",role:vc.name,model:nameOf(vc.model),via:viaOf(vc.model),
+        dur:(400+Math.floor(Math.random()*800))+"ms · session closed",
+        msg:vc.q+(round>1&&carried?"  ·  plus what all "+carried.length+" said in round "+(round-1):""),
+        verdict:verdict, out:'{ verdict: "'+verdict+'", why: "'+why+'" }'});
+      S.asks++;k++;nx();
+    },520);
+  })();
+}
+/* What the lead sends back with the rework.
+   A summary, because three reviewers at length is not a brief. Written by the lead — it is the one
+   dispatching the fix — and logged as a real ask on the lead's own model. The originals stay in the
+   record: summarising is where an objection gets softened, so what it replaced has to remain
+   readable. */
+var BRIEF={
+  "The order said one module. This also renames two unrelated helpers — out of scope.":
+    "Drop the two unrelated helper renames — out of scope for this module.",
+  "`collapse` runs before `strip`, so a trailing punctuation mark leaves a dangling dash.":
+    "Run strip before collapse, so trailing punctuation cannot leave a dangling dash.",
+  "NFKD changes string length; the slice at line 41 still assumes the pre-normalised index.":
+    "Recompute the slice at line 41 after normalising — the index moved.",
+  "The regex is greedy — `a--b` collapses to `a-b` but `a---b` does not.":
+    "Fix the dash-collapsing regex: it misses runs of three or more.",
+  "Normalisation happens after the lowercase, so Turkish dotless i round-trips wrongly.":
+    "Normalise before lowercasing, or Turkish dotless i round-trips wrongly."
+};
+function sendBack(n,failing,how,all){
+  var items=[]; failing.forEach(function(r){
+    var t=BRIEF[r.why]||r.why; if(items.indexOf(t)<0) items.push(t);
+  });
+  var mid=modelsFor("lead_task_review")[0];
+  logAdd({ts:stamp(),node:n.id,who:"main",role:"lead",model:nameOf(mid),via:viaOf(mid),
+    dur:(300+Math.floor(Math.random()*500))+"ms · session closed",
+    msg:"summarising "+failing.length+" objection(s) into the brief for the next round",
+    brief:{items:items,from:failing.length,how:how,verbatim:(all||failing)}});
+  mark(S.i,"stop"); setState("stopped"); drawRail(S.i,"stop");
+  $("#run").disabled=false; $("#run").textContent="Start again";
+  S.waiting=true;
+}
+
+function undecided(n,results,round){
+  round=round||1;
+  S.waiting=true;
+  mark(S.i,"wait"); drawRail(S.i,"wait"); setState("waiting");
+  logAdd({ts:stamp(),node:n.id,who:"runner",kind:"gate",tag:"gate",
+    msg:round>1 ? "no decision after "+round+" rounds — the run stopped for you"
+                : "no decision — the voices are evenly split, so the run stopped for you"});
+
+  var yes=results.filter(function(r){return r.v==="pass"}), no=results.filter(function(r){return r.v==="fail"});
+  var slot=$("#gate-slot"); slot.innerHTML="";
+  var u=el("div","undec");
+  u.appendChild(el("h3","","They could not agree. You decide."));
+  var p=el("p","plain");
+  p.textContent = no.length+" of the "+results.length+" reviewers think this should go back. The other "+
+                  yes.length+" think it is fine. Nobody has the casting vote, so the runner stopped rather "+
+                  "than pick a side.";
+  u.appendChild(p);
+  if(round>1){
+    var p2=el("p","plain");
+    p2.textContent = "It was put to them "+round+" times. From round 2 they could each see what the others "+
+                     "had objected to, and which model said it — and it still came back split. They have read "+
+                     "each other. Another round will not help.";
+    p2.style.color="var(--wait)";
+    u.appendChild(p2);
+  }
+
+  var sides=el("div","sides");
+  function side(cls,title,rows){
+    var d=el("div","sd "+cls); d.appendChild(el("h4","",title));
+    var ul=document.createElement("ul");
+    rows.forEach(function(r){
+      var li=document.createElement("li");
+      li.appendChild(document.createTextNode(r.why));
+      li.appendChild(el("div","wm",r.name+" · "+r.model));
+      ul.appendChild(li);
+    });
+    d.appendChild(ul); return d;
+  }
+  sides.appendChild(side("no","Send it back — "+no.length,no));
+  sides.appendChild(side("yes","It is fine — "+yes.length,yes));
+  u.appendChild(sides);
+
+  var a=el("div","gate-actions");
+  var back=el("button","btn reject","Send it back"),
+      okb=el("button","btn approve","Let it through"),
+      lt=el("button","btn ghost","Leave it waiting");
+  a.appendChild(back);a.appendChild(okb);a.appendChild(lt);
+  u.appendChild(a);
+  var f=el("p","note"); f.style.marginTop="9px";
+  f.innerHTML="Whichever you pick is <b>recorded with your name on it</b> — a tie broken by a person is a decision, and it should read like one.";
+  u.appendChild(f);
+  slot.appendChild(u);
+
+  okb.addEventListener("click",function(){
+    slot.innerHTML="";
+    logAdd({ts:stamp(),node:n.id,who:"runner",kind:"record",tag:"confirm",
+      msg:"you broke the tie: let through, over "+no.length+" objection(s). Recorded."});
+    S.waiting=false;
+    var g=n.gate?GATES[n.gate][S.risk]:"auto";
+    if(g!=="auto"){ timer=setTimeout(function(){gate(n,g)},300); return; }
+    mark(S.i,"done"); S.i++; step();
+  });
+  back.addEventListener("click",function(){
+    slot.innerHTML="";
+    logAdd({ts:stamp(),node:n.id,who:"runner",kind:"halt",tag:"confirm",
+      msg:"you broke the tie: sent back, over "+yes.length+" who thought it was fine. Recorded."});
+    sendBack(n,no,"you",results);
+  });
+  lt.addEventListener("click",function(){
+    logAdd({ts:stamp(),node:n.id,who:"runner",kind:"record",msg:"left waiting — the question is on disk, nothing expires"});
+  });
+}
+
+function gate(n,v){
+  S.waiting=true;var halting=v.indexOf("halt")===0;
+  mark(S.i,halting?"stop":"wait");drawRail(S.i,halting?"stop":"wait");setState(halting?"stopped":"waiting");
+  logAdd({ts:stamp(),node:n.id,who:"runner",kind:"gate",tag:"gate",msg:n.gate+" = "+v+" at risk "+S.risk+" — blocked, waiting for a person"});
+  var slot=$("#gate-slot");slot.innerHTML="";
+  var g=el("div","gate-prompt"+(halting?" stopgate":""));
+  g.appendChild(el("h3","",v==="halt_independent"?"Acceptance — and the verifier may not be the implementer":"This step is waiting for you"));
+  var w=el("div","why");
+  w.innerHTML="<code>"+n.gate+"</code> is <b>"+v+"</b> at risk <b>"+S.risk+"</b>. "+
+    (v==="confirm"?"Cheap to get wrong now, expensive later.":v==="halt_independent"?"A person decides, and not whoever built it.":"A person decides.");
+  g.appendChild(w);
+  g.appendChild(el("div","vline","node "+n.id+"  ·  gate "+n.gate+"  ·  risk "+S.risk+"  ·  verdict "+v));
+  var a=el("div","gate-actions");
+  var ok=el("button","btn approve",v==="halt_independent"?"Accept (as verifier)":"Approve and continue"),
+      no=el("button","btn reject","Reject — send back"),lt=el("button","btn ghost","Leave it waiting");
+  a.appendChild(ok);a.appendChild(no);a.appendChild(lt);g.appendChild(a);
+  var f=el("p","note");f.style.marginTop="9px";f.innerHTML="Blocked <b>server-side</b>. You can close this tab.";
+  g.appendChild(f);slot.appendChild(g);
+  ok.addEventListener("click",function(){slot.innerHTML="";
+    logAdd({ts:stamp(),node:n.id,who:"runner",kind:"record",tag:"confirm",msg:n.gate+" approved by you — continuing"});
+    S.waiting=false;mark(S.i,"done");S.i++;step()});
+  no.addEventListener("click",function(){slot.innerHTML="";
+    logAdd({ts:stamp(),node:n.id,who:"runner",kind:"halt",msg:n.gate+" rejected — returning to pm_plan"});
+    S.waiting=false;mark(S.i,"stop");setState("stopped");$("#run").disabled=false;$("#run").textContent="Start again"});
+  lt.addEventListener("click",function(){logAdd({ts:stamp(),node:n.id,who:"runner",kind:"record",msg:"left waiting — the question is on disk"})});
+}
+function finish(){
+  setState("done");drawRail(NODES.length-1,"done");
+  logAdd({ts:stamp(),node:"done",who:"runner",kind:"record",
+    msg:"reached done — "+S.asks+" asks over "+S.visited+" nodes"+(S.retries?", "+S.retries+" retried":"")});
+  $("#run").disabled=false;$("#run").textContent="Run again";
+}
+$("#run").addEventListener("click",function(){
+  reset();t0=Date.now();S={i:1,asks:0,visited:1,retries:0,waiting:false,risk:$("#risk").value};
+  $("#run").disabled=true;$("#run").textContent="Running…";$("#log").innerHTML="";
+  logAdd({ts:"+0s",node:"intake",who:"runner",kind:"record",
+    msg:"instruction accepted — “"+$("#instr").value.slice(0,60)+"”"+
+        (ATT.length? "  ·  "+ATT.length+" attachment(s): "+ATT.map(function(a){return a.name}).join(", ")+
+                     " → input_artifacts on every work order" : "")});
+  mark(0,"done");drawRail(0,"now");timer=setTimeout(step,420);
+});
+/* ---------------------------------------------------------- attachments */
+var ATT=[];
+function icon(n){
+  var e=(n.split(".").pop()||"").toLowerCase();
+  if(["png","jpg","jpeg","gif","webp","svg"].indexOf(e)>=0)return "🖼";
+  if(["pdf"].indexOf(e)>=0)return "📕";
+  if(["md","txt","rst"].indexOf(e)>=0)return "📄";
+  if(["xlsx","csv"].indexOf(e)>=0)return "📊";
+  if(["fig","sketch","xd"].indexOf(e)>=0)return "🎨";
+  return "📎";
+}
+function fmtSize(b){ return b<1024?b+" B":b<1048576?(b/1024).toFixed(0)+" KB":(b/1048576).toFixed(1)+" MB"; }
+function drawAtts(){
+  var box=$("#atts"); box.innerHTML="";
+  $("#att-note").hidden = ATT.length===0;
+  ATT.forEach(function(f,i){
+    var c=el("span","att");
+    c.appendChild(el("span","ic",icon(f.name)));
+    c.appendChild(el("span","nm",f.name));
+    c.appendChild(el("span","sz",fmtSize(f.size)));
+    var x=el("button","","×"); x.setAttribute("aria-label","remove "+f.name);
+    x.addEventListener("click",function(){ATT.splice(i,1);drawAtts()});
+    c.appendChild(x); box.appendChild(c);
+  });
+}
+$("#att-btn").addEventListener("click",function(){$("#att-in").click()});
+$("#att-in").addEventListener("change",function(){
+  Array.prototype.forEach.call(this.files,function(f){
+    if(!ATT.some(function(x){return x.name===f.name})) ATT.push({name:f.name,size:f.size});
+  });
+  this.value=""; drawAtts();
+});
+var box=document.querySelector(".ask-box");
+["dragenter","dragover"].forEach(function(ev){ box.addEventListener(ev,function(e){e.preventDefault();box.classList.add("drag")}) });
+["dragleave","drop"].forEach(function(ev){ box.addEventListener(ev,function(e){e.preventDefault();box.classList.remove("drag")}) });
+box.addEventListener("drop",function(e){
+  Array.prototype.forEach.call(e.dataTransfer.files,function(f){
+    if(!ATT.some(function(x){return x.name===f.name})) ATT.push({name:f.name,size:f.size});
+  });
+  drawAtts();
+});
+
+$("#reset").addEventListener("click",reset);
+$("#risk").addEventListener("change",reset);
+$("#pmode").addEventListener("change",reset);
+
+/* ---------------------------------------------------------- project + panel */
+function fillDefault(){
+  var s=$("#cfg-default");s.innerHTML="";
+  live().forEach(function(m){var o=document.createElement("option");o.value=m.id;
+    o.textContent=m.name+" — "+(VENDORS[m.vendor]?VENDORS[m.vendor].label:m.vendor)+" · "+m.access.toUpperCase();s.appendChild(o)});
+  if(!byId(CFG.def)||!byId(CFG.def).on){ CFG.def=(live()[0]||{}).id; }
+  s.value=CFG.def;
+}
+$("#cfg-default").addEventListener("change",function(){CFG.def=this.value;refreshAll()});
+$("#cfg-name").addEventListener("input",function(){$("#hdr-proj").textContent=this.value||"—";$("#v-proj").textContent=this.value||"this project"});
+$("#cfg-path").addEventListener("input",function(){$("#hdr-path").textContent=this.value});
+function stepper(id,get,set,fmt){var b=$("#"+id);
+  b.addEventListener("click",function(e){if(e.target.tagName!=="BUTTON")return;
+    set(get()+parseInt(e.target.dataset.d,10));b.querySelector(".v").textContent=fmt(get());refreshAll()});
+  b.querySelector(".v").textContent=fmt(get())}
+stepper("st-retry",function(){return CFG.retries},function(v){CFG.retries=Math.max(0,Math.min(9,v))},String);
+stepper("st-backoff",function(){return CFG.backoff},function(v){CFG.backoff=Math.max(0,Math.min(60,v))},function(v){return v+"s"});
+stepper("st-timeout",function(){return CFG.timeout},function(v){CFG.timeout=Math.max(30,Math.min(1800,v))},function(v){return v+"s"});
+function chips(){var b=$("#chips");b.innerHTML="";
+  CFG.vouched.forEach(function(v,i){var c=el("span","chip");c.appendChild(document.createTextNode(v));
+    var x=el("button","","×");x.addEventListener("click",function(){CFG.vouched.splice(i,1);chips()});c.appendChild(x);b.appendChild(c)})}
+chips();
+$("#vouch-add").addEventListener("click",function(){
+  var v=$("#vouch-in").value.trim().toLowerCase(),w=$("#vouchwarn");w.innerHTML="";if(!v)return;
+  if(v.split(/\s+/).length>1){w.appendChild(el("div","warnbox","Vouch for the command, one word — “npm”, not “npm run build”."));return}
+  if(REFUSED.indexOf(v)>=0){var d=el("div","warnbox");
+    d.innerHTML="<b>"+v+"</b> cannot be vouched for. Its name says nothing about what it will do — the argument is the program.";
+    w.appendChild(d);return}
+  if(CFG.vouched.indexOf(v)<0)CFG.vouched.push(v);$("#vouch-in").value="";chips()});
+$("#vouch-in").addEventListener("keydown",function(e){if(e.key==="Enter")$("#vouch-add").click()});
+HALTS.forEach(function(h){var li=el("li");li.appendChild(el("span","tag",h[0]));li.appendChild(el("span","txt",h[1]));$("#halts").appendChild(li)});
+
+var seatpick=$("#seatpick");
+seatpick.addEventListener("click",function(e){if(e.target.tagName!=="BUTTON")return;
+  seatpick.querySelectorAll("button").forEach(function(b){b.setAttribute("aria-pressed",b===e.target?"true":"false")});
+  CFG.seats=parseInt(e.target.textContent,10);refreshAll()});
+$("#hrm").addEventListener("click",function(){var on=this.getAttribute("aria-pressed")==="true";
+  this.setAttribute("aria-pressed",on?"false":"true");CFG.hrm=!on;refreshAll()});
+$("#rerun").addEventListener("click",function(){var on=this.getAttribute("aria-pressed")==="true";
+  this.setAttribute("aria-pressed",on?"false":"true");CFG.rerun=!on;refreshAll()});
+stepper("st-rerun",function(){return CFG.reruns},function(v){CFG.reruns=Math.max(1,Math.min(5,v))},String);
+function rerunNote(){
+  var w=$("#rerunnote"); w.innerHTML="";
+  var d=el("div","warnbox calm");
+  d.textContent = CFG.rerun
+    ? "A tie goes back to the panel up to "+CFG.reruns+" more time(s). Each round is fresh sessions, and each voice is "+
+      "told what every reviewer said last round, for and against, and which model said it — so it is an examination, "+
+      "not a second roll. Still split "+
+      "after that and it is yours: if they have read each other and still cannot agree, another round will not help."
+    : "A tie goes straight to you. No re-runs.";
+  w.appendChild(d);
+}
+function floorCheck(){var w=$("#floorwarn");w.innerHTML="";
+  if(CFG.seats<3&&!CFG.hrm)w.appendChild(el("div","warnbox",CFG.seats+" is below the floor of 3. Turn on high-risk mode, or the run opens 3 anyway."));
+  else if(CFG.seats<3&&CFG.hrm)w.appendChild(el("div","warnbox","Running "+CFG.seats+" seat(s), below the floor. Every run records it."))}
+function drawSeatCfg(){
+  var box=$("#seatcfg");box.innerHTML="";
+  var t=document.createElement("table");t.className="t";
+  var hr=document.createElement("tr");["Seat","Model","Asks"].forEach(function(h,i){
+    var th=document.createElement("th");th.textContent=h;if(i===0)th.style.width="22%";if(i===1)th.style.width="32%";hr.appendChild(th)});
+  t.appendChild(hr);
+  SEATS.forEach(function(s,i){
+    var tr=document.createElement("tr");if(i>=CFG.seats)tr.style.opacity=".38";
+    var c1=document.createElement("td");c1.className="m";c1.textContent=s.name;
+    if(s.veto)c1.appendChild(el("span","veto"," veto"));
+    tr.appendChild(c1);
+    var c2=document.createElement("td");var sel=document.createElement("select");
+    live().forEach(function(m){var o=document.createElement("option");o.value=m.id;
+      o.textContent=m.name+" · "+m.access.toUpperCase();sel.appendChild(o)});
+    sel.value=seatModel(s.name);sel.disabled=i>=CFG.seats;
+    sel.addEventListener("change",function(){CFG.seat[s.name]=this.value;refreshAll()});
+    c2.appendChild(sel);tr.appendChild(c2);
+    var c3=document.createElement("td");c3.className="d";c3.textContent=s.q;tr.appendChild(c3);
+    t.appendChild(tr);
+  });
+  box.appendChild(t);
+}
+function refreshAll(){
+  fillDefault();
+  $("#p-default").innerHTML="default <b>"+nameOf(CFG.def)+"</b>";
+  $("#p-retry").innerHTML="retries <b>"+CFG.retries+"</b>";
+  $("#p-seats").innerHTML="seats <b>"+CFG.seats+"</b>";
+  drawReg();drawNodes();drawSeatCfg();floorCheck();rerunNote();if(!S)drawSpine();
+}
+reset();refreshAll();
+})();
+</script>
