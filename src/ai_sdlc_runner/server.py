@@ -43,10 +43,11 @@ import secrets
 import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional
 
-from . import engine, graph, policy
+from . import engine, graph, models as models_mod, policy
 
 #: The only addresses this server will bind. Not a default — a rule. A runner that can merge
 #: branches has no business listening where anything but this machine can reach it, and making that
@@ -253,8 +254,12 @@ class Runner:
             return self.state.snapshot()
 
 
-def make_handler(runner: Runner, operator: Operator):
+def make_handler(runner: Runner, operator: Operator,
+                 registry: Optional["models_mod.Registry"] = None,
+                 registry_path: Optional[Path] = None):
     """The HTTP surface. Refuses before it reads, in the order the threat model requires."""
+
+    held = {"registry": registry if registry is not None else models_mod.Registry()}
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "ai-sdlc-runner"
@@ -262,6 +267,10 @@ def make_handler(runner: Runner, operator: Operator):
 
         # -- refusals ----------------------------------------------------------------------
         def _guard(self) -> bool:
+            if urlsplit(self.path).path in ("/", "/index.html"):
+                # The shell only. Still loopback-checked below; just not token-checked, because
+                # nothing can present a token before it has loaded the page that stores one.
+                return _loopback_host(self.headers.get("Host")) or self._refuse_host()
             if not _loopback_host(self.headers.get("Host")):
                 # First, and before anything is parsed: a non-loopback Host on a loopback socket is
                 # DNS rebinding, and the request should not get as far as being understood.
@@ -272,11 +281,24 @@ def make_handler(runner: Runner, operator: Operator):
                                   origin.startswith(f"https://{h}") for h in LOOPBACK_HOSTS):
                 self._json(403, {"error": f"cross-origin request from {origin} refused"})
                 return False
-            if not operator.accepts(self.headers.get("X-Operator-Token")):
+            presented = self.headers.get("X-Operator-Token")
+            if presented is None and urlsplit(self.path).path == "/run/events":
+                # EventSource cannot set headers -- the browser API simply has no way to. So the
+                # stream, and only the stream, accepts the token as a query parameter. It is a
+                # weaker place to carry a credential (it reaches access logs), which is why it is
+                # this one route and not a general fallback: the stream is read-only and the token
+                # is per-process, so the blast radius of a logged one is a session somebody can end
+                # by restarting the server.
+                presented = (parse_qs(urlsplit(self.path).query).get("token") or [None])[0]
+            if not operator.accepts(presented):
                 self._json(401, {"error": "no operator token. It is in "
                                           f"{operator.token_path}, readable by you alone."})
                 return False
             return True
+
+        def _refuse_host(self) -> bool:
+            self._json(403, {"error": "this server answers only to a loopback host"})
+            return False
 
         # -- plumbing ----------------------------------------------------------------------
         def _json(self, code: int, payload: Mapping[str, object]) -> None:
@@ -303,7 +325,10 @@ def make_handler(runner: Runner, operator: Operator):
         def do_GET(self):                           # noqa: N802 - http.server's spelling
             if not self._guard():
                 return
-            if self.path == "/flow":
+            path = urlsplit(self.path).path
+            if path in ("/", "/index.html"):
+                self._console()
+            elif path == "/flow":
                 self._json(200, {"nodes": [
                     {"id": n.id, "kind": n.kind, "label": n.label, "role": n.role,
                      "gate": n.gate, "gate_when": n.gate_when, "mode": n.mode,
@@ -312,14 +337,21 @@ def make_handler(runner: Runner, operator: Operator):
                     for n in graph.NODES],
                     "gates": {g: dict(v) for g, v in policy.GATES.items()},
                     "modes": list(graph.MODES)})
-            elif self.path == "/run":
+            elif path == "/run":
                 self._json(200, runner.state.snapshot())
-            elif self.path == "/run/events":
+            elif path == "/run/events":
                 self._stream()
-            elif self.path == "/whoami":
+            elif path == "/models":
+                # The console is local only; the models need not be, and the operator should never
+                # have to read a hostname to find that out. `leaving` is the answer to "what goes
+                # out from here", stated rather than derivable.
+                reg = held["registry"]
+                self._json(200, {**reg.as_dict(),
+                                 "leaving": [m.id for m in reg.leaving()]})
+            elif path == "/whoami":
                 self._json(200, {"operator": operator.name})
             else:
-                self._json(404, {"error": f"no route {self.path}"})
+                self._json(404, {"error": f"no route {path}"})
 
         def do_POST(self):                          # noqa: N802
             if not self._guard():
@@ -336,6 +368,16 @@ def make_handler(runner: Runner, operator: Operator):
                 elif self.path == "/run/gate":
                     out = runner.approve(version, str(body.get("gate") or ""),
                                          body.get("node_id"))
+                elif self.path == "/models":
+                    try:
+                        held["registry"] = held["registry"].add(
+                            models_mod._model_from(dict(body.get("model") or {})))
+                    except models_mod.ModelError as exc:
+                        raise ServerError(str(exc))
+                    if registry_path is not None:
+                        models_mod.save(held["registry"], registry_path)
+                    reg = held["registry"]
+                    out = {**reg.as_dict(), "leaving": [m.id for m in reg.leaving()]}
                 elif self.path == "/run/decide":
                     out = runner.rule(version, str(body.get("node_id") or ""),
                                       str(body.get("branch") or ""))
@@ -346,6 +388,26 @@ def make_handler(runner: Runner, operator: Operator):
                 self._json(409, {"error": str(exc)})
                 return
             self._json(200, out)
+
+        def _console(self):
+            """The page itself. Served without a token, and it holds nothing that needs one.
+
+            A browser cannot present a credential for the very first request -- it has no way to
+            attach a header to a navigation -- so the shell is public and the API is not. The page
+            carries no data, no state and no governance; it is markup that asks the server what is
+            true. The token reaches it through the URL fragment, which browsers never send anywhere.
+            """
+            page = Path(__file__).parent / "console" / "index.html"
+            body = page.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            # It talks to itself and nothing else, and says so rather than relying on being asked.
+            self.send_header("Content-Security-Policy",
+                             "default-src 'self'; style-src 'unsafe-inline'; "
+                             "script-src 'unsafe-inline'; connect-src 'self'")
+            self.end_headers()
+            self.wfile.write(body)
 
         def _stream(self):
             q = runner.listen()
@@ -374,7 +436,8 @@ def make_handler(runner: Runner, operator: Operator):
 
 
 def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
-          port: int = 8765) -> ThreadingHTTPServer:
+          port: int = 8765, registry: Optional["models_mod.Registry"] = None,
+          registry_path: Optional[Path] = None) -> ThreadingHTTPServer:
     """Build the server, refusing any host that is not this machine.
 
     The refusal is here rather than in the caller because a bind address is exactly the kind of thing
@@ -385,4 +448,26 @@ def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
             f"refusing to bind {host!r}. This runner merges branches and answers gates; it listens "
             f"on {LOOPBACK[0]} and nowhere else. If another machine needs to see it, put something "
             f"in front of it that you have decided to trust — do not widen this.")
-    return ThreadingHTTPServer((host, port), make_handler(runner, operator))
+    class _OneRunner(ThreadingHTTPServer):
+        """One project, one runner — and now something enforces it.
+
+        ``ThreadingHTTPServer`` sets ``allow_reuse_address``, which on Windows lets a **second**
+        process bind a port the first is already listening on. Both then answer, and which one
+        receives a given connection is undefined. That was found by starting a second `serve` during
+        a live test and watching the console get answers from the process that had been replaced —
+        a stale build serving requests, with nothing anywhere saying so.
+
+        "One project, one runner" was a sentence in a record that nothing checked. Now a second
+        `serve` on a busy port fails to bind, loudly, which is the only version of that sentence
+        worth having.
+        """
+
+        allow_reuse_address = False
+
+    try:
+        return _OneRunner((host, port), make_handler(runner, operator, registry, registry_path))
+    except OSError as exc:
+        raise ServerError(
+            f"cannot listen on {host}:{port} — {exc}. Something is already there. If it is another "
+            f"`runner serve`, stop it first: two runners on one port answer at random, and you "
+            f"would be reading one while driving the other.")
