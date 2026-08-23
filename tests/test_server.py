@@ -426,3 +426,55 @@ def test_the_snapshot_carries_where_the_work_was_dispatched(tmp_path):
     assert out["dispatches"], "the snapshot must say where the pool sent the work"
     assert any("dispatched to" in d for d in out["dispatches"])
     assert dispatched["engineer_selfverify"] == dispatched["engineer_build"]
+
+
+def test_a_resumed_run_does_not_re_ask_what_it_already_answered(tmp_path):
+    """The defect a three-module project found, and a one-module project could not.
+
+    Every gate approval re-enters `walk` from `intake`. With a journal, the asks already answered
+    come back from it and no session opens; **without** one, `resume` is False and every ask is put
+    again — so a run with four gates asks everything five times and re-runs every side effect with
+    it. The demo agent happened to be idempotent, so the only visible trace was a reviewer seeing
+    modules that had not been built when it was asked.
+
+    `serve` is the caller that could walk around the engine's own refusal, because it never asked
+    for a journal at all.
+    """
+    asked = []
+
+    def factory(seat=None, model=None):
+        class S(engine.Session):
+            def ask(self, order):
+                asked.append(order["node_id"])
+                if seat:
+                    return {"verdict": "pass"}
+                branch = {"pm_confirm": "yes", "pm_signoff": "yes",
+                          "lead_task_review": "pass", "re_review": "pass",
+                          "qa_accept": "pass"}.get(order["node_id"])
+                return {"verdict": branch} if branch else {"ok": True}
+
+            def close(self):
+                pass
+        return S()
+
+    journal = engine.AskJournal(tmp_path / "asks")
+    runner = server.Runner(
+        walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
+        make_config=lambda i, a, r: engine.RunConfig(
+            node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+            decisions={"next_module": ["module", "none", "none"], "feedback": "done"},
+            risk="high", undeclared="allow", confirmed=a, rulings=r,
+            resume=True, journal=journal))
+
+    runner.start("do it", 0)
+    after_first = len(asked)
+    assert after_first, "the first walk should have asked something"
+
+    stop = runner.state.report.suspended
+    runner.approve(runner.state.version, stop["gate"], stop["node_id"])
+
+    replayed = asked[after_first:]
+    already = set(asked[:after_first])
+    assert not [n for n in replayed if n in already and n != stop["node_id"]], (
+        f"the resumed walk re-asked {sorted(set(replayed) & already)} — with a journal those "
+        f"answers are on disk, and asking again re-runs whatever the agent did the first time")
