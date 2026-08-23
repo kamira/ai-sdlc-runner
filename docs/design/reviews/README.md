@@ -11,19 +11,30 @@ these files rather than a replacement for them.
 | `round-1-fable-seat.md` | `DESIGN: sound with changes` |
 | `round-2-codex-seat.md` | `ROUND 2: fail` |
 | `round-2-fable-seat.md` | `ROUND 2: pass with changes` |
+| `round-3-codex-seat.md` | `ROUND 3: fail` · `NEXT: build task 12` |
+| `round-3-fable-seat.md` | `ROUND 3: fail` · `NEXT: build task 12` |
 
-Both rounds split. Both rounds therefore did not pass — a tie does not pass, and that rule applies
-to this repository's own design record or it is not a rule.
+All three rounds split on the verdict, so none of them passed — a tie does not pass, and that rule
+applies to this repository's own design record or it is not a rule.
+
+**Round 3 is where they agreed on something.** Both seats independently answered `NEXT: build task
+12`, having found that round 3 turned up four defects *created by round 2's corrections* and zero new
+design findings. Round 1's defects were about the design, round 2's about the corrections, round 3's
+about the corrections to the corrections. Task 12 is built.
 
 ## Provenance, stated exactly
 
 The two codex files are cut from the seat's raw stdout, unedited.
 
-The two fable files are the text the seat returned, transcribed. **Their raw transcripts are zero
-bytes on disk** — the harness did not retain them — so unlike the codex pair these cannot be
-re-derived from an artefact I did not write. That is a weaker chain of custody and it is stated
-here rather than left for a later round to discover. If it matters for a decision, treat the codex
-files as the stronger evidence.
+The three codex files are cut from the seat's raw stdout, unedited.
+
+`round-3-fable-seat.md` is extracted from the seat's own transcript, unedited.
+
+`round-1-fable-seat.md` and `round-2-fable-seat.md` are the text the seat returned, **transcribed**:
+their raw transcripts are zero bytes on disk — the harness did not retain them — so unlike the other
+four these cannot be re-derived from an artefact I did not write. That is a weaker chain of custody
+and it is stated here rather than left for a later round to discover. If it matters for a decision,
+treat the other four as the stronger evidence.
 
 ## Reading them against the record
 
