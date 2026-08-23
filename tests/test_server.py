@@ -33,8 +33,9 @@ from test_flow import DECISIONS, SPEC
 
 # --- a runner whose walk is the real engine ------------------------------------------------
 
-def _make_config(instruction, approvals, rulings, *, seat_verdicts=None, risk="high"):
-    del instruction
+def _make_config(instructions, approvals, rulings, artifacts=(),
+                 *, seat_verdicts=None, risk="high"):
+    del instructions, artifacts
     return engine.RunConfig(
         node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
         decisions={"next_module": ["module", "none", "none"], "feedback": "done"},
@@ -57,7 +58,8 @@ def _runner(seat_verdicts=None, risk="high"):
     dispatch = _dispatch(seat_verdicts)
     return server.Runner(
         walk=lambda cfg: engine.walk(cfg, dispatch, enabled=True),
-        make_config=lambda i, a, r: _make_config(i, a, r, seat_verdicts=seat_verdicts, risk=risk))
+        make_config=lambda i, a, r, art=(): _make_config(
+            i, a, r, art, seat_verdicts=seat_verdicts, risk=risk))
 
 
 @pytest.fixture
@@ -317,7 +319,7 @@ def test_a_failing_walk_reports_stopped_rather_than_looking_idle():
     def boom(cfg):
         raise RuntimeError("the dispatcher fell over")
 
-    runner = server.Runner(walk=boom, make_config=lambda i, a, r: None)
+    runner = server.Runner(walk=boom, make_config=lambda i, a, r, art=(): None)
     out = runner.start("do it", 0)
     assert out["state"] == engine.STOPPED
     assert "fell over" in out["error"]
@@ -416,7 +418,7 @@ def test_the_snapshot_carries_where_the_work_was_dispatched(tmp_path):
 
     runner = server.Runner(
         walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
-        make_config=lambda i, a, r: engine.RunConfig(
+        make_config=lambda i, a, r, art=(): engine.RunConfig(
             node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
             decisions={"next_module": ["module", "none", "none"], "feedback": "done"},
             risk="low", undeclared="allow", confirmed=a, rulings=r,
@@ -460,7 +462,7 @@ def test_a_resumed_run_does_not_re_ask_what_it_already_answered(tmp_path):
     journal = engine.AskJournal(tmp_path / "asks")
     runner = server.Runner(
         walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
-        make_config=lambda i, a, r: engine.RunConfig(
+        make_config=lambda i, a, r, art=(): engine.RunConfig(
             node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
             decisions={"next_module": ["module", "none", "none"], "feedback": "done"},
             risk="high", undeclared="allow", confirmed=a, rulings=r,
@@ -478,3 +480,31 @@ def test_a_resumed_run_does_not_re_ask_what_it_already_answered(tmp_path):
     assert not [n for n in replayed if n in already and n != stop["node_id"]], (
         f"the resumed walk re-asked {sorted(set(replayed) & already)} — with a journal those "
         f"answers are on disk, and asking again re-runs whatever the agent did the first time")
+
+
+def test_an_unexpected_failure_still_gets_an_answer(live, monkeypatch):
+    """A handler that dies takes the socket with it, and the client sees `RemoteDisconnected`.
+
+    That is a failure with no message — it sends whoever is debugging to the network rather than to
+    the traceback. Found live: a missing attachment directory took down the request instead of
+    reporting itself.
+    """
+    call, runner, _ = live
+
+    def boom(*a, **kw):
+        raise ValueError("something nobody planned for")
+
+    monkeypatch.setattr(runner, "instruct", boom)
+    status, body = call("POST", "/run/instruct", {"version": 0, "instruction": "x"})
+    assert status == 500
+    assert "nobody planned for" in body["error"]
+
+
+def test_the_attachment_store_recreates_a_directory_taken_from_under_it(tmp_path):
+    from ai_sdlc_runner import attachments
+
+    store = attachments.Store(tmp_path / "att")
+    import shutil
+    shutil.rmtree(store.dir)
+    a = store.add("spec.md", b"the spec")
+    assert store.path_for(a.id).exists()

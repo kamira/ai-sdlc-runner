@@ -138,6 +138,22 @@ class AskJournal:
         return {e["ask_id"]: e["result"] for e in self.entries()
                 if e.get("status") == "answered" and "result" in e}
 
+    def orders(self) -> Dict[str, Mapping[str, object]]:
+        """``ask_id -> the order that was actually sent``, for everything answered.
+
+        This is what makes a resumed answer safe to reuse. The ask id says *where* in the walk a
+        question was asked; it does not say *what* was asked. Those came apart the moment a run
+        could take a second instruction: every work order then carries the new brief, so
+        `000-pm_plan` on the second walk is a genuinely different question wearing the same id — and
+        reusing the old answer meant the PM was never told about the new instruction at all.
+
+        Found live. The blueprint could not grow because the node that grows it was never re-asked.
+        This module's own docstring already had the rule: *"a subtly different question is how a
+        rerun quietly stops being a rerun."* It just had no way to tell.
+        """
+        return {e["ask_id"]: e.get("order") or {} for e in self.entries()
+                if e.get("status") == "answered" and "result" in e}
+
     def _write(self, ask_id: str, payload: Dict[str, object]) -> None:
         self._path(ask_id).write_bytes(
             (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
@@ -328,6 +344,15 @@ class RunConfig:
     #: always meant — or a ``Decision`` naming the node and run it answers for. Both spend from the
     #: same ledger; see ``Decision``.
     confirmed: Sequence[object] = ()
+    #: Extra ``input_artifacts`` added to **every** node's work order — the attachments the
+    #: operator handed over. On every node rather than the first, because a reviewer working from a
+    #: different brief than the engineer is not reviewing the same change.
+    artifacts: Sequence[str] = ()
+    #: What the operator asked for, in the order they asked. **A list, not a string**: the blueprint
+    #: is not finished when a run starts, and a second instruction is a real event rather than an
+    #: edit of the first. Keeping them separate is what lets a work order say *when* something was
+    #: asked for, which is most of what makes a late change reviewable.
+    instructions: Sequence[str] = ()
     #: ``node id -> model ids``. What a node's mode does with the list is `graph.Node.mode`'s job,
     #: not this field's: the same three ids mean three adjudicated voices on a ``model_panel`` and a
     #: pool of three on a ``pool``. A node with nothing here is asked once, however it is declared.
@@ -383,6 +408,22 @@ def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
             f"node {node.id!r} has no work order: no node spec was supplied for it. A node the "
             f"engine cannot template is a hard error naming the node — never a fall back to a "
             f"generic prompt.")
+    if cfg.artifacts or cfg.instructions:
+        spec = dict(spec)
+        # Appended, never replacing: a node's own inputs are what the plan said it needs, and the
+        # attachments are what everyone was additionally given. Dropping either would make one of
+        # the two invisible to whoever answers.
+        spec["input_artifacts"] = list(spec.get("input_artifacts") or ()) + list(cfg.artifacts)
+        if cfg.instructions:
+            asked = [f"instruction {i + 1} of {len(cfg.instructions)}: {text}"
+                     for i, text in enumerate(cfg.instructions)]
+            own = spec.get("instructions") or ()
+            # A node spec's `instructions` is a string in some plans and a list in others, and both
+            # are in use. Appending to whichever it is keeps the node's own wording intact --
+            # `list("do the work")` would have handed the model thirteen single letters.
+            joiner = "\n"
+            spec["instructions"] = (
+                joiner.join([own] + asked) if isinstance(own, str) else list(own) + asked)
     return workorder.render(node, spec, verdict, seat=seat)
 
 
@@ -414,7 +455,8 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
          seat: Optional[str] = None, journal: Optional[AskJournal] = None,
          ask_id: Optional[str] = None, node_id: str = "",
          answered: Optional[Mapping[str, Mapping[str, object]]] = None,
-         model: Optional[str] = None):
+         model: Optional[str] = None,
+         asked_before: Optional[Mapping[str, Mapping[str, object]]] = None):
     """Open a session, ask once, close it — the close guaranteed even if the ask raises.
 
     ``seen`` holds the session **objects**, not their ``id()``: an id is not an identity once the
@@ -426,7 +468,11 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
     previous version did not do: it wrote the record, then re-asked everything anyway.
     """
     if answered and ask_id in answered:
-        return answered[ask_id]
+        # Reuse the answer only if the question is the same one. Anything else is answering the new
+        # brief with words said about the old one.
+        previous = (asked_before or {}).get(ask_id)
+        if previous is None or dict(previous) == dict(order):
+            return answered[ask_id]
     if journal is not None and ask_id is not None:
         journal.record(ask_id, node_id, seat, order)
     session = _open(factory, seat, model)
@@ -478,13 +524,55 @@ def _followed_model(node: graph.Node, report: "RunReport") -> Optional[str]:
     return None
 
 
-def _choose(cfg: RunConfig, node: graph.Node, taken: Dict[str, int]) -> Optional[str]:
-    """The branch this visit takes: one label always, or a sequence consumed one per visit.
+#: A decision that says "read the run, do not read a list" — see `_frontier`.
+FRONTIER = "frontier"
 
-    The module loop needs the second form to say "module, module, none"; a static map would silently
-    turn the shipped loop into either an infinite one or a single pass.
+
+def _frontier(node: graph.Node, report: "RunReport") -> str:
+    """Is there another module to build? Answered from the run's own record.
+
+    **Why this is not the runner guessing.** A fixed sequence — `["module", "module", "none"]` — is
+    a claim about how many modules there will be, written before the first one is built. It is
+    correct exactly while the blueprint does not change, and the blueprint changing is the ordinary
+    case: a second instruction arrives, the PM plans two more modules, and the sequence is now a
+    statement about a plan that no longer exists. Found live, and it stopped the run:
+
+        node 'next_module' was reached 5 time(s) but only 4 decision(s) were supplied
+
+    Refusing was right. Guessing would have been worse. But the flow's own note already says what
+    the answer should be — *"the frontier is the first module with no record"* — so this reads two
+    recorded facts instead of a prediction: what the **PM most recently planned**, and what the
+    **engineers have actually built**. Neither is invented, and both are in the report.
+    """
+    planned: List[str] = []
+    for ask in report.asks:
+        if ask.node_id == "pm_plan" and isinstance(ask.result, Mapping):
+            named = ask.result.get("modules")
+            if isinstance(named, (list, tuple)):
+                planned = [str(m) for m in named]      # the latest plan wins; it is the current one
+    built = {str((ask.result or {}).get("module")) for ask in report.asks
+             if ask.node_id == "engineer_build" and isinstance(ask.result, Mapping)
+             and (ask.result or {}).get("module")}
+    remaining = [m for m in planned if m not in built]
+    if not planned:
+        raise EngineError(
+            f"node {node.id!r} is decided from the frontier, but no plan has named any modules. "
+            f"`pm_plan` must answer with a `modules` list for the loop to know when it is done — "
+            f"an empty frontier and an unstated one are not the same thing.")
+    return "module" if remaining else "none"
+
+
+def _choose(cfg: RunConfig, node: graph.Node, taken: Dict[str, int],
+            report: "RunReport") -> Optional[str]:
+    """The branch this visit takes.
+
+    Three forms, most specific last: one label always, a sequence consumed one per visit, or
+    ``"frontier"`` — read the run rather than a list, which is what a blueprint that grows during
+    the run requires.
     """
     value = cfg.decisions.get(node.id)
+    if value == FRONTIER:
+        return _frontier(node, report)
     if value is None or isinstance(value, str):
         return value
     visit = taken.get(node.id, 0)
@@ -804,6 +892,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
     # run is never silently continuing somebody else's — resuming is a decision, not a side effect
     # of a journal directory happening to exist.
     already: Dict[str, Mapping[str, object]] = {}
+    asked_before: Dict[str, Mapping[str, object]] = {}
     if cfg.resume:
         if cfg.journal is None:
             raise EngineError(
@@ -811,6 +900,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 "the interrupted run wrote to; without it there is nothing to read and continuing "
                 "would silently re-ask everything.")
         already = cfg.journal.answers()
+        asked_before = cfg.journal.orders()
 
     # One ledger. Untargeted entries stay a per-gate count, exactly as before; targeted ones are
     # held alongside and spent first, so a decision aimed at the stop it answers is preferred over
@@ -964,7 +1054,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     ask_id = f"{len(report.asks):03d}-{node.id}-{model}"
                     result = _ask(factory, _order_for(node, cfg, verdict), opened,
                                   journal=cfg.journal, ask_id=ask_id, node_id=node.id,
-                                  answered=already, model=model)
+                                  answered=already, model=model,
+                                  asked_before=asked_before)
                     if ask_id in already:
                         report.resumed.append(ask_id)
                     report.asks.append(Ask(node.id, node.role, None, result, model=model))
@@ -994,7 +1085,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     result = _ask(
                         factory, _order_for(node, cfg, verdict, seat), opened, seat=seat,
                         journal=cfg.journal, ask_id=f"{len(report.asks):03d}-{node.id}-{seat}",
-                        node_id=node.id, answered=already)
+                        node_id=node.id, answered=already,
+                        asked_before=asked_before)
                     ask_key = f"{len(report.asks):03d}-{node.id}-{seat}"
                     if ask_key in already:
                         report.resumed.append(ask_key)
@@ -1024,7 +1116,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 ask_id = f"{len(report.asks):03d}-{node.id}"
                 result = _ask(
                     factory, _order_for(node, cfg, verdict), opened, journal=cfg.journal,
-                    ask_id=ask_id, node_id=node.id, answered=already, model=model)
+                    ask_id=ask_id, node_id=node.id, answered=already, model=model,
+                                  asked_before=asked_before)
                 if ask_id in already:
                     report.resumed.append(ask_id)
                 report.asks.append(Ask(node.id, node.role, None, result, model=model))
@@ -1052,7 +1145,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             elif node.answer_decides:
                 choice = _answered_branch(node, answers)
             else:
-                choice = _choose(cfg, node, taken)
+                choice = _choose(cfg, node, taken, report)
             if choice == policy.UNDECIDED:
                 last = report.adjudications[-1] if report.adjudications else {}
                 ruled = next((r for r in unspent_rulings if r.node_id == node.id), None)
