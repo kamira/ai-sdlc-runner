@@ -132,6 +132,7 @@ class RunState:
     #: which is why they are kept rather than applied and forgotten.
     approvals: List[engine.Approval] = field(default_factory=list)
     rulings: List[engine.Ruling] = field(default_factory=list)
+    rejections: List["engine.Rejection"] = field(default_factory=list)
     log: List[Dict[str, object]] = field(default_factory=list)
     #: What the operator handed over, and anything the store has since lost. A brief that has
     #: quietly lost a document is worse than one that says so.
@@ -154,6 +155,8 @@ class RunState:
             "suspended": dict(report.suspended) if report and report.suspended else None,
             "confirmations": list(report.confirmations) if report else [],
             "rulings": list(report.rulings) if report else [],
+            "rejections": list(report.rejections) if report else [],
+            "send_backs": [dict(b) for b in report.send_backs] if report else [],
             # Where a pool sent the work, and which model a follows reused. The console has to be
             # able to show this or "chosen at random" is a claim nobody can check.
             "dispatches": list(report.dispatches) if report else [],
@@ -262,6 +265,24 @@ class Runner:
             self._publish()
         return self._advance()
 
+    def reject(self, version: int, gate: str, node_id: Optional[str],
+               reason: str) -> Dict[str, object]:
+        """Refuse a gate. Where the run then goes is the graph's to say, never the refuser's."""
+        with self._lock:
+            self._require_version(version)
+            self._require_suspension(undecided=False)
+            target = graph.BY_ID.get(node_id or "")
+            if target is None or target.rejects_to is None:
+                raise ServerError(
+                    f"{node_id!r} has nowhere to send a refusal. This gate can be approved or left "
+                    f"waiting — leaving the run stopped IS the refusal.")
+            self.state.rejections.append(
+                engine.Rejection(gate=gate, node_id=node_id, reason=reason))
+            self.state.state = "running"
+            self.state.version += 1
+            self._publish()
+        return self._advance()
+
     def rule(self, version: int, node_id: str, branch: str) -> Dict[str, object]:
         with self._lock:
             self._require_version(version)
@@ -300,7 +321,8 @@ class Runner:
                                                   tuple(self.state.approvals),
                                                   tuple(self.state.rulings),
                                                   tuple(self._store.order_paths())
-                                                  if self._store else ()))
+                                                  if self._store else (),
+                                                  tuple(self.state.rejections)))
         except Exception as exc:                   # the run failed; say so rather than look idle
             with self._lock:
                 self.state.state = engine.STOPPED
@@ -396,7 +418,7 @@ def make_handler(runner: Runner, operator: Operator,
                 self._json(200, {"nodes": [
                     {"id": n.id, "kind": n.kind, "label": n.label, "role": n.role,
                      "gate": n.gate, "gate_when": n.gate_when, "mode": n.mode,
-                     "main": n.main, "follows": n.follows,
+                     "main": n.main, "follows": n.follows, "rejects_to": n.rejects_to,
                      "branches": dict(n.branches), "next": n.next}
                     for n in graph.NODES],
                     "gates": {g: dict(v) for g, v in policy.GATES.items()},
@@ -445,6 +467,9 @@ def make_handler(runner: Runner, operator: Operator,
                         models_mod.save(held["registry"], registry_path)
                     reg = held["registry"]
                     out = {**reg.as_dict(), "leaving": [m.id for m in reg.leaving()]}
+                elif self.path == "/run/reject":
+                    out = runner.reject(version, str(body.get("gate") or ""),
+                                        body.get("node_id"), str(body.get("reason") or ""))
                 elif self.path == "/run/instruct":
                     out = runner.instruct(version, str(body.get("instruction") or ""))
                 elif self.path == "/attachments":

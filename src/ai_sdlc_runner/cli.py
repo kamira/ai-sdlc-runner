@@ -98,20 +98,51 @@ class _Process(engine.Session):
     ``{"verdict": "fail"}`` fails the node no matter what the exit code says.
     """
 
-    def __init__(self, argv: List[str], timeout: int):
-        self.argv, self.timeout = argv, timeout
+    def __init__(self, argv: List[str], timeout: int, retries: int = 0):
+        self.argv, self.timeout, self.retries = argv, timeout, retries
+        #: Every attempt that failed, so a run that took four tries does not read like one that
+        #: took one. An unrecorded retry turns a flaky backend into a mystery.
+        self.attempts: List[str] = []
 
     def describe(self) -> str:
         """Which backend this is, for the panel-diversity note. The command, not the process."""
         return " ".join(self.argv)
 
     def ask(self, order):
-        proc = subprocess.run(self.argv, input=workorder.to_json(order),
-                              capture_output=True, text=True, timeout=self.timeout)
-        if proc.returncode != 0:
-            raise CliError(
-                f"{self.argv[0]!r} exited {proc.returncode} answering {order['node_id']!r}: "
-                f"{proc.stderr.strip() or 'no stderr'}")
+        # Task 7. Retries live HERE, in the dispatcher, and never in the engine. Putting them in the
+        # engine would make "one ask, one session" untrue: the engine would be opening a second
+        # session for a question it had already asked, and the property that makes a panel a panel
+        # is exactly that each voice got its own.
+        #
+        # A retry is for a backend that FAILED TO ANSWER -- crashed, timed out, wrote nothing a
+        # reader could parse. It is never for an answer somebody dislikes: retrying a `fail` until
+        # it comes back `pass` is not a retry, it is shopping for a verdict, and the whole point of
+        # the panel is that nobody gets to do that. So the retry loop sits above the parse and below
+        # the routing, and never sees the verdict at all.
+        attempt, last = 0, None
+        while True:
+            attempt += 1
+            try:
+                proc = subprocess.run(self.argv, input=workorder.to_json(order),
+                                      capture_output=True, text=True, timeout=self.timeout)
+                if proc.returncode != 0:
+                    raise CliError(
+                        f"{self.argv[0]!r} exited {proc.returncode} answering "
+                        f"{order['node_id']!r}: {proc.stderr.strip() or 'no stderr'}")
+                break
+            except (CliError, subprocess.TimeoutExpired) as exc:
+                last = exc
+                if attempt > self.retries:
+                    # Out of attempts. The question stays pending in the journal, exactly as it
+                    # would have without retries -- retrying changes how many times we tried, not
+                    # what happens when trying stops working.
+                    raise CliError(
+                        f"{self.argv[0]!r} failed {attempt} time(s) answering "
+                        f"{order['node_id']!r}; giving up. Last failure: {exc}")
+                self.attempts.append(
+                    f"{order['node_id']}: attempt {attempt} failed ({type(exc).__name__}), "
+                    f"retrying")
+        del last
         answer = {"exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
         try:
             parsed = json.loads(proc.stdout)
@@ -141,6 +172,7 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
     seat_models = seat_models or {}
     default = config.get("agent_command")
     timeout = int(config.get("agent_timeout", 600))
+    retries = int(config.get("agent_retries", 0))
 
     def factory(seat: Optional[str] = None, model: Optional[str] = None):
         argv = None
@@ -157,7 +189,8 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
             argv = seat_models.get(seat) or default
         if not argv:
             return _Stub()
-        return _Process(list(argv) if isinstance(argv, list) else str(argv).split(), timeout)
+        return _Process(list(argv) if isinstance(argv, list) else str(argv).split(),
+                        timeout, retries)
 
     return factory
 
@@ -480,7 +513,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     store = attach_mod.Store(args.attachments or (Path(args.token_dir) / "attachments"))
 
-    def make_config(instructions, approvals, rulings, artifacts):
+    def make_config(instructions, approvals, rulings, artifacts=(), rejections=()):
         return engine.RunConfig(
             node_specs=plan.get("node_specs", {}),
             decisions=plan.get("decisions", {}),
@@ -494,6 +527,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
             node_models=plan.get("node_models", {}),
             artifacts=artifacts,
             instructions=instructions,
+            rejections=rejections,
             effects=effects_provider(plan),
             ordinary_commands=saved.ordinary_commands,
             undeclared=args.undeclared,

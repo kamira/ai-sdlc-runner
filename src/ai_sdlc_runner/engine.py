@@ -42,6 +42,21 @@ SessionFactory = Callable[[], "Session"]
 Dispatcher = Callable[[Dict[str, object]], Mapping[str, object]]
 
 
+class _Redirect:
+    """A gate's third answer: not proceed, not stop, but **continue somewhere else**.
+
+    `_gate` returned either None (proceed) or a finished report (stop). A rejection is neither: the
+    run carries on, at the node `graph.Node.rejects_to` names. Rather than overload the report with
+    a "and by the way, jump here" field that every caller would have to remember to read, the third
+    answer gets its own type.
+    """
+
+    __slots__ = ("to",)
+
+    def __init__(self, to: str):
+        self.to = to
+
+
 class EngineError(Exception):
     """Raised when the run cannot continue truthfully. Never softened into a skip."""
 
@@ -214,6 +229,29 @@ class Approval:
 
 
 @dataclass
+class Rejection:
+    """A person saying **no** at a gate, and the run going where the graph says.
+
+    Not an `Approval` with a flag. An approval opens a gate; a rejection sends the run somewhere
+    else entirely, and the somewhere is `graph.Node.rejects_to` rather than anything the rejecter
+    picks — otherwise a refusal would be a way to jump the flow to an arbitrary node.
+
+    A gate whose node has no `rejects_to` **cannot be rejected**. Rejecting `merge` means *do not
+    merge*, and there is no node for that; inventing one would be pretending a refusal is a step.
+    """
+
+    gate: str
+    node_id: Optional[str] = None
+    run_id: Optional[str] = None
+    #: Why. Recorded, because a refusal nobody explained is one the next person has to re-derive.
+    reason: str = ""
+
+    def __str__(self) -> str:
+        where = f" at {self.node_id}" if self.node_id else ""
+        return f"rejected {self.gate}{where}"
+
+
+@dataclass
 class Ruling:
     """A person's answer to a tie: **which branch**, at a node whose panel decided nothing.
 
@@ -272,6 +310,17 @@ class RunReport:
     #: "at random" is only acceptable if the choice is afterwards visible: an unrecorded random
     #: dispatch is indistinguishable from a preference nobody declared.
     dispatches: List[str] = field(default_factory=list)
+    #: Each extra round an undecided panel was given, and what it was told. Recorded because a
+    #: verdict reached on round three after seeing two rounds of argument is a different kind of
+    #: verdict from one reached blind, and a report that cannot tell them apart has lost the
+    #: distinction the mechanism is about.
+    panel_rounds: List[Dict[str, object]] = field(default_factory=list)
+    #: What a rework was told, when a panel sent work back: the lead's summary, and the originals
+    #: appended underneath it. Both, because a summary is where an objection gets softened and the
+    #: words it replaced should not need fetching.
+    send_backs: List[Dict[str, object]] = field(default_factory=list)
+    #: Gates a person refused, where the run went, and why.
+    rejections: List[str] = field(default_factory=list)
     #: Ties a person broke, and which way. Kept apart from ``confirmations`` because they answer a
     #: different question — "which branch" rather than "may this pass a gate" — and merging them
     #: would make the audit trail say a gate was confirmed when nobody confirmed anything.
@@ -295,6 +344,9 @@ class RunReport:
             "resumed": list(self.resumed),
             "rulings": list(self.rulings),
             "dispatches": list(self.dispatches),
+            "rejections": list(self.rejections),
+            "send_backs": [dict(b) for b in self.send_backs],
+            "panel_rounds": [dict(r) for r in self.panel_rounds],
         }
 
 
@@ -362,6 +414,17 @@ class RunConfig:
     #: "which model built this" has to be answerable afterwards, and a run nobody can repeat is a
     #: run nobody can investigate.
     dispatch_seed: int = 0
+    #: How many extra rounds an **undecided model panel** may be given before it goes to a person.
+    #: ``0`` sends the first tie straight to a person, which is the honest default: a re-run trades
+    #: independence for information, and nobody should pay that without saying so.
+    #:
+    #: **Model panels only.** The review seats are excluded and it is not configurable: each seat
+    #: answers a *different* question, so carrying every seat's reasons to every seat is
+    #: cross-question contamination rather than a second opinion — and this module's own rule is
+    #: that the count is the user's to set and the independence is not.
+    panel_reruns: int = 0
+    #: Gates a person refused — see ``Rejection``.
+    rejections: Sequence["Rejection"] = ()
     #: A person's answers to ties — see ``Ruling``. Empty by default: a run with no rulings stops
     #: at the first undecided panel, which is the honest behaviour when nobody has been asked yet.
     rulings: Sequence["Ruling"] = ()
@@ -401,7 +464,8 @@ def resolve_verdict(node: graph.Node, risk: str, autonomy: Optional[str] = None)
 
 
 def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
-               seat: Optional[str] = None) -> Dict[str, object]:
+               seat: Optional[str] = None,
+               carried: Optional[Sequence[Mapping[str, str]]] = None) -> Dict[str, object]:
     spec = cfg.node_specs.get(node.id)
     if spec is None:
         raise EngineError(
@@ -424,6 +488,18 @@ def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
             joiner = "\n"
             spec["instructions"] = (
                 joiner.join([own] + asked) if isinstance(own, str) else list(own) + asked)
+    if carried:
+        # Both sides, named. "Somebody objected" is not something a reviewer can weigh, and naming
+        # only the objectors would be sending half the room's reasoning — a thumb on the scale
+        # rather than the information the round exists to supply.
+        spec = dict(spec)
+        said = [f"last round {row['voice']} said {row['verdict']}" for row in carried]
+        said.append("Weigh both sides. Answer for yourself — you have not seen what the others "
+                    "say this round.")
+        own = spec.get("instructions") or ()
+        joiner = "\n"
+        spec["instructions"] = (
+            joiner.join([own] + said) if isinstance(own, str) else list(own) + said)
     return workorder.render(node, spec, verdict, seat=seat)
 
 
@@ -488,6 +564,36 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
     if journal is not None and ask_id is not None:
         journal.answered(ask_id, result)
     return result
+
+
+def _send_back(node: graph.Node, report: "RunReport", outcome: Mapping[str, object],
+               verdicts: Mapping[str, str]) -> None:
+    """Record what the rework is told, when a panel does not pass something.
+
+    **The brief leads and the originals are appended to the same record.** Not behind a lookup: an
+    appendix nobody has to fetch is one they will not read at the moment the summary looks wrong,
+    and summarising is exactly where an objection gets softened. This repository's entire recorded
+    history is disagreement being flattened, so the words that were actually said travel with the
+    words that replaced them.
+
+    The originals are marked **reference, not instruction**. A rework driven from four verbatim
+    objections at once is a rework with four masters; the summary is what to act on, and the
+    appendix is what to check it against.
+    """
+    against = sorted(who for who, v in verdicts.items() if v != policy.PASS)
+    if not against:
+        return
+    report.send_backs.append({
+        "node_id": node.id,
+        "outcome": str(outcome.get("outcome")),
+        # The summary. Short on purpose -- it is the instruction, and an instruction that restates
+        # every objection verbatim has not summarised anything.
+        "brief": f"{node.id} did not pass: {outcome.get('reason')}. "
+                 f"Address what {', '.join(against)} raised.",
+        # Appended, in full, attributed. Reference rather than instruction.
+        "appendix": [{"voice": who, "verdict": v} for who, v in sorted(verdicts.items())],
+        "appendix_is": "reference, not instruction",
+    })
 
 
 def _dispatch_from(configured: Sequence[str], cfg: "RunConfig", node: graph.Node,
@@ -822,6 +928,11 @@ def _adjudicate(node: graph.Node, report: "RunReport", seats: int) -> str:
             f"short of a seat has not reached the majority it was opened for")
     outcome = policy.adjudicate(verdicts)
     report.adjudications.append({"node_id": node.id, **outcome, "verdicts": dict(verdicts)})
+    if outcome["outcome"] != policy.PASS:
+        # The seats send work back too, and their objections are the ones most worth keeping whole:
+        # each seat answered a different question, so flattening four of them into one sentence
+        # loses which question failed.
+        _send_back(node, report, outcome, verdicts)
     reached = str(outcome["outcome"])
     if reached not in policy.OUTCOMES:
         raise EngineError(
@@ -960,6 +1071,28 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 f"not route this one.")
         unspent_rulings.append(ruling)
 
+    unspent_rejections: List[Rejection] = []
+    for rejection in cfg.rejections:
+        if rejection.gate not in policy.GATES:
+            raise EngineError(f"rejection names gate {rejection.gate!r}, which does not exist")
+        target = graph.BY_ID.get(rejection.node_id or "")
+        if rejection.node_id and target is None:
+            raise EngineError(f"{rejection} names a node that is not in the flow")
+        if target is not None and target.gate != rejection.gate:
+            raise EngineError(
+                f"{rejection}: node {target.id!r} has gate {target.gate!r}, not "
+                f"{rejection.gate!r}")
+        if target is not None and target.rejects_to is None:
+            raise EngineError(
+                f"{rejection}: {target.id!r} has nowhere to send a refusal. This gate can be "
+                f"approved or left waiting — rejecting it would mean *do not do this*, and there is "
+                f"no node for that. Leaving the run stopped IS the refusal.")
+        if rejection.run_id is not None and rejection.run_id != cfg.run_id:
+            raise EngineError(
+                f"{rejection} is for another run — this run is "
+                f"{cfg.run_id or 'un-identified (no journal)'}")
+        unspent_rejections.append(rejection)
+
     node_id: Optional[str] = "intake"
     for _ in range(cfg.max_steps):
         if node_id is None:
@@ -988,6 +1121,20 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             """
             if node.gate_when != phase or not policy.stops(str(verdict["verdict"])):
                 return None
+
+            for i, rejection in enumerate(unspent_rejections):
+                if rejection.gate != node.gate:
+                    continue
+                if rejection.node_id is not None and rejection.node_id != node.id:
+                    continue
+                if node.rejects_to is None:       # already refused up front; belt and braces
+                    break
+                unspent_rejections.pop(i)
+                report.rejections.append(
+                    f"{node.gate} at {node.id} was refused by the operator"
+                    + (f": {rejection.reason}" if rejection.reason else "")
+                    + f" — the run goes to {node.rejects_to}")
+                return _Redirect(node.rejects_to)
 
             # A decision naming this node is spent first: it is the more specific answer, and
             # preferring the blanket one would let a targeted approval survive its own stop and open
@@ -1037,6 +1184,9 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             return _finish(report, confirmations)
 
         stop = _gate("before")
+        if isinstance(stop, _Redirect):
+            node_id = stop.to
+            continue
         if stop is not None:
             return _finish(stop, confirmations)
 
@@ -1046,14 +1196,15 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             configured = list(cfg.node_models.get(node.id) or ())
 
             if node.mode == graph.MODEL_PANEL and len(configured) > 1:
+                carried: List[Dict[str, str]] = []
                 # Task 4. N voices on ONE question, each its own session, blind to each other --
                 # the same independence rule the seats have, for the same reason.
                 before = len(opened)
                 verdicts: Dict[str, str] = {}
                 for model in configured:
                     ask_id = f"{len(report.asks):03d}-{node.id}-{model}"
-                    result = _ask(factory, _order_for(node, cfg, verdict), opened,
-                                  journal=cfg.journal, ask_id=ask_id, node_id=node.id,
+                    result = _ask(factory, _order_for(node, cfg, verdict, carried=carried),
+                                  opened, journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                                   answered=already, model=model,
                                   asked_before=asked_before)
                     if ask_id in already:
@@ -1072,6 +1223,42 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 outcome = policy.adjudicate(verdicts, voices="models")
                 report.adjudications.append(
                     {"node_id": node.id, **outcome, "verdicts": dict(verdicts)})
+
+                # Task 3. A tie may go back to the panel, and from round two every voice is told
+                # what ALL of them said last round -- for and against, attributed.
+                #
+                # The cost is anchoring, and it is real: a voice told codex objected may defer to
+                # codex. It is paid on purpose, because a panel that ties has not run out of
+                # independence, it has run out of *information* -- the two sides never saw each
+                # other's reasoning. That is an argument for paying it, not evidence that it is
+                # worth paying, and the limit still ends at a person for a sharper reason: if they
+                # have read each other and still cannot agree, another round will not help.
+                rounds = 1
+                while outcome["outcome"] == policy.UNDECIDED and rounds <= cfg.panel_reruns:
+                    carried = [{"voice": who, "verdict": v} for who, v in sorted(verdicts.items())]
+                    report.panel_rounds.append({
+                        "node_id": node.id, "round": rounds, "carried": list(carried),
+                        "why": "undecided; put to the panel again with what both sides said",
+                    })
+                    rounds += 1
+                    verdicts, answers = {}, []
+                    for model in configured:
+                        ask_id = f"{len(report.asks):03d}-{node.id}-{model}-r{rounds}"
+                        result = _ask(factory, _order_for(node, cfg, verdict, carried=carried),
+                                      opened, journal=cfg.journal, ask_id=ask_id,
+                                      node_id=node.id, answered=already, model=model,
+                                      asked_before=asked_before)
+                        report.asks.append(Ask(node.id, node.role, None, result, model=model))
+                        answers.append(result)
+                        verdicts[model] = str(
+                            result.get("verdict") or result.get("outcome") or "")
+                    outcome = policy.adjudicate(verdicts, voices="models")
+                    report.adjudications.append(
+                        {"node_id": node.id, **outcome, "verdicts": dict(verdicts),
+                         "round": rounds})
+
+                if outcome["outcome"] != policy.PASS:
+                    _send_back(node, report, outcome, verdicts)
                 _note_panel_diversity(node, report, opened[before:])
                 # The panel's outcome is what routes. `answer_decides` reads ONE answer, and reading
                 # one of several voices would silently make a panel into whichever model happened to
@@ -1124,6 +1311,9 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 answers.append(result)
 
         stop = _gate("after")
+        if isinstance(stop, _Redirect):
+            node_id = stop.to
+            continue
         if stop is not None:
             return _finish(stop, confirmations)
 

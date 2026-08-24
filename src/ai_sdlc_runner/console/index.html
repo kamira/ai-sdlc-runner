@@ -70,6 +70,8 @@
   ul.log li.seat .who{color:var(--accent)}
   .err{color:var(--stop);font-family:var(--mono);font-size:12px;white-space:pre-wrap}
   .muted{color:var(--faint)}
+  .filebtn{font:inherit;padding:6px 13px;border:1px solid var(--line);border-radius:6px;background:var(--card);cursor:pointer}
+  button.no{border-color:var(--stop);color:var(--stop)}
 </style>
 
 <header>
@@ -90,7 +92,8 @@
     <textarea id="instruction" rows="3" placeholder="what should this runner build?"></textarea>
     <div style="margin:8px 0 20px" class="ask .row">
       <button class="p" id="start">start the run</button>
-      <button id="more">add to the brief</button></div>
+      <button id="more">add to the brief</button>
+      <label class="filebtn">attach a file<input type="file" id="file" hidden></label></div>
     <div id="brief"></div>
     <h2>the log</h2>
     <ul class="log" id="log"></ul>
@@ -240,6 +243,22 @@ function drawAsk() {
       act("/run/gate", { gate: s.gate, node_id: s.node_id });
     };
     el.querySelector(".row").appendChild(ok);
+
+    // Refuse — but only where the graph has somewhere to send a refusal. Offering the button at
+    // `merge`, where rejecting means "do not merge" and no node represents that, would be offering
+    // a control the server must then decline. The flow says which gates can be refused; this reads
+    // it rather than guessing.
+    var here = flow.filter(function (n) { return n.id === s.node_id; })[0];
+    if (here && here.rejects_to) {
+      var no = document.createElement("button");
+      no.className = "no";
+      no.textContent = "send back to " + here.rejects_to;
+      no.onclick = function () {
+        act("/run/reject", { gate: s.gate, node_id: s.node_id,
+                             reason: $("#instruction").value.trim() });
+      };
+      el.querySelector(".row").appendChild(no);
+    }
   }
   box.appendChild(el);
 }
@@ -265,10 +284,45 @@ function apply(s) {
 
 function fail(e) { $("#err").textContent = e.message; }
 
+$("#start").disabled = true;    // nothing is clickable until the server has said what is true
+$("#more").disabled = true;
+
 $("#start").onclick = function () {
+  if (!state) return;           // no snapshot means no version to answer, and answering without
+                                // one is exactly what the version exists to prevent
   $("#err").textContent = "";
   api("POST", "/run", { instruction: $("#instruction").value, version: state.version })
     .then(apply).catch(fail);
+};
+
+// Adding to the brief while a run is under way is the normal case, not a failure of planning: the
+// blueprint gets finished while the work happens. Enabled exactly when the server can accept one —
+// at a stop — because editing a brief mid-walk would have two nodes in one run answering different
+// questions with nothing saying which was which.
+$("#more").onclick = function () {
+  if (!state) return;
+  var text = $("#instruction").value.trim();
+  if (!text) { $("#err").textContent = "an empty instruction says nothing"; return; }
+  $("#err").textContent = "";
+  api("POST", "/run/instruct", { instruction: text, version: state.version })
+    .then(function (next) { $("#instruction").value = ""; apply(next); }).catch(fail);
+};
+
+// A spec, a wireframe, the screenshot of the thing that is wrong. It reaches every node's work
+// order, so the reviewer reads what the engineer built from.
+$("#file").onchange = function () {
+  var f = this.files && this.files[0];
+  this.value = "";
+  if (!f || !state) return;
+  var reader = new FileReader();
+  reader.onload = function () {
+    var url = String(reader.result);
+    $("#err").textContent = "";
+    api("POST", "/attachments", { filename: f.name, version: state.version,
+                                  data: url.slice(url.indexOf(",") + 1) })
+      .then(apply).catch(fail);
+  };
+  reader.readAsDataURL(f);
 };
 
 // --- go --------------------------------------------------------------------------------------

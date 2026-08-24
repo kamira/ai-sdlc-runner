@@ -101,6 +101,18 @@ class Node:
     #: roles are not unique — three nodes are ``role="lead"`` — and "verify what *this* build
     #: produced" cannot be said by naming a role.
     follows: Optional[str] = None
+    #: Where a **rejected** gate sends the run. ``None`` means this gate cannot be rejected — it can
+    #: be approved or left waiting, and nothing else.
+    #:
+    #: Declared per node rather than defaulting to one place. The mock-up sent every rejection to
+    #: `pm_plan`, which is right for a plan nobody agreed with and wrong for a QA run that failed:
+    #: that belongs back in the module loop, not back at the drawing board. A universal target is a
+    #: guess wearing the shape of a rule.
+    #:
+    #: Some gates genuinely have nowhere to go. Rejecting `merge` means *do not merge* — there is no
+    #: node for that, and inventing one would be pretending a refusal is a step. Those gates carry
+    #: ``None``, and a console must not offer a control the graph cannot honour.
+    rejects_to: Optional[str] = None
     note: str = ""
 
 
@@ -112,16 +124,18 @@ NODES: Tuple[Node, ...] = (
          note="a plan is work, not a verdict: several models would mean several candidate plans "
               "and no rule for choosing between them"),
     Node("pm_confirm", DECISION, "PM confirms the plan", role="pm", gate="plan_confirmed",
-         gate_when="after", answer_decides=True, mode=MODEL_PANEL,
+         gate_when="after", answer_decides=True, mode=MODEL_PANEL, rejects_to="pm_plan",
          branches={"yes": "lead_assess", "no": "pm_plan"},
          note="PM is asked, and the answer decides; the gate then stops with that answer in hand"),
     Node("lead_assess", STEP, "the lead confirms feasibility and risk", role="lead",
          gate="feasibility_confirmed", gate_when="after", next="pm_signoff", mode=SINGLE,
+         rejects_to="pm_plan",
          note="judged before anyone is dispatched, which is why the lead is asked first. The gate "
               "is consulted AFTER: the thing a person is being asked to confirm IS the lead's "
               "assessment, and stopping in front of it hands them an empty page"),
     Node("pm_signoff", DECISION, "PM signs off on the lead's assessment", role="pm",
          gate="before_dispatch", gate_when="after", answer_decides=True, mode=MODEL_PANEL,
+         rejects_to="pm_plan",
          branches={"yes": "next_module", "no": "pm_plan"}),
     Node("next_module", LOOP, "take the next unbuilt module", mode=RUNNER,
          branches={"module": "engineer_build", "none": "lead_review"},
@@ -132,9 +146,11 @@ NODES: Tuple[Node, ...] = (
               "does the work. Calling that a vote would misdescribe what happened"),
     Node("engineer_selfverify", STEP, "the engineer verifies its own work", role="engineer",
          gate="self_verify", next="lead_task_review", mode=FOLLOWS, follows="engineer_build",
+         rejects_to="engineer_build",
          note="its own work — which is why it is never the last word"),
     Node("lead_task_review", DECISION, "the lead reviews that module", role="lead",
          gate="task_review", gate_when="after", answer_decides=True, mode=MODEL_PANEL,
+         rejects_to="fix_pass",
          branches={"pass": "record_module", "fail": "fix_pass"},
          note="the lead reviews work it did not write, and the review's answer is what routes"),
     Node("record_module", STEP, "record the module as done", next="next_module", mode=RUNNER,
@@ -150,17 +166,17 @@ NODES: Tuple[Node, ...] = (
     Node("halt_second_fail", TERMINAL, "a second failure halts", mode=RUNNER,
          note="two failures on one module is not something retrying fixes"),
     Node("lead_review", DECISION, "review seats cross-check the whole change", role="seat",
-         gate="lead_review", gate_when="after", mode=SEAT_PANEL,
+         gate="lead_review", gate_when="after", mode=SEAT_PANEL, rejects_to="review_failed",
          branches={"pass": "qa_verify", "fail": "review_failed"},
          note="one or many seats, each in its own session. The branch comes from adjudicating their "
               "verdicts — veto, then majority, and a tie does not pass"),
     Node("review_failed", STEP, "the panel did not pass it", next="next_module", mode=RUNNER,
          note="back into the module loop; the panel's reasons travel with the run"),
     Node("qa_verify", STEP, "QA tests and verifies the whole change", role="qa", gate="qa_verify",
-         gate_when="after", next="qa_accept", mode=SINGLE,
+         gate_when="after", next="qa_accept", mode=SINGLE, rejects_to="next_module",
          note="run for real; a module's own tests are not this"),
     Node("qa_accept", DECISION, "acceptance", role="qa", gate="acceptance", gate_when="after",
-         answer_decides=True, mode=MODEL_PANEL,
+         answer_decides=True, mode=MODEL_PANEL, rejects_to="acceptance_failed",
          branches={"pass": "pr", "fail": "acceptance_failed"}),
     Node("acceptance_failed", STEP, "back into the module loop", next="next_module", mode=RUNNER),
     Node("pr", STEP, "open the pull request", role="lead", gate="pr", next="merge", mode=SINGLE),
@@ -279,6 +295,20 @@ def validate() -> None:
                 raise GraphError(f"node {node.id!r} follows itself")
         elif node.follows:
             raise GraphError(f"node {node.id!r} is mode {node.mode!r} and has no use for a follows")
+
+        # --- rejection routing -----------------------------------------------------------------
+        if node.rejects_to is not None:
+            if not node.gate:
+                raise GraphError(
+                    f"node {node.id!r} says where a rejection goes but has no gate to reject. Only "
+                    f"a gate can be rejected, because rejecting is what a person does instead of "
+                    f"approving")
+            if node.rejects_to not in ids:
+                raise GraphError(
+                    f"node {node.id!r} rejects to unknown node {node.rejects_to!r}")
+            if node.rejects_to == node.id:
+                raise GraphError(
+                    f"node {node.id!r} rejects to itself, which is a refusal that changes nothing")
 
     reachable = {"intake"}
     frontier = ["intake"]

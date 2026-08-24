@@ -33,7 +33,7 @@ from test_flow import DECISIONS, SPEC
 
 # --- a runner whose walk is the real engine ------------------------------------------------
 
-def _make_config(instructions, approvals, rulings, artifacts=(),
+def _make_config(instructions, approvals, rulings, artifacts=(), rejections=(),
                  *, seat_verdicts=None, risk="high"):
     del instructions, artifacts
     return engine.RunConfig(
@@ -58,8 +58,8 @@ def _runner(seat_verdicts=None, risk="high"):
     dispatch = _dispatch(seat_verdicts)
     return server.Runner(
         walk=lambda cfg: engine.walk(cfg, dispatch, enabled=True),
-        make_config=lambda i, a, r, art=(): _make_config(
-            i, a, r, art, seat_verdicts=seat_verdicts, risk=risk))
+        make_config=lambda i, a, r, art=(), rej=(): _make_config(
+            i, a, r, art, rej, seat_verdicts=seat_verdicts, risk=risk))
 
 
 @pytest.fixture
@@ -319,7 +319,7 @@ def test_a_failing_walk_reports_stopped_rather_than_looking_idle():
     def boom(cfg):
         raise RuntimeError("the dispatcher fell over")
 
-    runner = server.Runner(walk=boom, make_config=lambda i, a, r, art=(): None)
+    runner = server.Runner(walk=boom, make_config=lambda i, a, r, art=(), rej=(): None)
     out = runner.start("do it", 0)
     assert out["state"] == engine.STOPPED
     assert "fell over" in out["error"]
@@ -418,7 +418,7 @@ def test_the_snapshot_carries_where_the_work_was_dispatched(tmp_path):
 
     runner = server.Runner(
         walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
-        make_config=lambda i, a, r, art=(): engine.RunConfig(
+        make_config=lambda i, a, r, art=(), rej=(): engine.RunConfig(
             node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
             decisions={"next_module": ["module", "none", "none"], "feedback": "done"},
             risk="low", undeclared="allow", confirmed=a, rulings=r,
@@ -462,7 +462,7 @@ def test_a_resumed_run_does_not_re_ask_what_it_already_answered(tmp_path):
     journal = engine.AskJournal(tmp_path / "asks")
     runner = server.Runner(
         walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
-        make_config=lambda i, a, r, art=(): engine.RunConfig(
+        make_config=lambda i, a, r, art=(), rej=(): engine.RunConfig(
             node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
             decisions={"next_module": ["module", "none", "none"], "feedback": "done"},
             risk="high", undeclared="allow", confirmed=a, rulings=r,
@@ -508,3 +508,57 @@ def test_the_attachment_store_recreates_a_directory_taken_from_under_it(tmp_path
     shutil.rmtree(store.dir)
     a = store.add("spec.md", b"the spec")
     assert store.path_for(a.id).exists()
+
+
+def test_the_console_offers_a_send_back_only_where_the_graph_has_one(live):
+    """A control the server must then decline is worse than no control.
+
+    `/flow` carries `rejects_to`, and the page reads it. `merge` has none — rejecting it means *do
+    not merge*, and there is no node for that.
+    """
+    call, _, _ = live
+    _, body = call("GET", "/flow")
+    by_id = {n["id"]: n for n in body["nodes"]}
+    assert by_id["pm_confirm"]["rejects_to"] == "pm_plan"
+    assert by_id["merge"]["rejects_to"] is None
+
+    page = (__import__("pathlib").Path(server.__file__).parent
+            / "console" / "index.html").read_text(encoding="utf-8")
+    assert "here.rejects_to" in page, "the page should read the flow rather than guess"
+
+
+def test_refusing_a_gate_that_has_nowhere_to_go_is_refused_by_the_server(live):
+    call, _, _ = live
+    _, started = call("POST", "/run", {"instruction": "do it", "version": 0})
+    # Drive to `merge`, the one gate with no rejection target.
+    for _ in range(10):
+        if started["state"] != "suspended":
+            break
+        stop = started["suspended"]
+        if stop["node_id"] == "merge":
+            status, body = call("POST", "/run/reject",
+                                {"version": started["version"], "gate": "merge",
+                                 "node_id": "merge", "reason": "no"})
+            assert status == 409
+            assert "nowhere to send a refusal" in body["error"]
+            return
+        _, started = call("POST", "/run/gate",
+                          {"version": started["version"], "gate": stop["gate"],
+                           "node_id": stop["node_id"]})
+    raise AssertionError("the run never reached merge")
+
+
+def test_the_console_has_a_handler_for_every_button_it_draws():
+    """A button with no handler is a control that does nothing — which shipped once already.
+
+    `add to the brief` was in the markup for a whole change with no `onclick` behind it, because an
+    edit that should have added one failed silently. This reads the page and checks.
+    """
+    page = (__import__("pathlib").Path(server.__file__).parent
+            / "console" / "index.html").read_text(encoding="utf-8")
+    import re
+    ids = set(re.findall(r'id="([a-z]+)"[^>]*>(?:[^<]*)</button>', page))
+    ids |= set(re.findall(r'<button[^>]*id="([a-z]+)"', page))
+    for control in ids:
+        assert f'$("#{control}").onclick' in page, \
+            f"the page draws #{control} and nothing listens to it"
