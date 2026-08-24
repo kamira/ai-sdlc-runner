@@ -239,3 +239,25 @@ def test_the_asking_node_count_matches():
     for name, body in _text().items():
         for claimed in re.findall(r"(\d+)\s+(?:asking nodes|of them ask|個詢問節點)", body):
             assert int(claimed) == actual, f"{name} says {claimed}; there are {actual}"
+
+
+def test_the_change_records_task_count_matches_its_own_task_table():
+    """The recurrence this record was written to prevent, checked instead of promised.
+
+    CHG-20260822-04 simultaneously claimed "all nine tasks built" and "nothing in src/ has been
+    written", for the length of a build, because two places said how much was done and only one was
+    swept. This record says it in the Status line and in the State column; a test is the only thing
+    that keeps them agreeing.
+    """
+    import pathlib
+    import re
+
+    record = (pathlib.Path(__file__).resolve().parents[1]
+              / "docs" / "changes" / "CHG-20260823-11.md").read_text(encoding="utf-8")
+    ticked = record.count("**[x]**")
+    claimed = re.search(r"\*\*(\d+) of (\d+) tasks built\*\*", record)
+    assert claimed, "the Status line should say how many tasks are built"
+    assert int(claimed.group(1)) == ticked, (
+        f"Status says {claimed.group(1)} tasks built and the table ticks {ticked}. Two places "
+        f"saying how much is done is two chances to leave one stale.")
+    assert int(claimed.group(2)) == ticked + record.count("**[ ]**")
