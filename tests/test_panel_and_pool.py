@@ -194,3 +194,144 @@ def test_the_mode_and_not_the_node_name_decides():
     report, asked = _run(node_models={"qa_verify": ["opus", "codex", "gemini"]})
     assert len([a for a in asked if a[0] == "qa_verify"]) == 1
     assert not [a for a in report.adjudications if a["node_id"] == "qa_verify"]
+
+
+# --- task 3: an undecided panel may be given another round --------------------------------------
+
+def _tie_run(reruns, resolve_on=None, **kw):
+    """A two-model panel that ties, and optionally stops tying on a later round."""
+    rounds = {"n": 0}
+
+    def factory(seat=None, model=None):
+        class S(engine.Session):
+            def ask(self, order):
+                if seat:
+                    return {"verdict": "pass"}
+                if order["node_id"] == "lead_task_review":
+                    rounds["n"] += 1
+                    this_round = (rounds["n"] + 1) // 2      # two voices per round
+                    if resolve_on and this_round >= resolve_on:
+                        return {"verdict": "pass"}
+                    return {"verdict": "fail" if model == "codex" else "pass"}
+                branch = {"pm_confirm": "yes", "pm_signoff": "yes",
+                          "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])
+                return {"verdict": branch} if branch else {"ok": True}
+
+            def close(self):
+                pass
+        return S()
+
+    base = dict(node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+                decisions=dict(DECISIONS), risk="low", undeclared="allow",
+                node_models={"lead_task_review": ["opus", "codex"]}, panel_reruns=reruns)
+    base.update(kw)
+    return engine.walk(engine.RunConfig(**base), factory, enabled=True)
+
+
+def test_with_no_reruns_a_tie_goes_straight_to_a_person():
+    """The honest default. A re-run trades independence for information; nobody pays that by accident."""
+    report = _tie_run(reruns=0)
+    assert report.state == engine.SUSPENDED
+    assert report.suspended["undecided"] is True
+    assert not report.panel_rounds
+
+
+def test_a_tie_can_be_put_to_the_panel_again():
+    report = _tie_run(reruns=2, resolve_on=2)
+    assert report.panel_rounds, "the extra round should be recorded"
+    assert report.panel_rounds[0]["node_id"] == "lead_task_review"
+    # Round two resolved it, so the panel is no longer what the run is waiting for.
+    assert not (report.suspended or {}).get("undecided")
+
+
+def test_the_extra_round_carries_both_sides_attributed():
+    """Only the objections would be a thumb on the scale — half the room's reasoning."""
+    report = _tie_run(reruns=1)
+    carried = report.panel_rounds[0]["carried"]
+    verdicts = {row["voice"]: row["verdict"] for row in carried}
+    assert verdicts == {"opus": "pass", "codex": "fail"}, "both sides, named"
+
+
+def test_the_carried_round_reaches_the_work_order():
+    """Recording it is not the same as sending it. This checks the voices were actually told."""
+    told = []
+
+    def factory(seat=None, model=None):
+        class S(engine.Session):
+            def ask(self, order):
+                if order["node_id"] == "lead_task_review":
+                    got = order["instructions"]
+                    told.append(got if isinstance(got, str) else " ".join(got))
+                    return {"verdict": "fail" if model == "codex" else "pass"}
+                if seat:
+                    return {"verdict": "pass"}
+                branch = {"pm_confirm": "yes", "pm_signoff": "yes",
+                          "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])
+                return {"verdict": branch} if branch else {"ok": True}
+
+            def close(self):
+                pass
+        return S()
+
+    engine.walk(engine.RunConfig(
+        node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+        decisions=dict(DECISIONS), risk="low", undeclared="allow",
+        node_models={"lead_task_review": ["opus", "codex"]}, panel_reruns=1),
+        factory, enabled=True)
+
+    later = [t for t in told if "last round" in t]
+    assert later, "round two was not told what round one said"
+    assert "codex said fail" in later[0]
+    assert "opus said pass" in later[0], "the voice that passed is carried too"
+    assert "you have not seen what the others say this round" in later[0]
+
+
+def test_the_limit_still_ends_at_a_person():
+    """If they have read each other and still cannot agree, another round will not help."""
+    report = _tie_run(reruns=2)
+    assert len(report.panel_rounds) == 2, "exactly the allowed number of extra rounds"
+    assert report.state == engine.SUSPENDED
+    assert report.suspended["undecided"] is True
+
+
+def test_the_seats_are_never_re_run():
+    """Each seat answers a different question, so carrying their reasons across is contamination.
+
+    Driven rather than grepped: a four-seat panel is made to tie with `panel_reruns` set high, and
+    nothing extra may happen. Their independence is not the user's to set.
+    """
+    names = policy.seat_names(4)
+    failing = {names[0], names[1]}
+    # Objecting once and then passing, because a seat panel that fails forever loops forever —
+    # `lead_review` returns to the module loop, which comes straight back. That gap is recorded in
+    # the change record's "What is not settled"; this test declines to depend on it.
+    rounds = {}
+
+    def factory(seat=None, model=None):
+        class S(engine.Session):
+            def ask(self, order):
+                if seat:
+                    rounds[seat] = rounds.get(seat, 0) + 1
+                    if rounds[seat] > 1:
+                        return {"verdict": "pass"}
+                    return {"verdict": "fail" if seat in failing else "pass"}
+                if order["node_id"] == "pm_plan":
+                    return {"modules": ["only-one"]}
+                if order["node_id"] == "engineer_build":
+                    return {"module": "only-one"}
+                branch = {"pm_confirm": "yes", "pm_signoff": "yes",
+                          "lead_task_review": "pass", "re_review": "pass",
+                          "qa_accept": "pass"}.get(order["node_id"])
+                return {"verdict": branch} if branch else {"ok": True}
+
+            def close(self):
+                pass
+        return S()
+
+    report = engine.walk(engine.RunConfig(
+        node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+        decisions={"next_module": engine.FRONTIER, "feedback": "done"},
+        risk="low", undeclared="allow", review_seats=4, high_risk_mode=True,
+        panel_reruns=5), factory, enabled=True)
+
+    assert not [r for r in report.panel_rounds if r["node_id"] == "lead_review"],         "the seats were given another round; their independence is not configurable"
