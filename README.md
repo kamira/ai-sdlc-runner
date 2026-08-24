@@ -11,7 +11,7 @@ The flow and the governance are this repository's own, in two files anyone can r
 | File | What it holds |
 | --- | --- |
 | [`policy.py`](src/ai_sdlc_runner/policy.py) | the governance: roles and their capabilities, ten gates × three risk grades, the never-automated actions, the review seats and how their verdicts are adjudicated |
-| [`graph.py`](src/ai_sdlc_runner/graph.py) | the flow: 23 nodes, one kind of work each, with the module loop, the bounded retry, and the feedback edge back to PM |
+| [`graph.py`](src/ai_sdlc_runner/graph.py) | the flow: 24 nodes, one kind of work each, with the module loop, the bounded retry, and the feedback edge back to PM |
 
 Everything else serves those two: [`engine.py`](src/ai_sdlc_runner/engine.py) walks the flow and
 enforces the policy, [`workorder.py`](src/ai_sdlc_runner/workorder.py) renders the closed-schema
@@ -159,7 +159,7 @@ an acceptance, or drifts from what was actually done.
 | 檔案 | 內容 |
 | --- | --- |
 | [`policy.py`](src/ai_sdlc_runner/policy.py) | 治理:角色與能力、10 個閘門 × 3 個風險等級、永久停點、審議席與裁決規則 |
-| [`graph.py`](src/ai_sdlc_runner/graph.py) | 流程:23 個節點,一個節點只做一種工作,含模組迴圈、有界重試、回饋回到 PM 的邊 |
+| [`graph.py`](src/ai_sdlc_runner/graph.py) | 流程:24 個節點,一個節點只做一種工作,含模組迴圈、有界重試、回饋回到 PM 的邊 |
 
 ## 用法
 

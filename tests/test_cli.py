@@ -580,11 +580,12 @@ def test_a_lost_backend_leaves_the_question_on_disk(tmp_path, py_stub, capsys):
     out = capsys.readouterr().out
     assert code == 10
     assert "halted:" in out
-    assert "still to ask:  pm_plan" in out
+    assert "still to ask:  intake_review" in out
 
     pending = engine.AskJournal(journal).pending()
     assert len(pending) == 1
-    assert pending[0]["node_id"] == "pm_plan"
+    # `intake_review` asks first now, so it is the question left on disk.
+    assert pending[0]["node_id"] == "intake_review"
 
 
 def test_a_run_that_finishes_has_nothing_left_to_ask(tmp_path, py_stub, capsys):
@@ -606,7 +607,7 @@ def test_undeclared_defaults_to_refusing(tmp_path, py_stub, capsys):
 
     cli.main(["--config", str(config), "run", "--plan", _plan_file(tmp_path)])
     out = capsys.readouterr().out
-    assert "stopped at:    pm_plan" in out
+    assert "stopped at:    intake_review" in out
     assert "declares no operations" in out
 
 

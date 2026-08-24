@@ -40,6 +40,11 @@ def _seats(verdicts):
 
     def dispatch(order):
         if order.get("seat"):
+            # `intake_review` is a seat node too, and it is a SURVEY — it wants problems and
+            # missing aspects, not a verdict. Counting its asks towards the review panel's rounds
+            # had the panel pass before it was ever asked to object.
+            if order["node_id"] == "intake_review":
+                return {"problems": [], "missing": [], "unsafe": []}
             rounds[order["seat"]] = rounds.get(order["seat"], 0) + 1
             if rounds[order["seat"]] > 1:
                 return {"verdict": "pass"}       # the rework landed

@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Sequence
 
 from . import effects as effects_mod
-from . import graph, policy, workorder
+from . import graph, intake as intake_mod, policy, workorder
 
 SessionFactory = Callable[[], "Session"]
 Dispatcher = Callable[[Dict[str, object]], Mapping[str, object]]
@@ -310,6 +310,11 @@ class RunReport:
     #: "at random" is only acceptable if the choice is afterwards visible: an unrecorded random
     #: dispatch is indistinguishable from a preference nobody declared.
     dispatches: List[str] = field(default_factory=list)
+    #: What the seats said about the requirement: every problem, attributed, and every aspect
+    #: any of them could not find. A union — see `intake.py` for why this one is not adjudicated.
+    survey: Optional[Dict[str, object]] = None
+    #: Options offered for an aspect that has been asked for and not supplied ``ASK_LIMIT`` times.
+    options: Dict[str, List[str]] = field(default_factory=dict)
     #: Each extra round an undecided panel was given, and what it was told. Recorded because a
     #: verdict reached on round three after seeing two rounds of argument is a different kind of
     #: verdict from one reached blind, and a report that cannot tell them apart has lost the
@@ -347,6 +352,8 @@ class RunReport:
             "rejections": list(self.rejections),
             "send_backs": [dict(b) for b in self.send_backs],
             "panel_rounds": [dict(r) for r in self.panel_rounds],
+            "survey": dict(self.survey) if self.survey else None,
+            "options": {k: list(v) for k, v in self.options.items()},
         }
 
 
@@ -423,6 +430,10 @@ class RunConfig:
     #: cross-question contamination rather than a second opinion — and this module's own rule is
     #: that the count is the user's to set and the independence is not.
     panel_reruns: int = 0
+    #: Every time this run has already stopped for an incomplete requirement, and what was
+    #: missing each time. Carried across walks so "asked three times" is a fact rather than a
+    #: feeling — the escalation to options depends on it being counted, not remembered.
+    intake_history: Sequence[Mapping[str, object]] = ()
     #: Gates a person refused — see ``Rejection``.
     rejections: Sequence["Rejection"] = ()
     #: A person's answers to ties — see ``Ruling``. Empty by default: a run with no rulings stops
@@ -1164,7 +1175,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             report.state = SUSPENDED
             report.suspended = {
                 "node_id": node.id,
-                # Both kinds of suspension carry the same keys, so a caller never has to know which
+                "incomplete": False,
+                # Every kind of suspension carries the same keys, so a caller never has to know which
                 # shape it is holding before it can read one. A gate has no branches to choose
                 # between and a tie has no gate to confirm, and each says so rather than omitting
                 # the field -- a missing key and a false one read the same way only until they do
@@ -1265,6 +1277,69 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 # be asked first -- a vote held and then ignored.
                 panel_outcome = str(outcome["outcome"])
 
+            elif node.mode == graph.SURVEY:
+                # Every seat is asked, and EVERY answer is kept. This is the one place in the runner
+                # where several voices are collected rather than adjudicated, and the reason is in
+                # `intake.py`: "what is wrong with this" has as many answers as there are things
+                # wrong, and counting them throws the information away.
+                said: Dict[str, Mapping[str, object]] = {}
+                before = len(opened)
+                for seat in policy.seat_names(seats):
+                    ask_id = f"{len(report.asks):03d}-{node.id}-{seat}"
+                    result = _ask(
+                        factory, _order_for(node, cfg, verdict, seat), opened, seat=seat,
+                        journal=cfg.journal, ask_id=ask_id, node_id=node.id,
+                        answered=already, asked_before=asked_before)
+                    if ask_id in already:
+                        report.resumed.append(ask_id)
+                    report.asks.append(Ask(node.id, node.role, seat, result))
+                    answers.append(result)
+                    said[seat] = result
+                _note_panel_diversity(node, report, opened[before:])
+
+                survey = intake_mod.collect(said)
+                report.survey = survey.as_dict()
+
+                if not survey.complete:
+                    # Asking again is the right first move; asking forever is not. Past the limit
+                    # the runner stops asking and puts options on the table -- authored by a MODEL,
+                    # recorded as an ask, because a runner that quietly writes requirements has
+                    # stopped being a runner.
+                    for aspect in survey.missing:
+                        if not intake_mod.needs_options(cfg.intake_history, aspect):
+                            continue
+                        request = intake_mod.option_request(aspect, list(cfg.instructions))
+                        ask_id = f"{len(report.asks):03d}-{node.id}-options-{aspect}"
+                        spec = dict(cfg.node_specs.get(node.id) or {})
+                        spec["objective"] = request["question"]
+                        answer = _ask(
+                            factory,
+                            workorder.render(node, spec, verdict, seat=None),
+                            opened, journal=cfg.journal, ask_id=ask_id, node_id=node.id,
+                            answered=already, asked_before=asked_before)
+                        report.asks.append(Ask(node.id, node.role, None, answer))
+                        report.options[aspect] = intake_mod.read_options(answer, aspect)
+
+                    report.state = SUSPENDED
+                    report.suspended = {
+                        "node_id": node.id,
+                        "undecided": False,
+                        "incomplete": True,
+                        "gate": node.gate,
+                        "gate_when": node.gate_when,
+                        "verdict": verdict["verdict"],
+                        "risk": verdict["risk"],
+                        "branches": [],
+                        "missing": list(survey.missing),
+                        "problems": survey.all_problems(),
+                        "safety": {k: list(v) for k, v in survey.safety.items()},
+                        "options": {k: list(v) for k, v in report.options.items()},
+                        "run_id": cfg.run_id,
+                    }
+                    report.halted_at = node.id
+                    report.halt_reason = intake_mod.stop_reason(survey, cfg.intake_history)
+                    return _finish(report, confirmations)
+
             elif node.mode == graph.SEAT_PANEL:
                 panel_sessions: List[object] = []
                 before = len(opened)
@@ -1357,6 +1432,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     report.suspended = {
                         "node_id": node.id,
                         "undecided": True,
+                        "incomplete": False,
                         "gate": None,
                         "gate_when": None,
                         "verdict": policy.UNDECIDED,

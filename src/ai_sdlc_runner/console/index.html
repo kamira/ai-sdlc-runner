@@ -106,6 +106,12 @@
   .legend .sw{display:inline-block;width:9px;height:9px;border-radius:2px;vertical-align:middle;margin-right:5px;border:1px solid var(--line)}
   .filebtn{font:inherit;padding:6px 13px;border:1px solid var(--line);border-radius:6px;background:var(--card);cursor:pointer}
   button.no{border-color:var(--stop);color:var(--stop)}
+  .gap{display:grid;grid-template-columns:110px 1fr;gap:8px;padding:5px 0;border-top:1px solid var(--line);font-size:12.5px}
+  .gap .k{font-family:var(--mono);font-size:10.5px;color:var(--stop)}
+  .opt{display:grid;grid-template-columns:22px 1fr;gap:8px;padding:3px 0 3px 10px;font-size:12px;color:var(--dim)}
+  .opt .n{font-family:var(--mono);font-size:10px;color:var(--faint)}
+  .raised{font-size:12px;color:var(--dim);padding:3px 0 3px 2px}
+  .raised b{font-family:var(--mono);font-size:10.5px;font-weight:600;color:var(--ink)}
 </style>
 
 <header>
@@ -430,6 +436,66 @@ function drawAsk() {
   if (!state || state.state !== "suspended" || !state.suspended) return;
   var s = state.suspended;
   var el = document.createElement("div"); el.className = "ask";
+
+  if (s.incomplete) {
+    // A third kind of stop, and it is neither a gate nor a tie. Nothing has been planned or built:
+    // the seats read the requirement first and said what it does not say. Answering it is the
+    // instruction box, not a button — which is why there is no button here.
+    el.innerHTML = "<h3>The requirement is not complete</h3><p></p>";
+    el.querySelector("p").textContent = state.reason;
+
+    (s.missing || []).forEach(function (aspect) {
+      var row = document.createElement("div"); row.className = "gap";
+      var k = document.createElement("div"); k.className = "k"; k.textContent = aspect;
+      var v = document.createElement("div");
+      var opts = (s.options || {})[aspect];
+      if (opts && opts.length) {
+        // Asked three times and not supplied. The runner stops asking and puts options on the
+        // table — it does not pick one, and there are always at least three so the choice is real.
+        v.textContent = "asked " + (state.intake_asks || 0) +
+                        " times. Options, none of them chosen for you:";
+        opts.forEach(function (text, i) {
+          var o = document.createElement("div"); o.className = "opt";
+          var n = document.createElement("div"); n.className = "n"; n.textContent = (i + 1) + ".";
+          var t = document.createElement("div"); t.textContent = text;
+          o.appendChild(n); o.appendChild(t); v.appendChild(o);
+        });
+      } else {
+        v.textContent = "not stated";
+      }
+      row.appendChild(k); row.appendChild(v); el.appendChild(row);
+    });
+
+    (s.problems || []).forEach(function (line) {
+      var d = document.createElement("div"); d.className = "raised";
+      var at = line.indexOf(": ");
+      var b = document.createElement("b"); b.textContent = at > 0 ? line.slice(0, at) : "seat";
+      d.appendChild(b);
+      d.appendChild(document.createTextNode("  " + (at > 0 ? line.slice(at + 2) : line)));
+      el.appendChild(d);
+    });
+
+    Object.keys(s.safety || {}).forEach(function (seat) {
+      (s.safety[seat] || []).forEach(function (line) {
+        var d = document.createElement("div"); d.className = "raised";
+        d.style.color = "var(--stop)";
+        var b = document.createElement("b"); b.textContent = seat + " (unsafe)";
+        b.style.color = "var(--stop)";
+        d.appendChild(b);
+        d.appendChild(document.createTextNode("  " + line));
+        el.appendChild(d);
+      });
+    });
+
+    var how = document.createElement("p");
+    how.className = "muted";
+    how.style.marginTop = "10px";
+    how.textContent = "Answer in the box below and press \u201cadd to the brief\u201d, or attach a "
+                    + "file. Every work order from then on carries it.";
+    el.appendChild(how);
+    box.appendChild(el);
+    return;
+  }
 
   if (s.undecided) {
     // A tie and a gate are different questions, so they get different controls. Offering "confirm"
