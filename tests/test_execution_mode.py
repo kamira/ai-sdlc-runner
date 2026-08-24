@@ -60,7 +60,7 @@ def test_the_real_graph_validates():
 
 def test_the_modes_partition_all_twenty_three_nodes():
     counted = sum(1 for n in graph.NODES if n.mode in graph.MODES)
-    assert counted == len(graph.NODES) == 23
+    assert counted == len(graph.NODES), "every node has a mode from the closed set"
 
 
 def test_a_node_that_asks_nobody_is_runner_and_only_such_a_node_is():
@@ -86,12 +86,12 @@ def test_a_runner_node_declared_single_is_refused():
 
 
 def test_a_non_seat_node_declared_seat_panel_is_refused():
-    with pytest.raises(graph.GraphError, match="seats are the only"):
+    with pytest.raises(graph.GraphError, match="only the review seats"):
         _validate_with(_mutate("lead_task_review", mode=graph.SEAT_PANEL))
 
 
 def test_the_seat_node_declared_model_panel_is_refused():
-    with pytest.raises(graph.GraphError, match="seats are the only"):
+    with pytest.raises(graph.GraphError, match="only the review seats"):
         _validate_with(_mutate("lead_review", mode=graph.MODEL_PANEL))
 
 

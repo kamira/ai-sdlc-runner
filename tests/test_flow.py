@@ -64,9 +64,15 @@ class Recorder:
     """A dispatcher that answers every order and keeps what it was sent.
 
     ``answers`` overrides one node's answer; a list is consumed one per visit and falls back to the
-    default afterwards. ``seat_verdicts`` applies to the **first** panel only. Both exist for the
-    same reason: a failure that repeats forever tests the retry, not the routing, and the flow's
-    only bound on repeats is `max_steps` — a test that hits it proves nothing about the branch.
+    default afterwards. ``seat_verdicts`` applies to the **review panel** — `lead_review` — and to
+    nothing else. Both exist for the same reason: a failure that repeats forever tests the retry,
+    not the routing, and the flow's only bound on repeats is `max_steps`, so a test that hits it
+    proves nothing about the branch.
+
+    ``seat_verdicts`` used to mean "the first panel", counted with `_seats_asked < SEAT_FLOOR`. That
+    was a **proxy** for "the review panel", and it broke the moment `intake_review` became the first
+    panel — the same shape of mistake this repository keeps writing down: a count standing in for
+    the thing it was meant to identify. It names the node now.
     """
 
     def __init__(self, answers=None, seat_verdicts=None):
@@ -75,15 +81,27 @@ class Recorder:
                         for k, v in (answers or {}).items()}
         self.seat_verdicts = seat_verdicts or {}
         self._seats_asked = 0
+        self._panels = 0
 
     def __call__(self, order):
         self.orders.append(order)
         seat = order.get("seat")
         if seat:
-            first_panel = self._seats_asked < policy.SEAT_FLOOR
             self._seats_asked += 1
-            verdict = self.seat_verdicts.get(seat, SEAT_PASS) if first_panel else SEAT_PASS
-            return {"verdict": verdict}
+            if order["node_id"] == "intake_review":
+                # A survey, not a panel. It is asked what is wrong and what is missing, and a
+                # default Recorder finds neither — the tests that care supply their own dispatcher.
+                return {"problems": [], "missing": [], "unsafe": []}
+            # The FIRST visit to the review panel, and only that one. A panel that fails every
+            # time loops forever — `lead_review` routes to `review_failed`, which returns to the
+            # module loop, which comes straight back — and a test that hits `max_steps` proves
+            # nothing about the branch it was written for.
+            if order["node_id"] == "lead_review":
+                if seat == policy.seat_names(policy.SEAT_FLOOR)[0]:
+                    self._panels += 1
+                if self._panels <= 1:
+                    return {"verdict": self.seat_verdicts.get(seat, SEAT_PASS)}
+            return {"verdict": SEAT_PASS}
 
         node_id = order["node_id"]
         override = self.answers.get(node_id)
@@ -96,7 +114,7 @@ class Recorder:
 
 #: The module loop's branches for a run that goes round twice — a failed panel or a failed
 #: acceptance sends the flow back into it, and the second pass finds nothing left to build.
-TWO_PASSES = {"next_module": ["module", "none", "none"], "feedback": "done"}
+TWO_PASSES = {"next_module": ["module", "none", "none", "none"], "feedback": "done"}
 
 
 #: `merge` stops at every risk grade, so a run that is meant to reach the end confirms it. Spelling
@@ -549,7 +567,9 @@ def test_a_factory_that_reuses_a_session_is_refused():
 
 def test_each_review_seat_is_its_own_ask():
     report = engine.walk(_cfg(), Recorder(), enabled=True)
-    seats = [a for a in report.asks if a.seat]
+    # `intake_review` is role="seat" too, and it is a survey rather than the review
+    # panel. Filtering on the role alone would count two different things as one.
+    seats = [a for a in report.asks if a.seat and a.node_id == "lead_review"]
     assert len(seats) == policy.SEAT_FLOOR
     assert len({a.seat for a in seats}) == len(seats)
 
@@ -747,7 +767,7 @@ def test_a_node_that_does_work_and_declares_nothing_is_refused():
     `operations` skipped it entirely. The red lines could be walked past by saying *less*."""
     cfg = _cfg(undeclared="refuse")
     report = engine.walk(cfg, Recorder(), enabled=True)
-    assert report.halted_at == "pm_plan"
+    assert report.halted_at == "intake_review"
     assert "declares no operations" in report.halt_reason
 
 
@@ -755,7 +775,9 @@ def test_refusing_is_the_default():
     cfg = engine.RunConfig(node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
                            decisions=dict(DECISIONS), risk="low")
     assert cfg.undeclared == "refuse"
-    assert engine.walk(cfg, Recorder(), enabled=True).halted_at == "pm_plan"
+    # `intake_review` asks first now, and a seat can execute, so it owes a declaration like
+    # anything else that can act.
+    assert engine.walk(cfg, Recorder(), enabled=True).halted_at == "intake_review"
 
 
 def test_a_node_that_declares_its_work_passes():
@@ -774,7 +796,8 @@ def test_a_review_seat_owes_a_declaration_like_anything_else_that_can_act():
     cfg = _cfg(undeclared="refuse", confirmed=THROUGH,
                operations={node.id: [_op("ordinary development work")]
                            for node in graph.NODES if node.role and node.role != "seat"})
-    assert engine.walk(cfg, Recorder(), enabled=True).halted_at == "lead_review"
+    # `intake_review` is a seat node too, and it is reached first.
+    assert engine.walk(cfg, Recorder(), enabled=True).halted_at == "intake_review"
 
 
 def test_a_node_with_no_role_and_no_effects_owes_nothing():

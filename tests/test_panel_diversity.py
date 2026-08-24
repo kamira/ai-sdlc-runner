@@ -87,7 +87,9 @@ def test_one_backend_answering_every_seat_is_recorded():
     report = engine.walk(_cfg(), _Backend(), enabled=True)
     assert report.halted_at == "done"
     assert report.single_model_panels
-    assert "lead_review" in report.single_model_panels[0]
+    # `intake_review` is a seat node too and is noted first; this test is about the
+    # review panel, so it looks for that one rather than for whichever came first.
+    assert any("lead_review" in note for note in report.single_model_panels)
     assert "the model was not" in report.single_model_panels[0]
 
 

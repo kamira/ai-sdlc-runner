@@ -133,6 +133,10 @@ class RunState:
     approvals: List[engine.Approval] = field(default_factory=list)
     rulings: List[engine.Ruling] = field(default_factory=list)
     rejections: List["engine.Rejection"] = field(default_factory=list)
+    #: Every time this run has stopped for an incomplete requirement, and what was missing. The
+    #: escalation to options depends on this being **counted** rather than remembered, and it has to
+    #: survive the walks in between — a counter that resets each walk would ask forever.
+    intake_history: List[Dict[str, object]] = field(default_factory=list)
     log: List[Dict[str, object]] = field(default_factory=list)
     #: What the operator handed over, and anything the store has since lost. A brief that has
     #: quietly lost a document is worse than one that says so.
@@ -156,6 +160,8 @@ class RunState:
             "confirmations": list(report.confirmations) if report else [],
             "rulings": list(report.rulings) if report else [],
             "rejections": list(report.rejections) if report else [],
+            "survey": dict(report.survey) if report and report.survey else None,
+            "intake_asks": len(self.intake_history),
             "send_backs": [dict(b) for b in report.send_backs] if report else [],
             # Where a pool sent the work, and which model a follows reused. The console has to be
             # able to show this or "chosen at random" is a claim nobody can check.
@@ -230,9 +236,17 @@ class Runner:
                     f"two nodes answering different questions with nothing saying which was which.")
             self.state.instructions.append(instruction.strip())
             self._refresh_attachments()
+            self.state.state = "running"
             self.state.version += 1
             self._publish()
-            return self.state.snapshot()
+        # Then walk again. Adding to the brief and NOT re-walking was a defect found live: the
+        # instruction landed, the version moved, and nothing was re-asked — so the seats went on
+        # reporting what the first instruction had not said, however much was added afterwards.
+        #
+        # Re-walking is safe because it is the same walk it always was: the journal reuses every
+        # answer whose question is unchanged, and a changed brief changes every question, which is
+        # precisely when re-asking is the correct thing to do.
+        return self._advance()
 
     def attach(self, version: int, filename: str, data: bytes) -> Dict[str, object]:
         if self._store is None:
@@ -244,9 +258,12 @@ class Runner:
             except attach_mod.AttachmentError as exc:
                 raise ServerError(str(exc))
             self._refresh_attachments()
+            self.state.state = "running"
             self.state.version += 1
             self._publish()
-            return self.state.snapshot()
+        # Same reason as `instruct`: an attachment reaches every work order, so every question has
+        # changed and the run has to be walked again for anybody to see it.
+        return self._advance()
 
     def _refresh_attachments(self) -> None:
         if self._store is None:
@@ -322,7 +339,8 @@ class Runner:
                                                   tuple(self.state.rulings),
                                                   tuple(self._store.order_paths())
                                                   if self._store else (),
-                                                  tuple(self.state.rejections)))
+                                                  tuple(self.state.rejections),
+                                                  tuple(self.state.intake_history)))
         except Exception as exc:                   # the run failed; say so rather than look idle
             with self._lock:
                 self.state.state = engine.STOPPED
@@ -331,6 +349,11 @@ class Runner:
                 self._publish()
                 return self.state.snapshot()
         with self._lock:
+            # A stop for an incomplete requirement is counted here and nowhere else, so "asked three
+            # times" is arithmetic over what happened rather than a feeling about it.
+            stop = report.suspended or {}
+            if stop.get("incomplete"):
+                self.state.intake_history.append({"missing": list(stop.get("missing") or ())})
             self.state.report = report
             self.state.state = report.state
             self.state.version += 1

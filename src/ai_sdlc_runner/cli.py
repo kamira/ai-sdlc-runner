@@ -524,7 +524,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     store = attach_mod.Store(args.attachments or (Path(args.token_dir) / "attachments"))
 
-    def make_config(instructions, approvals, rulings, artifacts=(), rejections=()):
+    def make_config(instructions, approvals, rulings, artifacts=(), rejections=(),
+                    intake_history=()):
         return engine.RunConfig(
             node_specs=plan.get("node_specs", {}),
             decisions=plan.get("decisions", {}),
@@ -539,6 +540,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
             artifacts=artifacts,
             instructions=instructions,
             rejections=rejections,
+            intake_history=intake_history,
             effects=effects_provider(plan),
             ordinary_commands=saved.ordinary_commands,
             undeclared=args.undeclared,

@@ -34,7 +34,7 @@ from test_flow import DECISIONS, SPEC
 # --- a runner whose walk is the real engine ------------------------------------------------
 
 def _make_config(instructions, approvals, rulings, artifacts=(), rejections=(),
-                 *, seat_verdicts=None, risk="high"):
+                 intake_history=(), *, seat_verdicts=None, risk="high"):
     del instructions, artifacts
     return engine.RunConfig(
         node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
@@ -58,8 +58,8 @@ def _runner(seat_verdicts=None, risk="high"):
     dispatch = _dispatch(seat_verdicts)
     return server.Runner(
         walk=lambda cfg: engine.walk(cfg, dispatch, enabled=True),
-        make_config=lambda i, a, r, art=(), rej=(): _make_config(
-            i, a, r, art, rej, seat_verdicts=seat_verdicts, risk=risk))
+        make_config=lambda i, a, r, art=(), rej=(), hist=(): _make_config(
+            i, a, r, art, rej, hist, seat_verdicts=seat_verdicts, risk=risk))
 
 
 @pytest.fixture
@@ -194,7 +194,7 @@ def test_the_flow_endpoint_carries_every_node_including_the_failure_paths(live):
     status, body = call("GET", "/flow")
     assert status == 200
     ids = {n["id"] for n in body["nodes"]}
-    assert len(ids) == len(graph.NODES) == 23
+    assert len(ids) == len(graph.NODES)
     for failure_path in ("fix_pass", "re_review", "halt_second_fail",
                          "review_failed", "acceptance_failed"):
         assert failure_path in ids
@@ -319,7 +319,7 @@ def test_a_failing_walk_reports_stopped_rather_than_looking_idle():
     def boom(cfg):
         raise RuntimeError("the dispatcher fell over")
 
-    runner = server.Runner(walk=boom, make_config=lambda i, a, r, art=(), rej=(): None)
+    runner = server.Runner(walk=boom, make_config=lambda i, a, r, art=(), rej=(), hist=(): None)
     out = runner.start("do it", 0)
     assert out["state"] == engine.STOPPED
     assert "fell over" in out["error"]
@@ -418,7 +418,7 @@ def test_the_snapshot_carries_where_the_work_was_dispatched(tmp_path):
 
     runner = server.Runner(
         walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
-        make_config=lambda i, a, r, art=(), rej=(): engine.RunConfig(
+        make_config=lambda i, a, r, art=(), rej=(), hist=(): engine.RunConfig(
             node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
             decisions={"next_module": ["module", "none", "none"], "feedback": "done"},
             risk="low", undeclared="allow", confirmed=a, rulings=r,
@@ -462,7 +462,7 @@ def test_a_resumed_run_does_not_re_ask_what_it_already_answered(tmp_path):
     journal = engine.AskJournal(tmp_path / "asks")
     runner = server.Runner(
         walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
-        make_config=lambda i, a, r, art=(), rej=(): engine.RunConfig(
+        make_config=lambda i, a, r, art=(), rej=(), hist=(): engine.RunConfig(
             node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
             decisions={"next_module": ["module", "none", "none"], "feedback": "done"},
             risk="high", undeclared="allow", confirmed=a, rulings=r,
@@ -562,3 +562,43 @@ def test_the_console_has_a_handler_for_every_button_it_draws():
     for control in ids:
         assert f'$("#{control}").onclick' in page, \
             f"the page draws #{control} and nothing listens to it"
+
+
+def test_adding_to_the_brief_re_walks_the_run(tmp_path):
+    """Found live: the instruction landed, the version moved, and nothing was re-asked.
+
+    The seats went on reporting what the *first* instruction had not said, however much was added
+    afterwards — so "add to the brief" looked like it worked and changed nothing anybody could see.
+    """
+    asked = []
+
+    def factory(seat=None, model=None):
+        class S(engine.Session):
+            def ask(self, order):
+                asked.append(order["node_id"])
+                if seat:
+                    return {"verdict": "pass"}
+                branch = {"pm_confirm": "yes", "pm_signoff": "yes",
+                          "lead_task_review": "pass", "re_review": "pass",
+                          "qa_accept": "pass"}.get(order["node_id"])
+                return {"verdict": branch} if branch else {"ok": True}
+
+            def close(self):
+                pass
+        return S()
+
+    journal = engine.AskJournal(tmp_path / "asks")
+    runner = server.Runner(
+        walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
+        make_config=lambda i, a, r, art=(), rej=(), hist=(): engine.RunConfig(
+            node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+            decisions={"next_module": ["module", "none", "none"], "feedback": "done"},
+            risk="high", undeclared="allow", confirmed=a, rulings=r,
+            instructions=i, resume=True, journal=journal))
+
+    runner.start("build it", 0)
+    before = len(asked)
+    runner.instruct(runner.state.version, "and make it dark")
+    assert len(asked) > before, (
+        "adding to the brief asked nobody anything — the instruction landed and the run did not "
+        "move, so nothing downstream ever saw it")

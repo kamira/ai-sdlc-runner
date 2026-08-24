@@ -63,8 +63,18 @@ SEAT_PANEL = "seat_panel"  #: the review seats — each its own question, indepe
 MODEL_PANEL = "model_panel"  #: N models on *one* question, adjudicated
 POOL = "pool"              #: N models a main may dispatch to; one of them does the work
 FOLLOWS = "follows"        #: whichever model answered the node named in ``follows``
+SURVEY = "survey"          #: every seat is asked and **all** answers are kept — see below
 
-MODES = (RUNNER, SINGLE, SEAT_PANEL, MODEL_PANEL, POOL, FOLLOWS)
+MODES = (RUNNER, SINGLE, SEAT_PANEL, MODEL_PANEL, POOL, FOLLOWS, SURVEY)
+
+#: ``SURVEY`` is the one mode that does **not** adjudicate, and the difference is the point.
+#:
+#: A panel answers *"may this proceed?"* — one question, one answer, and counting is how you get it.
+#: A survey answers *"what is wrong with this?"* — as many answers as there are things wrong, where
+#: counting **destroys** the information. A problem three seats missed and one saw is still a
+#: problem, and outvoting it would be the panel agreeing not to know something.
+#:
+#: So a survey takes the union and no verdict is reached. Nothing is vetoed, nothing ties.
 
 
 @dataclass(frozen=True)
@@ -117,8 +127,17 @@ class Node:
 
 
 NODES: Tuple[Node, ...] = (
-    Node("intake", STEP, "the user's instruction arrives", next="pm_plan", mode=RUNNER,
+    Node("intake", STEP, "the user's instruction arrives", next="intake_review", mode=RUNNER,
          note="the runner reads it; nobody is asked anything yet"),
+    Node("intake_review", STEP, "the seats read the requirement", role="seat",
+         next="pm_plan", mode=SURVEY,
+         note="before anything is planned. Every seat says what is wrong and what is missing, and "
+              "ALL of it is kept — this is the one place several voices are collected rather than "
+              "adjudicated, because 'what is wrong with this' has as many answers as there are "
+              "things wrong and counting them would throw the information away. NO GATE: what "
+              "stops a run here is the requirement being incomplete, not a risk grade — a gate "
+              "that fires on a complete requirement would be asking a person to approve the "
+              "absence of a problem, and one that never fires is decoration"),
     Node("pm_plan", STEP, "PM turns the instruction into a plan", role="pm", next="pm_confirm",
          mode=SINGLE,
          note="a plan is work, not a verdict: several models would mean several candidate plans "
@@ -262,10 +281,10 @@ def validate() -> None:
             raise GraphError(
                 f"node {node.id!r} is mode {node.mode!r} with role {node.role!r} — a node with no "
                 f"role asks nobody and must be {RUNNER!r}, and only such a node may be")
-        if (node.role == "seat") != (node.mode == SEAT_PANEL):
+        if (node.role == "seat") != (node.mode in (SEAT_PANEL, SURVEY)):
             raise GraphError(
-                f"node {node.id!r} is mode {node.mode!r} with role {node.role!r} — the review "
-                f"seats are the only {SEAT_PANEL!r}, and they are always one")
+                f"node {node.id!r} is mode {node.mode!r} with role {node.role!r} — only the review "
+                f"seats are a {SEAT_PANEL!r} or a {SURVEY!r}, and they are always one of the two")
         if node.mode == MODEL_PANEL and node.kind != DECISION:
             raise GraphError(
                 f"node {node.id!r} is a {MODEL_PANEL!r} but a {node.kind!r} — several models on one "
