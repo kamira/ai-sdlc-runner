@@ -342,10 +342,12 @@ class Runner:
 
 def make_handler(runner: Runner, operator: Operator,
                  registry: Optional["models_mod.Registry"] = None,
-                 registry_path: Optional[Path] = None):
+                 registry_path: Optional[Path] = None,
+                 assignments: Optional[Mapping[str, object]] = None):
     """The HTTP surface. Refuses before it reads, in the order the threat model requires."""
 
-    held = {"registry": registry if registry is not None else models_mod.Registry()}
+    held = {"registry": registry if registry is not None else models_mod.Registry(),
+            "assignments": dict(assignments or {})}
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "ai-sdlc-runner"
@@ -437,6 +439,41 @@ def make_handler(runner: Runner, operator: Operator,
             elif path == "/attachments":
                 self._json(200, {"attachments": [a.as_dict() for a in runner.state.attachments],
                                  "missing": list(runner.state.missing)})
+            elif path == "/config/nodes":
+                # The question a registry cannot answer: where does this model get *used*? A model
+                # listed and used nowhere looks configured, and a model on eight nodes looks the
+                # same in a list as one on a single node.
+                node_models = dict(held["assignments"].get("node_models") or {})
+                seat_models = dict(held["assignments"].get("seat_models") or {})
+                reg = held["registry"]
+                known = {m.id: m for m in reg}
+                by_model = {}
+                for node_id, ids in node_models.items():
+                    mode = graph.BY_ID[node_id].mode if node_id in graph.BY_ID else None
+                    for model_id in ids:
+                        entry = by_model.setdefault(
+                            model_id, {"nodes": [], "seats": [], "known": model_id in known})
+                        entry["nodes"].append({"node_id": node_id, "mode": mode})
+                for seat, command in seat_models.items():
+                    # A seat naming a registry model lands in that model's bucket rather than
+                    # inventing a second entry for the same backend under its command line.
+                    label = (command if isinstance(command, str) and command in known
+                             else " ".join(command) if isinstance(command, (list, tuple))
+                             else str(command))
+                    entry = by_model.setdefault(
+                        label, {"nodes": [], "seats": [], "known": label in known})
+                    entry["seats"].append(seat)
+                # Models the project has and nothing uses. Said out loud, because "configured" and
+                # "used" look identical in a list and only one of them does anything.
+                for model_id in known:
+                    by_model.setdefault(model_id, {"nodes": [], "seats": [], "known": True})
+                self._json(200, {
+                    "node_models": node_models,
+                    "seat_models": {k: (" ".join(v) if isinstance(v, (list, tuple)) else str(v))
+                                    for k, v in seat_models.items()},
+                    "by_model": by_model,
+                    "models": [m.as_dict() for m in reg],
+                })
             elif path == "/whoami":
                 self._json(200, {"operator": operator.name})
             else:
@@ -546,7 +583,8 @@ def make_handler(runner: Runner, operator: Operator,
 
 def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
           port: int = 8765, registry: Optional["models_mod.Registry"] = None,
-          registry_path: Optional[Path] = None) -> ThreadingHTTPServer:
+          registry_path: Optional[Path] = None,
+          assignments: Optional[Mapping[str, object]] = None) -> ThreadingHTTPServer:
     """Build the server, refusing any host that is not this machine.
 
     The refusal is here rather than in the caller because a bind address is exactly the kind of thing
@@ -574,7 +612,8 @@ def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
         allow_reuse_address = False
 
     try:
-        return _OneRunner((host, port), make_handler(runner, operator, registry, registry_path))
+        return _OneRunner((host, port),
+                          make_handler(runner, operator, registry, registry_path, assignments))
     except OSError as exc:
         raise ServerError(
             f"cannot listen on {host}:{port} — {exc}. Something is already there. If it is another "

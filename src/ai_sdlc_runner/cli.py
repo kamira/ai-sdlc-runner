@@ -176,6 +176,17 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
 
     def factory(seat: Optional[str] = None, model: Optional[str] = None):
         argv = None
+        # A seat may name a registry model, exactly as a node does. Resolved first, because a plain
+        # string that happens to be a model id meaning "run this program called claude" would be a
+        # nasty way to find out the two naming schemes had diverged.
+        if model is None and seat is not None and registry is not None:
+            named = seat_models.get(seat)
+            if isinstance(named, str):
+                try:
+                    registry.get(named)
+                    model = named
+                except models_mod.ModelError:
+                    pass            # not a model id; treated as argv below, as it always was
         if model and registry is not None:
             entry = registry.get(model)          # raises if it is not a model this project has
             if entry.transport != models_mod.CLI:
@@ -552,7 +563,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
                            make_config=make_config, store=store)
     try:
         httpd = server.serve(runner, operator, port=args.port,
-                             registry=registry, registry_path=registry_path)
+                             registry=registry, registry_path=registry_path,
+                             assignments={"node_models": plan.get("node_models") or {},
+                                          "seat_models": plan.get("seat_models") or {}})
     except server.ServerError as exc:
         print(f"error: {exc}")
         return 2

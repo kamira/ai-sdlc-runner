@@ -221,3 +221,40 @@ def test_a_round_trip_keeps_every_field(tmp_path):
     models.save(original, path)
     reloaded = models.load(path)
     assert [m.as_dict() for m in reloaded] == [m.as_dict() for m in original]
+
+
+# --- a seat may name a model the same way a node does -------------------------------------------
+
+def test_a_seat_can_name_a_registry_model():
+    """One naming scheme.
+
+    Found by building the panel that shows where each model is used: `claude` and
+    `python3 agent.py --as claude` appeared as two different models, because `node_models` names a
+    **model id** and `seat_models` named an **argv**. The panel is where that stopped being
+    invisible.
+    """
+    from ai_sdlc_runner import cli
+
+    registry = models.Registry(models=(_cli(id="claude", command=("run-claude", "-p")),))
+    factory = cli.session_factory({"agent_command": ["default"]},
+                                  seat_models={"defect": "claude"}, registry=registry)
+    assert factory(seat="defect").argv == ["run-claude", "-p"]
+
+
+def test_an_argv_seat_still_works():
+    """It predates the registry, and some projects will have it. The fallback is the older scheme."""
+    from ai_sdlc_runner import cli
+
+    factory = cli.session_factory({"agent_command": ["default"]},
+                                  seat_models={"defect": ["custom", "cmd"]},
+                                  registry=models.Registry())
+    assert factory(seat="defect").argv == ["custom", "cmd"]
+
+
+def test_a_seat_naming_something_that_is_not_a_model_falls_back_to_argv():
+    from ai_sdlc_runner import cli
+
+    factory = cli.session_factory({"agent_command": ["default"]},
+                                  seat_models={"defect": "not-a-model"},
+                                  registry=models.Registry())
+    assert factory(seat="defect").argv == ["not-a-model"]

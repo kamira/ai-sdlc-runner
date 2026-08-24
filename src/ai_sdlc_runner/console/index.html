@@ -35,16 +35,35 @@
   header .st.suspended{color:var(--wait)} header .st.running{color:var(--accent)}
   header .st.finished{color:var(--go)} header .st.stopped{color:var(--stop)}
   header .grow{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--faint)}
-  main{display:grid;grid-template-columns:270px 1fr;gap:0;height:calc(100vh - 49px)}
+  main{display:grid;grid-template-columns:minmax(300px,34vw) 1fr;gap:0;height:calc(100vh - 49px)}
   aside{border-right:1px solid var(--line);overflow:auto;padding:12px}
   section{overflow:auto;padding:16px 18px}
   h2{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--faint);margin:0 0 8px;font-weight:600}
-  .node{display:flex;gap:8px;align-items:baseline;padding:3px 6px;border-radius:4px;font-size:12.5px}
-  .node .id{font-family:var(--mono);font-size:11.5px}
-  .node .role{margin-left:auto;font-size:10px;color:var(--faint);font-family:var(--mono)}
-  .node.done{color:var(--faint)} .node.done .id{text-decoration:line-through}
-  .node.here{background:var(--soft);font-weight:600;outline:1px solid var(--wait)}
-  .node.gate .id::after{content:"◆";color:var(--wait);margin-left:5px;font-size:9px}
+  /* The flowchart. Four states, and each is a different colour on purpose: where the run IS has
+     to be findable at a glance, which is the whole reason this stopped being a list. */
+  .chart{min-width:100%}
+  .chart .edge{fill:none;stroke:var(--line);stroke-width:1.5}
+  .chart .edge.taken{stroke:var(--go);stroke-width:2}
+  .chart .edge.back{stroke-dasharray:3 3}
+  .chart .elabel{font-family:var(--mono);font-size:8.5px;fill:var(--faint)}
+  .chart .box{fill:var(--card);stroke:var(--line);stroke-width:1.5}
+  .chart .name{font-family:var(--mono);font-size:9.5px;fill:var(--ink)}
+  .chart .who{font-family:var(--mono);font-size:7.5px;fill:var(--faint)}
+
+  /* visited — done, and out of the way */
+  .chart .n.done .box{fill:var(--soft);stroke:var(--line)}
+  .chart .n.done .name{fill:var(--faint)}
+
+  /* HERE — the one thing this panel exists to answer */
+  .chart .n.here .box{fill:var(--wait);stroke:var(--wait);stroke-width:2.5}
+  .chart .n.here .name{fill:var(--bg);font-weight:700}
+  .chart .n.here .who{fill:var(--bg);opacity:.8}
+  .chart .halo{fill:none;stroke:var(--wait);stroke-width:2;opacity:.35}
+
+  /* a terminal, and a gate */
+  .chart .n.terminal .box{stroke-dasharray:4 3}
+  .chart .gatepin{fill:var(--wait)}
+  .chart .n.done .gatepin{fill:var(--faint)}
   textarea{width:100%;font:13px/1.5 inherit;padding:9px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);resize:vertical}
   button{font:inherit;padding:6px 13px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);cursor:pointer}
   button.p{background:var(--ink);color:var(--bg);border-color:var(--ink)}
@@ -70,6 +89,21 @@
   ul.log li.seat .who{color:var(--accent)}
   .err{color:var(--stop);font-family:var(--mono);font-size:12px;white-space:pre-wrap}
   .muted{color:var(--faint)}
+  .legend{font-size:10.5px;color:var(--faint);line-height:1.9;margin:10px 2px 0}
+  .legend b{font-weight:600}
+  .mdl{border:1px solid var(--line);border-radius:6px;background:var(--card);margin:0 0 8px;overflow:hidden}
+  .mdl .h{display:flex;gap:8px;align-items:baseline;padding:6px 9px;background:var(--soft);font-size:12px}
+  .mdl .h .id{font-family:var(--mono);font-size:11.5px;font-weight:600}
+  .mdl .h .reach{margin-left:auto;font-family:var(--mono);font-size:9.5px;padding:1px 6px;border-radius:99px;background:var(--card);border:1px solid var(--line)}
+  .mdl .h .reach.local{color:var(--go)}
+  .mdl .h .reach.internal{color:var(--wait)}
+  .mdl .h .reach.external{color:var(--stop)}
+  .mdl .u{display:grid;grid-template-columns:62px 1fr;gap:8px;padding:4px 9px;border-top:1px solid var(--line);font-size:11.5px}
+  .mdl .u .k{font-family:var(--mono);font-size:10px;color:var(--faint)}
+  .mdl .u .v{font-family:var(--mono);font-size:10.5px}
+  .mdl .u.none .v{color:var(--faint);font-family:inherit;font-style:italic}
+  .mdl .u.unknown .k{color:var(--stop)}
+  .legend .sw{display:inline-block;width:9px;height:9px;border-radius:2px;vertical-align:middle;margin-right:5px;border:1px solid var(--line)}
   .filebtn{font:inherit;padding:6px 13px;border:1px solid var(--line);border-radius:6px;background:var(--card);cursor:pointer}
   button.no{border-color:var(--stop);color:var(--stop)}
 </style>
@@ -85,6 +119,9 @@
   <aside>
     <h2>the flow</h2>
     <div id="flow"></div>
+    <p class="legend" id="legend"></p>
+    <h2 style="margin-top:22px">the models, and where they are used</h2>
+    <div id="models"></div>
   </aside>
   <section>
     <div id="ask"></div>
@@ -113,7 +150,7 @@
 var TOKEN = sessionStorage.getItem("runner-token") || "";
 
 var $ = function (s) { return document.querySelector(s); };
-var flow = [], state = null;
+var flow = [], state = null, assign = null;
 
 function api(method, path, body) {
   return fetch(path, {
@@ -129,19 +166,202 @@ function api(method, path, body) {
 }
 
 // --- drawing ---------------------------------------------------------------------------------
+var SVGNS = "http://www.w3.org/2000/svg";
+var W = 132, H = 26, GAPX = 20, GAPY = 44, PAD = 14;
+
+function svg(name, attrs, parent) {
+  var el = document.createElementNS(SVGNS, name);
+  for (var k in attrs) el.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(el);
+  return el;
+}
+
+function layout() {
+  // Layers from a breadth-first walk of the REAL edges. Computed rather than hand-placed: a
+  // hand-drawn diagram is a second description of the graph, and a second description goes stale —
+  // this project already had a mock-up claim 23 nodes while drawing 18.
+  var by = {}, depth = {}, order = [];
+  flow.forEach(function (n) { by[n.id] = n; });
+  var queue = ["intake"];
+  depth.intake = 0;
+  while (queue.length) {
+    var id = queue.shift(), n = by[id];
+    if (!n) continue;
+    order.push(id);
+    var outs = [];
+    for (var k in n.branches) outs.push(n.branches[k]);
+    if (n.next) outs.push(n.next);
+    outs.forEach(function (t) {
+      if (by[t] && !(t in depth)) { depth[t] = depth[id] + 1; queue.push(t); }
+    });
+  }
+  var rows = {};
+  order.forEach(function (id) {
+    var d = depth[id];
+    (rows[d] = rows[d] || []).push(id);
+  });
+  var pos = {}, widest = 0;
+  Object.keys(rows).forEach(function (d) {
+    widest = Math.max(widest, rows[d].length);
+    rows[d].forEach(function (id, i) {
+      pos[id] = { x: PAD + i * (W + GAPX), y: PAD + Number(d) * (H + GAPY), row: Number(d) };
+    });
+  });
+  return { by: by, pos: pos,
+           w: PAD * 2 + widest * (W + GAPX) - GAPX,
+           h: PAD * 2 + (Math.max.apply(null, Object.keys(rows).map(Number)) + 1) * (H + GAPY) };
+}
+
 function drawFlow() {
   var here = state && state.at, seen = (state && state.visited) || [];
-  $("#flow").innerHTML = "";
+  var L = layout(), host = $("#flow");
+  host.innerHTML = "";
+  var root = svg("svg", { "class": "chart", width: L.w, height: L.h,
+                          viewBox: "0 0 " + L.w + " " + L.h }, host);
+
+  // edges first, so nodes sit on top of them
   flow.forEach(function (n) {
-    var el = document.createElement("div");
-    el.className = "node" + (n.id === here ? " here" : seen.indexOf(n.id) >= 0 ? " done" : "")
-                 + (n.gate ? " gate" : "");
-    el.innerHTML = '<span class="id"></span><span class="role"></span>';
-    el.querySelector(".id").textContent = n.id;
-    el.querySelector(".role").textContent = n.role || "runner";
-    el.title = n.label + (n.gate ? "  ·  gate: " + n.gate : "") + "  ·  " + n.mode;
-    $("#flow").appendChild(el);
+    var from = L.pos[n.id];
+    if (!from) return;
+    var outs = [];
+    for (var k in n.branches) outs.push([k, n.branches[k]]);
+    if (n.next) outs.push([null, n.next]);
+    outs.forEach(function (pair) {
+      var label = pair[0], to = L.pos[pair[1]];
+      if (!to) return;
+      var back = to.row <= from.row;
+      var x1 = from.x + W / 2, y1 = from.y + H, x2 = to.x + W / 2, y2 = to.y;
+      var d;
+      if (back) {
+        // A loop or a send-back. Drawn round the right-hand side so it reads as going *back*
+        // rather than as a stray line crossing the spine.
+        var side = L.w - 6;
+        d = "M " + (from.x + W) + " " + (from.y + H / 2) +
+            " H " + side + " V " + (to.y + H / 2) + " H " + (to.x + W);
+        y1 = from.y + H / 2;
+      } else {
+        d = "M " + x1 + " " + y1 + " C " + x1 + " " + (y1 + GAPY / 2) + ", " +
+            x2 + " " + (y2 - GAPY / 2) + ", " + x2 + " " + y2;
+      }
+      // "taken" means this edge was actually walked — both ends visited, in order.
+      var walked = seen.indexOf(n.id) >= 0 && seen.indexOf(pair[1]) >= 0;
+      svg("path", { "class": "edge" + (back ? " back" : "") + (walked ? " taken" : ""), d: d },
+          root);
+      if (label) {
+        svg("text", { "class": "elabel", x: back ? L.w - 4 : (x1 + x2) / 2 + 3,
+                      y: back ? y1 - 4 : y1 + GAPY / 2,
+                      "text-anchor": back ? "end" : "middle" }, root).textContent = label;
+      }
+    });
   });
+
+  // nodes
+  flow.forEach(function (n) {
+    var p = L.pos[n.id];
+    if (!p) return;
+    var cls = "n" + (n.id === here ? " here" : seen.indexOf(n.id) >= 0 ? " done" : "") +
+              (n.kind === "terminal" ? " terminal" : "");
+    var g = svg("g", { "class": cls }, root);
+    var t = svg("title", {}, g);
+    t.textContent = n.label + (n.gate ? "  ·  gate: " + n.gate : "") + "  ·  " + n.mode +
+                    (n.rejects_to ? "  ·  refusal → " + n.rejects_to : "");
+    if (n.id === here) {
+      svg("rect", { "class": "halo", x: p.x - 4, y: p.y - 4, width: W + 8, height: H + 8,
+                    rx: 8 }, g);
+    }
+    svg("rect", { "class": "box", x: p.x, y: p.y, width: W, height: H, rx: 5 }, g);
+    if (n.gate) svg("circle", { "class": "gatepin", cx: p.x + W - 8, cy: p.y + 7, r: 2.6 }, g);
+    svg("text", { "class": "name", x: p.x + 8, y: p.y + 12 }, g).textContent = n.id;
+    svg("text", { "class": "who", x: p.x + 8, y: p.y + 21 }, g).textContent =
+      (n.role || "runner") + " · " + n.mode;
+  });
+
+  // Keep the current node on screen without yanking the view when nothing moved.
+  var current = root.querySelector(".n.here");
+  if (current && current.scrollIntoView) {
+    current.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+  drawLegend();
+}
+
+function drawModels() {
+  var box = $("#models");
+  if (!box || !assign) return;
+  box.innerHTML = "";
+  var byModel = assign.by_model || {};
+  var meta = {};
+  (assign.models || []).forEach(function (m) { meta[m.id] = m; });
+
+  Object.keys(byModel).sort().forEach(function (id) {
+    var use = byModel[id], m = meta[id];
+    var el = document.createElement("div"); el.className = "mdl";
+
+    var h = document.createElement("div"); h.className = "h";
+    var name = document.createElement("span"); name.className = "id"; name.textContent = id;
+    h.appendChild(name);
+    if (m) {
+      var vendor = document.createElement("span");
+      vendor.className = "muted";
+      vendor.textContent = m.vendor + " · " + m.transport;
+      h.appendChild(vendor);
+      var reach = document.createElement("span");
+      reach.className = "reach " + m.reach;
+      // The one fact worth never having to infer: does work sent here leave this machine?
+      reach.textContent = m.reach;
+      reach.title = m.leaves_this_machine
+        ? "work orders sent to this model leave this machine"
+        : "runs on this machine; nothing leaves it";
+      h.appendChild(reach);
+    } else {
+      var gone = document.createElement("span");
+      gone.className = "reach external";
+      gone.textContent = "not in the registry";
+      h.appendChild(gone);
+    }
+    el.appendChild(h);
+
+    function row(kind, label, cls) {
+      var r = document.createElement("div"); r.className = "u" + (cls ? " " + cls : "");
+      var k = document.createElement("div"); k.className = "k"; k.textContent = kind;
+      var v = document.createElement("div"); v.className = "v"; v.textContent = label;
+      r.appendChild(k); r.appendChild(v); el.appendChild(r);
+    }
+
+    if (use.nodes && use.nodes.length) {
+      // The mode matters as much as the node: three models on a `pool` is one of them doing the
+      // work, and on a `model_panel` it is three voices being adjudicated. Same list, different run.
+      use.nodes.forEach(function (n) { row("node", n.node_id + "  (" + n.mode + ")"); });
+    }
+    if (use.seats && use.seats.length) {
+      use.seats.forEach(function (seat) { row("seat", seat); });
+    }
+    if (!(use.nodes || []).length && !(use.seats || []).length) {
+      // Said out loud. "Configured" and "used" look identical in a list, and only one of them does
+      // anything — a model nobody dispatches to is a setting somebody believes is in effect.
+      row("used", "nowhere — this model is registered and nothing dispatches to it", "none");
+    }
+    box.appendChild(el);
+  });
+
+  if (!Object.keys(byModel).length) {
+    var p = document.createElement("p");
+    p.className = "muted";
+    p.style.fontSize = "11.5px";
+    p.textContent = "No models registered. Every node is answered by the default agent command.";
+    box.appendChild(p);
+  }
+}
+
+function drawLegend() {
+  $("#legend").innerHTML =
+    '<span class="sw" style="background:var(--wait);border-color:var(--wait)"></span>' +
+    '<b>where the run is</b><br>' +
+    '<span class="sw" style="background:var(--soft)"></span>already visited<br>' +
+    '<span class="sw" style="background:var(--card)"></span>not reached yet<br>' +
+    '<span class="sw" style="background:var(--go);border-color:var(--go)"></span>' +
+    'an edge this run took<br>' +
+    '<span class="sw" style="background:var(--wait);border-radius:50%;border-color:var(--wait)">' +
+    '</span>the node has a gate';
 }
 
 function drawLog() {
@@ -327,7 +547,8 @@ $("#file").onchange = function () {
 
 // --- go --------------------------------------------------------------------------------------
 api("GET", "/flow")
-  .then(function (f) { flow = f.nodes; return api("GET", "/run"); })
+  .then(function (f) { flow = f.nodes; return api("GET", "/config/nodes"); })
+  .then(function (a) { assign = a; drawModels(); return api("GET", "/run"); })
   .then(function (s) {
     apply(s);
     // The snapshot came first, so the stream can only ever move us forward from a known state.
