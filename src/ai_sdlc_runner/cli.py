@@ -18,6 +18,7 @@ real: **the same question, different answerers.** The routing lives here and nev
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import subprocess
 import sys
@@ -25,6 +26,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from . import attachments as attach_mod
+from . import conversations as conv_mod
 from . import engine, models as models_mod, graph, policy, settings as settings_mod, ship, tui, workorder
 
 DEFAULT_CONFIG = "config/runner.yaml"
@@ -346,6 +348,125 @@ def _report_pending(journal) -> None:
               f"{entry['order'].get('role_label', entry['order'].get('role'))}")
 
 
+def _read_store(args: argparse.Namespace):
+    try:
+        return conv_mod.backend(args.store, root=args.store_root, uri=args.store_uri,
+                                remote=args.store_remote == "allow")
+    except conv_mod.ConversationError as exc:
+        print(f"error: {exc}")
+        raise SystemExit(2)
+
+
+def cmd_conversations(args: argparse.Namespace) -> int:
+    """List what has been stored, by project."""
+    back = _read_store(args)
+    pid = conv_mod.project_id(args.project) if args.project else None
+    projects = {p["id"]: p.get("name", "?") for p in back.projects()}
+    heads = back.conversations(pid)
+    if not heads:
+        print("no conversations stored" + (f" for project {args.project!r}" if args.project else ""))
+        return 0
+    for head in heads:
+        proj = head.get("project") or {}
+        name = proj.get("name") or projects.get(proj.get("id"), "?")
+        print(f"{head.get('conversation_id')}  {name}")
+    return 0
+
+
+def cmd_export(args: argparse.Namespace) -> int:
+    """Write one conversation out in the format the operator chose.
+
+    The format is asked for rather than defaulted, because the three are not interchangeable: only
+    `json` is lossless, and a silent default would pick which information the operator loses.
+    """
+    back = _read_store(args)
+    if args.store_remote == "allow" and args.project and args.conversation:
+        # The case the design was written to fix and the first code did not: `export` runs outside
+        # any walk, so `RunReport.relaxations` does not exist at the moment the relaxation is
+        # actually used. A seat found the fix present for `run` and `serve` and absent here -- the
+        # one invocation most likely to reach a remote store. So it is recorded in the document,
+        # which is the only durable thing an export has.
+        try:
+            conv_mod.Conversation(
+                back, args.project, conversation_id=args.conversation
+            ).relaxation("--store-remote allow: exported from a store whose locality was not checked")
+        except conv_mod.ConversationError as exc:
+            print(f"warning: could not record the relaxation: {exc}", file=sys.stderr)
+    if not args.project or not args.conversation:
+        print("error: export needs --project NAME and --conversation ID. "
+              "`runner conversations --project NAME` lists them.")
+        return 2
+    try:
+        document = back.read(conv_mod.project_id(args.project), args.conversation)
+        text = conv_mod.export_conversation(document, args.format)
+    except conv_mod.ConversationError as exc:
+        print(f"error: {exc}")
+        return 2
+    if args.out:
+        # `Path.write_text` grew a `newline=` keyword in 3.10 and this project's floor is 3.9, so
+        # the newline is pinned here instead — a CSV whose line endings depend on the OS is a
+        # different file on each half of the CI matrix.
+        with io.open(args.out, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        print(f"wrote {args.out} ({len(document.get('turns') or [])} turns, {args.format})")
+        if args.format == "csv":
+            print("note: csv is the lossy form — nested values are JSON text in the *_json "
+                  "columns, cells are defused against spreadsheet formula execution, and "
+                  "over_spreadsheet_cell_limit flags rows a spreadsheet will truncate.")
+    else:
+        sys.stdout.write(text)
+    return 0
+
+
+def _store_flags(parser: argparse.ArgumentParser) -> None:
+    """The conversation-store flags, on every command that stores one.
+
+    `--project` has **no default**. Both review seats refused the first design's default — the plan
+    file's parent directory — because that files every `examples/plan.json` run under a project
+    called "examples", and `serve` may have no plan at all. A location is not an identity, and there
+    is no other fact available to default from, so it is asked for.
+    """
+    parser.add_argument("--project", default=None, metavar="NAME",
+                        help="what this conversation is filed under. Required to store one; there "
+                             "is no default, because a directory name is a location rather than a "
+                             "project. The name is stored as data — a hash of it is what touches "
+                             "the filesystem.")
+    parser.add_argument("--store", choices=conv_mod.BACKENDS, default="file",
+                        help="which document store (default file). A backend whose package is "
+                             "missing refuses by name; it never falls back to `file`.")
+    parser.add_argument("--store-root", default=None, metavar="DIR",
+                        help="where the file/tinydb store lives (default .runner/conversations)")
+    parser.add_argument("--store-uri", default=None, metavar="URI",
+                        help="the mongo URI. Must be loopback, single-host, no +srv, no "
+                             "replicaSet, and directConnection is forced — a host check alone does "
+                             "not stop topology discovery connecting off-machine.")
+    parser.add_argument("--store-remote", choices=("refuse", "allow"), default="refuse",
+                        help="`allow` sends conversations to a non-loopback store and records a "
+                             "relaxation in the conversation itself. The whole operating flow is "
+                             "local-only; this is the one way out and it is never silent.")
+
+
+def _open_conversation(args: argparse.Namespace, journal_dir=None, run=None):
+    """Open the conversation for this invocation, or return ``None`` if none was asked for.
+
+    Refusals here are fatal and print: a store the operator asked for and did not get is not a
+    detail to discover later. Write failures, once open, are the opposite — see
+    `Conversation.write_errors`.
+    """
+    if not getattr(args, "project", None):
+        return None
+    try:
+        back = conv_mod.backend(args.store, root=args.store_root, uri=args.store_uri,
+                                remote=args.store_remote == "allow")
+        conv = conv_mod.Conversation.resume_or_open(back, args.project, journal_dir, run=run)
+    except conv_mod.ConversationError as exc:
+        print(f"error: {exc}")
+        raise SystemExit(2)
+    if args.store_remote == "allow":
+        conv.relaxation("--store-remote allow: the locality checks on the store were skipped")
+    return conv
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Walk the flow for one change."""
     config = load_config(args.config)
@@ -386,7 +507,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         if not high_risk:
             seats = None
 
+    conversation = _open_conversation(
+        args, journal_dir=args.ask_journal,
+        run={"journal": str(Path(args.ask_journal).resolve()) if args.ask_journal else None,
+             "plan": str(args.plan)})
     cfg = engine.RunConfig(
+        conversation=conversation,
         node_specs=plan.get("node_specs", {}),
         decisions=plan.get("decisions", {}),
         risk=args.risk or plan.get("risk", "high"),
@@ -446,6 +572,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     # Say which kind of stop this was. The report has been able to distinguish them since task 1;
     # printing the distinction is what makes it usable from here, and leaving it out would be a
     # field the operator cannot see -- decorative data with an audience.
+    for failure in report.store_errors:
+        # The summary channel. `_guarded` already spoke at the moment of failure, which is the one
+        # that survives a crash; this is the one an operator reading the end of a run cannot miss.
+        # A seat found the first version writing neither.
+        print(f"store failed:  {failure}", file=sys.stderr)
     print(f"state:         {report.state}")
     if report.state == engine.SUSPENDED and report.suspended:
         stop = report.suspended
@@ -523,10 +654,14 @@ def cmd_serve(args: argparse.Namespace) -> int:
     journal = engine.AskJournal(args.ask_journal or (Path(args.token_dir) / "asks"))
 
     store = attach_mod.Store(args.attachments or (Path(args.token_dir) / "attachments"))
+    conversation = _open_conversation(args, journal_dir=journal.dir,
+                                      run={"journal": str(journal.dir.resolve()),
+                                           "plan": str(args.plan or "")})
 
     def make_config(instructions, approvals, rulings, artifacts=(), rejections=(),
                     intake_history=()):
         return engine.RunConfig(
+            conversation=conversation,
             node_specs=plan.get("node_specs", {}),
             decisions=plan.get("decisions", {}),
             risk=args.risk or plan.get("risk", "high"),
@@ -632,6 +767,7 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("--models", default=None,
                     help="path to the model registry (default <token-dir>/models.json)")
     pv.add_argument("--settings", default=None, help="path to settings.json")
+    _store_flags(pv)
     pv.set_defaults(func=cmd_serve)
 
     pr = sub.add_parser("run", help="walk the flow for one change")
@@ -666,7 +802,24 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--resume", action="store_true",
                     help="continue an interrupted run: skip what the journal already answered and "
                          "re-ask only what it does not have. Needs --ask-journal.")
+    _store_flags(pr)
     pr.set_defaults(func=cmd_run)
+
+    pc = sub.add_parser("conversations", help="list stored conversations, by project")
+    _store_flags(pc)
+    pc.set_defaults(func=cmd_conversations)
+
+    pe = sub.add_parser("export", help="export one conversation as JSON, Markdown or CSV")
+    _store_flags(pe)
+    pe.add_argument("--conversation", default=None, metavar="ID",
+                    help="which conversation; `runner conversations` lists them")
+    pe.add_argument("--format", choices=conv_mod.FORMATS, required=True,
+                    help="json (lossless), markdown (for reading), csv (for a spreadsheet, and "
+                         "the lossy one). Asked for rather than defaulted: a default would pick "
+                         "which information you lose.")
+    pe.add_argument("-o", "--out", default=None, metavar="FILE",
+                    help="write here instead of standard output")
+    pe.set_defaults(func=cmd_export)
     return p
 
 

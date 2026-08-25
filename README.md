@@ -247,6 +247,67 @@ Useful flags:
 | `--review-seats N` / `--seat-model SEAT=CMD` | how many seats, and which backend answers each |
 | `--undeclared refuse\|allow` | what to do with a working node that declares no operations |
 | `--risk low\|medium\|high` | override the plan's grade |
+| `--project NAME` | store this conversation under that project. No default — see below |
+
+### Every conversation is kept, and can be exported
+
+Add `--project NAME` to `run` or `serve` and every turn is written down **as it happens**: each work
+order and the model that answered it, each answer, each ask that failed, every instruction with the
+number it arrived as, and **every operator decision** — approval, refusal, tie-break — with the
+relaxations the run was granted and the state it ended in.
+
+```bash
+runner --config runner.yaml run --plan plan.json --project "Login page" --ask-journal .runner/asks
+runner conversations --project "Login page"
+runner export --project "Login page" --conversation <id> --format markdown -o talk.md
+```
+
+| Flag | |
+|---|---|
+| `--store file\|tinydb\|mongo` | which document store (default `file`). A missing package **refuses by name** and never falls back |
+| `--store-root DIR` | where `file` and `tinydb` live (default `.runner/conversations`) |
+| `--store-uri URI` | the mongo URI — loopback only unless relaxed |
+| `--store-remote refuse\|allow` | `allow` sends conversations off this machine, and records that it did |
+| `--format json\|markdown\|csv` | on `export`. Required, because only `json` is lossless and a default would choose what you lose |
+
+A store write that fails **never fails the run**, and is never silent: a line on stderr the moment
+it fails, and `store_errors` on the report at the end. No attempt is made to write that note *into*
+the store — the thing that would hold it is the thing that just failed.
+
+**It is not derived from the ask journal**, and that distinction is the whole design. The journal
+answers *"what is the current question at position N"* — a resume index, keyed by position, which
+`record` overwrites; two runs in one journal directory leave one entry. The store answers *"what
+happened, in order"*, append-only, and a crashed run keeps everything up to the crash. The journal
+has also never held an operator turn, so a store derived from it would contain only the model's half
+of a conversation.
+
+Both review seats returned **`not sound`** on the first design, which proposed exactly that
+derivation, and on four other points: the Mongo host check, the `(project, run)` key, CSV formula
+injection, and where a relaxation is recorded. Their verdicts are committed whole in
+[`docs/design/reviews/`](docs/design/reviews/) and the design that answers them is
+[`docs/design/conversation-store.md`](docs/design/conversation-store.md).
+
+**On a Mongo store, a loopback host is not the check.** `MongoClient` performs topology discovery:
+given a loopback seed that turns out to be a replica-set member or a `mongos`, it reads the topology
+*from the server* and connects to every member it learns of. So the URI must be `mongodb://` (not
+`+srv`), single-host, a host that **round-trips** to loopback or a unix socket, and carrying only
+options on an **allowlist** — and `directConnection=true` is **forced on the client**, which is the
+one of the five that constrains the driver rather than the string.
+
+The allowlist is there because the first version named the two dangerous options instead, and a seat
+got past it twice: `?proxyHost=…&proxyPort=…` keeps the seed loopback and routes the connection
+through somebody else's SOCKS proxy, and `?replicaset=` walked past a check spelled `replicaSet`. A
+tunnel to a remote mongod remains out of scope — no URI can reveal one.
+
+The store holds every work order verbatim and is **exactly as sensitive as the ask journal already
+sitting beside it**, and no better protected: the `file` backend is created `0700` best-effort,
+which does little on Windows, and a local `mongod` typically has no auth at all.
+
+`csv` is the lossy export and says so structurally rather than in a note row — CSV has no comments.
+Nested values are JSON text in `*_json` columns, every cell is defused against spreadsheet formula
+execution (`=HYPERLINK(…)` in model-produced text is an exfiltration channel), and
+`over_spreadsheet_cell_limit` flags the rows a spreadsheet will silently truncate at 32,767
+characters.
 
 ### With the console
 
