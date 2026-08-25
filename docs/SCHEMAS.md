@@ -20,7 +20,7 @@ miscounts its own subject is the thing it warns about, so the count is now check
 | 6 | Answer contract | [`examples/agent.py`](../examples/agent.py) | shipped |
 | 7 | Ask journal entry | [`engine.py`](../src/ai_sdlc_runner/engine.py) | shipped |
 | 8 | Conversation document + turn | [`conversations.py`](../src/ai_sdlc_runner/conversations.py) | shipped |
-| 9 | CSV export columns | [`conversations.py`](../src/ai_sdlc_runner/conversations.py) | shipped |
+| 9 | Export formats — CSV columns, HTML stops | [`conversations.py`](../src/ai_sdlc_runner/conversations.py) | shipped |
 | 10 | Model registry | [`models.py`](../src/ai_sdlc_runner/models.py) | shipped · **closed** |
 | 11 | Settings | [`settings.py`](../src/ai_sdlc_runner/settings.py) | shipped · **closed** |
 | 12 | Attachment manifest | [`attachments.py`](../src/ai_sdlc_runner/attachments.py) | shipped |
@@ -232,7 +232,7 @@ which routes by seat name and passes no model at all.
 A reader may add `incomplete_lines` (a torn write) and `duplicate_seqs` (what `file` can report but
 not refuse).
 
-## 9 · CSV export columns — fixed
+## 9 · Export formats — four, and only one of them lossless
 
 ```
 seq · at · kind · node_id · ask_id · role · seat · model
@@ -241,6 +241,28 @@ text_or_state · body_json · over_spreadsheet_cell_limit
 
 `_json` suffixes and the flag column **are** the "this is lossy" notice — CSV has no comments, and a
 note row is a data row to every consumer. Every cell is defused against formula execution.
+
+`FORMATS = ("json", "markdown", "csv", "html")`, and `--format` is **required**: a default
+would decide for you which information you lose.
+
+| | keeps | loses |
+|---|---|---|
+| `json` | everything | — |
+| `markdown` | every turn, in order | the envelope, and the shape of the walk |
+| `html` | every turn *and* the shape of the walk | nothing, but it is a page rather than data |
+| `csv` | the columns above | nested bodies, past the cell limit |
+
+The **HTML** export groups turns into *stops*: consecutive turns at one `node_id`. Consecutive, not
+gathered — a node revisited later is a **second** stop, and merging the two would hide the loop
+the format exists to show.
+
+An `answer` carries `ask_id` and no `node_id`, so its node is read back out of the `NNN-node_id[-seat]`
+form of the id. Without that, every ask/answer pair splits in two: 53 stops for 55 turns, a list
+wearing a waterfall's markup.
+
+Three voices, from `kind`: `runner` (`ask`, `opened`, `closed`, `relaxation`, `note`), `model`
+(`answer`, `unanswered`), `operator` (`instruction`, `decision`). Model-written text is escaped on
+the way in — the same reason CSV cells are defused against formulas.
 
 ## 10 · Model registry — **closed**, entry *and* envelope
 

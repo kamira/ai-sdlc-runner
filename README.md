@@ -268,7 +268,7 @@ runner export --project "Login page" --conversation <id> --format markdown -o ta
 | `--store-root DIR` | where `file` and `tinydb` live (default `.runner/conversations`) |
 | `--store-uri URI` | the mongo URI — loopback only unless relaxed |
 | `--store-remote refuse\|allow` | `allow` sends conversations off this machine, and records that it did |
-| `--format json\|markdown\|csv` | on `export`. Required, because only `json` is lossless and a default would choose what you lose |
+| `--format json\|markdown\|html\|csv` | on `export`. Required, because only `json` is lossless and a default would choose what you lose. `html` is a waterfall down the flow — one stop per node visit, the model's side and the operator's side marked apart |
 
 A store write that fails **never fails the run**, and is never silent: a line on stderr the moment
 it fails, and `store_errors` on the report at the end. No attempt is made to write that note *into*
@@ -610,7 +610,7 @@ first one winning — so two of them disagreeing inside one answer resolves sile
 ## Testing
 
 ```bash
-pytest -q          # 1113 tests
+pytest -q          # 1148 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

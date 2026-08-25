@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Sequence
 
 from . import conversations as conversations_mod
+from . import paths
 from . import effects as effects_mod
 from . import graph, intake as intake_mod, policy, workorder
 
@@ -112,7 +113,7 @@ class AskJournal:
 
     def __init__(self, directory: str | Path):
         self.dir = Path(directory)
-        self.dir.mkdir(parents=True, exist_ok=True)
+        paths.makedirs(self.dir)
 
     def _path(self, ask_id: str) -> Path:
         return self.dir / f"{ask_id}.json"
@@ -124,7 +125,7 @@ class AskJournal:
         return ask_id
 
     def answered(self, ask_id: str, result: Mapping[str, object]) -> None:
-        payload = json.loads(self._path(ask_id).read_text(encoding="utf-8"))
+        payload = json.loads(paths.read_text(self._path(ask_id)))
         payload["status"] = "answered"
         payload["result"] = dict(result)
         self._write(ask_id, payload)
@@ -135,8 +136,8 @@ class AskJournal:
 
     def entries(self) -> List[Dict[str, object]]:
         """Every ask, answered or not, in the order they were asked."""
-        return [json.loads(path.read_text(encoding="utf-8"))
-                for path in sorted(self.dir.glob("*.json"))]
+        return [json.loads(paths.read_text(self.dir / name))
+                for name in sorted(n for n in paths.listdir(self.dir) if n.endswith(".json"))]
 
     def answers(self) -> Dict[str, Mapping[str, object]]:
         """``ask_id -> result`` for everything already answered.
@@ -171,7 +172,8 @@ class AskJournal:
                 if e.get("status") == "answered" and "result" in e}
 
     def _write(self, ask_id: str, payload: Dict[str, object]) -> None:
-        self._path(ask_id).write_bytes(
+        paths.write_bytes(
+            self._path(ask_id),
             (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
             .encode("utf-8"))
 

@@ -1,0 +1,341 @@
+{
+  "risk": "low",
+  "decisions": {
+    "next_module": "frontier",
+    "feedback": "done"
+  },
+  "node_specs": {
+    "intake_review": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, tides.js, app.js. No build step, no dependencies.",
+      "objective": "A single-page tide table for Porthcurno: markup, styles, a tide model, and a view that draws a twelve-hour curve.",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": "the page opens in a browser and shows the current level, the next six tides, and the curve",
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": "site/index.html, site/styles.css, site/tides.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "pm_plan": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, tides.js, app.js. No build step, no dependencies.",
+      "objective": "A single-page tide table for Porthcurno: markup, styles, a tide model, and a view that draws a twelve-hour curve.",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": "the page opens in a browser and shows the current level, the next six tides, and the curve",
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": "site/index.html, site/styles.css, site/tides.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "pm_confirm": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, tides.js, app.js. No build step, no dependencies.",
+      "objective": "A single-page tide table for Porthcurno: markup, styles, a tide model, and a view that draws a twelve-hour curve.",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": "the page opens in a browser and shows the current level, the next six tides, and the curve",
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": "site/index.html, site/styles.css, site/tides.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "lead_assess": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, tides.js, app.js. No build step, no dependencies.",
+      "objective": "A single-page tide table for Porthcurno: markup, styles, a tide model, and a view that draws a twelve-hour curve.",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": "the page opens in a browser and shows the current level, the next six tides, and the curve",
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": "site/index.html, site/styles.css, site/tides.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "pm_signoff": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, tides.js, app.js. No build step, no dependencies.",
+      "objective": "A single-page tide table for Porthcurno: markup, styles, a tide model, and a view that draws a twelve-hour curve.",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": "the page opens in a browser and shows the current level, the next six tides, and the curve",
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": "site/index.html, site/styles.css, site/tides.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "engineer_build": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, tides.js, app.js. No build step, no dependencies.",
+      "objective": "A single-page tide table for Porthcurno: markup, styles, a tide model, and a view that draws a twelve-hour curve.",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": "the page opens in a browser and shows the current level, the next six tides, and the curve",
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": "site/index.html, site/styles.css, site/tides.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "engineer_selfverify": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, tides.js, app.js. No build step, no dependencies.",
+      "objective": "A single-page tide table for Porthcurno: markup, styles, a tide model, and a view that draws a twelve-hour curve.",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": "the page opens in a browser and shows the current level, the next six tides, and the curve",
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": "site/index.html, site/styles.css, site/tides.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "lead_task_review": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, tides.js, app.js. No build step, no dependencies.",
+      "objective": "A single-page tide table for Porthcurno: markup, styles, a tide model, and a view that draws a twelve-hour curve.",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": "the page opens in a browser and shows the current level, the next six tides, and the curve",
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": "site/index.html, site/styles.css, site/tides.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "fix_pass": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, tides.js, app.js. No build step, no dependencies.",
+      "objective": "A single-page tide table for Porthcurno: markup, styles, a tide model, and a view that draws a twelve-hour curve.",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": "the page opens in a browser and shows the current level, the next six tides, and the curve",
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": "site/index.html, site/styles.css, site/tides.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "re_review": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, tides.js, app.js. No build step, no dependencies.",
+      "objective": "A single-page tide table for Porthcurno: markup, styles, a tide model, and a view that draws a twelve-hour curve.",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": "the page opens in a browser and shows the current level, the next six tides, and the curve",
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": "site/index.html, site/styles.css, site/tides.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "lead_review": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, tides.js, app.js. No build step, no dependencies.",
+      "objective": "A single-page tide table for Porthcurno: markup, styles, a tide model, and a view that draws a twelve-hour curve.",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": "the page opens in a browser and shows the current level, the next six tides, and the curve",
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": "site/index.html, site/styles.css, site/tides.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "qa_verify": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, tides.js, app.js. No build step, no dependencies.",
+      "objective": "A single-page tide table for Porthcurno: markup, styles, a tide model, and a view that draws a twelve-hour curve.",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": "the page opens in a browser and shows the current level, the next six tides, and the curve",
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": "site/index.html, site/styles.css, site/tides.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "qa_accept": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, tides.js, app.js. No build step, no dependencies.",
+      "objective": "A single-page tide table for Porthcurno: markup, styles, a tide model, and a view that draws a twelve-hour curve.",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": "the page opens in a browser and shows the current level, the next six tides, and the curve",
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": "site/index.html, site/styles.css, site/tides.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "pr": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, tides.js, app.js. No build step, no dependencies.",
+      "objective": "A single-page tide table for Porthcurno: markup, styles, a tide model, and a view that draws a twelve-hour curve.",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": "the page opens in a browser and shows the current level, the next six tides, and the curve",
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": "site/index.html, site/styles.css, site/tides.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "merge": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, tides.js, app.js. No build step, no dependencies.",
+      "objective": "A single-page tide table for Porthcurno: markup, styles, a tide model, and a view that draws a twelve-hour curve.",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": "the page opens in a browser and shows the current level, the next six tides, and the curve",
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": "site/index.html, site/styles.css, site/tides.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    }
+  },
+  "operations": {
+    "intake_review": [
+      {
+        "description": "intake_review: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "pm_plan": [
+      {
+        "description": "pm_plan: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "pm_confirm": [
+      {
+        "description": "pm_confirm: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "lead_assess": [
+      {
+        "description": "lead_assess: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "pm_signoff": [
+      {
+        "description": "pm_signoff: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "engineer_build": [
+      {
+        "description": "write one module file",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "engineer_selfverify": [
+      {
+        "description": "engineer_selfverify: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "lead_task_review": [
+      {
+        "description": "lead_task_review: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "fix_pass": [
+      {
+        "description": "fix_pass: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "re_review": [
+      {
+        "description": "re_review: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "lead_review": [
+      {
+        "description": "lead_review: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "qa_verify": [
+      {
+        "description": "qa_verify: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "qa_accept": [
+      {
+        "description": "qa_accept: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "pr": [
+      {
+        "description": "pr: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "merge": [
+      {
+        "description": "merge: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ]
+  }
+}

@@ -573,3 +573,73 @@ def test_a_marker_whose_conversation_is_gone_is_reopened(tmp_path):
     assert again.write_errors == [], again.write_errors
     assert [t["kind"] for t in again.document()["turns"]] == ["opened", "note"]
     assert again.id == first.id, "a resumed run must keep the identity its marker names"
+
+
+# ── html: the waterfall ───────────────────────────────────────────────────────────────────────
+
+def _walked(tmp_path):
+    """A conversation shaped like a real run: a loop, three seats, an operator decision."""
+    c = conv.Conversation(_store(tmp_path), "P").open()
+    c.instruction("build the thing", 1)
+    for seat in ("conformance", "defect", "risk"):
+        c.ask(f"00-lead_review-{seat}", "lead_review", "seat", seat, None, {"brief": "b"})
+        c.answer(f"00-lead_review-{seat}", {"verdict": "pass"}, backend="python3 agent.py")
+    for visit in range(2):
+        # A review between the builds, because that is what the module loop does — and two builds
+        # back to back are correctly **one** stop, which is what the first version of this fixture
+        # accidentally tested.
+        c.ask(f"1{visit}-engineer_build", "engineer_build", "engineer", None, "opus", {"b": 1})
+        c.answer(f"1{visit}-engineer_build", {"module": f"m{visit}"}, "opus")
+        c.ask(f"2{visit}-lead_task_review", "lead_task_review", "lead", None, "opus", {"b": 1})
+        c.answer(f"2{visit}-lead_task_review", {"verdict": "pass"}, "opus")
+    c.decision("approval", "merge", "confirmed")
+    c.close("finished")
+    return c.document()
+
+
+def test_the_html_export_makes_one_stop_per_node_visit(tmp_path):
+    """A transcript and a spreadsheet both lose the **shape** of a run.
+
+    Grouping consecutive turns by node puts it back: a node revisited is a second stop, not a
+    merged one, because collapsing them would hide the loop the waterfall exists to show.
+    """
+    page = conv.export_conversation(_walked(tmp_path), "html")
+    assert page.lstrip().startswith("<!doctype html>")
+    assert page.count('class="stop"') < page.count('class="turn')
+    assert page.count(">engineer_build") == 2, "a revisited node must be two stops"
+    assert "VISIT 2" in page.upper()
+
+
+def test_an_answer_is_grouped_with_the_ask_it_answers(tmp_path):
+    """An `answer` carries `ask_id` and no `node_id`.
+
+    Reading it as its own stop split every pair in two — 53 stops for 55 turns, a list wearing a
+    waterfall's markup.
+    """
+    page = conv.export_conversation(_walked(tmp_path), "html")
+    stops = page.count('class="stop"')
+    assert stops <= 8, f"{stops} stops for a run with four distinct nodes and one loop"
+
+
+def test_the_two_voices_are_told_apart(tmp_path):
+    """"the model answered" and "a person decided" is the distinction the store exists to keep."""
+    page = conv.export_conversation(_walked(tmp_path), "html")
+    for voice in ("turn model", "turn operator", "turn runner"):
+        assert voice in page, f"{voice} is not marked on the page"
+    assert page.count("turn operator") == 2, "the instruction and the decision are both a person's"
+
+
+def test_the_html_export_escapes_what_a_model_wrote(tmp_path):
+    """Answers are model-produced text going into a page. The CSV export defuses formulas for the
+    same reason; this one escapes markup."""
+    c = conv.Conversation(_store(tmp_path), "P").open()
+    c.answer("00-x", {"why": "<script>alert(1)</script> & \"quoted\""}, "m")
+    page = conv.export_conversation(c.document(), "html")
+    assert "<script>alert(1)</script>" not in page
+    assert "&lt;script&gt;" in page
+
+
+def test_html_is_one_of_the_formats_the_cli_offers():
+    assert "html" in conv.FORMATS
+    cli_source = Path(conv.__file__).with_name("cli.py").read_text(encoding="utf-8")
+    assert "a waterfall down the" in cli_source, "the flag's help must say what html is"

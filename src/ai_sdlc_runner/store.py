@@ -43,7 +43,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
-from . import graph, models as models_mod, policy
+from . import graph, models as models_mod, paths, policy
 
 #: Bumped when the tables change. Read and compared at open — a version nobody consults is a number,
 #: not a mechanism, which is what an earlier draft of the design was pulled up for.
@@ -104,7 +104,7 @@ def connect(path: str | Path) -> sqlite3.Connection:
     ```
     """
     file = Path(path)
-    file.parent.mkdir(parents=True, exist_ok=True)
+    paths.makedirs(file.parent)
     # `check_same_thread=False`, and a lock to make that safe. The server is a
     # `ThreadingHTTPServer` -- **every request is handled in its own thread** -- so a connection
     # bound to the thread that opened it raises `ProgrammingError` on the first console edit.
@@ -117,16 +117,24 @@ def connect(path: str | Path) -> sqlite3.Connection:
     # (`docs/DATABASE.md`): serialising is the honest implementation of a rule that is already
     # stated, where a pool of connections would quietly permit what the design says is unsupported.
     try:
-        db = sqlite3.connect(str(file), check_same_thread=False, factory=Connection)
+        # The long form. Measured: at 294 characters `sqlite3.connect` says "unable to open
+        # database file" on the plain path and opens fine on the extended one — the model store is
+        # a database at whatever depth the operator chose, so it needs the prefix as much as a
+        # conversation file does.
+        db = sqlite3.connect(paths.real(file), check_same_thread=False, factory=Connection)
         db.execute("PRAGMA journal_mode = WAL")    # the file's, and the first read of the header
     except sqlite3.DatabaseError as exc:
         # A file that is not a database, or one this process cannot open. Refused **by name**: a
         # seat pointed out that the one failure this function tested — a schema from the future —
         # was covered while corruption, the likelier fate of a file an operator keeps, escaped as a
         # raw traceback. A coarse check answering safe about something it had not looked at.
+        # `paths.plain` on the message: the path we handed the OS carries the extended-length
+        # prefix, and an error reading `\?\C:\…` sends whoever is debugging it looking for a
+        # network share that does not exist.
         raise StoreError(
-            f"{file} could not be opened as a store: {exc}. If it is a real database, this runner "
-            f"cannot read it; if it is not, move it aside — nothing here will overwrite it.")
+            f"{file} could not be opened as a store: {paths.plain(str(exc))}. If it is a real "
+            f"database, this runner cannot read it; if it is not, move it aside — nothing here "
+            f"will overwrite it.")
     db.execute("PRAGMA foreign_keys = ON")         # per connection, OFF by default
     db.execute("PRAGMA busy_timeout = 5000")       # per connection
     db.execute("PRAGMA synchronous = NORMAL")      # per connection; resets to FULL

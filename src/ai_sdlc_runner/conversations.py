@@ -48,6 +48,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from . import paths
+
 #: Bumped when the shape of a stored turn changes in a way a reader must know about. Written into
 #: every header, because a document that cannot say which shape it is has to be guessed at.
 SCHEMA = 1
@@ -314,21 +316,21 @@ class FileBackend(Backend):
 
     def __init__(self, root: str | Path):
         self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
+        # Through `paths`, because this is the store a seat lost a whole conversation from and a
+        # real SPA build lost another: 282 characters against a 260-character limit, reported as
+        # `FileNotFoundError` about a directory that had just been created.
+        paths.makedirs(self.root)
         self._own(self.root)
 
     @staticmethod
     def _own(path: Path) -> None:
         """0700, best effort. Not claimed as protection — see the design's §6: on Windows this does
         little, and the store is exactly as sensitive as the journal already sitting beside it."""
-        try:
-            os.chmod(path, 0o700)
-        except OSError:
-            pass
+        paths.chmod(path, 0o700)
 
     def _dir(self, pid: str) -> Path:
         d = self.root / pid
-        d.mkdir(parents=True, exist_ok=True)
+        paths.makedirs(d)
         self._own(d)
         return d
 
@@ -338,34 +340,35 @@ class FileBackend(Backend):
     def open_conversation(self, header: Mapping[str, object]) -> None:
         pid = str(header["project"]["id"])          # type: ignore[index]
         path = self._path(pid, str(header["conversation_id"]))
-        if path.exists():
+        if paths.exists(path):
             raise ConversationError(f"refused: {path.name} already exists; a conversation id is "
                                     f"minted once and never reopened")
-        with io.open(path, "w", encoding="utf-8", newline="\n") as fh:
+        with paths.open_(path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(json.dumps({"header": dict(header)}, ensure_ascii=False, sort_keys=True) + "\n")
         # The project's name lives beside its conversations, so `projects()` reads a fact rather
         # than an index that can drift from what it indexes.
         marker = self._dir(pid) / "_project.json"
-        if not marker.exists():
-            marker.write_text(
-                json.dumps(dict(header["project"]), ensure_ascii=False, sort_keys=True) + "\n",  # type: ignore[arg-type]
-                encoding="utf-8")
+        if not paths.exists(marker):
+            paths.write_text(
+                marker,
+                json.dumps(dict(header["project"]), ensure_ascii=False,  # type: ignore[arg-type]
+                           sort_keys=True) + "\n")
 
     def append(self, header: Mapping[str, object], turn: Turn) -> None:
         path = self._path(str(header["project"]["id"]), str(header["conversation_id"]))  # type: ignore[index]
-        if not path.exists():
+        if not paths.exists(path):
             raise ConversationError(f"refused: no conversation at {path.name} to append to")
-        with io.open(path, "a", encoding="utf-8", newline="\n") as fh:
+        with paths.open_(path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(json.dumps(turn.as_dict(), ensure_ascii=False, sort_keys=True) + "\n")
 
     def read(self, pid: str, cid: str) -> Dict[str, object]:
         path = self._path(pid, cid)
-        if not path.exists():
+        if not paths.exists(path):
             raise ConversationError(f"no conversation {cid} in project {pid}")
         header: Dict[str, object] = {}
         turns: List[Dict[str, object]] = []
         partial: List[int] = []
-        for n, line in enumerate(io.open(path, encoding="utf-8")):
+        for n, line in enumerate(paths.open_(path, encoding="utf-8")):
             line = line.strip()
             if not line:
                 continue
@@ -383,14 +386,20 @@ class FileBackend(Backend):
         return _assemble(header, turns, partial)
 
     def conversations(self, pid: Optional[str] = None) -> List[Dict[str, object]]:
-        dirs = [self.root / pid] if pid else [d for d in sorted(self.root.iterdir()) if d.is_dir()]
+        # `paths.listdir` rather than `iterdir`/`glob`: both go through the OS with the plain
+        # path, so a store deeper than MAX_PATH lists as empty rather than raising — a directory
+        # that silently has nothing in it is the worst of the three failure modes.
+        names = [pid] if pid else sorted(paths.listdir(self.root))
         out: List[Dict[str, object]] = []
-        for d in dirs:
-            if not d.is_dir():
+        for name in names:
+            d = self.root / name
+            if not paths.exists(d):
                 continue
-            for path in sorted(d.glob("*.jsonl")):
+            for entry in sorted(n for n in paths.listdir(d) if n.endswith(".jsonl")):
+                path = d / entry
                 try:
-                    first = json.loads(io.open(path, encoding="utf-8").readline() or "{}")
+                    first = json.loads(
+                        (paths.read_text(path).splitlines() or ["{}"])[0] or "{}")
                 except ValueError:
                     continue
                 head = first.get("header") or {}
@@ -400,10 +409,10 @@ class FileBackend(Backend):
 
     def projects(self) -> List[Dict[str, object]]:
         out = []
-        for d in sorted(self.root.iterdir()):
-            marker = d / "_project.json"
-            if d.is_dir() and marker.exists():
-                out.append(json.loads(marker.read_text(encoding="utf-8")))
+        for name in sorted(paths.listdir(self.root)):
+            marker = self.root / name / "_project.json"
+            if paths.exists(marker):
+                out.append(json.loads(paths.read_text(marker)))
         return out
 
 
@@ -628,8 +637,8 @@ class Conversation:
         first write, and changing it would silently rewrite categorisation history.
         """
         marker = Path(journal_dir) / MARKER if journal_dir else None
-        if marker is not None and marker.exists():
-            existing = json.loads(marker.read_text(encoding="utf-8"))
+        if marker is not None and paths.exists(marker):
+            existing = json.loads(paths.read_text(marker))
             if existing.get("project") and existing["project"] != project.strip():
                 raise ConversationError(
                     f"refused: this run's conversation is filed under project "
@@ -682,7 +691,8 @@ class Conversation:
         if self._journal_dir is None:
             return
         try:
-            earlier = len([p for p in self._journal_dir.glob("*.json")])
+            earlier = len([n for n in paths.listdir(self._journal_dir)
+                           if n.endswith(".json")])
         except OSError:
             return
         if earlier:
@@ -697,10 +707,11 @@ class Conversation:
         self._opened = True
         if self._journal_dir is not None:
             try:
-                self._journal_dir.mkdir(parents=True, exist_ok=True)
-                (self._journal_dir / MARKER).write_text(
+                paths.makedirs(self._journal_dir)
+                paths.write_text(
+                    self._journal_dir / MARKER,
                     json.dumps({"conversation_id": self.id, "project": self.project["name"]},
-                               ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+                               ensure_ascii=False, sort_keys=True) + "\n")
             except OSError as exc:
                 self.write_errors.append(f"could not mark the journal: {exc}")
         self.turn(OPENED, project=self.project["name"], run=dict(self.header["run"] or {}))
@@ -804,7 +815,9 @@ class Conversation:
         try:
             work()
         except Exception as exc:  # noqa: BLE001 - archival never propagates into a run
-            note = f"{what}: {exc}"
+            # Stripped of the extended-length prefix — an operator reading `\?\C:\…` on stderr
+            # goes looking for a network share instead of at their own store root.
+            note = f"{what}: {paths.plain(str(exc))}"
             self.write_errors.append(note)
             print(f"conversation store failed: {note}", file=sys.stderr)
 
@@ -818,7 +831,7 @@ def _now() -> str:
 # Export — 「JSON, Markdown, CSV 都支援，但用戶可選哪種形式匯出」
 # ──────────────────────────────────────────────────────────────────────────────────────────────
 
-FORMATS = ("json", "markdown", "csv")
+FORMATS = ("json", "markdown", "csv", "html")
 
 #: The CSV columns. Fixed, because "one row per turn" is not something anybody can implement or
 #: check against. A ``_json`` suffix says the cell holds JSON text — which is also the only honest
@@ -834,6 +847,8 @@ def export_conversation(document: Mapping[str, object], fmt: str) -> str:
         return json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     if fmt == "markdown":
         return _markdown(document)
+    if fmt == "html":
+        return _html(document)
     return _csv(document)
 
 
@@ -916,3 +931,201 @@ def _csv(document: Mapping[str, object]) -> str:
     # No header comment row: CSV has no comments, and a note row is a data row to every consumer.
     # The `_json` suffixes and `over_spreadsheet_cell_limit` are where that notice actually lives.
     return buf.getvalue()
+
+
+# ── html: a waterfall down time, stopped at the flow's nodes ──────────────────────────────────
+
+#: Who said it. A conversation has two sides and the log flattens them into one column of turns —
+#: this is where they come apart again, because "the model answered" and "a person decided" are the
+#: distinction the whole store exists to keep.
+_VOICES = {
+    ASK: ("runner", "asked"),
+    ANSWER: ("model", "answered"),
+    UNANSWERED: ("model", "failed"),
+    INSTRUCTION: ("operator", "instructed"),
+    DECISION: ("operator", "decided"),
+    OPENED: ("runner", "opened"),
+    CLOSED: ("runner", "closed"),
+    RELAXATION: ("runner", "relaxed"),
+    NOTE: ("runner", "noted"),
+}
+
+
+def _escape(value: object) -> str:
+    return (str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;"))
+
+
+def _pretty(body: Mapping[str, object]) -> str:
+    return _escape(json.dumps(body, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _summary(turn: Mapping[str, object]) -> str:
+    """One line a reader can scan without opening anything."""
+    kind = turn.get("kind")
+    if kind == ASK:
+        role = turn.get("role") or "?"
+        seat = f" · {turn['seat']}" if turn.get("seat") else ""
+        return f"{role}{seat}"
+    if kind == ANSWER:
+        result = turn.get("result") or {}
+        for key in ("verdict", "module", "modules", "missing"):
+            if key in result and result[key] not in (None, "", [], {}):
+                return f"{key}: {json.dumps(result[key], ensure_ascii=False)[:70]}"
+        return "answered"
+    if kind == DECISION:
+        return f"{turn.get('decision')} at {turn.get('at_node')}"
+    if kind == INSTRUCTION:
+        return str(turn.get("text") or "")[:90]
+    if kind == CLOSED:
+        return str(turn.get("state") or "")
+    return str(turn.get("text") or turn.get("why") or "")[:90]
+
+
+def _html(document: Mapping[str, object]) -> str:
+    """The conversation as a waterfall down time, its stops the nodes the run walked.
+
+    Markdown is a transcript and CSV is a spreadsheet; neither shows the **shape** of a run — that
+    one node was asked four times because the module loop came back to it, or that three seats
+    answered the same question in a row. Grouping consecutive turns by `node_id` puts that on the
+    page: one block per visit, in the order the walk made them, with the model's side and the
+    operator's side marked apart.
+    """
+    project = (document.get("project") or {})
+    turns = list(document.get("turns") or [])
+
+    # Consecutive turns at one node are one stop. Consecutive, not grouped — a node revisited later
+    # is a **second** stop, and collapsing the two would hide the loop the waterfall exists to show.
+    stops = []
+    for turn in turns:
+        # An `answer` carries `ask_id` and no `node_id` — it belongs to the ask above it, and
+        # reading it as its own stop split every pair in two: 53 stops for 55 turns, which is a
+        # list wearing a waterfall's markup.
+        node = turn.get("node_id") or turn.get("at_node") or ""
+        if not node and turn.get("ask_id"):
+            named = str(turn["ask_id"]).split("-", 1)
+            node = named[1] if len(named) > 1 else ""
+            if stops and node.startswith(stops[-1]["node"]):
+                node = stops[-1]["node"]          # `000-lead_review-defect` belongs to lead_review
+        if stops and stops[-1]["node"] == node:
+            stops[-1]["turns"].append(turn)
+        else:
+            stops.append({"node": node, "turns": [turn]})
+
+    visits = {}
+    for stop in stops:
+        visits[stop["node"]] = visits.get(stop["node"], 0) + 1
+        stop["visit"] = visits[stop["node"]]
+
+    rows = []
+    for stop in stops:
+        node = stop["node"]
+        label = _escape(node or "—")
+        nth = (f'<span class="nth">visit {stop["visit"]}</span>'
+               if visits[node] > 1 and node else "")
+        at = _escape((stop["turns"][0].get("at") or "").replace("T", " ")[:19])
+        first, last = stop["turns"][0]["seq"], stop["turns"][-1]["seq"]
+        span = f"{first}" if first == last else f"{first}–{last}"
+
+        cards = []
+        for turn in stop["turns"]:
+            who, verb = _VOICES.get(str(turn.get("kind")), ("runner", str(turn.get("kind"))))
+            body = {k: v for k, v in turn.items() if k not in ("seq", "kind", "at", "node_id")}
+            model = turn.get("model") or turn.get("backend")
+            byline = f'<span class="model">{_escape(model)}</span>' if model else ""
+            cards.append(
+                f'<article class="turn {who}">'
+                f'<header><span class="who">{who}</span>'
+                f'<span class="verb">{verb}</span>{byline}'
+                f'<span class="seq">#{turn["seq"]}</span></header>'
+                f'<p class="sum">{_escape(_summary(turn))}</p>'
+                f'<details><summary>full</summary><pre>{_pretty(body)}</pre></details>'
+                f"</article>")
+
+        rows.append(
+            f'<li class="stop"><div class="when"><time>{at}</time>'
+            f'<span class="span">{span}</span></div>'
+            f'<div class="what"><h2>{label}{nth}</h2>{"".join(cards)}</div></li>')
+
+    counts = {}
+    for turn in turns:
+        counts[turn.get("kind")] = counts.get(turn.get("kind"), 0) + 1
+    stats = " · ".join(f"<b>{n}</b> {k}" for k, n in sorted(counts.items()) if k)
+
+    return _PAGE.format(
+        title=_escape(project.get("name", "conversation")),
+        cid=_escape(document.get("conversation_id", "?")),
+        pid=_escape(project.get("id", "?")),
+        stats=stats,
+        stops=len(stops),
+        rows="\n".join(rows),
+    )
+
+
+_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title} — conversation</title>
+<style>
+:root{{--ink:#16191f;--ground:#fbfbf9;--panel:#fff;--rule:#e2ded6;--rule2:#c9c3b7;
+--runner:#5d6b7a;--model:#1d6a8c;--operator:#a2542c;--muted:#6d7178}}
+@media(prefers-color-scheme:dark){{:root{{--ink:#e7e5e0;--ground:#13161a;--panel:#1a1e24;
+--rule:#2a2f36;--rule2:#3d434c;--runner:#93a3b4;--model:#5aa8c9;--operator:#d99a63;--muted:#959aa2}}}}
+*{{box-sizing:border-box}}
+body{{margin:0;background:var(--ground);color:var(--ink);
+font:15px/1.6 "IBM Plex Sans",ui-sans-serif,system-ui,sans-serif}}
+code,pre,.mono{{font-family:"IBM Plex Mono",ui-monospace,monospace}}
+header.top{{max-width:62rem;margin:0 auto;padding:2.5rem 1.25rem 1.25rem;
+border-bottom:2px solid var(--ink)}}
+h1{{margin:.2rem 0;font-size:2rem;letter-spacing:-.02em}}
+.meta{{font-family:"IBM Plex Mono",monospace;font-size:.74rem;color:var(--muted)}}
+.stats{{margin-top:.6rem;font-family:"IBM Plex Mono",monospace;font-size:.76rem;color:var(--muted)}}
+.stats b{{color:var(--ink)}}
+ol.flow{{list-style:none;max-width:62rem;margin:0 auto;padding:2rem 1.25rem 5rem}}
+li.stop{{display:grid;grid-template-columns:9.5rem 1fr;gap:1.25rem;position:relative;
+padding-bottom:1.6rem}}
+li.stop::before{{content:"";position:absolute;left:9.5rem;top:.45rem;bottom:-.4rem;
+width:2px;background:var(--rule);transform:translateX(-1px)}}
+li.stop:last-child::before{{display:none}}
+.when{{text-align:right;padding-top:.15rem;position:relative}}
+.when::after{{content:"";position:absolute;right:-1.31rem;top:.5rem;width:9px;height:9px;
+border-radius:50%;background:var(--ground);border:2px solid var(--rule2)}}
+.when time{{display:block;font-family:"IBM Plex Mono",monospace;font-size:.72rem;color:var(--muted)}}
+.when .span{{font-family:"IBM Plex Mono",monospace;font-size:.66rem;color:var(--rule2)}}
+.what h2{{margin:0 0 .5rem;font-size:.95rem;font-family:"IBM Plex Mono",monospace;
+letter-spacing:-.01em}}
+.nth{{margin-left:.5rem;font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;
+color:var(--operator);border:1px solid var(--rule2);border-radius:3px;padding:.05rem .3rem}}
+.turn{{background:var(--panel);border:1px solid var(--rule);border-left:3px solid var(--runner);
+border-radius:0 6px 6px 0;padding:.55rem .8rem;margin-bottom:.45rem}}
+.turn.model{{border-left-color:var(--model)}}
+.turn.operator{{border-left-color:var(--operator)}}
+.turn header{{display:flex;align-items:baseline;gap:.5rem;font-size:.7rem;
+font-family:"IBM Plex Mono",monospace}}
+.who{{text-transform:uppercase;letter-spacing:.08em;color:var(--runner);font-weight:600}}
+.turn.model .who{{color:var(--model)}}
+.turn.operator .who{{color:var(--operator)}}
+.verb{{color:var(--muted)}}
+.model{{color:var(--muted);font-size:.66rem}}
+.seq{{margin-left:auto;color:var(--rule2)}}
+.sum{{margin:.25rem 0 0;font-size:.86rem;word-break:break-word}}
+details{{margin-top:.35rem}}
+summary{{cursor:pointer;font-size:.7rem;color:var(--muted);
+font-family:"IBM Plex Mono",monospace}}
+summary:focus-visible{{outline:2px solid var(--model);outline-offset:2px}}
+pre{{margin:.4rem 0 0;padding:.6rem .7rem;background:var(--ground);border:1px solid var(--rule);
+border-radius:4px;font-size:.72rem;overflow-x:auto;max-height:22rem}}
+@media(max-width:640px){{li.stop{{grid-template-columns:1fr;gap:.3rem}}
+li.stop::before,.when::after{{display:none}}.when{{text-align:left}}}}
+@media(prefers-reduced-motion:reduce){{*{{transition:none!important;animation:none!important}}}}
+</style></head><body>
+<header class="top">
+  <p class="meta">conversation {cid} · project {pid}</p>
+  <h1>{title}</h1>
+  <p class="stats">{stats} · <b>{stops}</b> stops on the flow</p>
+</header>
+<ol class="flow">
+{rows}
+</ol>
+</body></html>
+"""
