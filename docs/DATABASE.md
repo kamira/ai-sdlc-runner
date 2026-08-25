@@ -17,8 +17,50 @@ it, because a schema without its reasons gets "simplified" back into the defect 
 | In the database | Stays a file | Why |
 |---|---|---|
 | conversation history — every ask, answer, decision, instruction | `runner.yaml` — `agent_command`, `agent_timeout` | nothing in `src/` ever writes it; a person authors it |
-| the **model registry** | `settings.json` — seats, high-risk bypass, vouched commands | server config, read before any store exists |
+| the **model registry** — *which models exist* | `settings.json` — seats, high-risk bypass, vouched commands | server config, read before any store exists |
 | — | the ask journal (`.runner/asks/*.json`) | a **resume index**, mutable by design; see §5 |
+| **not stored at all** | the **model assignment** — `node_models`, `seat_models` in the plan | it is an **input**, never an output — see §0.1 |
+
+### 0.1 · Model configuration is two halves, and only one is persisted here
+
+This is the question the schema does not answer on its own, so it is answered here.
+
+| | What it is | Where it lives | Who writes it |
+|---|---|---|---|
+| **Registry** | *which models exist* — `opus` is a `cli` model running `claude -p` | `models.json` today, the `models` table proposed | the operator, through `POST /models`, **and it persists** |
+| **Assignment** | *which node and which seat gets which model* | the plan file's `node_models` / `seat_models`, and `--seat-model` | **nobody.** It is read once at startup and never written |
+
+`assignments` is built at `cli.py:704` from `plan.get("node_models")` and `plan.get("seat_models")`,
+held in memory, and exposed **read-only** by `GET /config/nodes`. No POST route touches it. There is
+no writer anywhere in `src/`.
+
+**That is defensible, and it is also a half-feature.** Defensible because `Registry`'s own docstring
+draws the line — *"the models this project may use, and nothing about which node uses which"* — and
+an assignment is a property of **this change**, not of the project: the plan file is its durable
+home, and it is the file a person version-controls. A half-feature because through the console you
+can **add a model and cannot assign it to anything**: it appears in `by_model` with empty `nodes`
+and `seats` until somebody hand-edits the plan.
+
+### 0.2 · A decision that is not mine to make
+
+The ruling this schema implements says:
+
+> 「sqlite 內容不僅限於紀錄，也包含 **model 模型配置**的紀錄儲存」
+
+**「模型配置」 can be read two ways**, and this page took the narrow one:
+
+1. **the registry only** — which models exist. That is what the `models` table holds, and what is
+   built here.
+2. **the registry *and* the assignment** — which would mean `node_models` and `seat_models` become
+   tables too, the console gets routes to edit them, and the plan file stops being their home.
+
+Reading (1) was chosen because `Registry` draws that line itself and because an assignment belongs to
+a change rather than to a project. **It was not confirmed**, and a previous round of this same design
+was refused for exactly that move — deciding an ambiguity silently instead of naming it. So it is
+named:
+
+**If 「模型配置」 was meant to include the assignment, this schema is missing two tables and the API is
+missing the routes to fill them.** Say so and it gets built.
 
 **The database's own location is never in the database.** It comes from `--store-root` and nothing
 else. That is not a limitation to work around later — it is the one rule that keeps the bootstrap

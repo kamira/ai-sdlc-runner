@@ -221,3 +221,50 @@ def test_the_page_admits_the_assignment_side_is_not_closed():
     """The plan file ignores unknown keys, so a misspelt `node_models` assigns nothing."""
     section = FLAT.split("What model management does **not** have")[1]
     assert "not closed" in section and "node_models" in section
+
+
+# ── persistence: which half is stored, and which is not ───────────────────────────────────────
+
+def test_the_registry_persists_and_the_assignment_does_not():
+    """The question that produced this section: *model 管理的配置沒有被納進db? 那怎麼持久化?*
+
+    Two halves, and only one is written by anything. If an assignment writer is ever added, this
+    fails — and it should, because the pages say there is none.
+    """
+    import inspect
+    from ai_sdlc_runner import cli, server
+
+    post = inspect.getsource(server).split("def do_POST(self)")[1].split("\n        def ")[0]
+    assert "models_mod.save" in post, "the registry must still be written by POST /models"
+    assert "assignments" not in post, (
+        "a POST route now touches assignments — DATABASE.md §0.1 and MODELS.md say nothing writes "
+        "them, and one of the three has to change")
+    assert "node_models" not in post and "seat_models" not in post
+
+    whole = inspect.getsource(server) + inspect.getsource(cli)
+    writers = [line for line in whole.splitlines()
+               if ("node_models" in line or "seat_models" in line)
+               and any(w in line for w in ("save(", "write_text", "json.dump"))]
+    assert not writers, f"something writes the assignment now: {writers}"
+
+
+def test_the_assignment_is_read_only_over_http():
+    """`GET /config/nodes` shows it; nothing changes it."""
+    import inspect
+    from ai_sdlc_runner import server
+
+    get = inspect.getsource(server).split("def do_GET(self)")[1].split("\n        def ")[0]
+    section = get.split("/config/nodes")[1].split("elif path ==")[0]
+    assert "held[" in section, "the assignment is read from held state"
+    for mutation in ("save", "write", "held[\"assignments\"] ="):
+        assert mutation not in section, f"/config/nodes now does {mutation!r}"
+
+
+def test_both_pages_say_where_each_half_lives():
+    database = (ROOT / "docs" / "DATABASE.md").read_text(encoding="utf-8")
+    flat_db = " ".join(database.split())
+    assert "0.1 · Model configuration is two halves" in database
+    assert "no writer anywhere in `src/`" in flat_db
+    assert "0.2 · A decision that is not mine to make" in database, (
+        "the ambiguity in 「模型配置」 must stay named, not silently resolved")
+    assert "The assignment has no writer, anywhere" in PAGE
