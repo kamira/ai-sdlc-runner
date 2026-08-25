@@ -25,7 +25,8 @@ miscounts its own subject is the thing it warns about, so the count is now check
 | 11 | Settings | [`settings.py`](../src/ai_sdlc_runner/settings.py) | shipped · **closed** |
 | 12 | Attachment manifest | [`attachments.py`](../src/ai_sdlc_runner/attachments.py) | shipped |
 | 13 | Run report | [`engine.py`](../src/ai_sdlc_runner/engine.py) | shipped |
-| 14 | **SQLite DDL** | [`sqlite-only.md`](design/sqlite-only.md) | **proposed, not built** |
+| 14 | **SQLite DDL** | [`DATABASE.md`](DATABASE.md) | **proposed, not built** |
+| 15 | **Server HTTP API** | [`API.md`](API.md) | shipped |
 
 ---
 
@@ -293,7 +294,9 @@ matters and not by the type.
 
 ## 14 · SQLite DDL — **proposed, not built**
 
-From [`sqlite-only.md`](design/sqlite-only.md). Nothing here exists in code.
+The full schema, with every absent column and the finding that removed it, is
+**[`DATABASE.md`](DATABASE.md)** — pinned by `tests/test_database_schema.py`, which executes the
+page's SQL verbatim and tries to violate each constraint. Summary below.
 
 Which pragmas persist, measured rather than assumed — set all five, close, reopen:
 
@@ -355,6 +358,15 @@ duplicate-`seq` policy is written down for the importer and not for the live pat
 
 ---
 
+## 15 · Server HTTP API
+
+Fifteen routes, eight `GET` and seven `POST`, every one crossing a process boundary to a browser.
+Written down in **[`API.md`](API.md)** and pinned by `tests/test_api_schema.py`.
+
+The three-check guard that runs before every route — loopback `Host`, then `Origin`, then
+`X-Operator-Token` — and the two deliberate token exemptions are documented there, in that order,
+because the order is the property.
+
 ## What this catalogue does **not** cover
 
 Named, because a map that silently omits territory is worse than one that marks it blank. Both seats
@@ -362,7 +374,7 @@ found these independently.
 
 | Missing | Why it matters |
 |---|---|
-| **The server HTTP API** — ~15 endpoints (`/flow`, `/run`, `/run/events`, `/models`, `/attachments`, `/config/nodes`, `/whoami`, `/run/gate`, `/run/reject`, `/run/instruct`, `/run/decide`, …) | the largest omission: every one crosses a process boundary to a browser, each with a request and response shape nobody wrote down |
+| ~~The server HTTP API~~ | **written down** — [`API.md`](API.md), fifteen routes, pinned by `tests/test_api_schema.py` |
 | **`runner.yaml`** — `agent_command`, `agent_timeout` | durable config with a hand-rolled fallback parser that has already shipped one bug (the inline-list split) |
 | **`RunConfig`** | the engine's real input contract, substantially wider than the plan file the catalogue shows |
 | **`Approval` / `Rejection` / `Ruling`** | operator decisions crossing the server→engine boundary; the catalogue has their flattened conversation turns, not their input shapes |
