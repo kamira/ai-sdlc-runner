@@ -417,7 +417,8 @@ parsed with `json.loads`. A complete, comment-free, working example is in
 runner --config examples/runner.yaml run --plan examples/plan.json --risk low --confirm merge
 ```
 
-That drives all 24 nodes, asks 17 questions, writes a real `greet.py`, and finishes. It is three
+That **visits 20 of the 24 nodes** — the other four are failure paths a green run never takes —
+asks 17 questions, writes a real `greet.py`, and finishes. It is three
 files: [`plan.json`](examples/plan.json) (15 node specs and 15 operation blocks),
 [`runner.yaml`](examples/runner.yaml), and [`agent.py`](examples/agent.py) — which is also the only
 place **the answer contract** is written down:
@@ -609,7 +610,7 @@ first one winning — so two of them disagreeing inside one answer resolves sile
 ## Testing
 
 ```bash
-pytest -q          # 1084 passing
+pytest -q          # 1112 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is
@@ -620,7 +621,7 @@ Four kinds of claim in the documents are machine-checked rather than trusted:
 
 | Test | Refuses |
 |---|---|
-| `test_documented_numbers` | a figure in the README that the graph or the policy no longer supports |
+| `test_documented_numbers` | a figure in the README that the graph or the policy no longer supports — including the **count of tests**, and how many nodes a run of the example actually visits |
 | `test_every_cli_flag_the_readme_names_actually_exists` | a flag `argparse` would not accept, aliases included |
 | `test_schemas` · `test_api_schema` · `test_models_schema` | a page that has drifted from the code it maps — including the **count** of closed schemas, which it derives by *exercising* each one rather than reading a label |
 | `test_database_schema` | the DDL on the page failing to execute, or its constraints failing to refuse |
