@@ -252,8 +252,26 @@ class Turn:
     at: str = ""
     body: Dict[str, object] = field(default_factory=dict)
 
+    #: Body keys that may never reach a stored turn, because they *are* the turn's identity.
+    ENVELOPE = ("seq", "kind", "at")
+
     def as_dict(self) -> Dict[str, object]:
-        return {"seq": self.seq, "kind": self.kind, "at": self.at, **self.body}
+        """The body first, then the envelope — and the order is the whole point.
+
+        The first version spread the body **last**, so a body key silently replaced `seq`, `at` or
+        `kind`: `turn("note", seq=999, at="not-a-time")` stored a turn whose identity disagreed with
+        the number `Conversation` had allocated and the time it recorded. `kind` survived only
+        because Python raises `TypeError` on the keyword collision — luck, not a schema.
+
+        A log whose payload can rewrite its own envelope cannot be ordered, deduplicated or dated,
+        which is all a log is for. Found by an independent seat reading this line.
+        """
+        collided = [k for k in self.ENVELOPE if k in self.body]
+        if collided:
+            raise ConversationError(
+                f"turn body carries {collided}, which name the turn's own identity. A body that "
+                f"can rewrite its envelope makes seq, kind and at unreliable for every reader.")
+        return {**self.body, "seq": self.seq, "kind": self.kind, "at": self.at}
 
 
 # ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -681,6 +699,15 @@ class Conversation:
     def turn(self, kind: str, **body: object) -> Optional[Turn]:
         if kind not in KINDS:
             raise ConversationError(f"unknown turn kind {kind!r}")
+        # Checked HERE, before `_guarded`, and this placement is the point. A body naming its own
+        # envelope is a bug in the caller, not a disk that filled up -- and `_guarded` exists to
+        # stop archival failures reaching a run. Left inside it, a programming error would be
+        # swallowed into `write_errors` and the run would carry on with a turn it never stored.
+        collided = [k for k in Turn.ENVELOPE if k in body]
+        if collided:
+            raise ConversationError(
+                f"turn body carries {collided}, which name the turn's own identity. A body that "
+                f"can rewrite its envelope makes seq, kind and at unreliable for every reader.")
         t = Turn(seq=self._seq, kind=kind, at=_now(), body=dict(body))
         self._seq += 1
         self._guarded(lambda: self.store.append(self.header, t), f"turn {t.seq} ({kind})")
