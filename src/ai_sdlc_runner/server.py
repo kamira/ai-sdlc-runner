@@ -78,6 +78,36 @@ def _loopback_host(header: Optional[str]) -> bool:
     return host.lower() in LOOPBACK_HOSTS
 
 
+def _loopback_origin(origin: str) -> bool:
+    """Is this ``Origin`` one of ours? **Parsed, never prefix-matched.**
+
+    The first version asked whether the origin *started with* ``http://localhost``. It does not take
+    much to defeat that: ``http://localhost.evil.example`` starts with ``http://localhost``, and an
+    attacker can register that name. Found by an independent seat reading the check; confirmed by
+    running it — three lookalike origins were accepted.
+
+    A prefix is not a host. `urlsplit` knows where a hostname ends and this function does not have
+    to guess.
+    """
+    parts = urlsplit(origin)
+    if parts.scheme not in ("http", "https"):
+        return False
+    if parts.path or parts.query or parts.fragment or parts.username or parts.password:
+        return False        # an origin is scheme://host[:port] and nothing else
+
+    # Rebuilt and compared, because parsing alone is not enough: `urlsplit` reads
+    # `http://[::1].evil.example` as host `::1` and silently drops the rest, so a hostname check
+    # would accept it. A browser would not send that -- but "browsers only send well-formed
+    # origins" is exactly the kind of assumption that turns into the next finding.
+    host = (parts.hostname or "").lower()
+    port = f":{parts.port}" if parts.port else ""
+    literal = f"[{host}]" if ":" in host else host
+    if f"{parts.scheme}://{literal}{port}" != origin.strip().lower():
+        return False
+    # `hostname` strips the port and the brackets from an IPv6 literal, so `[::1]` arrives as `::1`.
+    return host in {h.strip("[]") for h in LOOPBACK_HOSTS}
+
+
 @dataclass
 class Operator:
     """Who the server will accept answers from, and how it knows.
@@ -388,8 +418,7 @@ def make_handler(runner: Runner, operator: Operator,
                 self._json(403, {"error": "this server answers only to a loopback host"})
                 return False
             origin = self.headers.get("Origin")
-            if origin and not any(origin.startswith(f"http://{h}") or
-                                  origin.startswith(f"https://{h}") for h in LOOPBACK_HOSTS):
+            if origin and not _loopback_origin(origin):
                 self._json(403, {"error": f"cross-origin request from {origin} refused"})
                 return False
             presented = self.headers.get("X-Operator-Token")

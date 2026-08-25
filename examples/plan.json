@@ -1,0 +1,373 @@
+{
+  "risk": "low",
+  "decisions": {
+    "next_module": "frontier",
+    "feedback": "done"
+  },
+  "node_specs": {
+    "intake_review": {
+      "scope": "intake_review",
+      "objective": "intake_review: see examples/agent.py",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": [
+        "the expected outputs exist"
+      ],
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "pm_plan": {
+      "scope": "pm_plan",
+      "objective": "pm_plan: see examples/agent.py",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": [
+        "the expected outputs exist"
+      ],
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "pm_confirm": {
+      "scope": "pm_confirm",
+      "objective": "pm_confirm: see examples/agent.py",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": [
+        "the expected outputs exist"
+      ],
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "lead_assess": {
+      "scope": "lead_assess",
+      "objective": "lead_assess: see examples/agent.py",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": [
+        "the expected outputs exist"
+      ],
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "pm_signoff": {
+      "scope": "pm_signoff",
+      "objective": "pm_signoff: see examples/agent.py",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": [
+        "the expected outputs exist"
+      ],
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "engineer_build": {
+      "scope": "greet.py",
+      "objective": "write greet(name) -> str",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": [
+        "the expected outputs exist"
+      ],
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": [
+        "greet.py"
+      ],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "engineer_selfverify": {
+      "scope": "engineer_selfverify",
+      "objective": "engineer_selfverify: see examples/agent.py",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": [
+        "the expected outputs exist"
+      ],
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "lead_task_review": {
+      "scope": "lead_task_review",
+      "objective": "lead_task_review: see examples/agent.py",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": [
+        "the expected outputs exist"
+      ],
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "fix_pass": {
+      "scope": "fix_pass",
+      "objective": "fix_pass: see examples/agent.py",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": [
+        "the expected outputs exist"
+      ],
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "re_review": {
+      "scope": "re_review",
+      "objective": "re_review: see examples/agent.py",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": [
+        "the expected outputs exist"
+      ],
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "lead_review": {
+      "scope": "lead_review",
+      "objective": "lead_review: see examples/agent.py",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": [
+        "the expected outputs exist"
+      ],
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "qa_verify": {
+      "scope": "qa_verify",
+      "objective": "qa_verify: see examples/agent.py",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": [
+        "the expected outputs exist"
+      ],
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "qa_accept": {
+      "scope": "qa_accept",
+      "objective": "qa_accept: see examples/agent.py",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": [
+        "the expected outputs exist"
+      ],
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "pr": {
+      "scope": "pr",
+      "objective": "pr: see examples/agent.py",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": [
+        "the expected outputs exist"
+      ],
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "merge": {
+      "scope": "merge",
+      "objective": "merge: see examples/agent.py",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": [
+        "the expected outputs exist"
+      ],
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    }
+  },
+  "operations": {
+    "intake_review": [
+      {
+        "description": "intake_review: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "pm_plan": [
+      {
+        "description": "pm_plan: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "pm_confirm": [
+      {
+        "description": "pm_confirm: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "lead_assess": [
+      {
+        "description": "lead_assess: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "pm_signoff": [
+      {
+        "description": "pm_signoff: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "engineer_build": [
+      {
+        "description": "write one module file",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "engineer_selfverify": [
+      {
+        "description": "engineer_selfverify: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "lead_task_review": [
+      {
+        "description": "lead_task_review: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "fix_pass": [
+      {
+        "description": "fix_pass: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "re_review": [
+      {
+        "description": "re_review: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "lead_review": [
+      {
+        "description": "lead_review: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "qa_verify": [
+      {
+        "description": "qa_verify: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "qa_accept": [
+      {
+        "description": "qa_accept: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "pr": [
+      {
+        "description": "pr: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "merge": [
+      {
+        "description": "merge: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ]
+  }
+}

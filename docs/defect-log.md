@@ -10,8 +10,9 @@ fact: the defects that would have shipped silently were almost never the ones th
 |---|---|
 | An independent seat, reading a record or the code | **13** |
 | Only by running it on a real project | **9** |
-| The test suite, unprompted | **4** |
-| My own process failures | **9** |
+| The test suite, unprompted | **3** (+1 intended collision, below) |
+| My own process failures | **10** |
+| Putting the README through the same review | **4** |
 
 ## On screenshots
 
@@ -19,18 +20,25 @@ There are none for these. The screenshot tool could not composite the browser pa
 work — every attempt returned *"the Browser pane is not displayed, so the page is not compositing
 frames"* — and by the time it worked, every defect below was already fixed.
 
-It would also not have helped much: **two of these thirty-two defects were visible on a screen.**
-The rest were tracebacks, failing assertions, or wrong values in a JSON response. What is quoted
-below is the output captured at the moment each was found, which is stronger evidence than a
-photograph of a terminal.
+It would have helped less than it sounds: **four of these thirty-five had a consequence visible on a screen**
+— the ineffective *add to the brief*, the missing dispatch line, the first-click exception, and the
+stale-token 401. The rest were tracebacks, failing assertions, or wrong values in a JSON response.
+
+So the honest version of this section is narrower than the one that stood here first, which said
+*"two of thirty-two"* against a table summing to 35 and concluded screenshots "would not have helped
+much". Both seats caught the arithmetic. A screenshot would not have shown any of the four *causes*,
+but it would have documented what an operator saw, and that is worth something. What is quoted below
+is captured output where the entry says so and retrospective prose where it does not.
 
 ---
 
 ## Found by an independent seat — 13
 
 Two seats reviewed each round with the same brief, neither seeing the other, against a frozen tree.
-**Every one of these was found before the code existed** — they are defects in design records and in
-claims, caught by somebody reading carefully rather than by anything executing.
+**Every one was found before the change's code existed** — they are defects in design records and in
+claims, caught by reading rather than by anything executing. (Some quote engine code that already
+ran; what did not exist was the code the record was proposing. The first version of this sentence
+said "before the code existed", which both seats read as false of its own entries.)
 
 ### task 2 — adding `undecided` to the policy would have been a no-op that went green
 
@@ -242,10 +250,14 @@ distinguishes *refused* from *no token*.
 
 ---
 
-## Found by the test suite, unprompted — 4
+## Found by the test suite, unprompted — 3, plus one intended collision
 
-Three of these came from two tests that exist to catch a **class** of mistake rather than a specific
-one — `test_nothing_is_unwired` and `test_documented_numbers`. Both earned their keep here.
+All three came from two tests that exist to catch a **class** of mistake rather than a specific one
+— `test_nothing_is_unwired` and `test_documented_numbers`. Both earned their keep here.
+
+The fourth entry below is **not a defect** and is not counted as one: it is a test colliding with a
+rule the change was deliberately replacing. It was counted at first, which inflated the column in a
+table whose whole point is comparing the groups. Both seats caught it.
 
 ### task 8 — a public constant nothing read
 
@@ -286,7 +298,7 @@ written next to it, not because it turned red."* It turned red; the reason is in
 
 ---
 
-## My own process failures — 9
+## My own process failures — 10
 
 Kept because they cost real time and two of them are the same mistake the whole project is about.
 
@@ -359,6 +371,12 @@ I recorded that `--seats N` did not exist. It does — it is an alias declared o
 action, and concluded the alias was fictional. **Trusting a tool's summary instead of reading the
 source**, which is the same move as every other entry in this section.
 
+### the README mislabelled the feedback node's branches
+
+CHG-20260823-15 recorded this and I did not carry it here, while the README claimed this file records
+*every* defect. Both seats caught the omission. `feedback` branches on `more`/`done`; the diagram
+implied the node names.
+
 ### two fixtures used a proxy for the thing they meant
 
 ```
@@ -367,6 +385,49 @@ seat_verdicts applies to the **first** panel     # meaning: the review panel
 
 A counter stood in for "the review panel". Adding `intake_review` made it the first panel and the
 proxy broke — **a miniature of this project's whole recurring lesson**, in my own test double.
+
+---
+
+## Found by putting the README itself through review — 4
+
+Two seats read `README.md` and this file at `d93fcd2` and split — `not sound` and `sound with
+changes` — so it did not pass. Beyond the documentation errors listed above, the review found two
+things in the **code**.
+
+### a cross-origin check that compared prefixes
+
+```
+http://localhost.evil.example  -> ACCEPTED
+http://127.0.0.1.evil.example  -> ACCEPTED
+```
+
+`origin.startswith("http://localhost")` is true of any domain an attacker registers under that
+prefix. Found by a seat *reading* the check; confirmed by running it. **A prefix is not a host** —
+the origin is now parsed and required to round-trip exactly.
+
+### `halt_independent` enforces nothing
+
+Graded on `acceptance` at high risk, and the README said *"the verifier must not be the builder"*.
+`STOPPING` treats it identically to `halt`, there is one operator identity, and nothing records or
+compares who confirmed. **The enforcement is the name of a constant.**
+
+This is task 15's finding one layer down: independence was "enforced by a button caption", and the
+fix moved the caption into a policy table. Now in *Known gaps* rather than stated as a property.
+
+### a sentence disproved by the commit it shipped in
+
+> *"Changes are reviewed by two independent seats **before they land**."*
+
+CHG-20260823-14 and -15 — **the two changes that wrote that sentence** — were already merged, with
+their own Status lines saying nobody independent had read them. A seat reading the reviewed commit
+could disprove the claim from the repository itself, and did.
+
+### a plan nobody could run
+
+Both seats walked a newcomer's path and got stuck in the same place: the example was `jsonc` (so
+`json.loads` rejects it), carried one node spec of the fifteen required, never mentioned the
+`operations` block every acting node needs, and nowhere stated what a dispatched agent must print.
+Fixed by shipping `examples/` — a plan that drives all 24 nodes and writes real code.
 
 ---
 

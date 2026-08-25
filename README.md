@@ -123,7 +123,11 @@ getting it wrong is expensive to undo.**
 Merging is a one-way door, so it stops earliest of anything — **including at low risk**, where it
 asks rather than halts. "Low risk" grades the change, not the door.
 
-Acceptance on a high-risk change is `halt_independent`: the verifier must not be the builder.
+Acceptance on a high-risk change is graded `halt_independent`. **That grade always stops for a
+person; it does not currently enforce that the person differs from the builder.** `STOPPING` treats
+it exactly like `halt`, the server has a single operator identity, and nothing records or checks who
+confirmed. The name states an intent the code does not yet keep — found by an independent seat, and
+named here rather than left for a reader to assume. See *Known gaps*.
 
 ```bash
 runner policy    # print every gate at every grade, the seats, the never-automated actions
@@ -178,8 +182,10 @@ on the node. The difference is declared in `graph.Node.mode`, never inferred fro
 
 Same three ids in `node_models`; entirely different runs. A pool's choice is **random on purpose** —
 any cleverer rule is the runner deciding which model is better at a task it has not seen — and
-**reproducible on purpose too**, seeded by run and node, so "which model built this" stays answerable
-afterwards. Every dispatch is recorded.
+**deterministic**, seeded by `dispatch_seed`, the node id, and which ask this is. The default seed is
+`0` and the CLI does not set it, so the same plan dispatches the same way every time; inserting an
+earlier ask shifts the ordinal and can change later dispatches. Every dispatch is recorded, which is
+what actually makes "which model built this" answerable.
 
 **One ask, one session.** Every asking node gets its own session, opened and closed around a single
 ask. A multi-seat review is several asks, so each seat is its own session — otherwise "three seats"
@@ -203,9 +209,13 @@ worth stating because every other multi-voice node works the other way:
 > counting **destroys** the information.
 
 Missing an aspect is not "bad", it is **incomplete**: the run stops before anything is planned and
-says exactly what it does not have. Asking again is right; asking forever is not — after the **third**
-unanswered ask for one aspect, the runner stops asking and puts **at least three options** on the
-table, authored by a model and recorded as an ask. It does not pick one.
+says exactly what it does not have. Asking again is right; asking forever is not — once an aspect has
+gone unanswered **three** times, the next pass puts **at least three options** on the table, authored
+by a model and recorded as an ask. It does not pick one.
+
+Precisely: `needs_options` becomes true when three misses are already on record, so the options
+appear on the *fourth* survey rather than instead of the third. The seats are asked again on that
+pass too.
 
 ---
 
@@ -265,11 +275,20 @@ browser:
 
 1. a non-loopback `Host` is refused (DNS rebinding);
 2. a cross-origin `Origin` is refused;
-3. **a token is required on every request** — minted at startup, written owner-only. A cross-origin
-   page can *send* a request but cannot **read a file on disk**, which is what makes local-only hold.
+3. **a token is required on every request that carries data** — minted at startup, written
+   owner-only (best-effort: `chmod 0600` does little on Windows). Two deliberate exemptions, both
+   documented in `server.py`: the **static shell page** (`/`), because a browser cannot attach a
+   header to a navigation, and the **event stream**, which accepts the token as a query parameter
+   because `EventSource` has no way to set headers. A query string reaches access logs, which is why
+   it is that one read-only route and not a general fallback.
 
-The token travels in the URL **fragment**, which browsers never send to a server and never put in a
-`Referer`.
+The token travels to the page in the URL **fragment**, which browsers never send to a server and
+never put in a `Referer`. From there the page sends it as a header — except on the event stream,
+above.
+
+The `Origin` check **parses** the origin and requires it to round-trip exactly. It used to compare
+prefixes, which accepted `http://localhost.evil.example`; an independent seat found it by reading the
+check, and three lookalike origins were accepted when run. A prefix is not a host.
 
 The models it dispatches to need not be local. Each carries a computed **reach** — `local`,
 `internal`, `external` — and the console says which ones leave the machine. Choosing an external
@@ -306,7 +325,48 @@ model should be a decision somebody made, not one they discover later.
 
 The node spec's fields are a **closed schema** — exactly these, no more and no fewer. A field outside
 it is refused rather than ignored, because a setting that looks configured and does nothing is worse
-than one that was rejected.
+than one that was rejected. **Every asking node needs one** — 15 of the 24 — and the walk stops at
+the first one that has none.
+
+A plan also needs an **`operations`** block for every node that can act, including the review seats:
+`policy.role("seat").can_execute` is true, and the criterion is the capability, never the role's
+name. A node that declares nothing is refused unless you pass `--undeclared allow`, which records
+that you did.
+
+```jsonc
+"operations": {
+  "engineer_build": [
+    { "description": "write one module file", "kind": "ordinary", "targets": ["greet.py"] }
+  ]
+}
+```
+
+### A plan you can actually run
+
+The snippets above are illustrative and **will not run** — they are `jsonc`, and `plan.json` is
+parsed with `json.loads`. A complete, comment-free, working example is in
+[`examples/`](examples/):
+
+```bash
+runner --config examples/runner.yaml run --plan examples/plan.json --risk low --confirm merge
+```
+
+That drives all 24 nodes, asks 17 questions, writes a real `greet.py`, and finishes. It is three
+files: [`plan.json`](examples/plan.json) (15 node specs and 15 operation blocks),
+[`runner.yaml`](examples/runner.yaml), and [`agent.py`](examples/agent.py) — which is also the only
+place **the answer contract** is written down:
+
+| The node | must answer |
+|---|---|
+| a decision node | `{"verdict": "<branch>"}` — one the node offers |
+| `pm_plan` | `{"modules": [...]}` when `next_module` is `"frontier"` |
+| `engineer_build` | `{"module": "<id>"}` |
+| a seat on a panel | `{"verdict": "pass"\|"fail", "why": "…"}` |
+| a seat at intake | `{"missing": [...], "problems": [...], "unsafe": [...]}` |
+| anything else | any JSON object |
+
+The work order arrives as JSON on **stdin**; the answer goes to **stdout** as JSON. A non-zero exit
+is a failed attempt.
 
 `decisions.next_module` may be `"frontier"`, which reads two recorded facts — what the PM most
 recently planned, and what the engineers have built — instead of a list written before the first
@@ -328,28 +388,34 @@ models that opens fewer than N sessions is refused"* rather than *"panels work"*
 in CI and refuses a record whose status says finished with no acceptance record beside it. It caught
 one of mine.
 
-**Changes are reviewed by two independent seats** before they land, each with the same brief, neither
-seeing the other, against a frozen tree. Their verdicts are committed whole in
+**Substantial changes go to two independent seats**, each with the same brief, neither seeing the
+other, against a frozen tree. Their verdicts are committed whole in
 [`docs/design/reviews/`](docs/design/reviews/) rather than summarised — a summary is where an
 objection gets softened, and this repository's recorded history is disagreement being flattened.
 
-**A split does not pass.** The runner's own rule — a tie decides nothing — applies to its own design
-records, or it is not a rule.
+**This is a practice, not a mechanism, and it has been broken.** CHG-20260823-14 and -15 — the two
+changes that wrote this section — **landed before any seat had read them**, and their own Status
+lines said so at the time. A reviewer reading the commit they shipped in could disprove the sentence
+that used to stand here, and one did. Nothing in CI enforces review-before-merge; the ledger check
+enforces only that a record claiming *finished* has an acceptance record beside it.
+
+**A split does not pass** — when a review is held. The runner enforces that for runs; for design
+records it is followed by hand, and the same caveat applies.
 
 **Some tests exist to catch a shape of mistake rather than a specific one**, and they are the ones
 that keep earning their keep:
 
 | Test | What it refuses |
 |---|---|
-| `test_nothing_is_unwired` | a public name in `src/` that nothing in `src/` calls — a mechanism nobody invokes is not built |
+| `test_nothing_is_unwired.py` | a public name in `src/` that nothing in `src/` calls — a mechanism nobody invokes is not built |
 | `test_documented_numbers` | a figure in the docs that disagrees with the code, recomputed rather than trusted |
 | `test_the_console_has_a_handler_for_every_button_it_draws` | a control that does nothing |
 
 **[`docs/defect-log.md`](docs/defect-log.md)** records every defect hit while building this, grouped
-by *how it was found*. The short version: **thirteen were found by a reader before the code existed,
-nine only by running it on a real project, and four by the test suite** — and the nine that only
-running it found had all been shipping, invisible to a suite passing 800+ tests, because a
-one-module, one-instruction, one-server demo had the same bug and looked fine.
+by *how it was found*. The short version: **thirteen were found by a reader before the change's code existed, nine only by
+running it on a real project, and four by the test suite** — and several of the nine had been
+shipping for changes, invisible to a suite passing 800+ tests, because a one-module,
+one-instruction, one-server demo had the same bug and looked fine.
 
 ---
 
@@ -377,10 +443,31 @@ tools/
 
 ---
 
+## Known gaps
+
+Named here rather than left for a reader to discover, because a governance tool that overstates what
+it enforces is worse than one that enforces less and says so. All three were found by independent
+seats reviewing this README.
+
+**`halt_independent` does not check independence.** It is graded on `acceptance` at high risk and it
+always stops for a person — but `STOPPING` treats it identically to `halt`, the server has a single
+operator identity, and nothing records or compares who confirmed against who built. The name is an
+intent. Closing it needs a second identity, which nothing in the design has yet.
+
+**A seat panel that keeps failing has no bound.** `lead_review` → `review_failed` → `next_module` →
+`lead_review` cycles until `max_steps`. The **module** review is explicitly bounded — one fix pass,
+one re-review, then halt — and the seat panel is not. It changes the flow's topology, so it needs its
+own record.
+
+**Review-before-merge is a practice, not a mechanism.** See above; CI enforces the ledger, not the
+review.
+
+---
+
 ## Testing
 
 ```bash
-pytest -q          # 847 passing
+pytest -q
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check.

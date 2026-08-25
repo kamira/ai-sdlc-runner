@@ -602,3 +602,32 @@ def test_adding_to_the_brief_re_walks_the_run(tmp_path):
     assert len(asked) > before, (
         "adding to the brief asked nobody anything — the instruction landed and the run did not "
         "move, so nothing downstream ever saw it")
+
+
+@pytest.mark.parametrize("origin", [
+    "http://localhost.evil.example",
+    "http://127.0.0.1.evil.example",
+    "https://localhost.attacker.test",
+    "http://[::1].evil.example",
+])
+def test_a_lookalike_origin_is_refused(live, origin):
+    """A prefix is not a host.
+
+    The check used to ask whether the origin *started with* `http://localhost`. An attacker can
+    register `localhost.evil.example`, and it does. Found by an independent seat reading the check;
+    all three lookalikes it named were accepted when run.
+    """
+    call, _, _ = live
+    status, body = call("GET", "/run", origin=origin)
+    assert status == 403, f"{origin} was accepted"
+    assert "cross-origin" in body["error"]
+
+
+@pytest.mark.parametrize("origin", [
+    "http://localhost:8765", "http://127.0.0.1:9999", "https://127.0.0.1", "http://[::1]:8080",
+])
+def test_our_own_origins_are_still_accepted(live, origin):
+    """The fix must not refuse the page it serves."""
+    call, _, _ = live
+    status, _ = call("GET", "/run", origin=origin)
+    assert status == 200, f"{origin} was refused"
