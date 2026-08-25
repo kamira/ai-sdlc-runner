@@ -48,9 +48,14 @@ def test_every_entry_names_a_file_that_exists():
         assert target.exists(), f"the catalogue links to {link}, which does not exist"
 
 
-def test_the_catalogue_has_all_fourteen_entries():
-    numbered = re.findall(r"^## (\d+) · ", TEXT, re.M)
-    assert [int(n) for n in numbered] == list(range(1, 15))
+def test_every_row_of_the_index_has_an_entry_below_it():
+    """Counted from the table rather than hard-coded, so adding a schema does not need two edits
+    in two files — the failure mode that produced this page's first three drifts."""
+    rows = [int(m) for m in re.findall(r"^\| (\d+) \| ", TEXT, re.M)]
+    numbered = [int(n) for n in re.findall(r"^## (\d+) · ", TEXT, re.M)]
+    assert rows == list(range(1, len(rows) + 1)), f"the index is not numbered 1..N: {rows}"
+    assert numbered == rows, (
+        f"the index lists {rows} and the entries below are {numbered}")
 
 
 # ── the drift that actually happened, each pinned ─────────────────────────────────────────────
