@@ -54,23 +54,61 @@ def test_the_pragmas_this_connection_needs_are_on_it(db):
     assert db.execute("pragma synchronous").fetchone()[0] == 1        # NORMAL
 
 
-def test_a_store_that_died_between_its_tables_and_its_version_still_opens(tmp_path):
-    """`executescript` autocommits, so a crash there left tables at version 0.
+def test_a_half_built_store_with_the_RIGHT_shape_recovers(tmp_path):
+    """`executescript` autocommits, so a crash before `PRAGMA user_version` leaves tables at 0.
 
-    Every later open re-ran the script and died with `table models already exists` — the store
-    bricked permanently by an interruption at the one moment it could least survive one. Simulated
-    by a seat; reproduced here.
+    The first version of this test created `models(id)` — a table with **one** of its eight columns
+    — and asserted the reopen succeeded. It did, and the store was then marked current and failed on
+    first use. **The test written to prove the recovery works was demonstrating the defect and
+    reporting green**, which is this repository's most-recorded shape appearing inside the check
+    built to catch it.
+
+    So the case is split. Here: the correct shape, which must recover.
     """
     import sqlite3
     path = tmp_path / "half.sqlite"
+    made = store.connect(tmp_path / "reference.sqlite")
+    ddl = [row[0] for row in made.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' ORDER BY name")]
+    made.close()
+
     half = sqlite3.connect(str(path))
-    half.executescript("CREATE TABLE models (id TEXT PRIMARY KEY);")
+    for statement in ddl:                       # the real tables, and no version
+        half.executescript(statement + ";")
+    half.commit()
     half.close()
     assert sqlite3.connect(str(path)).execute("pragma user_version").fetchone()[0] == 0
 
     recovered = store.connect(path)
     assert recovered.execute("pragma user_version").fetchone()[0] == store.SCHEMA_VERSION
+    # ...and it is usable, which is the part the old test never checked.
+    store.save_registry(recovered, models.Registry(models=(_model(),)))
+    assert [m.id for m in store.load_registry(recovered)] == ["opus"]
     recovered.close()
+
+
+def test_a_half_built_store_with_the_WRONG_shape_is_refused_not_blessed(tmp_path):
+    """`IF NOT EXISTS` skipped creation on any table with the right **name**.
+
+    ```
+    blessed to version: 1
+    actual columns    : ['id']
+    first real use    -> OperationalError: table models has no column named vendor
+    ```
+
+    A name standing in for a constraint, inside the recovery written for the previous name standing
+    in for a constraint. Found by a seat.
+    """
+    import sqlite3
+    path = tmp_path / "wrong.sqlite"
+    broken = sqlite3.connect(str(path))
+    broken.executescript("CREATE TABLE models (id TEXT PRIMARY KEY);")
+    broken.close()
+
+    with pytest.raises(store.StoreError) as exc:
+        store.connect(path)
+    assert "already exists with columns" in str(exc.value)
+    assert "move it aside" in str(exc.value)
 
 
 def test_a_file_that_is_not_a_database_is_refused_by_name(tmp_path):
@@ -394,31 +432,65 @@ def test_a_config_edit_advances_the_version_so_other_tabs_see_it(console):
     assert after["version"] > before["version"]
 
 
-def test_a_stored_assignment_reaches_an_actual_dispatch(tmp_path, monkeypatch):
-    """The test whose absence let the worst finding ship with every other test green.
+def test_a_stored_assignment_reaches_an_actual_dispatch(tmp_path):
+    """Walk the engine and watch which model the factory was asked for.
 
-    A seat put it plainly: *"No test anywhere asserts a store assignment reaches a dispatch — which
-    is why this survived."* So this one walks the engine and looks at which model was asked.
+    The first version of this test built a `RunConfig` and asserted the id was in it. A seat named
+    it exactly: *"never calls engine.walk, never opens a session, never observes a backend — its
+    name stands in for the constraint it did not examine."* That is the defect this whole file is
+    about, in the test written to prove the defect was gone.
+
+    So this one runs the walk and records every `(seat, model)` the factory is asked to open.
     """
-    from ai_sdlc_runner import engine, graph
+    from ai_sdlc_runner import engine, graph, workorder
 
     db = store.connect(tmp_path / "config.sqlite")
-    store.save_registry(db, models.Registry(models=(_model(id="from-store"),)))
-    store.set_node_models(db, "pm_confirm", ["from-store"])
-
-    merged, source = store.resolve(
-        {"node_models": {}},
+    store.save_registry(db, models.Registry(models=(_model(id="chosen"),)))
+    store.set_node_models(db, "pm_plan", ["chosen"])
+    merged, _ = store.resolve(
+        {"node_models": {}, "seat_models": {}},
         {"node_models": store.node_models(db), "seat_models": store.seat_models(db)})
     db.close()
 
-    assert merged["node_models"]["pm_confirm"] == ["from-store"]
-    assert source["node_models.pm_confirm"] == store.FROM_STORE
+    asked = []
 
-    # ...and the engine reads exactly that field, so a config built from `merged` dispatches to it.
-    cfg = engine.RunConfig(node_specs={}, decisions={},
-                           node_models=merged["node_models"])
-    assert list(cfg.node_models.get("pm_confirm") or ()) == ["from-store"]
-    assert graph.BY_ID["pm_confirm"].mode in store.MODES_THAT_USE_MODELS
+    class Recorder(engine.Session):
+        def __init__(self, model):
+            self.model = model
+
+        def ask(self, order):
+            asked.append((order["node_id"], self.model))
+            node = graph.BY_ID[order["node_id"]]
+            # Every key any node on the way might read. A stub that answers half the contract
+            # stops the walk before the node under test, which is how the first attempt at this
+            # test saw an empty list and blamed the wiring.
+            return {"verdict": list(node.branches)[0] if node.branches else "done",
+                    "modules": [], "module": "",
+                    "missing": [], "problems": [], "unsafe": []}
+
+        def close(self):
+            pass
+
+    def factory(seat=None, model=None):
+        return Recorder(model)
+
+    spec = {field: "" for field in workorder.NODE_SPEC_FIELDS}
+    cfg = engine.RunConfig(
+        node_specs={node.id: dict(spec) for node in graph.NODES},
+        decisions={}, risk="low",
+        operations={node.id: [{"description": "x", "kind": "ordinary", "targets": []}]
+                    for node in graph.NODES},
+        node_models=merged["node_models"],
+        max_steps=40)
+    try:
+        engine.walk(cfg, factory, enabled=True)
+    except engine.EngineError:
+        pass                                    # the walk may stop early; the ask is what matters
+
+    dispatched = [model for node_id, model in asked if node_id == "pm_plan"]
+    assert dispatched, f"pm_plan was never asked; asked = {asked[:5]}"
+    assert dispatched[0] == "chosen", (
+        f"the engine dispatched {dispatched[0]!r}, not the model the store assigned")
 
 
 def test_neither_command_reads_the_plan_directly_for_node_models():
@@ -430,3 +502,104 @@ def test_neither_command_reads_the_plan_directly_for_node_models():
         source = inspect.getsource(command)
         assert 'node_models=plan.get("node_models"' not in source, (
             f"{command.__name__} reads the plan directly; a stored assignment would be ignored")
+
+
+# ── round 2: the corrections' own findings ────────────────────────────────────────────────────
+
+def test_run_hands_the_registry_to_the_factory_it_resolved_ids_for():
+    """The critical round-2 finding, and the same class as round 1's.
+
+    `cmd_run` resolved stored model ids into `RunConfig` and then called `session_factory` **without
+    the registry** — and `session_factory` only translates an id to a command when
+    `registry is not None`. So `run` selected a stored model and dispatched to the default backend.
+    Configuration that looks connected and does not govern execution, one command over.
+    """
+    import inspect
+    from ai_sdlc_runner import cli
+
+    walk_call = [line for line in inspect.getsource(cli.cmd_run).splitlines()
+                 if "session_factory(" in line]
+    assert walk_call, "cmd_run no longer builds a factory"
+    assert any("registry=" in line for line in
+               inspect.getsource(cli.cmd_run).split("session_factory(")[1].splitlines()[:3]), (
+        "cmd_run calls session_factory without a registry; a stored model id cannot be dispatched")
+
+
+def test_a_config_edit_checks_and_bumps_the_version_without_letting_go(console):
+    """Three separate critical sections is a check-then-act window.
+
+    Two threads validate version N, both write, both bump — and the double-submit the version
+    exists to refuse happens anyway. `Runner.edit` holds one lock across all three.
+    """
+    import inspect
+    from ai_sdlc_runner import server as server_mod
+
+    edit = inspect.getsource(server_mod.Runner.edit)
+    assert "with self._lock:" in edit
+    body = edit.split("with self._lock:")[1]
+    for step in ("_require_version", "write()", "self.state.version += 1"):
+        assert step in body, f"{step} is outside the lock"
+
+
+def test_adding_a_model_also_checks_the_version(console):
+    """The fix stopped one route short of the one that writes a file."""
+    _, state = console.call("/run")
+    assert console.call("/models", {"version": state["version"], "model": MODEL})[0] == 200
+    code, out = console.call("/models", {"version": state["version"],
+                                         "model": {**MODEL, "id": "second"}})
+    assert code == 409, "POST /models accepted a stale version"
+    assert "answered version" in out["error"]
+
+
+def test_concurrent_config_edits_and_model_adds_do_not_deadlock(tmp_path):
+    """Two lock orderings deadlock, and this file had two for exactly one round.
+
+    The fix for the check-then-act window took the store's lock inside `write()` and `held_lock`
+    after it, while `POST /models` took `held_lock` first — so one thread holding `held` and waiting
+    for the store, and another holding the store and waiting for `held`, would both block forever.
+
+    Driven with real concurrent requests rather than reasoned about, because a lock order argued
+    from is a lock order nobody measured.
+    """
+    import concurrent.futures
+
+    made = _Console(tmp_path)
+    try:
+        made.post("/models", {"model": MODEL})
+        for extra in ("second", "third", "fourth"):
+            made.post("/models", {"model": {**MODEL, "id": extra}})
+
+        def edit(n):
+            return made.post("/config/nodes",
+                             {"node_id": "pm_plan", "models": ["opus"] if n % 2 else []})[0]
+
+        def add(n):
+            return made.post("/models", {"model": {**MODEL, "id": f"m{n}"}})[0]
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            jobs = [pool.submit(edit if n % 2 else add, n) for n in range(16)]
+            codes = [job.result(timeout=30) for job in jobs]
+
+        # Some lose the version race — that is the mechanism, not a hang. Nothing may block.
+        assert set(codes) <= {200, 409}, codes
+        assert 200 in codes
+    finally:
+        made.close()
+
+
+def test_the_lock_order_is_stated_and_every_path_takes_it():
+    """A lock order that lives only in the author's head is the one that gets inverted."""
+    import inspect
+    from ai_sdlc_runner import server as server_mod
+
+    source = inspect.getsource(server_mod.make_handler)
+    assert "LOCK_ORDER" in source, "the order must be written down, not remembered"
+
+    # The BODY of , not the docstring above it — prose mentioning `write()` is not
+    # the call to it, and a test that cannot tell them apart is reading the wrong thing.
+    body = source.split("def under_lock():")[1].split("out = runner.edit")[0]
+    code = [line for line in body.splitlines()
+            if line.strip() and not line.strip().startswith("#")]
+    joined = chr(10).join(code)
+    assert joined.index("with held_lock") < joined.index("write()"), (
+        f"_config_edit reaches the store before held; that is the inverted order:{chr(10)}{joined}")

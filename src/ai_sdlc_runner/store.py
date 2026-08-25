@@ -147,46 +147,94 @@ def _migrate(db: sqlite3.Connection) -> None:
             f"store may hold columns this version would drop on write; upgrade the runner rather "
             f"than opening it.")
     if found < 1:
-        # `IF NOT EXISTS`, and the version set **inside the same transaction** as the tables.
+        # One transaction, and **the shape is verified rather than assumed**.
         #
-        # The first version used `executescript`, which autocommits each statement, and set
-        # `user_version` afterwards. A crash in that window left the tables built at version 0, so
-        # every later open re-ran the script and died with a raw
-        # `OperationalError: table models already exists` — the store bricked permanently, by an
-        # interruption at the one moment it was least able to survive one. Found by a seat
-        # simulating exactly that.
+        # Two rounds of finding on these ten lines. First: `executescript` autocommits, so a crash
+        # before `PRAGMA user_version` left the tables at version 0 and every later open died with
+        # `table models already exists` — the store bricked permanently.
         #
-        # Two processes racing a fresh store hit the same window, and this closes that too.
+        # Then the fix for that was worse. `IF NOT EXISTS` skipped creation on any table with the
+        # right *name*, so a half-built `models(id)` was **blessed to version 1** and failed on
+        # first use:
+        #
+        # ```
+        # blessed to version: 1
+        # actual columns    : ['id']
+        # first real use    -> OperationalError: table models has no column named vendor
+        # ```
+        #
+        # A name standing in for a constraint, in the recovery written for the previous name
+        # standing in for a constraint. **And my own test created exactly that malformed shape and
+        # called the recovery a pass** — a check answering safe about the thing it was built to
+        # examine.
+        #
+        # So: individual statements inside one transaction (no `executescript`, no autocommit), and
+        # any pre-existing table must match column for column or the store is refused by name.
+        _verify_or_refuse(db)
         with _locked(db), db:
-            db.executescript("""
-            CREATE TABLE IF NOT EXISTS models (
-              id           TEXT PRIMARY KEY,
-              vendor       TEXT NOT NULL,
-              name         TEXT NOT NULL,
-              transport    TEXT NOT NULL,
-              command_json TEXT NOT NULL DEFAULT '[]',
-              endpoint     TEXT NOT NULL DEFAULT '',
-              key_env      TEXT NOT NULL DEFAULT '',
-              note         TEXT NOT NULL DEFAULT ''
-            );
-
-            -- `ordinal` because the order of a list is load-bearing: a pool's seeded choice and a
-            -- model panel's ask ids both depend on it, so a set would lose something real.
-            CREATE TABLE IF NOT EXISTS node_assignments (
-              node_id  TEXT NOT NULL,
-              ordinal  INTEGER NOT NULL,
-              model_id TEXT NOT NULL REFERENCES models(id),
-              PRIMARY KEY (node_id, ordinal)
-            );
-
-            -- One model per seat. A seat is one voice; a list would be a panel inside a panel.
-            CREATE TABLE IF NOT EXISTS seat_assignments (
-              seat     TEXT PRIMARY KEY,
-              model_id TEXT NOT NULL REFERENCES models(id)
-            );
-            """)
+            # **`db.execute`, not `executescript`.** `executescript` issues a COMMIT before it
+            # runs, so an enclosing `with db:` does not cover it — which made the previous
+            # comment's claim of "one transaction" false about the four lines under it. A seat
+            # caught the contradiction: the comment said *no executescript, no autocommit* directly
+            # above a call to `executescript`.
+            #
+            # Written as separate statements, the whole migration really is one transaction, and
+            # the half-built state the last two rounds were about cannot occur at all.
+            for statement in _SCHEMA_1:
+                db.execute(statement)
             db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     db.commit()
+
+
+#: Schema 1, one statement per table. Separate statements rather than one script, because
+#: `executescript` commits before it runs and would take the migration out of its own transaction.
+_SCHEMA_1 = (
+    """CREATE TABLE IF NOT EXISTS models (
+         id           TEXT PRIMARY KEY,
+         vendor       TEXT NOT NULL,
+         name         TEXT NOT NULL,
+         transport    TEXT NOT NULL,
+         command_json TEXT NOT NULL DEFAULT '[]',
+         endpoint     TEXT NOT NULL DEFAULT '',
+         key_env      TEXT NOT NULL DEFAULT '',
+         note         TEXT NOT NULL DEFAULT ''
+       )""",
+    # `ordinal` because the order of a list is load-bearing: a pool's seeded choice and a model
+    # panel's ask ids both read it positionally, so a set would lose something real.
+    """CREATE TABLE IF NOT EXISTS node_assignments (
+         node_id  TEXT NOT NULL,
+         ordinal  INTEGER NOT NULL,
+         model_id TEXT NOT NULL REFERENCES models(id),
+         PRIMARY KEY (node_id, ordinal)
+       )""",
+    # One model per seat. A seat is one voice; a list would be a panel inside a panel.
+    """CREATE TABLE IF NOT EXISTS seat_assignments (
+         seat     TEXT PRIMARY KEY,
+         model_id TEXT NOT NULL REFERENCES models(id)
+       )""",
+)
+
+#: What each table must hold at schema 1. Compared column for column when a table already exists at
+#: version 0 — a table's *name* says nothing about whether it is the table this runner wrote.
+_EXPECTED = {
+    "models": ("id", "vendor", "name", "transport", "command_json", "endpoint", "key_env", "note"),
+    "node_assignments": ("node_id", "ordinal", "model_id"),
+    "seat_assignments": ("seat", "model_id"),
+}
+
+
+def _verify_or_refuse(db: sqlite3.Connection) -> None:
+    """A table already here at version 0 must be the one we would have made."""
+    for table, columns in _EXPECTED.items():
+        found = tuple(row[1] for row in db.execute(f"PRAGMA table_info({table})"))
+        if not found:
+            continue                      # not there; it is about to be created
+        if found != columns:
+            raise StoreError(
+                f"{table!r} already exists with columns {list(found)}, and this runner's schema "
+                f"{SCHEMA_VERSION} expects {list(columns)}. The store was left half-built or was "
+                f"written by something else — move it aside rather than let this runner mark it "
+                f"current, which is how a broken store gets blessed and fails on first use.")
 
 
 # ── the registry ──────────────────────────────────────────────────────────────────────────────
