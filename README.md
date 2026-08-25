@@ -39,6 +39,15 @@ pip install -e ".[test]"
 Standard library only. PyYAML is optional — `runner.yaml` is read by a small built-in parser when it
 is absent.
 
+`runner.yaml` says what to dispatch to:
+
+```yaml
+agent_command: ["claude", "-p"]   # one process per ask; the work order arrives on stdin
+agent_timeout: 600
+agent_retries: 0                  # retries are for a backend that FAILED TO ANSWER, never for an
+                                  # answer somebody dislikes — see policy on retries below
+```
+
 ---
 
 ## The flow
@@ -47,32 +56,44 @@ is absent.
 verifying your own work, and having it reviewed are three kinds of work, so they are three nodes.
 
 ```
-intake
-  └─ intake_review          the seats read the requirement — before anything is planned
-       └─ pm_plan
-            └─ pm_confirm                    ◆ plan_confirmed
-                 └─ lead_assess              ◆ feasibility_confirmed
-                      └─ pm_signoff          ◆ before_dispatch
-                           └─ next_module ─┐
-   ┌───────────────────────────────────────┘
-   │  per module:
-   │    engineer_build            one engineer, one small module
-   │      └─ engineer_selfverify  ◆ self_verify — its own work, never the last word
-   │           └─ lead_task_review ◆ task_review
-   │                ├─ pass → record_module → next_module
-   │                └─ fail → fix_pass → re_review
-   │                                       ├─ pass → record_module
-   │                                       └─ fail → halt_second_fail   (bounded: one fix pass)
-   └─ when no modules remain:
-        lead_review               ◆ lead_review — the seats cross-check the whole change
-          └─ qa_verify            ◆ qa_verify — run for real
-               └─ qa_accept       ◆ acceptance
-                    └─ pr         ◆ pr
-                         └─ merge ◆ merge — the one-way door
-                              └─ close_out → feedback → pm_plan | done
+intake  →  intake_review        the seats read the requirement — before anything is planned
+             │
+             ↓
+           pm_plan  →  pm_confirm ◆plan_confirmed
+                          ├─ yes → lead_assess ◆feasibility_confirmed
+                          │           └─→ pm_signoff ◆before_dispatch
+                          │                  ├─ yes → next_module
+                          │                  └─ no  ──────────────┐
+                          └─ no ─────────────────────────────────┤
+                                                        (back to pm_plan)
+
+next_module ─┬─ module → engineer_build            one engineer, one small module
+             │             └─→ engineer_selfverify ◆self_verify  its own work, never the last word
+             │                    └─→ lead_task_review ◆task_review
+             │                           ├─ pass → record_module ──→ next_module
+             │                           └─ fail → fix_pass → re_review
+             │                                                  ├─ pass → record_module
+             │                                                  └─ fail → halt_second_fail  ■
+             │                                       (bounded: exactly one fix pass)
+             │
+             └─ none → lead_review ◆lead_review     the seats cross-check the whole change
+                          ├─ fail → review_failed ──────→ next_module
+                          └─ pass → qa_verify ◆qa_verify        run it for real
+                                      └─→ qa_accept ◆acceptance
+                                             ├─ fail → acceptance_failed ─→ next_module
+                                             └─ pass → pr ◆pr
+                                                        └─→ merge ◆merge   the one-way door
+                                                              └─→ close_out → feedback
+                                                                               ├─ more → pm_plan
+                                                                               └─ done → done ■
 ```
 
-`◆` marks a gate. Three shapes carry most of the meaning and are explicit rather than flattened:
+`◆` marks a gate; `■` marks a terminal. The three failure paths — `halt_second_fail`,
+`review_failed`, `acceptance_failed` — are drawn because they are the ones an operator most needs to
+see, and because leaving them out is exactly the defect a review seat found in this project's own
+mock-up.
+
+Three shapes carry most of the meaning and are explicit rather than flattened:
 
 - **the per-module loop** — one engineer per small module, and the loop *is* the resume mechanism: an
   already-recorded module is simply not the frontier;
@@ -193,13 +214,18 @@ table, authored by a model and recorded as an ask. It does not pick one.
 ### From the command line
 
 ```bash
-runner run --plan plan.json --risk medium --ask-journal .runner/asks
+runner --config runner.yaml run --plan plan.json --risk medium --ask-journal .runner/asks
 ```
+
+`--config` is a **global** flag and must come before the subcommand. It is where `agent_command`
+lives — the program each ask is dispatched to. Without it every ask goes to a stub that answers
+nothing, and the run completes while having asked nobody.
 
 A halted run tells you what stopped it. Answer it and resume:
 
 ```bash
-runner run --plan plan.json --resume --ask-journal .runner/asks --confirm plan_confirmed
+runner --config runner.yaml run --plan plan.json --resume \
+       --ask-journal .runner/asks --confirm plan_confirmed
 ```
 
 Useful flags:
@@ -208,14 +234,14 @@ Useful flags:
 |---|---|
 | `--confirm GATE` | a gate you have already approved; repeatable |
 | `--rule NODE=BRANCH` | break a tie a panel could not decide |
-| `--seats N` / `--seat-model SEAT=CMD` | how many seats, and which backend answers each |
+| `--review-seats N` / `--seat-model SEAT=CMD` | how many seats, and which backend answers each |
 | `--undeclared refuse\|allow` | what to do with a working node that declares no operations |
 | `--risk low\|medium\|high` | override the plan's grade |
 
 ### With the console
 
 ```bash
-runner serve --plan plan.json --port 8765
+runner --config runner.yaml serve --plan plan.json --port 8765
 ```
 
 ```

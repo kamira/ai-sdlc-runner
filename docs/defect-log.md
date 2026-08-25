@@ -1,6 +1,6 @@
 # Defect log
 
-Every problem hit while building the operator console and its governance — 24 change records, 847
+Every problem hit while building the operator console and its governance — 25 change records, 849
 tests, five live projects.
 
 Grouped **not by task but by how each one was found**, because that turned out to be the more useful
@@ -11,7 +11,7 @@ fact: the defects that would have shipped silently were almost never the ones th
 | An independent seat, reading a record or the code | **13** |
 | Only by running it on a real project | **9** |
 | The test suite, unprompted | **4** |
-| My own process failures | **6** |
+| My own process failures | **9** |
 
 ## On screenshots
 
@@ -19,7 +19,7 @@ There are none for these. The screenshot tool could not composite the browser pa
 work — every attempt returned *"the Browser pane is not displayed, so the page is not compositing
 frames"* — and by the time it worked, every defect below was already fixed.
 
-It would also not have helped much: **two of these twenty-nine defects were visible on a screen.**
+It would also not have helped much: **two of these thirty-two defects were visible on a screen.**
 The rest were tracebacks, failing assertions, or wrong values in a JSON response. What is quoted
 below is the output captured at the moment each was found, which is stronger evidence than a
 photograph of a terminal.
@@ -286,7 +286,7 @@ written next to it, not because it turned red."* It turned red; the reason is in
 
 ---
 
-## My own process failures — 6
+## My own process failures — 9
 
 Kept because they cost real time and two of them are the same mistake the whole project is about.
 
@@ -333,6 +333,31 @@ ledger check failed:
 
 *"Built and driven"* reads as finished, and finished requires an acceptance record. Writing one would
 have been false: **I verified it myself, and self-verification is the one thing acceptance is not.**
+
+### the README omitted the failure paths — the same defect a seat found in the mock-up
+
+`review_failed` and `acceptance_failed` were not in the flow diagram. Both are how a run recovers
+from a panel or an acceptance saying no.
+
+A seat had found exactly this in the mock-up — *"claimed 23 nodes, drew 18, and every omission was a
+failure path, which is what a console is for"* — and I reproduced it three changes later **in a
+document that quotes the finding**.
+
+### a README example that would have run against a stub
+
+```bash
+runner serve --plan plan.json --port 8765     # no --config
+```
+
+`--config` is global and carries `agent_command`. Without it every ask goes to `_Stub` and **the run
+completes having asked nobody**, which looks like success rather than like a usage error.
+
+### and one correction of mine that was itself wrong
+
+I recorded that `--seats N` did not exist. It does — it is an alias declared on the same line as
+`--review-seats`. I had read `argparse`'s `--help`, which prints only the first option string per
+action, and concluded the alias was fictional. **Trusting a tool's summary instead of reading the
+source**, which is the same move as every other entry in this section.
 
 ### two fixtures used a proxy for the thing they meant
 

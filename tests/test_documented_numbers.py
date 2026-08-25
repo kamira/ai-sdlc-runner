@@ -261,3 +261,54 @@ def test_the_change_records_task_count_matches_its_own_task_table():
         f"Status says {claimed.group(1)} tasks built and the table ticks {ticked}. Two places "
         f"saying how much is done is two chances to leave one stale.")
     assert int(claimed.group(2)) == ticked + record.count("**[ ]**")
+
+
+def test_every_cli_flag_the_readme_names_actually_exists():
+    """A README that names a flag the CLI does not have sends people to a usage error.
+
+    Written after the README shipped with `--seats N`, which has never existed — the flag is
+    `--review-seats`. Nothing checked, because prose is not run.
+    """
+    import argparse
+    import pathlib
+    import re
+
+    from ai_sdlc_runner import cli
+
+    readme = (pathlib.Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+
+    real = set()
+    parser = cli.build_parser()
+    stack = [parser]
+    while stack:
+        current = stack.pop()
+        for action in current._actions:
+            real.update(action.option_strings)
+            if isinstance(action, argparse._SubParsersAction):
+                stack.extend(action.choices.values())
+
+    named = set(re.findall(r"`(--[a-z][a-z-]*)", readme))
+    named |= set(re.findall(r"^\s*runner .*?(--[a-z][a-z-]*)", readme, re.M))
+    unknown = sorted(f for f in named if f not in real)
+    assert not unknown, (
+        f"the README names {unknown}, which the CLI does not accept. Either the flag was renamed "
+        f"and the README was not swept, or it never existed.")
+
+
+def test_the_readme_puts_global_flags_before_the_subcommand():
+    """`--config` is global. After the subcommand it is an error, and the example would not run.
+
+    Worse than not running: without `--config` there is no `agent_command`, every ask goes to a
+    stub, and the run completes having asked nobody — which looks like success.
+    """
+    import pathlib
+    import re
+
+    readme = (pathlib.Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    for line in readme.splitlines():
+        line = line.strip()
+        if not line.startswith("runner ") or "--config" not in line:
+            continue
+        before, _, after = line.partition("--config")
+        assert not re.search(r"\b(run|serve|flow|policy|settings)\b", before), (
+            f"this example puts --config after the subcommand and would fail to parse:\n  {line}")
