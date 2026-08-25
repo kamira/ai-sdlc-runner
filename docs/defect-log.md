@@ -1,6 +1,6 @@
 # Defect log
 
-Every problem hit while building the operator console and its governance — 26 change records, 901
+Every problem hit while building the operator console and its governance — 26 change records, 915
 tests, five live projects.
 
 Grouped **not by task but by how each one was found**, because that turned out to be the more useful
@@ -14,6 +14,7 @@ fact: the defects that would have shipped silently were almost never the ones th
 | My own process failures | **10** |
 | Putting the README through the same review | **5** |
 | Reviewing a **design** before its code existed | **14** |
+| Reviewing the **code that answered** that design | **11** |
 
 ## On screenshots
 
@@ -517,6 +518,58 @@ pointed at the new function, failed on its first run.
 
 I had written the correct check once already, in another file, two days before. A fix that does not
 become a habit is a fix that gets to be found twice.
+
+## Found by reviewing the code that answered the design — 11
+
+Round 2 of CHG-20260823-17. Both seats returned `not sound` again, and **both named the same
+function** — `local_mongo_uri`, the one written to answer round 1's finding about it.
+
+### The check written to replace a coarse check was a coarse check
+
+```
+ACCEPT  mongodb://127.0.0.1/db?proxyHost=attacker.example&proxyPort=1080
+ACCEPT  mongodb://remote.evil.sock
+ACCEPT  mongodb://127.0.0.1/?replicaset=rs0
+```
+
+All three reproduced by running them. `proxyHost` keeps the seed loopback and routes the connection
+through somebody else's SOCKS proxy — I had refused two option names and passed the rest to the
+driver. `remote.evil.sock` is a registrable DNS name that my check called a unix socket because the
+string ends `.sock`, and which therefore **skipped the loopback test entirely**: the check deciding
+*whether* to apply the locality rule was itself the coarse one. And Mongo's options are
+case-insensitive while my two refusals were not.
+
+### "Must not be silent" was silent, on a path length this repository already has a constant for
+
+A seat drove the real command with a store root crossing Windows' 260-character limit:
+
+```
+state:         finished
+(no conversation file written at all)   exit 0
+```
+
+Every turn failed, the whole conversation was lost, and the run said `finished`. The design named
+three channels for a failed write; the code had a list nobody printed. **Round 1 had found exactly
+that defect in the design** — a sentence naming no mechanism — and the code answering it shipped a
+field naming no mechanism.
+
+The test guarding it asserted that a dict key existed and called that "never silent".
+
+### Nine more
+
+The ask recorded before the session opened, so three of the four ways an ask can fail left no
+outcome beside it; a seat panel's answers recording `model: None` because seats route by name;
+`cmd_export` not recording its own relaxation, which was *the* case round 1 raised; a project name
+interpolated raw into a markdown header, forging a heading; a formula behind a newline emitted
+undefused; a uniqueness guarantee two of three backends did not keep; and a resume that adds
+`--project` storing none of what the journal already answered.
+
+### What this group is for
+
+Nothing here was found by the test suite, which was green at 901 passing throughout. Two of the
+eleven are this log's own two most-named defects, reproduced **inside the functions written to fix
+them one round earlier**. A fix that does not become a habit gets found twice, and this is the page
+where that keeps being written down.
 
 ## What the grouping says
 

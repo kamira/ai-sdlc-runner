@@ -380,6 +380,18 @@ def cmd_export(args: argparse.Namespace) -> int:
     `json` is lossless, and a silent default would pick which information the operator loses.
     """
     back = _read_store(args)
+    if args.store_remote == "allow" and args.project and args.conversation:
+        # The case the design was written to fix and the first code did not: `export` runs outside
+        # any walk, so `RunReport.relaxations` does not exist at the moment the relaxation is
+        # actually used. A seat found the fix present for `run` and `serve` and absent here -- the
+        # one invocation most likely to reach a remote store. So it is recorded in the document,
+        # which is the only durable thing an export has.
+        try:
+            conv_mod.Conversation(
+                back, args.project, conversation_id=args.conversation
+            ).relaxation("--store-remote allow: exported from a store whose locality was not checked")
+        except conv_mod.ConversationError as exc:
+            print(f"warning: could not record the relaxation: {exc}", file=sys.stderr)
     if not args.project or not args.conversation:
         print("error: export needs --project NAME and --conversation ID. "
               "`runner conversations --project NAME` lists them.")
@@ -560,6 +572,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     # Say which kind of stop this was. The report has been able to distinguish them since task 1;
     # printing the distinction is what makes it usable from here, and leaving it out would be a
     # field the operator cannot see -- decorative data with an audience.
+    for failure in report.store_errors:
+        # The summary channel. `_guarded` already spoke at the moment of failure, which is the one
+        # that survives a crash; this is the one an operator reading the end of a run cannot miss.
+        # A seat found the first version writing neither.
+        print(f"store failed:  {failure}", file=sys.stderr)
     print(f"state:         {report.state}")
     if report.state == engine.SUSPENDED and report.suspended:
         stop = report.suspended

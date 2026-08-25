@@ -188,6 +188,11 @@ def test_a_failed_store_write_never_fails_a_run_and_is_never_silent(tmp_path):
     c = conv.Conversation(Broken(), "P").open()
     c.note("something")                                     # does not raise
     assert c.write_errors and "disk is full" in c.write_errors[0]
+    # ...and it reaches a person. The first version of this test asserted that a **dict key
+    # existed** and called that "never silent" — a coarse check answering safe about something it
+    # had not examined, in the test written to prove the opposite. A seat drove the real command on
+    # a path over Windows' 260-character limit, lost every turn of a whole conversation, and was
+    # told `finished` with no signal at all.
     assert "store_errors" in engine.RunReport().as_dict()
 
 
@@ -198,7 +203,7 @@ def test_a_failed_store_write_never_fails_a_run_and_is_never_silent(tmp_path):
     ("mongodb://reports.example.com:27017", "not loopback"),
     ("mongodb://localhost.evil.example:27017", "not loopback"),
     ("mongodb://127.0.0.1,remote.example.com:27017", "several hosts"),
-    ("mongodb://127.0.0.1:27017/?replicaSet=rs0", "replicaSet"),
+    ("mongodb://127.0.0.1:27017/?replicaSet=rs0", "replicaset"),
     ("mongodb://127.0.0.1:27017/?directConnection=false", "directConnection=false"),
     ("http://127.0.0.1:27017", "not a mongo URI"),
     ("mongodb://[::1].evil.example", "refused"),
@@ -208,6 +213,26 @@ def test_a_uri_that_could_leave_this_machine_is_refused(uri, why):
     with pytest.raises(conv.ConversationError) as exc:
         conv.local_mongo_uri(uri)
     assert why in str(exc.value)
+
+
+@pytest.mark.parametrize("uri", [
+    # The one that showed a denylist was the wrong shape: the seed host stays loopback while the
+    # whole connection goes through somebody else's SOCKS proxy. Found by a seat, on the code.
+    "mongodb://127.0.0.1/db?proxyHost=attacker.example&proxyPort=1080",
+    "mongodb://127.0.0.1/?tlsCAFile=//attacker.example/share/ca.pem",
+    # Mongo's option parsing is case-insensitive; the first version's two named refusals were not.
+    "mongodb://127.0.0.1/?replicaset=rs0",
+    "mongodb://127.0.0.1/?directconnection=false",
+])
+def test_an_option_the_rule_never_examined_is_refused_rather_than_assumed_safe(uri):
+    """A denylist answers "safe" about every option nobody thought of.
+
+    That is this repository's second-most-frequent defect, and the round-1 review had already found
+    it *in the design* of this very check — where it was about the host rather than the options. It
+    came back one layer down in the code that answered the finding.
+    """
+    with pytest.raises(conv.ConversationError):
+        conv.local_mongo_uri(uri)
 
 
 @pytest.mark.parametrize("uri", [
@@ -383,3 +408,141 @@ def test_the_engine_records_the_decisions_the_report_records(tmp_path):
             after = source[source.find(appended) if i == 0 else
                            source.find(appended, source.find(appended) + 1):][:900]
             assert "cfg.conversation.decision(" in after, f"{appended} #{i} records nothing"
+
+
+# ── round 2: findings on the code ─────────────────────────────────────────────────────────────
+
+def test_a_formula_behind_leading_whitespace_is_still_defused():
+    """A cell whose formula sat after a newline was emitted unchanged by the first version."""
+    for prefix in ("\n", " ", "\t ", "\r\n  "):
+        assert conv._defuse(prefix + "=HYPERLINK(1)").startswith("'")
+    assert conv._defuse("ordinary text") == "ordinary text"
+
+
+def test_markdown_metadata_cannot_forge_document_structure(tmp_path):
+    """A project name is operator text and was interpolated straight into the header line."""
+    doc = conv.Conversation(_store(tmp_path), "ok\n# FORGED HEADING").open().document()
+    out = conv.export_conversation(doc, "markdown")
+    headings = [ln for ln in out.splitlines() if ln.startswith("# ")]
+    assert headings == [ln for ln in headings if "FORGED" not in ln], headings
+
+
+def test_a_session_that_fails_to_open_still_records_the_outcome(tmp_path):
+    """Three of the four ways an ask can fail were unrecorded, while the README said "each"."""
+    def broken_factory():
+        raise RuntimeError("no backend")
+
+    c = conv.Conversation(_store(tmp_path), "P").open()
+    with pytest.raises(RuntimeError):
+        engine._ask(broken_factory, {"node_id": "x"}, [], ask_id="000-x", node_id="x",
+                    conversation=c, role="engineer")
+    assert [t["kind"] for t in c.document()["turns"]] == ["opened", "ask", "unanswered"]
+
+
+def test_a_session_handed_back_twice_still_records_the_outcome(tmp_path):
+    class Once(engine.Session):
+        def ask(self, order):
+            return {"ok": True}
+
+        def close(self):
+            pass
+
+    shared = Once()
+    c = conv.Conversation(_store(tmp_path), "P").open()
+    with pytest.raises(engine.EngineError):
+        engine._ask(lambda: shared, {"node_id": "x"}, [shared], ask_id="000-x", node_id="x",
+                    conversation=c, role="engineer")
+    assert c.document()["turns"][-1]["kind"] == "unanswered"
+
+
+def test_the_backend_that_answered_is_recorded_even_when_no_model_was_asked_for(tmp_path):
+    """A seat panel routes by seat and passes no model, so `model` is None for every seat.
+
+    A record that cannot name the answerer has kept the votes and thrown away the thing being voted
+    on — which is the finding the `model` field exists for, one level further down.
+    """
+    class Named(engine.Session):
+        def describe(self):
+            return "python3 examples/agent.py"
+
+        def ask(self, order):
+            return {"verdict": "pass"}
+
+        def close(self):
+            pass
+
+    c = conv.Conversation(_store(tmp_path), "P").open()
+    engine._ask(lambda: Named(), {"node_id": "x"}, [], seat="defect", ask_id="000-x",
+                node_id="x", conversation=c, role="seat")
+    answer = [t for t in c.document()["turns"] if t["kind"] == "answer"][0]
+    assert answer["model"] is None                    # nothing was routed by model
+    assert answer["backend"] == "python3 examples/agent.py"
+
+
+def test_a_failed_store_write_reaches_stderr_at_the_moment_it_fails(capsys, tmp_path):
+    """The first version named three channels in its docstring and wrote to one."""
+    class Broken(conv.Backend):
+        def open_conversation(self, header):
+            pass
+
+        def append(self, header, turn):
+            raise OSError("the disk is full")
+
+        def read(self, pid, cid):
+            return {"turns": []}
+
+    conv.Conversation(Broken(), "P").open().note("something")
+    assert "conversation store failed" in capsys.readouterr().err
+
+
+def test_a_duplicate_seq_is_reported_where_it_cannot_be_refused(tmp_path):
+    """`file` cannot refuse one without a read per append, so the reader says so.
+
+    The design's first version claimed all three backends refused a duplicate — a guarantee two of
+    them did not keep. Stating it where it is true beats stating it everywhere.
+    """
+    back = _store(tmp_path)
+    c = conv.Conversation(back, "P").open()
+    c.note("first")
+    path = list((tmp_path / "conversations").rglob("*.jsonl"))[0]
+    with io.open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"seq": 1, "kind": "note", "text": "a second first"}) + "\n")
+    assert back.read(c.project["id"], c.id)["duplicate_seqs"] == [1]
+
+
+def test_a_name_that_merely_ends_in_sock_is_not_a_socket():
+    """`mongodb://remote.evil.sock` is a registrable DNS name the driver dials over TCP.
+
+    The first version tested a `.sock` suffix and a `%2f` substring, and a seat got both past it
+    without `--store-remote allow` — the check deciding *whether* to apply the loopback test was
+    itself the coarse one, inside the function written to stop exactly that.
+    """
+    for hostile in ("mongodb://remote.evil.sock",
+                    "mongodb://remote.evil.example%2f:27017",
+                    "mongodb://evil%2Fx.sock"):
+        with pytest.raises(conv.ConversationError):
+            conv.local_mongo_uri(hostile)
+    # A real socket is an absolute path, and stays allowed.
+    assert conv.local_mongo_uri("mongodb://%2Ftmp%2Fmongodb-27017.sock")
+
+
+def test_a_store_failure_reaches_the_operator_at_the_end_of_a_run_too():
+    """Two channels: stderr at the moment of failure, and the report's summary at the end."""
+    cli = Path(conv.__file__).with_name("cli.py").read_text(encoding="utf-8")
+    assert "store failed:" in cli and "report.store_errors" in cli
+
+
+def test_a_journal_that_already_had_answers_says_so_rather_than_pretending(tmp_path):
+    """Adding --project to a resume stores none of what came before, by design.
+
+    Backfilling would be deriving the conversation from the journal — the thing both round-1
+    verdicts refused. So the gap is marked rather than filled or hidden.
+    """
+    j = tmp_path / "asks"
+    older = engine.AskJournal(j)
+    older.record("000-pm_plan", "pm_plan", None, {"brief": "before the store existed"})
+    older.answered("000-pm_plan", {"modules": ["a"]})
+
+    c = conv.Conversation.resume_or_open(_store(tmp_path), "P", j)
+    notes = [t for t in c.document()["turns"] if t["kind"] == "note"]
+    assert notes and "already answered" in notes[0]["text"]

@@ -134,7 +134,7 @@ Codex-seat asked what the three actually guarantee in common. They guarantee thi
 | Guarantee | How |
 |---|---|
 | append-only | no backend has an update path; `file` opens `"a"`, the others insert |
-| `(conversation_id, seq)` is unique | a duplicate is **refused**, never silently overwritten |
+| `(conversation_id, seq)` is unique | **refused** where a backend can (Mongo's unique index, TinyDB's check) and **reported** by the reader everywhere. `file` cannot refuse one without a read per append, and one writer per conversation is already the rule — so the guarantee is stated where it is true rather than everywhere. The first version claimed all three refused |
 | ordering | by the integer `seq`, never by insertion order or filename |
 | a partial write is visible | the last line of a JSONL file may be short; the reader reports it rather than dropping it |
 | concurrent writers | **not supported** — one runner per conversation. Said here rather than implied |
@@ -157,12 +157,20 @@ So the rule is not one check. Without `--store-remote allow`, all of these hold:
 
 1. scheme is `mongodb` — **`mongodb+srv://` is refused**, it is a DNS seedlist lookup by construction
 2. exactly **one** host — a comma in the netloc is refused
-3. the host is loopback, **or** a percent-encoded unix socket path (genuinely local, and allowed)
-4. no `replicaSet=` in the query
+3. the host **round-trips**, and is loopback or a percent-encoded unix socket path
+4. every query option is on an **allowlist**, matched case-insensitively
 5. `directConnection=true` is **forced on the client**, so discovery cannot widen the connection
 
 Points 1–4 constrain the URI; **point 5 is the one that constrains the driver**, and without it the
 first four are decoration.
+
+**Rules 3 and 4 are round-2 findings on the code that answered round 1.** The first version checked
+the parsed hostname, which reads `mongodb://[::1].evil.example` as `::1` and drops the rest — the
+same hole CI had caught in `server.py` two changes earlier. And it *refused two option names*, which
+a seat broke twice over: `?proxyHost=attacker.example&proxyPort=1080` keeps the seed loopback and
+sends the whole connection through somebody else's SOCKS proxy, and `?replicaset=rs0` walked past a
+check that refused `replicaSet=rs0`. A denylist answers "safe" about every option nobody thought of,
+which is the same defect as the host check one field over.
 
 `--store-remote allow` skips all five and records a `relaxation` turn **in the document itself**.
 Fable-seat found why that matters: `export` runs outside any walk, so `RunReport.relaxations` does
@@ -205,8 +213,14 @@ default that quietly loses information.
   all — the protection is the mongod's auth, typically none on localhost. So: the `file` backend is
   created `0700` best-effort, and the documentation says the store is **as sensitive as the journal
   already sitting beside it** and no better protected.
-- **A failed store write never fails a run** — and is never silent. It becomes a `note` turn where
-  the store is reachable, **and** `RunReport.store_errors`, **and** a non-zero-marked line on
-  stderr. Named field, named moment, because the first brief said "must not be silent" and named no
-  mechanism, which fable-seat pointed out is how a sentence ships with nothing checking it.
+- **A failed store write never fails a run** — and is never silent. Two channels, both real:
+  a line on **stderr at the moment of failure**, which is the one that survives a crash, and
+  **`RunReport.store_errors`** printed at the end of the run. A `note` turn is *not* attempted: the
+  store that would hold it is the one that just failed, and writing the record of a failure into
+  the thing that failed is not a channel.
+
+  Round 2 found the first code had none of them — the failures went into a list, the docstring named
+  three channels, and nothing wrote to stderr or printed the field. That is "must not be silent"
+  naming no mechanism, which is exactly the round-1 finding this bullet was written to answer,
+  reappearing one layer down.
 - **No concurrent writers.** One runner per conversation, stated in §3.

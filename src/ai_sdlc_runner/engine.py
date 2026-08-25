@@ -586,27 +586,57 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
     # independent seat reading this function's signature against the journal's.
     if conversation is not None:
         conversation.ask(ask_id or "", node_id, role, seat, model, order)
-    session = _open(factory, seat, model)
+    # Everything from here to the answer is inside the recorder. A seat found the first version
+    # recording the ask *before* `_open` and catching only `session.ask` -- so a factory that failed
+    # to open, a session returned twice, or a `close()` that raised all left an ask with no outcome
+    # beside it, which reads as "never answered" rather than "failed". The README said "each ask
+    # that failed" while three of the four ways to fail were unrecorded.
+    def _failed(exc: BaseException) -> None:
+        if conversation is not None:
+            conversation.unanswered(ask_id or "", f"{type(exc).__name__}: {exc}")
+
+    try:
+        session = _open(factory, seat, model)
+    except Exception as exc:
+        _failed(exc)
+        raise
     if any(previous is session for previous in seen):
-        raise EngineError(
+        repeated = EngineError(
             "the session factory returned a session it already returned: every ask opens its own "
             "session and closes it afterwards, so nothing carries over between asks")
+        _failed(repeated)
+        raise repeated
     seen.append(session)
     try:
         result = session.ask(order)
+        # **Which backend actually answered**, not only which model was requested. A seat panel
+        # routes by seat and passes no model at all, so `model` is `None` for every seat -- and a
+        # record that cannot name the answerer has kept the votes and thrown away the thing being
+        # voted on, which is the finding this whole field exists for, one level down.
+        backend = _describe(session)
     except Exception as exc:
-        # An ask that raised is a turn too. Without this the conversation shows a question and then
-        # nothing, which reads as "never answered" rather than "failed", and those are different.
-        if conversation is not None:
-            conversation.unanswered(ask_id or "", f"{type(exc).__name__}: {exc}")
+        _failed(exc)
         raise
     finally:
-        session.close()
+        try:
+            session.close()
+        except Exception as exc:      # noqa: BLE001 - a close that raises is still a failed ask
+            _failed(exc)
+            raise
     if journal is not None and ask_id is not None:
         journal.answered(ask_id, result)
     if conversation is not None:
-        conversation.answer(ask_id or "", result, model)
+        conversation.answer(ask_id or "", result, model, backend=backend)
     return result
+
+
+def _describe(session) -> Optional[str]:
+    """What a session says it is, where it says anything. Never fatal: this is for the record."""
+    try:
+        described = getattr(session, "describe", None)
+        return str(described()) if callable(described) else None
+    except Exception:                 # noqa: BLE001
+        return None
 
 
 def _send_back(node: graph.Node, report: "RunReport", outcome: Mapping[str, object],

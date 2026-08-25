@@ -270,6 +270,10 @@ runner export --project "Login page" --conversation <id> --format markdown -o ta
 | `--store-remote refuse\|allow` | `allow` sends conversations off this machine, and records that it did |
 | `--format json\|markdown\|csv` | on `export`. Required, because only `json` is lossless and a default would choose what you lose |
 
+A store write that fails **never fails the run**, and is never silent: a line on stderr the moment
+it fails, and `store_errors` on the report at the end. No attempt is made to write that note *into*
+the store — the thing that would hold it is the thing that just failed.
+
 **It is not derived from the ask journal**, and that distinction is the whole design. The journal
 answers *"what is the current question at position N"* — a resume index, keyed by position, which
 `record` overwrites; two runs in one journal directory leave one entry. The store answers *"what
@@ -286,9 +290,14 @@ injection, and where a relaxation is recorded. Their verdicts are committed whol
 **On a Mongo store, a loopback host is not the check.** `MongoClient` performs topology discovery:
 given a loopback seed that turns out to be a replica-set member or a `mongos`, it reads the topology
 *from the server* and connects to every member it learns of. So the URI must be `mongodb://` (not
-`+srv`), single-host, loopback or a unix socket, without `replicaSet=` — and `directConnection=true`
-is **forced on the client**, which is the one of the five that constrains the driver rather than the
-string. A tunnel to a remote mongod is out of scope and no URI can reveal one.
+`+srv`), single-host, a host that **round-trips** to loopback or a unix socket, and carrying only
+options on an **allowlist** — and `directConnection=true` is **forced on the client**, which is the
+one of the five that constrains the driver rather than the string.
+
+The allowlist is there because the first version named the two dangerous options instead, and a seat
+got past it twice: `?proxyHost=…&proxyPort=…` keeps the seed loopback and routes the connection
+through somebody else's SOCKS proxy, and `?replicaset=` walked past a check spelled `replicaSet`. A
+tunnel to a remote mongod remains out of scope — no URI can reveal one.
 
 The store holds every work order verbatim and is **exactly as sensitive as the ask journal already
 sitting beside it**, and no better protected: the `file` backend is created `0700` best-effort,

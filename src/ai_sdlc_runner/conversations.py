@@ -41,11 +41,12 @@ import io
 import json
 import os
 import re
+import sys
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 #: Bumped when the shape of a stored turn changes in a way a reader must know about. Written into
 #: every header, because a document that cannot say which shape it is has to be guessed at.
@@ -84,6 +85,23 @@ SPREADSHEET_CELL_LIMIT = 32767
 #: spreadsheet, and ``=HYPERLINK(...)`` is an exfiltration channel — reached, in a local-only
 #: project, through the export whose stated purpose is to be opened in a spreadsheet.
 FORMULA_LEADERS = ("=", "+", "-", "@", "\t", "\r")
+
+#: The **only** Mongo URI options that may appear without `--store-remote allow`, lower-cased.
+#:
+#: An allowlist, and the reason is a finding: the first version refused `replicaSet` and
+#: `directConnection=false` by name and passed everything else straight to `MongoClient`. A seat
+#: found `?proxyHost=attacker.example&proxyPort=1080` accepted — the seed host stays loopback while
+#: the driver sends the whole connection through a SOCKS proxy off this machine. A denylist answers
+#: "safe" about every option nobody thought of, which is this repository's second-most-frequent
+#: defect written as a config field.
+#:
+#: Matched case-insensitively, because Mongo's option parsing is and the same seat showed
+#: `?replicaset=rs0` walking past the check that refused `replicaSet=rs0`.
+MONGO_OPTIONS = frozenset({
+    "directconnection", "authsource", "appname", "connecttimeoutms", "sockettimeoutms",
+    "servselectiontimeoutms", "serverselectiontimeoutms", "maxpoolsize", "minpoolsize",
+    "retrywrites", "retryreads", "w", "journal", "readpreference", "uuidrepresentation",
+})
 
 #: What counts as loopback in a Mongo URI. Same set the server uses for `Origin`, and for the same
 #: reason; see `local_mongo_uri` for why the analogy stops there.
@@ -166,7 +184,7 @@ def local_mongo_uri(uri: str) -> str:
         host = (parts.hostname or "").lower()
     except ValueError as exc:
         raise ConversationError(f"refused: not a host this can check ({exc})") from None
-    socket_path = "%2f" in netloc.lower() or netloc.lower().endswith(".sock")
+    socket_path = _unix_socket(netloc)
     if not socket_path:
         # The host must **round-trip**, not merely parse. `urlsplit` reads
         # `mongodb://[::1].evil.example` as host `::1` and silently drops the rest, so a hostname
@@ -184,22 +202,45 @@ def local_mongo_uri(uri: str) -> str:
             f"refused: {host or '(no host)'} is not loopback. The whole operating flow is "
             f"local-only; a conversation carries every work order and every instruction verbatim. "
             f"Pass --store-remote allow to send it there anyway, and it is recorded.")
-    query = parse_qs(parts.query, keep_blank_values=True)
-    if "replicaSet" in query:
+    query = {k.lower(): v for k, v in
+             parse_qs(parts.query, keep_blank_values=True).items()}
+    unknown = sorted(set(query) - MONGO_OPTIONS)
+    if unknown:
         raise ConversationError(
-            "refused: replicaSet= makes the driver discover members from the server, and a member "
-            "it discovers can be anywhere")
-    if query.get("directConnection", ["true"])[0].lower() == "false":
+            f"refused: {', '.join(unknown)} — this checks an allowlist, because a rule that names "
+            f"the dangerous options answers 'safe' about every option nobody thought of. "
+            f"`proxyHost` is the one that showed it: a loopback seed and the whole connection "
+            f"through somebody else's SOCKS proxy. Pass --store-remote allow to skip the checks, "
+            f"and it is recorded.")
+    if query.get("directconnection", ["true"])[0].lower() == "false":
         raise ConversationError(
             "refused: directConnection=false lets topology discovery widen the connection past the "
             "host you named")
     return text
 
 
+def _unix_socket(netloc: str) -> bool:
+    """Is this netloc a unix socket path, rather than a name that merely looks like one?
+
+    **A `.sock` suffix is not a socket and a `%2f` anywhere is not a path.** The first version tested
+    exactly that, and a seat got `mongodb://remote.evil.sock` accepted without `--store-remote
+    allow`: a registrable DNS name, which the driver resolves and dials over TCP, classified as
+    "genuinely local" on the strength of how it ends. `mongodb://remote.evil.example%2f:27017`
+    passed the same way. Both skipped the loopback test entirely, because the check that decides
+    *whether* to apply the loopback test was the coarse one.
+
+    A unix socket in a MongoDB URI is a **percent-encoded absolute path**. So it is decoded and
+    required to be one: it starts at the root and it ends `.sock`. `remote.evil.sock` has no root
+    and `remote.evil.example%2f` decodes to a relative path, so neither is one.
+    """
+    decoded = unquote(netloc.split("?", 1)[0])
+    return decoded.startswith("/") and decoded.endswith(".sock")
+
+
 def _hardened(uri: str) -> str:
     """``directConnection=true``, forced. Points 1-4 above constrain the URI; this constrains the
     driver, and without it the other four are decoration."""
-    if "directConnection=" in uri:
+    if "directconnection=" in uri.lower():
         return uri
     return uri + ("&" if "?" in uri else "?") + "directConnection=true"
 
@@ -503,6 +544,17 @@ def _assemble(header: Mapping[str, object], turns: Sequence[Mapping[str, object]
     doc["turns"] = sorted((dict(t) for t in turns), key=lambda t: int(t.get("seq", 0)))
     if partial:
         doc["incomplete_lines"] = list(partial)
+    # `file` cannot refuse a duplicate seq at write time without a read per append, and the design
+    # already declares one writer per conversation. So the guarantee is stated where it is true: a
+    # duplicate is **refused** by the two backends that can (Mongo's unique index, TinyDB's check)
+    # and **reported** by the reader. The first version claimed all three refused, which was a
+    # guarantee two of them did not keep -- a name standing in for a constraint, found by a seat.
+    seen, repeated = set(), []
+    for t in doc["turns"]:
+        n = int(t.get("seq", 0))
+        (repeated.append(n) if n in seen else seen.add(n))
+    if repeated:
+        doc["duplicate_seqs"] = sorted(set(repeated))
     return doc
 
 
@@ -582,7 +634,31 @@ class Conversation:
             return conv
         conv = cls(store, project, journal_dir, run=run)
         conv.open()
+        conv._note_earlier_asks()
         return conv
+
+    def _note_earlier_asks(self) -> None:
+        """Say so when a journal already holds answers this conversation was not open for.
+
+        Found in round 2: adding `--project` to a resume whose journal already has answers stores
+        none of them, because `_ask` returns a journalled answer before this module is reached — by
+        design, since re-recording a reused answer would say something happened twice.
+
+        Backfilling them would be **deriving the conversation from the journal**, which is the whole
+        thing both round-1 verdicts refused: the journal holds the latest question at each position
+        and no operator turn at all. So the honest move is neither to invent those turns nor to let
+        the gap pass unmarked — the conversation says how many answers predate it.
+        """
+        if self._journal_dir is None:
+            return
+        try:
+            earlier = len([p for p in self._journal_dir.glob("*.json")])
+        except OSError:
+            return
+        if earlier:
+            self.note(f"{earlier} ask(s) were already answered in this journal before the "
+                      f"conversation was opened. They are not turns here: reconstructing them from "
+                      f"the journal is the derivation this store exists not to do.")
 
     def open(self) -> "Conversation":
         if self._opened:
@@ -628,8 +704,13 @@ class Conversation:
                   order=dict(order))
 
     def answer(self, ask_id: str, result: Mapping[str, object],
-               model: Optional[str] = None) -> None:
-        self.turn(ANSWER, ask_id=ask_id, model=model, result=dict(result))
+               model: Optional[str] = None, backend: Optional[str] = None) -> None:
+        """``model`` is what was asked for; ``backend`` is what answered.
+
+        They are not the same and a seat panel is where they come apart: it routes by seat name and
+        passes no model at all, so `model` is `None` for every seat while the backend is known.
+        """
+        self.turn(ANSWER, ask_id=ask_id, model=model, backend=backend, result=dict(result))
 
     def unanswered(self, ask_id: str, why: str) -> None:
         self.turn(UNANSWERED, ask_id=ask_id, why=why)
@@ -673,11 +754,20 @@ class Conversation:
         Both halves, because either alone is wrong: failing the run makes an archive able to stop
         work, and swallowing it means the conversation and the evidence of its loss are both gone at
         process exit.
+
+        **It speaks on stderr here**, at the moment of failure. The first version collected the
+        failures into a list and named three channels in its own docstring; a seat checked and found
+        that nothing anywhere wrote the stderr line, and that no caller printed the report field
+        either -- so a store that failed every write was completely silent to the operator. That is
+        the exact shape of "must not be silent" naming no mechanism, which the round-1 review had
+        already found in the design, reappearing one layer down in the code that answered it.
         """
         try:
             work()
         except Exception as exc:  # noqa: BLE001 - archival never propagates into a run
-            self.write_errors.append(f"{what}: {exc}")
+            note = f"{what}: {exc}"
+            self.write_errors.append(note)
+            print(f"conversation store failed: {note}", file=sys.stderr)
 
 
 def _now() -> str:
@@ -718,14 +808,26 @@ def _fence(text: str) -> str:
     return "`" * max(3, longest + 1)
 
 
+def _inline(value: object) -> str:
+    """A value safe to interpolate into a markdown line.
+
+    A project name is operator text and was written straight into the header, so a name carrying a
+    newline and a `#` produced a heading outside any fence. Found by a seat -- the same finding as
+    the fence length, one line further up, where I had not looked for it.
+    """
+    text = re.sub(r"[\r\n]+", " ", str(value))
+    ticks = "`" * (max((len(m) for m in re.findall(r"`+", text)), default=0) + 1)
+    return f"{ticks}{text}{ticks}" if text else "``"
+
+
 def _markdown(document: Mapping[str, object]) -> str:
     project = (document.get("project") or {})
-    out = [f"# Conversation {document.get('conversation_id', '?')}", "",
-           f"- Project: **{project.get('name', '?')}** (`{project.get('id', '?')}`)",
+    out = [f"# Conversation {_inline(document.get('conversation_id', '?'))}", "",
+           f"- Project: {_inline(project.get('name', '?'))} ({_inline(project.get('id', '?'))})",
            f"- Schema: {document.get('schema', '?')}"]
     run = document.get("run") or {}
     if run:
-        out.append(f"- Run: `{json.dumps(run, ensure_ascii=False, sort_keys=True)}`")
+        out.append(f"- Run: {_inline(json.dumps(run, ensure_ascii=False, sort_keys=True))}")
     if document.get("incomplete_lines"):
         out.append(f"- **Incomplete lines in the store:** {document['incomplete_lines']} — a write "
                    f"was interrupted. Reported rather than dropped.")
@@ -743,13 +845,18 @@ def _markdown(document: Mapping[str, object]) -> str:
 
 
 def _defuse(cell: str) -> str:
-    """A cell beginning ``=``, ``+``, ``-``, ``@``, tab or CR executes when opened in a spreadsheet.
+    """A cell whose first non-blank character is one of `FORMULA_LEADERS` executes as a formula.
 
     The text is model-produced, the export's stated purpose is to be opened in a spreadsheet, and
-    ``=HYPERLINK(...)`` is an exfiltration channel — in a project whose standing constraint is
+    `=HYPERLINK(...)` is an exfiltration channel -- in a project whose standing constraint is
     local-only. RFC-compliant quoting does not neutralise a formula; a leading apostrophe does.
+
+    **The first non-blank character, not the first character.** A cell whose formula sat behind a
+    newline was emitted unchanged by the first version of this function, and a seat found it:
+    leading whitespace does not stop a spreadsheet evaluating what comes after it.
     """
-    return "'" + cell if cell[:1] in FORMULA_LEADERS else cell
+    leading = cell[:1] in FORMULA_LEADERS or cell.lstrip()[:1] in FORMULA_LEADERS
+    return "'" + cell if leading else cell
 
 
 def _csv(document: Mapping[str, object]) -> str:
