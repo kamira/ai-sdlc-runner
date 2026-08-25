@@ -27,6 +27,7 @@ miscounts its own subject is the thing it warns about, so the count is now check
 | 13 | Run report | [`engine.py`](../src/ai_sdlc_runner/engine.py) | shipped |
 | 14 | **SQLite DDL** | [`DATABASE.md`](DATABASE.md) | **proposed, not built** |
 | 15 | **Server HTTP API** | [`API.md`](API.md) | shipped |
+| 16 | **Model management** — rules, reach, assignment | [`MODELS.md`](MODELS.md) | shipped |
 
 ---
 
@@ -366,6 +367,18 @@ Written down in **[`API.md`](API.md)** and pinned by `tests/test_api_schema.py`.
 The three-check guard that runs before every route — loopback `Host`, then `Origin`, then
 `X-Operator-Token` — and the two deliberate token exemptions are documented there, in that order,
 because the order is the property.
+
+## 16 · Model management
+
+Entry 10 is the model **shape**. [`MODELS.md`](MODELS.md) is the part that governs it — every
+refusal `validate()` makes, how `reach` is computed from `(transport, endpoint)` and why an operator
+must never label it themselves, and how a model gets from the registry to an actual ask through
+`node_models`, `seat_models` and the factory's resolution order.
+
+One thing it records that appears nowhere else: **an `api` model validates, lists, and cannot be
+dispatched to.** The first ask routed to one raises, because this runner dispatches by running a
+command. The refusal is right — the alternative is sending the work to the default and reporting it
+as the named model — but `transport: "api"` is a declaration the runner cannot yet honour.
 
 ## What this catalogue does **not** cover
 
