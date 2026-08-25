@@ -116,12 +116,25 @@ def connect(path: str | Path) -> sqlite3.Connection:
     # A lock rather than a connection per thread, because the design already declares **one writer**
     # (`docs/DATABASE.md`): serialising is the honest implementation of a rule that is already
     # stated, where a pool of connections would quietly permit what the design says is unsupported.
-    db = sqlite3.connect(str(file), check_same_thread=False, factory=Connection)
-    db.execute("PRAGMA journal_mode = WAL")        # the file's
+    try:
+        db = sqlite3.connect(str(file), check_same_thread=False, factory=Connection)
+        db.execute("PRAGMA journal_mode = WAL")    # the file's, and the first read of the header
+    except sqlite3.DatabaseError as exc:
+        # A file that is not a database, or one this process cannot open. Refused **by name**: a
+        # seat pointed out that the one failure this function tested — a schema from the future —
+        # was covered while corruption, the likelier fate of a file an operator keeps, escaped as a
+        # raw traceback. A coarse check answering safe about something it had not looked at.
+        raise StoreError(
+            f"{file} could not be opened as a store: {exc}. If it is a real database, this runner "
+            f"cannot read it; if it is not, move it aside — nothing here will overwrite it.")
     db.execute("PRAGMA foreign_keys = ON")         # per connection, OFF by default
     db.execute("PRAGMA busy_timeout = 5000")       # per connection
     db.execute("PRAGMA synchronous = NORMAL")      # per connection; resets to FULL
-    _migrate(db)
+    try:
+        _migrate(db)
+    except sqlite3.DatabaseError as exc:
+        db.close()
+        raise StoreError(f"{file} could not be migrated: {exc}")
     return db
 
 
@@ -134,8 +147,19 @@ def _migrate(db: sqlite3.Connection) -> None:
             f"store may hold columns this version would drop on write; upgrade the runner rather "
             f"than opening it.")
     if found < 1:
-        db.executescript("""
-            CREATE TABLE models (
+        # `IF NOT EXISTS`, and the version set **inside the same transaction** as the tables.
+        #
+        # The first version used `executescript`, which autocommits each statement, and set
+        # `user_version` afterwards. A crash in that window left the tables built at version 0, so
+        # every later open re-ran the script and died with a raw
+        # `OperationalError: table models already exists` — the store bricked permanently, by an
+        # interruption at the one moment it was least able to survive one. Found by a seat
+        # simulating exactly that.
+        #
+        # Two processes racing a fresh store hit the same window, and this closes that too.
+        with _locked(db), db:
+            db.executescript("""
+            CREATE TABLE IF NOT EXISTS models (
               id           TEXT PRIMARY KEY,
               vendor       TEXT NOT NULL,
               name         TEXT NOT NULL,
@@ -148,7 +172,7 @@ def _migrate(db: sqlite3.Connection) -> None:
 
             -- `ordinal` because the order of a list is load-bearing: a pool's seeded choice and a
             -- model panel's ask ids both depend on it, so a set would lose something real.
-            CREATE TABLE node_assignments (
+            CREATE TABLE IF NOT EXISTS node_assignments (
               node_id  TEXT NOT NULL,
               ordinal  INTEGER NOT NULL,
               model_id TEXT NOT NULL REFERENCES models(id),
@@ -156,31 +180,72 @@ def _migrate(db: sqlite3.Connection) -> None:
             );
 
             -- One model per seat. A seat is one voice; a list would be a panel inside a panel.
-            CREATE TABLE seat_assignments (
+            CREATE TABLE IF NOT EXISTS seat_assignments (
               seat     TEXT PRIMARY KEY,
               model_id TEXT NOT NULL REFERENCES models(id)
             );
-        """)
-        db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            """)
+            db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     db.commit()
 
 
 # ── the registry ──────────────────────────────────────────────────────────────────────────────
 
 def save_registry(db: sqlite3.Connection, registry: models_mod.Registry) -> None:
-    """Replace the stored registry with this one.
+    """Make the stored registry match this one — **without deleting rows something points at.**
+
+    The first version opened with `DELETE FROM models`, which a foreign key correctly refuses the
+    moment any assignment exists:
+
+    ```
+    adding a model AFTER an assignment -> IntegrityError: FOREIGN KEY constraint failed
+       registry still  : ['a']
+    ```
+
+    Found by an independent seat. It was worse than a failed write: `POST /models` had already put
+    the model in memory and in `models.json` before reaching this line, so the request became a 500
+    with the file and the store disagreeing — and on the next start the store won and the added
+    model **silently vanished**. Exactly the "visible but unassignable" split this module was
+    supposed to prevent, produced by the code written to prevent it.
+
+    So: upsert what is here, and remove only what is gone. Removing a model an assignment still
+    references is **refused by name**, because "you cannot delete this yet" and "your registry
+    saved" must not look the same.
 
     `reach` and `leaves_this_machine` are **not** written, and there is no column for them.
-    `models.py` computes both and strips them on save, with the reason on the line that does it:
-    *"storing them would let a stale label outlive the truth."*
+    `models.py` computes both and strips them on save: *"storing them would let a stale label
+    outlive the truth."*
     """
+    keep = {m.id for m in registry}
     with _locked(db), db:
-        db.execute("DELETE FROM models")
         db.executemany(
             "INSERT INTO models (id, vendor, name, transport, command_json, endpoint, key_env, "
-            "note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "note) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET vendor=excluded.vendor, name=excluded.name, "
+            "transport=excluded.transport, command_json=excluded.command_json, "
+            "endpoint=excluded.endpoint, key_env=excluded.key_env, note=excluded.note",
             [(m.id, m.vendor, m.name, m.transport, json.dumps(list(m.command)),
               m.endpoint, m.key_env, m.note) for m in registry])
+        stale = [row[0] for row in db.execute("SELECT id FROM models")
+                 if row[0] not in keep]
+        for model_id in stale:
+            users = _assigned_to(db, model_id)
+            if users:
+                raise StoreError(
+                    f"model {model_id!r} is still assigned to {', '.join(users)}. Clear those "
+                    f"assignments first — dropping it here would leave them pointing at nothing, "
+                    f"and a foreign key would refuse the write without saying which.")
+            db.execute("DELETE FROM models WHERE id = ?", (model_id,))
+
+
+def _assigned_to(db: sqlite3.Connection, model_id: str) -> List[str]:
+    """Everywhere a model is assigned, named the way an operator would go and change it."""
+    nodes = [f"node {row[0]!r}" for row in db.execute(
+        "SELECT DISTINCT node_id FROM node_assignments WHERE model_id = ? ORDER BY node_id",
+        (model_id,))]
+    seats = [f"seat {row[0]!r}" for row in db.execute(
+        "SELECT seat FROM seat_assignments WHERE model_id = ? ORDER BY seat", (model_id,))]
+    return nodes + seats
 
 
 def load_registry(db: sqlite3.Connection) -> models_mod.Registry:

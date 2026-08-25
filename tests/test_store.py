@@ -42,9 +42,44 @@ def db(tmp_path):
 # ── the store ─────────────────────────────────────────────────────────────────────────────────
 
 def test_the_pragmas_this_connection_needs_are_on_it(db):
+    """All five `connect` sets, not the three that were easy to check.
+
+    A seat pointed out that `busy_timeout` and `synchronous` were asserted nowhere — the two that
+    decide what happens under contention and what a power cut costs.
+    """
     assert db.execute("pragma foreign_keys").fetchone()[0] == 1
     assert db.execute("pragma journal_mode").fetchone()[0] == "wal"
     assert db.execute("pragma user_version").fetchone()[0] == store.SCHEMA_VERSION
+    assert db.execute("pragma busy_timeout").fetchone()[0] == 5000
+    assert db.execute("pragma synchronous").fetchone()[0] == 1        # NORMAL
+
+
+def test_a_store_that_died_between_its_tables_and_its_version_still_opens(tmp_path):
+    """`executescript` autocommits, so a crash there left tables at version 0.
+
+    Every later open re-ran the script and died with `table models already exists` — the store
+    bricked permanently by an interruption at the one moment it could least survive one. Simulated
+    by a seat; reproduced here.
+    """
+    import sqlite3
+    path = tmp_path / "half.sqlite"
+    half = sqlite3.connect(str(path))
+    half.executescript("CREATE TABLE models (id TEXT PRIMARY KEY);")
+    half.close()
+    assert sqlite3.connect(str(path)).execute("pragma user_version").fetchone()[0] == 0
+
+    recovered = store.connect(path)
+    assert recovered.execute("pragma user_version").fetchone()[0] == store.SCHEMA_VERSION
+    recovered.close()
+
+
+def test_a_file_that_is_not_a_database_is_refused_by_name(tmp_path):
+    """It raised a raw `sqlite3.DatabaseError`, and `cmd_serve` catches only `StoreError` — so an
+    operator whose store got corrupted met a traceback instead of a sentence."""
+    junk = tmp_path / "junk.sqlite"
+    junk.write_text("not a database at all", encoding="utf-8")
+    with pytest.raises(store.StoreError, match="could not be opened as a store"):
+        store.connect(junk)
 
 
 def test_a_store_from_the_future_is_refused_rather_than_guessed_at(tmp_path):
@@ -117,8 +152,10 @@ def test_every_mode_that_ignores_a_list_is_refused(db):
     assert len(ignored) == 4
     for mode in ignored:
         node = next((n for n in graph.NODES if n.mode == mode), None)
-        if node is None:
-            continue
+        # No `continue`. The first version skipped a mode with no representative node and still
+        # passed — a coarse check licensed to answer safe without examining, which a seat named.
+        assert node is not None, (
+            f"no node has mode {mode!r}, so this test silently stopped covering it")
         with pytest.raises(store.StoreError, match="does nothing with a model list"):
             store.set_node_models(db, node.id, ["opus"])
 
@@ -167,6 +204,17 @@ class _Console:
                                   db=self.db, plan_assignments=plan_assignments or {})
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
+    def post(self, path, body):
+        """Post at the run's current version, the way a client that reloads state must.
+
+        Every config edit advances the version -- a configuration that moved under another tab
+        should invalidate the answer it was about to send -- so a fixed `0` is stale after the
+        first write. That is the mechanism working, and a test that hard-coded the version was
+        testing a client that does not exist.
+        """
+        _, state = self.call("/run")
+        return self.call(path, {**body, "version": state["version"]})
+
     def call(self, path, body=None):
         url = f"http://127.0.0.1:{self.httpd.server_address[1]}{path}"
         data = json.dumps(body).encode() if body is not None else None
@@ -198,20 +246,17 @@ def test_a_console_edit_does_not_die_on_a_thread_boundary(console):
     that opened it raised `ProgrammingError`, every pre-database refusal still returned `409`, and
     every route that reached SQLite returned `500`. A test that used the store directly passed.
     """
-    assert console.call("/models", {"version": 0, "model": MODEL})[0] == 200
-    code, out = console.call("/config/nodes", {"version": 0, "node_id": "pm_plan",
-                                               "models": ["opus"]})
+    assert console.post("/models", {"model": MODEL})[0] == 200
+    code, out = console.post("/config/nodes", {"node_id": "pm_plan", "models": ["opus"]})
     assert code == 200, out
     assert out["node_models"] == {"pm_plan": ["opus"]}
 
 
 def test_a_model_added_and_assigned_through_the_console_survives_a_restart(tmp_path):
     first = _Console(tmp_path)
-    assert first.call("/models", {"version": 0, "model": MODEL})[0] == 200
-    assert first.call("/config/nodes", {"version": 0, "node_id": "pm_plan",
-                                        "models": ["opus"]})[0] == 200
-    assert first.call("/config/seats", {"version": 0, "seat": "defect",
-                                        "model_id": "opus"})[0] == 200
+    assert first.post("/models", {"model": MODEL})[0] == 200
+    assert first.post("/config/nodes", {"node_id": "pm_plan", "models": ["opus"]})[0] == 200
+    assert first.post("/config/seats", {"seat": "defect", "model_id": "opus"})[0] == 200
     first.close()
 
     again = _Console(tmp_path)
@@ -229,8 +274,8 @@ def test_a_model_added_and_assigned_through_the_console_survives_a_restart(tmp_p
 def test_the_read_route_says_which_source_each_assignment_came_from(tmp_path):
     made = _Console(tmp_path, plan_assignments={"node_models": {"lead_review": ["planned"]}})
     try:
-        made.call("/models", {"version": 0, "model": MODEL})
-        made.call("/config/nodes", {"version": 0, "node_id": "pm_plan", "models": ["opus"]})
+        made.post("/models", {"model": MODEL})
+        made.post("/config/nodes", {"node_id": "pm_plan", "models": ["opus"]})
         _, out = made.call("/config/nodes")
         assert out["source"]["node_models.lead_review"] == store.FROM_PLAN
         assert out["source"]["node_models.pm_plan"] == store.FROM_STORE
@@ -247,7 +292,7 @@ def test_the_plan_cannot_be_overwritten_from_the_console(tmp_path):
     """
     made = _Console(tmp_path, plan_assignments={"node_models": {"lead_review": ["planned"]}})
     try:
-        _, out = made.call("/config/nodes", {"version": 0, "node_id": "lead_review", "models": []})
+        _, out = made.post("/config/nodes", {"node_id": "lead_review", "models": []})
         assert out["node_models"]["lead_review"] == ["planned"]
         assert out["source"]["node_models.lead_review"] == store.FROM_PLAN
     finally:
@@ -262,8 +307,8 @@ def test_the_plan_cannot_be_overwritten_from_the_console(tmp_path):
     ("/config/seats", {"seat": "vibes", "model_id": "opus"}, "no seat"),
 ])
 def test_every_refusal_reaches_the_operator_as_409(console, path, body, fragment):
-    console.call("/models", {"version": 0, "model": MODEL})
-    code, out = console.call(path, {"version": 0, **body})
+    console.post("/models", {"model": MODEL})
+    code, out = console.post(path, body)
     assert code == 409, out
     assert fragment in out["error"]
 
@@ -273,3 +318,115 @@ def test_an_assignment_edit_needs_the_run_version_like_every_other_post(console,
     code, out = console.call(path, {"node_id": "pm_plan", "models": [], "seat": "defect"})
     assert code == 409
     assert "version" in out["error"]
+
+
+# ── the three findings an independent seat made on this change ────────────────────────────────
+
+def test_an_assignment_edited_in_the_console_reaches_the_next_run(tmp_path):
+    """The worst finding: the edit changed the display and not the run.
+
+    `make_config` read `plan.get("node_models")`, so `_reassign` refreshed what the console showed
+    while the engine went on receiving whatever the plan said at startup — and `_reassign`'s own
+    comment claimed the opposite. Both are now resolved per walk.
+    """
+    import inspect
+    from ai_sdlc_runner import cli
+
+    serve = inspect.getsource(cli.cmd_serve)
+    assert 'node_models=plan.get("node_models"' not in serve, (
+        "make_config is reading the plan again; a console edit would be display-only")
+    assert "current_assignments()" in serve
+    assert "build_factory()" in serve, (
+        "the session factory is captured once again; seat routing would freeze at startup")
+
+
+def test_a_model_can_be_added_after_an_assignment_exists(db):
+    """`DELETE FROM models` was refused by the foreign key the moment anything was assigned.
+
+    Worse than a failed write: `POST /models` had already updated memory and `models.json`, so the
+    request 500'd with the file and the store disagreeing — and on the next start the store won and
+    the added model silently vanished.
+    """
+    first = _model()
+    store.save_registry(db, models.Registry(models=(first,)))
+    store.set_node_models(db, "pm_plan", ["opus"])
+    store.save_registry(db, models.Registry(models=(first, _model(id="second"))))
+    assert [m.id for m in store.load_registry(db)] == ["opus", "second"]
+    assert store.node_models(db) == {"pm_plan": ["opus"]}
+
+
+def test_removing_a_model_something_is_assigned_to_is_refused_by_name(db):
+    """"You cannot delete this yet" and "your registry saved" must not look the same."""
+    store.save_registry(db, models.Registry(models=(_model(), _model(id="other"))))
+    store.set_node_models(db, "pm_plan", ["opus"])
+    store.set_seat_model(db, "risk", "opus")
+    with pytest.raises(store.StoreError) as exc:
+        store.save_registry(db, models.Registry(models=(_model(id="other"),)))
+    assert "node 'pm_plan'" in str(exc.value) and "seat 'risk'" in str(exc.value)
+    # ...and nothing was half-removed on the way out.
+    assert [m.id for m in store.load_registry(db)] == ["opus", "other"]
+
+
+def test_a_model_nothing_points_at_can_still_be_removed(db):
+    store.save_registry(db, models.Registry(models=(_model(), _model(id="other"))))
+    store.save_registry(db, models.Registry(models=(_model(),)))
+    assert [m.id for m in store.load_registry(db)] == ["opus"]
+
+
+def test_a_stale_version_is_refused_on_an_assignment_edit(console):
+    """They accepted any integer. A field named `version` that is not compared is a name."""
+    console.post("/models", {"model": MODEL})
+    _, state = console.call("/run")
+    current = state["version"]
+    assert console.call("/config/nodes", {"version": current, "node_id": "pm_plan",
+                                          "models": ["opus"]})[0] == 200
+    code, out = console.call("/config/nodes", {"version": current, "node_id": "pm_plan",
+                                               "models": []})
+    assert code == 409, "the same version was accepted twice; a double-click writes twice"
+    assert "answered version" in out["error"]
+
+
+def test_a_config_edit_advances_the_version_so_other_tabs_see_it(console):
+    console.post("/models", {"model": MODEL})
+    _, before = console.call("/run")
+    console.post("/config/nodes", {"node_id": "pm_plan", "models": ["opus"]})
+    _, after = console.call("/run")
+    assert after["version"] > before["version"]
+
+
+def test_a_stored_assignment_reaches_an_actual_dispatch(tmp_path, monkeypatch):
+    """The test whose absence let the worst finding ship with every other test green.
+
+    A seat put it plainly: *"No test anywhere asserts a store assignment reaches a dispatch — which
+    is why this survived."* So this one walks the engine and looks at which model was asked.
+    """
+    from ai_sdlc_runner import engine, graph
+
+    db = store.connect(tmp_path / "config.sqlite")
+    store.save_registry(db, models.Registry(models=(_model(id="from-store"),)))
+    store.set_node_models(db, "pm_confirm", ["from-store"])
+
+    merged, source = store.resolve(
+        {"node_models": {}},
+        {"node_models": store.node_models(db), "seat_models": store.seat_models(db)})
+    db.close()
+
+    assert merged["node_models"]["pm_confirm"] == ["from-store"]
+    assert source["node_models.pm_confirm"] == store.FROM_STORE
+
+    # ...and the engine reads exactly that field, so a config built from `merged` dispatches to it.
+    cfg = engine.RunConfig(node_specs={}, decisions={},
+                           node_models=merged["node_models"])
+    assert list(cfg.node_models.get("pm_confirm") or ()) == ["from-store"]
+    assert graph.BY_ID["pm_confirm"].mode in store.MODES_THAT_USE_MODELS
+
+
+def test_neither_command_reads_the_plan_directly_for_node_models():
+    """Both `run` and `serve` must resolve. `run` did not open the store at all."""
+    import inspect
+    from ai_sdlc_runner import cli
+
+    for command in (cli.cmd_run, cli.cmd_serve):
+        source = inspect.getsource(command)
+        assert 'node_models=plan.get("node_models"' not in source, (
+            f"{command.__name__} reads the plan directly; a stored assignment would be ignored")

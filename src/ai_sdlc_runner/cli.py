@@ -478,6 +478,25 @@ def cmd_run(args: argparse.Namespace) -> int:
     plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
 
     journal = engine.AskJournal(args.ask_journal) if args.ask_journal else None
+
+    # The assignment store, read the same way `serve` reads it: the plan wins where it speaks, the
+    # store fills where it is silent. `--assignment-store none` opts out for a run that must depend
+    # on the plan alone.
+    plan_assignments = {"node_models": plan.get("node_models") or {},
+                        "seat_models": plan.get("seat_models") or {}}
+    resolved_assignments = dict(plan_assignments)
+    assignment_source: Dict[str, str] = {}
+    store_path = args.assignment_store or ".runner/config.sqlite"
+    if str(store_path).lower() != "none":
+        try:
+            config_db = store_mod.connect(store_path)
+            resolved_assignments, assignment_source = store_mod.resolve(
+                plan_assignments,
+                {"node_models": store_mod.node_models(config_db),
+                 "seat_models": store_mod.seat_models(config_db)})
+        except store_mod.StoreError as exc:
+            print(f"error: {exc}")
+            return 2
     try:
         saved = settings_mod.load(args.settings)
     except settings_mod.SettingsError as exc:
@@ -523,14 +542,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         operations=plan.get("operations", {}),
         confirmed=tuple(args.confirm or ()),
         rulings=tuple(_rulings(args.rule or ())),
-        node_models=plan.get("node_models", {}),
+        # The same resolution `serve` uses. Without this `runner run` ignored the store
+        # entirely — an assignment made in the console governed nothing on the command line, and
+        # "the project's standing assignment" was a phrase about a table two commands disagreed on.
+        node_models=resolved_assignments.get("node_models") or {},
         effects=effects_provider(plan),
         ordinary_commands=saved.ordinary_commands,
         undeclared=args.undeclared,
         resume=bool(args.resume),
         journal=journal,
     )
-    seat_models = dict(plan.get("seat_models") or {})
+    seat_models = dict(resolved_assignments.get("seat_models") or {})
     for pair in args.seat_model or ():
         seat, _, command = pair.partition("=")
         if not command:
@@ -672,7 +694,17 @@ def cmd_serve(args: argparse.Namespace) -> int:
             operations=plan.get("operations", {}),
             confirmed=approvals,
             rulings=rulings,
-            node_models=plan.get("node_models", {}),
+            # **The current** assignment, not the plan's — resolved on every walk.
+            #
+            # This read `plan.get("node_models")`, so an assignment edited through the console
+            # changed the display and not the run: `_reassign` refreshed `held`, and the engine
+            # went on receiving whatever the plan said at startup. A seat found it, and the comment
+            # on `_reassign` claimed the opposite in as many words -- "a console showing a stale
+            # merge would be reporting an assignment that is not the one the next run will use".
+            #
+            # Resolved per walk rather than captured once, because a value captured at startup is
+            # how the defect happened.
+            node_models=current_assignments().get("node_models") or {},
             artifacts=artifacts,
             instructions=instructions,
             rejections=rejections,
@@ -718,10 +750,21 @@ def cmd_serve(args: argparse.Namespace) -> int:
         {"node_models": store_mod.node_models(db), "seat_models": store_mod.seat_models(db)})
 
     config = load_config(args.config)
-    factory = session_factory(config, dict(assignments.get("seat_models") or {}),
-                              registry=registry)
+
+    def current_assignments():
+        """Plan over store, re-resolved now. The engine and the factory both read through this."""
+        merged, _ = store_mod.resolve(
+            plan_assignments,
+            {"node_models": store_mod.node_models(db), "seat_models": store_mod.seat_models(db)})
+        return merged
+
+    def build_factory():
+        """A fresh factory per walk, so a seat reassigned in the console takes effect on the next
+        run rather than on the next restart. Capturing one at startup froze seat routing."""
+        return session_factory(config, dict(current_assignments().get("seat_models") or {}),
+                               registry=store_mod.load_registry(db) or registry)
     operator = server.Operator.mint(Path(args.token_dir))
-    runner = server.Runner(walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
+    runner = server.Runner(walk=lambda cfg: engine.walk(cfg, build_factory(), enabled=True),
                            make_config=make_config, store=store)
     try:
         httpd = server.serve(runner, operator, port=args.port,
@@ -831,6 +874,10 @@ def build_parser() -> argparse.ArgumentParser:
                          "reverse of --high-risk-mode, so the override works both ways.")
     pr.add_argument("--ask-journal", default=None,
                     help="directory to journal each question in before asking it")
+    pr.add_argument("--assignment-store", default=None, metavar="FILE",
+                    help="the model configuration this run reads (default .runner/config.sqlite). "
+                         "The plan wins where it names a node or seat; the store fills the rest. "
+                         "Pass `none` to depend on the plan alone.")
     pr.add_argument("--resume", action="store_true",
                     help="continue an interrupted run: skip what the journal already answered and "
                          "re-ask only what it does not have. Needs --ask-journal.")
