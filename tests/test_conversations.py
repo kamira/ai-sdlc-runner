@@ -546,3 +546,30 @@ def test_a_journal_that_already_had_answers_says_so_rather_than_pretending(tmp_p
     c = conv.Conversation.resume_or_open(_store(tmp_path), "P", j)
     notes = [t for t in c.document()["turns"] if t["kind"] == "note"]
     assert notes and "already answered" in notes[0]["text"]
+
+
+def test_a_marker_whose_conversation_is_gone_is_reopened(tmp_path):
+    """Found by driving a real project, not by a test.
+
+    `resume_or_open` set `_opened = False` when the store read failed — meaning "so open it" — and
+    then returned without opening. Every turn of that run failed with
+    `no conversation at ….jsonl to append to`, once per turn, and the whole conversation went to
+    stderr instead of to disk.
+
+    No test reached it because every test either starts clean or resumes a store that still has the
+    file. A journal that outlives its store is what a real machine produces.
+    """
+    back = _store(tmp_path)
+    journal = tmp_path / "asks"
+    first = conv.Conversation.resume_or_open(back, "P", journal)
+    first.note("before")
+    assert (journal / conv.MARKER).exists()
+
+    for path in (tmp_path / "conversations").rglob("*.jsonl"):
+        path.unlink()                                   # the store is gone; the journal is not
+
+    again = conv.Conversation.resume_or_open(back, "P", journal)
+    again.note("after")
+    assert again.write_errors == [], again.write_errors
+    assert [t["kind"] for t in again.document()["turns"]] == ["opened", "note"]
+    assert again.id == first.id, "a resumed run must keep the identity its marker names"

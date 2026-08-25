@@ -647,8 +647,20 @@ class Conversation:
                 conv._said = {("relaxation", t.get("text"))
                               for t in turns if t.get("kind") == RELAXATION}
             except ConversationError:
+                # The marker names a conversation this store does not have — the journal survived
+                # and the store did not, or a store root moved. `_opened = False` was meant to say
+                # "so open it", and the code returned instead: every turn of that run then failed
+                # with `no conversation at ….jsonl to append to`, once per turn, and the whole
+                # conversation was lost to stderr.
+                #
+                # Found by driving a real project through the runner. No test reached it because
+                # every test either starts clean or resumes a store that still has the file.
+                #
+                # Opened under the **marker's** id, so a resumed run keeps the identity it was
+                # given rather than minting a second one for the same journal.
                 conv._seq = 0
                 conv._opened = False
+                conv.open()
             return conv
         conv = cls(store, project, journal_dir, run=run)
         conv.open()
