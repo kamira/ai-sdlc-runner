@@ -504,6 +504,16 @@ tools/
 
 ---
 
+## Every schema in one place
+
+[`docs/SCHEMAS.md`](docs/SCHEMAS.md) lists all fourteen — the node, the plan, the node spec, the
+operation, the work order, the answer contract, the journal entry, the conversation turn, the CSV
+columns, the model registry, the settings, the attachment manifest, the run report, and the proposed
+SQLite DDL. Three of them are **closed schemas**: a field outside them is refused rather than
+ignored.
+
+---
+
 ## Known gaps
 
 Named here rather than left for a reader to discover, because a governance tool that overstates what
