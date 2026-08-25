@@ -12,7 +12,7 @@ fact: the defects that would have shipped silently were almost never the ones th
 | Only by running it on a real project | **9** |
 | The test suite, unprompted | **3** (+1 intended collision, below) |
 | My own process failures | **10** |
-| Putting the README through the same review | **4** |
+| Putting the README through the same review | **5** |
 
 ## On screenshots
 
@@ -388,7 +388,7 @@ proxy broke — **a miniature of this project's whole recurring lesson**, in my 
 
 ---
 
-## Found by putting the README itself through review — 4
+## Found by putting the README itself through review — 5
 
 Two seats read `README.md` and this file at `d93fcd2` and split — `not sound` and `sound with
 changes` — so it did not pass. Beyond the documentation errors listed above, the review found two
@@ -404,6 +404,16 @@ http://127.0.0.1.evil.example  -> ACCEPTED
 `origin.startswith("http://localhost")` is true of any domain an attacker registers under that
 prefix. Found by a seat *reading* the check; confirmed by running it. **A prefix is not a host** —
 the origin is now parsed and required to round-trip exactly.
+
+### the fix for that check crashed on three of five CI jobs
+
+```
+ValueError: Invalid IPv6 URL
+```
+
+`urlsplit("http://[::1].evil.example")` **raises** under Python 3.9 and 3.13 and returns a hostname
+under 3.11 on Windows — so the parsing fix passed locally and took down three jobs. A malformed
+origin must be refused, not raise; which inputs raise is not something one interpreter can tell you.
 
 ### `halt_independent` enforces nothing
 

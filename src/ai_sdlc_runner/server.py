@@ -89,8 +89,17 @@ def _loopback_origin(origin: str) -> bool:
     A prefix is not a host. `urlsplit` knows where a hostname ends and this function does not have
     to guess.
     """
-    parts = urlsplit(origin)
-    if parts.scheme not in ("http", "https"):
+    try:
+        parts = urlsplit(origin)
+        scheme, host_attr, port = parts.scheme, parts.hostname, parts.port
+    except ValueError:
+        # `urlsplit` raises "Invalid IPv6 URL" on a malformed origin -- and on which inputs it
+        # raises differs by Python version: 3.11 on Windows returned a hostname for
+        # `http://[::1].evil.example`, while 3.9 and 3.13 raise. CI caught the difference; my
+        # machine could not have. Malformed is refused either way, which is the only answer that
+        # does not depend on the interpreter.
+        return False
+    if scheme not in ("http", "https"):
         return False
     if parts.path or parts.query or parts.fragment or parts.username or parts.password:
         return False        # an origin is scheme://host[:port] and nothing else
@@ -99,10 +108,10 @@ def _loopback_origin(origin: str) -> bool:
     # `http://[::1].evil.example` as host `::1` and silently drops the rest, so a hostname check
     # would accept it. A browser would not send that -- but "browsers only send well-formed
     # origins" is exactly the kind of assumption that turns into the next finding.
-    host = (parts.hostname or "").lower()
-    port = f":{parts.port}" if parts.port else ""
+    host = (host_attr or "").lower()
+    port_part = f":{port}" if port else ""
     literal = f"[{host}]" if ":" in host else host
-    if f"{parts.scheme}://{literal}{port}" != origin.strip().lower():
+    if f"{scheme}://{literal}{port_part}" != origin.strip().lower():
         return False
     # `hostname` strips the port and the brackets from an IPv6 literal, so `[::1]` arrives as `::1`.
     return host in {h.strip("[]") for h in LOOPBACK_HOSTS}
