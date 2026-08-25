@@ -495,11 +495,18 @@ src/ai_sdlc_runner/
   workorder.py    the closed-schema order every ask receives
   intake.py       the six aspects, the union of what the seats found, the escalation to options
   models.py       the model registry: transport, key-by-name, computed reach
+  plan.py         the plan file, closed at the top level and inside its ship block
+  store.py        the SQLite store: the registry, and which node or seat gets which model
+  conversations.py  every turn of every conversation, append-only, categorised by project
   attachments.py  content-addressed storage; the filename never becomes a path
   server.py       the local-only back end
   console/        the operator console — one page, no build step
-  cli.py          flow · policy · settings · run · serve
+  cli.py          flow · policy · settings · run · serve · conversations · export
 docs/
+  SCHEMAS.md      all sixteen schemas, and which a machine enforces
+  API.md          the seventeen HTTP routes, and the guard that runs before every one
+  DATABASE.md     the SQLite schema, and every column that is deliberately not in it
+  MODELS.md       the rules that govern a model: refusals, reach, assignment
   changes/        one record per change, with done-whens and what is not claimed
   design/         briefs, the interaction mock-up, and every seat verdict in full
   defect-log.md   every defect, grouped by how it was found
@@ -518,19 +525,53 @@ SQLite DDL, and the server's HTTP API. **Five** are closed schemas — the plan 
 the work order, the model registry and the settings: a field outside them is refused rather than
 ignored.
 
-Three have pages of their own — [`docs/API.md`](docs/API.md) for the fifteen HTTP routes,
-[`docs/DATABASE.md`](docs/DATABASE.md) for the proposed SQLite schema, and
-[`docs/MODELS.md`](docs/MODELS.md) for the rules that govern models: every refusal, how reach is
-computed, and how a model reaches an ask. All three pages are pinned by
-tests, because the catalogue drifted three ways in a day when nothing checked it.
+Three have pages of their own — [`docs/API.md`](docs/API.md) for the **seventeen** HTTP routes,
+[`docs/DATABASE.md`](docs/DATABASE.md) for the SQLite schema (**three of its five tables are
+built**), and [`docs/MODELS.md`](docs/MODELS.md) for the rules that govern models: every refusal,
+how reach is computed, and how a model reaches an ask.
+
+A **[schema chart](docs/schema-atlas.html)** draws the same sixteen: the pipeline one ask travels,
+the database with its real foreign keys, and which of the three axes — closed/open, built/designed,
+persisted/in-memory — each schema sits on.
+
+**All four pages are pinned by tests** — the catalogue drifted three checkable ways within a day of
+being written, because nothing checked it. The tests execute the DDL, drive every refusal, and
+compare each page against the code it maps.
+
+---
+
+## Where model configuration lives
+
+Two halves, and both persist.
+
+| | What it says | Where |
+|---|---|---|
+| **the registry** | which models exist | the `models` table (and `models.json`, still written) |
+| **the assignment** | which node and which seat gets which model | `node_assignments` / `seat_assignments`, **and** the plan |
+
+```bash
+runner --config runner.yaml serve --plan plan.json          # POST /config/nodes, /config/seats
+runner --config runner.yaml run   --plan plan.json          # reads the same store
+runner run --plan plan.json --assignment-store none         # the plan alone
+```
+
+**The plan wins where it says something; the store fills where the plan is silent.** That is
+`settings.py`'s rule one layer out — a per-change declaration must not be silently overridden by
+something configured weeks ago — and `GET /config/nodes` returns a **`source`** map saying which of
+the two put each assignment there. A merged answer alone cannot say, and an override nobody can see
+is worse than no override.
+
+The store refuses an unknown node, a node whose **mode ignores a model list** (four of the seven
+do), a model the registry does not have, and a seat this runner does not define. Only registry model
+ids can be assigned through it; a raw command line stays a plan and `--seat-model` thing.
 
 ---
 
 ## Known gaps
 
 Named here rather than left for a reader to discover, because a governance tool that overstates what
-it enforces is worse than one that enforces less and says so. All three were found by independent
-seats reviewing this README.
+it enforces is worse than one that enforces less and says so. Every one was found by an independent
+seat, and several by seats reviewing the fix for the previous one.
 
 **`halt_independent` does not check independence.** It is graded on `acceptance` at high risk and it
 always stops for a person — but `STOPPING` treats it identically to `halt`, the server has a single
@@ -542,15 +583,46 @@ intent. Closing it needs a second identity, which nothing in the design has yet.
 one re-review, then halt — and the seat panel is not. It changes the flow's topology, so it needs its
 own record.
 
-**Review-before-merge is a practice, not a mechanism.** See above; CI enforces the ledger, not the
-review.
+**Review-before-merge is a practice, not a mechanism.** CI enforces the ledger, not the review. It
+has been followed since CHG-20260823-17, and it has been broken before that — the changes that broke
+it are named in their own records.
+
+**An `api` model registers and cannot be dispatched to.** It validates, it lists, the console shows
+its reach — and the first ask routed to one raises, because this runner dispatches by running a
+command. The refusal is right: the alternative it names in its own message is sending the work to
+the default and reporting it as the named model. But `transport: "api"` is a declaration the runner
+cannot yet honour.
+
+**Two processes on one store are not covered.** A lock serialises threads inside one process;
+`busy_timeout` is all there is between two, and each holds its own in-memory cache the other cannot
+refresh. No harness exists, and four review rounds have said so.
+
+**Only the conversation document carries a schema version.** Plans, answers, ask journals, the
+registry, settings, attachment manifests and run reports all persist or cross a process boundary,
+and none of them can say which shape it is.
+
+**A decision node's answer is read under three names.** `branch`, then `verdict`, then `outcome`,
+first one winning — so two of them disagreeing inside one answer resolves silently.
 
 ---
 
 ## Testing
 
 ```bash
-pytest -q
+pytest -q          # 1084 passing
 ```
 
-CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check.
+CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is
+the point: several defects here were Windows-only, and one — a `ValueError` on a malformed origin —
+was found by CI on 3.9 and 3.13 after passing on the developer machine's 3.11.
+
+Four kinds of claim in the documents are machine-checked rather than trusted:
+
+| Test | Refuses |
+|---|---|
+| `test_documented_numbers` | a figure in the README that the graph or the policy no longer supports |
+| `test_every_cli_flag_the_readme_names_actually_exists` | a flag `argparse` would not accept, aliases included |
+| `test_schemas` · `test_api_schema` · `test_models_schema` | a page that has drifted from the code it maps — including the **count** of closed schemas, which it derives by *exercising* each one rather than reading a label |
+| `test_database_schema` | the DDL on the page failing to execute, or its constraints failing to refuse |
+
+What no test holds is the prose explaining *why* a gate stops where it does. That is argument.
