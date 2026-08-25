@@ -47,7 +47,8 @@ def test_the_route_count_the_page_states_is_the_real_one():
     stated = re.search(r"\*\*(\w+) routes\*\* — (\w+) `GET`, (\w+) `POST`", PAGE)
     assert stated, "the page no longer states how many routes there are"
     words = {"seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
-             "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16}
+             "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+             "eighteen": 18, "nineteen": 19, "twenty": 20}
     stated = [g.lower() for g in stated.groups()]
     # `/` and `/index.html` are one route served by one branch, and the page says so.
     gets = len(_routes("do_GET")) - 1

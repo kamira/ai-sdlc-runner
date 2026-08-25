@@ -1,8 +1,9 @@
 """Pin `docs/DATABASE.md` (CHG-20260823-22).
 
-The schema is proposed and unbuilt, so there is no implementation to compare it against. What *can*
-be checked is the thing that matters most about a DDL nobody has run: **does it run, and do its
-constraints actually refuse?**
+Three of the five tables are now built (store.py); conversations and turns are not. For the unbuilt
+half the question that matters is **does the DDL run, and do its constraints actually refuse?** — so
+this file executes the page SQL verbatim and tries to violate it. For the built half it checks the
+page against the tables the code really creates.
 
 Three rounds of review found the same failure mode in this schema three times — a `reach` column
 persisting a computed safety label, a `REFERENCES` clause with `foreign_keys` off, and a
@@ -152,8 +153,31 @@ def test_the_turns_table_can_hold_every_kind_the_store_defines():
     assert stored == set(conversations.KINDS)
 
 
-def test_the_page_states_it_is_not_built():
-    """The one claim that must not drift silently in the other direction."""
-    assert "proposed, not built" in PAGE
-    assert not list((ROOT / "src").rglob("*sqlite*.py")), (
-        "a sqlite module now exists; DATABASE.md must stop saying it is unbuilt")
+def test_the_page_says_which_tables_are_built_and_which_are_not():
+    """The claim that must not drift in either direction.
+
+    The first version asserted the prose said "proposed, not built" and that no file in `src/`
+    had "sqlite" in its *name*. `store.py` does not, so the test passed while the page said
+    nothing was built and three tables were. A check on a filename is not a check on a fact.
+    """
+    import sqlite3
+    import tempfile
+    from ai_sdlc_runner import store as store_mod
+
+    live = store_mod.connect(Path(tempfile.mkdtemp()) / "probe.sqlite")
+    built = {row[0] for row in
+             live.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    live.close()
+
+    designed = set(re.findall(r"CREATE TABLE (\w+)", PAGE))
+    assert built <= designed, f"code creates tables the page does not design: {built - designed}"
+
+    flat = " ".join(PAGE.split())
+    for table in sorted(built):
+        assert table in flat, f"{table} is created by code and not on the page"
+    for table in sorted(designed - built):
+        assert "created by no code" in flat or "not created by any" in flat, (
+            f"{table} is designed and unbuilt; the page must say so")
+    assert f"{len(built)} of {len(designed)} tables are built" in flat or (
+        "three of five tables are built" in flat.lower()), (
+        f"the page must say how many of the {len(designed)} tables exist; {len(built)} do")

@@ -48,7 +48,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional
 
 from . import attachments as attach_mod
-from . import engine, graph, models as models_mod, policy
+from . import engine, graph, models as models_mod, policy, store as store_mod
 
 #: The only addresses this server will bind. Not a default — a rule. A runner that can merge
 #: branches has no business listening where anything but this machine can reach it, and making that
@@ -405,11 +405,70 @@ class Runner:
 def make_handler(runner: Runner, operator: Operator,
                  registry: Optional["models_mod.Registry"] = None,
                  registry_path: Optional[Path] = None,
-                 assignments: Optional[Mapping[str, object]] = None):
+                 assignments: Optional[Mapping[str, object]] = None,
+                 db=None, plan_assignments: Optional[Mapping[str, object]] = None):
     """The HTTP surface. Refuses before it reads, in the order the threat model requires."""
 
     held = {"registry": registry if registry is not None else models_mod.Registry(),
-            "assignments": dict(assignments or {})}
+            "assignments": dict(assignments or {}),
+            "plan": dict(plan_assignments or {}),
+            "source": {}}
+
+    def _reassign():
+        """Re-merge plan and store after an edit, and refresh the provenance.
+
+        The plan wins where it says something; the store fills where it is silent. Recomputed after
+        every write rather than cached, because a console showing a stale merge would be reporting
+        an assignment that is not the one the next run will use.
+        """
+        stored = {"node_models": store_mod.node_models(db),
+                  "seat_models": store_mod.seat_models(db)} if db is not None else {}
+        merged, source = store_mod.resolve(held["plan"], stored)
+        held["assignments"] = merged
+        held["source"] = source
+        return {**merged, "source": source}
+
+    def _assign_node(body):
+        if db is None:
+            raise ServerError("this runner has no assignment store; start `serve` with one")
+        node_id = str(body.get("node_id") or "")
+        raw = body.get("models")
+        if not isinstance(raw, list):
+            raise ServerError("`models` must be a list of model ids — an empty one clears the node")
+        try:
+            store_mod.set_node_models(db, node_id, [str(m) for m in raw])
+        except store_mod.StoreError as exc:
+            raise ServerError(str(exc))
+        return _reassign()
+
+    def _assign_seat(body):
+        if db is None:
+            raise ServerError("this runner has no assignment store; start `serve` with one")
+        seat = str(body.get("seat") or "")
+        model_id = body.get("model_id")
+        try:
+            store_mod.set_seat_model(db, seat, str(model_id) if model_id else None)
+        except store_mod.StoreError as exc:
+            raise ServerError(str(exc))
+        return _reassign()
+
+    if db is not None:
+        # Read the registry back out of the store, where the store has one.
+        #
+        # Without this a caller that passes `db` and no registry gets an empty one -- and the
+        # console then shows **no models** while the assignments reference them by id. Found by
+        # driving the real server: the assignment survived a restart and the model list came back
+        # `[]`, which is precisely the "assignable and invisible" split this module's own comment
+        # on `POST /models` warns about, arriving from the other direction.
+        try:
+            stored_registry = store_mod.load_registry(db)
+        except Exception as exc:                 # noqa: BLE001 - a bad row must not kill startup
+            raise ServerError(f"the assignment store's registry could not be read: {exc}")
+        if len(stored_registry):
+            held["registry"] = stored_registry
+        elif len(held["registry"]):
+            store_mod.save_registry(db, held["registry"])
+        _reassign()
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "ai-sdlc-runner"
@@ -534,6 +593,13 @@ def make_handler(runner: Runner, operator: Operator,
                                     for k, v in seat_models.items()},
                     "by_model": by_model,
                     "models": [m.as_dict() for m in reg],
+                    # Which source put each assignment there. An override nobody can see is worse
+                    # than no override: the plan wins over the store, and a console that showed the
+                    # merged result with no provenance could not say that it had.
+                    "source": dict(held.get("source") or {}),
+                    # Which modes do anything with a list, so the console can grey out the rest
+                    # rather than let somebody configure a node that ignores them.
+                    "assignable": list(store_mod.MODES_THAT_USE_MODELS),
                 })
             elif path == "/whoami":
                 self._json(200, {"operator": operator.name})
@@ -563,6 +629,12 @@ def make_handler(runner: Runner, operator: Operator,
                         raise ServerError(str(exc))
                     if registry_path is not None:
                         models_mod.save(held["registry"], registry_path)
+                    if db is not None:
+                        # Both, for now: the file is what an operator on the previous version
+                        # reads, and the store is what assignments reference. Writing one and not
+                        # the other would make a model assignable and invisible, or visible and
+                        # unassignable, depending on which half was dropped.
+                        store_mod.save_registry(db, held["registry"])
                     reg = held["registry"]
                     out = {**reg.as_dict(), "leaving": [m.id for m in reg.leaving()]}
                 elif self.path == "/run/reject":
@@ -577,6 +649,10 @@ def make_handler(runner: Runner, operator: Operator,
                     except Exception as exc:
                         raise ServerError(f"the attachment body is not valid base64: {exc}")
                     out = runner.attach(version, str(body.get("filename") or ""), raw)
+                elif self.path == "/config/nodes":
+                    out = _assign_node(body)
+                elif self.path == "/config/seats":
+                    out = _assign_seat(body)
                 elif self.path == "/run/decide":
                     out = runner.rule(version, str(body.get("node_id") or ""),
                                       str(body.get("branch") or ""))
@@ -645,7 +721,9 @@ def make_handler(runner: Runner, operator: Operator,
 def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
           port: int = 8765, registry: Optional["models_mod.Registry"] = None,
           registry_path: Optional[Path] = None,
-          assignments: Optional[Mapping[str, object]] = None) -> ThreadingHTTPServer:
+          assignments: Optional[Mapping[str, object]] = None,
+          db=None, plan_assignments: Optional[Mapping[str, object]] = None
+          ) -> ThreadingHTTPServer:
     """Build the server, refusing any host that is not this machine.
 
     The refusal is here rather than in the caller because a bind address is exactly the kind of thing
@@ -674,7 +752,8 @@ def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
 
     try:
         return _OneRunner((host, port),
-                          make_handler(runner, operator, registry, registry_path, assignments))
+                          make_handler(runner, operator, registry, registry_path, assignments,
+                                       db=db, plan_assignments=plan_assignments))
     except OSError as exc:
         raise ServerError(
             f"cannot listen on {host}:{port} — {exc}. Something is already there. If it is another "

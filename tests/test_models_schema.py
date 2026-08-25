@@ -225,27 +225,25 @@ def test_the_page_admits_the_assignment_side_is_not_closed():
 
 # ── persistence: which half is stored, and which is not ───────────────────────────────────────
 
-def test_the_registry_persists_and_the_assignment_does_not():
-    """The question that produced this section: *model 管理的配置沒有被納進db? 那怎麼持久化?*
+def test_both_halves_of_model_configuration_persist():
+    """The inverse of what this test used to assert, and the inversion is the point.
 
-    Two halves, and only one is written by anything. If an assignment writer is ever added, this
-    fails — and it should, because the pages say there is none.
+    It was written to pin *"nothing writes the assignment"*, with the note that a writer
+    appearing anywhere would fail it and one of the three — code, page, test — would have to
+    change. A writer appeared, because the user ruled that 「模型配置」 means both halves. So
+    this now pins the other direction: both are written, and by exactly one place each.
     """
     import inspect
-    from ai_sdlc_runner import cli, server
+    from ai_sdlc_runner import server, store
 
-    post = inspect.getsource(server).split("def do_POST(self)")[1].split("\n        def ")[0]
+    marker = chr(10) + "        def "
+    post = inspect.getsource(server).split("def do_POST(self)")[1].split(marker)[0]
     assert "models_mod.save" in post, "the registry must still be written by POST /models"
-    assert "assignments" not in post, (
-        "a POST route now touches assignments — DATABASE.md §0.1 and MODELS.md say nothing writes "
-        "them, and one of the three has to change")
-    assert "node_models" not in post and "seat_models" not in post
+    assert "/config/nodes" in post and "/config/seats" in post, (
+        "the assignment routes are gone — MODELS.md and DATABASE.md say they exist")
 
-    whole = inspect.getsource(server) + inspect.getsource(cli)
-    writers = [line for line in whole.splitlines()
-               if ("node_models" in line or "seat_models" in line)
-               and any(w in line for w in ("save(", "write_text", "json.dump"))]
-    assert not writers, f"something writes the assignment now: {writers}"
+    for writer in ("set_node_models", "set_seat_model", "save_registry"):
+        assert hasattr(store, writer), f"store.{writer} is the only writer and it is missing"
 
 
 def test_the_assignment_is_read_only_over_http():
@@ -261,10 +259,17 @@ def test_the_assignment_is_read_only_over_http():
 
 
 def test_both_pages_say_where_each_half_lives():
+    """Both halves persist now, and both pages have to say so — including the one that used
+    to say the opposite. A page that still described the old split would be worse than none,
+    because it would read as current."""
     database = (ROOT / "docs" / "DATABASE.md").read_text(encoding="utf-8")
     flat_db = " ".join(database.split())
+
     assert "0.1 · Model configuration is two halves" in database
-    assert "no writer anywhere in `src/`" in flat_db
-    assert "0.2 · A decision that is not mine to make" in database, (
-        "the ambiguity in 「模型配置」 must stay named, not silently resolved")
-    assert "The assignment has no writer, anywhere" in PAGE
+    assert "node_assignments" in flat_db and "seat_assignments" in flat_db
+    assert "no writer anywhere in `src/`" not in flat_db.split("Until CHG")[0], (
+        "the page still claims the assignment has no writer; it has two routes now")
+
+    # And the ambiguity is answered rather than still open.
+    assert "Answered: both halves" in flat_db
+    assert "Both halves persist" in PAGE

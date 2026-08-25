@@ -1,6 +1,6 @@
 # The server's HTTP API
 
-The console's back end. **Fifteen routes** — eight `GET`, seven `POST` — every one crossing a process
+The console's back end. **Seventeen routes** — eight `GET`, nine `POST` — every one crossing a process
 boundary to a browser, and until now none of them written down. An independent seat called this the
 largest omission in [`SCHEMAS.md`](SCHEMAS.md); this is that entry.
 
@@ -105,8 +105,18 @@ on eight nodes looks the same in a list as one on a single node.
   "by_model": { "<model id or command>": { "nodes": [ {"node_id", "mode"} ],
                                            "seats": [ "<seat>", … ],
                                            "known": true } },
-  "models": [ …as in GET /models, without `leaving`… ] }
+  "models": [ …as in GET /models, without `leaving`… ],
+  "source": { "node_models.<node id>": "plan" | "store", "seat_models.<seat>": … },
+  "assignable": [ "single", "model_panel", "pool" ] }
 ```
+
+**`source` says which of two places put each assignment there.** An assignment can come from the
+plan file (this change's declaration) or from the store (the project's standing one), and **the plan
+wins**. A console showing the merged result with no provenance could not say that it had — and an
+override nobody can see is worse than no override.
+
+**`assignable` is the three modes that do anything with a list.** The other four ignore it, so the
+console can grey them out rather than let somebody configure a node that will not read it.
 
 `known: false` marks a model a plan names and the registry does not have. Every registry model
 appears in `by_model` even with empty `nodes` and `seats` — that is how "configured but unused"
@@ -150,6 +160,8 @@ If the version does not match the run's current one:
 | `POST /run/gate` | `{version, gate, node_id?}` | the run is not suspended, or is suspended on a **tie** rather than a gate |
 | `POST /run/reject` | `{version, gate, node_id?, reason?}` | as above, or the node has no `rejects_to` |
 | `POST /run/decide` | `{version, node_id, branch}` | the run is not suspended, or is suspended on a **gate** rather than a tie |
+| `POST /config/nodes` | `{version, node_id, models: [...]}` | no such node; a node whose **mode ignores** a model list; a model the registry does not have; `models` not a list |
+| `POST /config/seats` | `{version, seat, model_id}` | no such seat; a model the registry does not have |
 | `POST /run/instruct` | `{version, instruction}` | the instruction is empty — *"an empty instruction says nothing"* |
 | `POST /attachments` | `{version, filename, data}` — `data` is **base64** | the base64 is invalid, or `attachments.py` refuses the type or size |
 | `POST /models` | `{version, model: {…8 fields…}}` | `_model_from` refuses an unknown field, or `validate` refuses the model |
@@ -163,6 +175,20 @@ If the version does not match the run's current one:
 A gate asks *whether the run may proceed*; a tie asks *which way*. Accepting one for the other would
 record an answer to a question nobody was asked — so `/run/gate` and `/run/decide` each check
 `suspended.undecided` and refuse the other's case.
+
+### The two assignment routes return the resolved assignment
+
+```jsonc
+{ "node_models": { … }, "seat_models": { … }, "source": { … } }
+```
+
+Not a run snapshot — they change configuration, not the run. **An empty `models` list clears a
+node**; there is no `DELETE` verb and adding one for a single case would be a second way to say a
+thing that already has one.
+
+**Clearing a node the plan speaks for changes nothing visible.** The store row goes and the plan's
+assignment still stands, with `source` still saying `"plan"`. That is the precedence working, and it
+is shown rather than left to surprise somebody.
 
 ### `POST /models` returns the registry, not a snapshot
 
@@ -277,7 +303,7 @@ Stated rather than left to be discovered:
   and `/config/nodes` returns every model. Fine for one operator and one run; stated because
   "it scales" is not being claimed.
 - **No `DELETE`, no `PUT`.** A model can be added and never removed through the API — `Registry`
-  has `remove` and nothing routes to it.
+  has `remove` and nothing routes to it. Assignments *can* be cleared, by posting an empty list.
 - **No CSRF token beyond the operator token**, which is what the `Origin` check and the
   header-not-cookie design are for.
 - **One operator.** `GET /whoami` returns a single name, and that is why `halt_independent` is in
