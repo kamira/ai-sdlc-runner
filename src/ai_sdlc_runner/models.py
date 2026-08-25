@@ -270,7 +270,21 @@ def load(path: str | Path) -> Registry:
         payload = json.loads(text)
     except ValueError as exc:
         raise ModelError(f"{file} is not valid JSON: {exc}")
-    entries = payload.get("models") if isinstance(payload, dict) else payload
+    if isinstance(payload, dict):
+        # The **envelope** is closed too, and it was not. A seat found that
+        # `{"models": [], "modelz": [...]}` loaded as an empty registry: one typo and every model
+        # you configured is gone, with no message. That is the same failure this module's own
+        # `_model_from` refuses one level down, and the same sentence applies -- ignoring a key
+        # would let a setting look configured and do nothing.
+        unknown = sorted(set(payload) - {"models"})
+        if unknown:
+            raise ModelError(
+                f"{file} has top-level key(s) this runner does not know: {unknown}. Ignoring them "
+                f"would let a whole registry look configured and do nothing -- a misspelt 'models' "
+                f"loads as no models at all.")
+        entries = payload.get("models")
+    else:
+        entries = payload
     if not isinstance(entries, list):
         raise ModelError(f"{file} should hold a list of models, or an object with a 'models' list")
     return Registry(models=tuple(_model_from(e) for e in entries))

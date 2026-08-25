@@ -3,8 +3,12 @@
 One page, so that "what shape is this?" never needs a code read. Each entry names the file that
 **defines** it — that file is authoritative, this page is a map.
 
-Two schemas are **closed**: a field outside them is refused rather than ignored, because a setting
-that looks configured and does nothing is worse than one that was rejected.
+**Four** schemas are **closed**: a field outside them is refused rather than ignored, because a
+setting that looks configured and does nothing is worse than one that was rejected. Revision 1 of
+this page said *"two"* in this sentence while its own table marked *three*, and the true number was
+four — `settings.py` enforces closedness and was not credited. A catalogue of closedness that
+miscounts its own subject is the thing it warns about, so the count is now checked by
+[`tests/test_schemas.py`](../tests/test_schemas.py) rather than asserted here.
 
 | # | Schema | Defined in | Status |
 |---|---|---|---|
@@ -18,7 +22,7 @@ that looks configured and does nothing is worse than one that was rejected.
 | 8 | Conversation document + turn | [`conversations.py`](../src/ai_sdlc_runner/conversations.py) | shipped |
 | 9 | CSV export columns | [`conversations.py`](../src/ai_sdlc_runner/conversations.py) | shipped |
 | 10 | Model registry | [`models.py`](../src/ai_sdlc_runner/models.py) | shipped · **closed** |
-| 11 | Settings | [`settings.py`](../src/ai_sdlc_runner/settings.py) | shipped |
+| 11 | Settings | [`settings.py`](../src/ai_sdlc_runner/settings.py) | shipped · **closed** |
 | 12 | Attachment manifest | [`attachments.py`](../src/ai_sdlc_runner/attachments.py) | shipped |
 | 13 | Run report | [`engine.py`](../src/ai_sdlc_runner/engine.py) | shipped |
 | 14 | **SQLite DDL** | [`sqlite-only.md`](design/sqlite-only.md) | **proposed, not built** |
@@ -27,7 +31,9 @@ that looks configured and does nothing is worse than one that was rejected.
 
 ## 1 · Node — the flow
 
-24 of these, one kind of work each. `validate()` enforces eight cross-rules over them.
+24 of these, one kind of work each. `validate()` enforces cross-rules over them — the count is not
+stated here because no partition of that function yields the number revision 1 claimed, which a seat
+checked and could not reproduce. A decorative number is a small lie about a real mechanism.
 
 ```python
 id: str                     # unique
@@ -67,7 +73,7 @@ Two biconditionals `validate()` checks rather than infers:
 }
 ```
 
-## 3 · Node spec — **closed**
+## 3 · Node spec — **closed by key set, open by type**
 
 Per change, supplied by the caller. None of it can come from the governance definitions.
 
@@ -75,6 +81,19 @@ Per change, supplied by the caller. None of it can come from the governance defi
 scope · objective · instructions · done_criteria · acceptance_predicate
 input_artifacts · expected_outputs · idempotence_probes · workdir
 ```
+
+`workorder._check` refuses a missing key **and** an extra one. It does not check **types**, and one
+of them bites. `instructions` is legally a string in some plans and a list in others — both are in
+use — and `render` calls `str()` on it, so a list reaches the model as a Python repr:
+
+```
+type sent to the model: str
+value : '[\'step one\', "step two: don\'t"]'
+```
+
+Mixed quoting, not JSON and not prose, in the order's most important field. A value the schema
+permits and the renderer cannot carry honestly. **Not yet fixed** — it needs a decision about which
+type is canonical, and that changes every plan in use.
 
 ## 4 · Operation — what a node will actually do
 
@@ -111,6 +130,10 @@ policy_verdict · capabilities · permanent_halts · idempotence_probes · workd
 
 `policy_verdict` has its own fixed shape: `gate · risk · verdict · source · tightened`.
 
+`source` carries **two facts concatenated into one string** — where the verdict came from, and any
+refused loosening. A consumer cannot separate them mechanically. Acknowledged in `policy.py` and
+recorded here rather than left to be rediscovered.
+
 ## 6 · Answer contract — what a dispatched agent prints
 
 JSON on stdout. A non-zero exit is a failed attempt.
@@ -123,6 +146,14 @@ JSON on stdout. A non-zero exit is a failed attempt.
 | a seat on a panel | `{"verdict": "pass"\|"fail", "why": "…"}` |
 | a seat at intake | `{"missing": [...], "problems": [...], "unsafe": [...]}` |
 | anything else | any JSON object |
+
+**Three names for one fact.** `_answered_branch` reads `answer.get("branch") or
+answer.get("verdict") or answer.get("outcome")` — `branch` wins silently, so an answer carrying two
+of them that disagree resolves to whichever is first, with nothing said. Seat verdicts accept
+`verdict` or `outcome` the same way. `examples/agent.py` documents only `verdict`.
+
+And `engineer_build`'s `{"module": ...}` is **not enforced**: an answer that omits it never shrinks
+the frontier, so the run loops to `max_steps` and dies 200 steps from the cause.
 
 ## 7 · Ask journal entry
 
@@ -154,6 +185,17 @@ JSON Lines: a header line, then one line per turn. Append-only, never rewritten.
 `seq` is an **integer**, never a zero-padded name — the journal sorts filenames and `'%03d' % 1000`
 lands between the 100th and the 101st.
 
+**A body may not name `seq`, `kind` or `at`.** It could until a seat read `Turn.as_dict`, which
+spread the body *after* the envelope: `turn("note", seq=999, at="not-a-time")` stored a turn whose
+identity disagreed with the number allocated and the time recorded. `kind` survived only because
+Python raises `TypeError` on the keyword collision — luck, not schema. A log whose payload can
+rewrite its envelope cannot be ordered, deduplicated or dated, which is all a log is for. The
+collision is now refused **to the caller**, ahead of `_guarded`, because it is a bug in the caller
+rather than an archival failure.
+
+The per-kind bodies below are **convention, not schema**: nothing yet enforces required or typed
+body fields per kind.
+
 | kind | body |
 |---|---|
 | `opened` | `project`, `run` |
@@ -182,9 +224,13 @@ text_or_state · body_json · over_spreadsheet_cell_limit
 `_json` suffixes and the flag column **are** the "this is lossy" notice — CSV has no comments, and a
 note row is a data row to every consumer. Every cell is defused against formula execution.
 
-## 10 · Model registry — **closed**
+## 10 · Model registry — **closed**, entry *and* envelope
 
-Eight fields persist. `_model_from` refuses anything else by name.
+Eight fields persist. `_model_from` refuses anything else by name — and so, now, does the envelope.
+A seat found that `{"models": [], "modelz": [...]}` loaded as an **empty registry**: one typo and
+every model you configured was gone with no message, which is the same defect `_model_from` refuses
+one level down. Closed on every path in: file load, `Registry.add`, and the console's
+`POST /models`.
 
 ```jsonc
 { "models": [ { "id": "…", "vendor": "…", "name": "claude-opus-5",
@@ -199,7 +245,10 @@ Eight fields persist. `_model_from` refuses anything else by name.
 derived from `(transport, endpoint)` on every load. `save()` strips them: *"storing them would let a
 stale label outlive the truth."*
 
-## 11 · Settings
+## 11 · Settings — **closed**
+
+`settings.py` refuses unknown keys and wrong types with the same doctrine as the registry. It was
+closed all along and revision 1 of this page did not say so.
 
 ```jsonc
 { "review_seats": null,          // null = the floor (3)
@@ -210,10 +259,24 @@ stale label outlive the truth."*
 ## 12 · Attachment manifest
 
 ```jsonc
-{ "id": "<sha256[:32]>",   // ALSO the stored filename — no extension, nothing a scanner reads
-  "filename": "spec.pdf",  // data, NEVER a path
+{ "id": "<sha256, all 64 chars>",   // identity
+  "filename": "spec.pdf",           // data, NEVER a path
   "media_type": "application/pdf", "size": 12345, "instruction": 1 }
 ```
+
+**The id is the full 64-character digest; the stored filename is `stored_name(id) = id[:32]`.**
+They are not the same string:
+
+```
+id (full digest) len: 64
+stored filename  len: 32
+equal? False
+```
+
+Revision 1 of this page said the id *was* the filename. It was false about the field the entry
+leads with, and anyone joining manifest ids to stored files off that line would have written a bug.
+`attachments.py` says it plainly — *"The id stays the full digest, because identity is not the thing
+under pressure here; only the filename is."*
 
 ## 13 · Run report
 
@@ -224,21 +287,41 @@ options · panel_rounds · send_backs · rejections · rulings · store_errors`
 Three states: `finished` (reached a terminal), `suspended` (a decision continues it), `stopped`
 (nothing continues it).
 
+The **dataclass** does not enforce membership — `RunReport(state="banana")` constructs and
+`as_dict()` emits it. `_finish` refuses on every walk exit, so it is enforced at the boundary that
+matters and not by the type.
+
 ## 14 · SQLite DDL — **proposed, not built**
 
 From [`sqlite-only.md`](design/sqlite-only.md). Nothing here exists in code.
 
+Which pragmas persist, measured rather than assumed — set all five, close, reopen:
+
+```
+journal_mode     wal        <- the FILE's
+user_version     7          <- the FILE's
+foreign_keys     0          <- per connection: RESET
+synchronous      2          <- per connection: RESET (to FULL)
+busy_timeout     5000       <- per connection
+```
+
+**Three are per-connection, two are the file's.** Revision 1 of this page said *"two are
+per-connection state, one is the file's"* — wrong on both counts, in the block whose subject is
+pragmas that lie. `foreign_keys` and `synchronous` must be set on **every** connection or the
+`REFERENCES` clause enforces nothing and the documented durability level is not the one running.
+
 ```sql
--- Set on EVERY connection: two are per-connection state, one is the file's.
+-- Per connection, every time: foreign_keys, synchronous, busy_timeout.
+-- Written into the file once: journal_mode, user_version.
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;      -- OFF by default, per connection. Without it REFERENCES is decorative.
 PRAGMA busy_timeout = 5000;
 PRAGMA synchronous = NORMAL;   -- process crash: safe. Power loss: last transactions may roll back.
-PRAGMA user_version = …;       -- database schema version; ordered migrations
+PRAGMA user_version = 1;       -- database schema version; ordered migrations
 
 CREATE TABLE conversations (
   conversation_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, project_name TEXT NOT NULL,
-  schema INTEGER NOT NULL, run_json TEXT NOT NULL, opened_at TEXT NOT NULL);
+  schema INTEGER NOT NULL, run_json TEXT NOT NULL);
 
 CREATE TABLE turns (
   conversation_id TEXT NOT NULL REFERENCES conversations(conversation_id),
@@ -252,6 +335,52 @@ CREATE TABLE models (
   key_env TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '');
 ```
 
-No `reach` column, no `updated_at`. No `json_extract` anywhere — every query is by
-`conversation_id`, `project_id` or `seq`, so JSON1 is never load-bearing and Python 3.9's bundled
-SQLite never has to be asked.
+No `reach` column, no `updated_at`, and **no `opened_at`** — the third one is this round's finding.
+Both earlier seats called `opened_at` a guess and the correction deleted `updated_at` while keeping
+it. Nothing in the code reads an open timestamp, so it is the same dead-column class; worse, it is a
+**second copy of the OPENED turn's `at`** — the "two truths" the `turns` comment forbids eight lines
+above it — minted at a different moment on the live path, and forced equal only on import. If a
+listing ever needs an open time, it is the OPENED turn's `at`, one query away.
+
+No `json_extract` anywhere — every query is by `conversation_id`, `project_id` or `seq`, so JSON1 is
+never load-bearing and Python 3.9's bundled SQLite never has to be asked.
+
+### Still open on the DDL
+
+**A resumed run whose store read failed resets `_seq` to 0.** Against the file backend that produces
+duplicate `seq` values the reader *reports*. Against a primary key, every turn of that run is
+**refused** and swallowed into `write_errors` — the whole resumed conversation lost to stderr. The
+duplicate-`seq` policy is written down for the importer and not for the live path.
+
+
+---
+
+## What this catalogue does **not** cover
+
+Named, because a map that silently omits territory is worse than one that marks it blank. Both seats
+found these independently.
+
+| Missing | Why it matters |
+|---|---|
+| **The server HTTP API** — ~15 endpoints (`/flow`, `/run`, `/run/events`, `/models`, `/attachments`, `/config/nodes`, `/whoami`, `/run/gate`, `/run/reject`, `/run/instruct`, `/run/decide`, …) | the largest omission: every one crosses a process boundary to a browser, each with a request and response shape nobody wrote down |
+| **`runner.yaml`** — `agent_command`, `agent_timeout` | durable config with a hand-rolled fallback parser that has already shipped one bug (the inline-list split) |
+| **`RunConfig`** | the engine's real input contract, substantially wider than the plan file the catalogue shows |
+| **`Approval` / `Rejection` / `Ruling`** | operator decisions crossing the server→engine boundary; the catalogue has their flattened conversation turns, not their input shapes |
+| **The `.conversation` marker** and **`_project.json`** | durable, and the marker is load-bearing at resume — stale data there controls re-attachment |
+| **`EffectOutcome`** — `frontier`, `already_met`, `applied`, `out_of_order` | durable report output with a fixed shape |
+| **The intake `Survey` aggregate** | crosses the agent→operator boundary and lands in the run report; adds a computed `complete` absent from the answer contract |
+| **The `ship` block's interior** | entry 2 shows it as literally `{ … }` — and a misspelt `ship` key makes a run do **no side effects** and report `finished` |
+
+### Versioning
+
+**Only the conversation document carries a version**, and even that is written rather than checked.
+Plans, answer envelopes, ask journals, the registry, settings, attachment manifests and run reports
+all persist or cross a process boundary, and none of them can say which shape they are.
+
+### The one that produced all of the above
+
+Nothing pinned this page. `tests/test_documented_numbers.py` pins the README's counts, flags and
+examples; **the schema catalogue had no test at all**, and drifted in three checkable ways within a
+day of being written — the attachment id, the closed count, and the pragma arithmetic.
+[`tests/test_schemas.py`](../tests/test_schemas.py) now pins what is checkable. The rest is prose,
+and prose is not run.
