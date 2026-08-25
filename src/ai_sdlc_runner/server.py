@@ -354,6 +354,19 @@ class Runner:
         with self._lock:
             self._require_version(version)
 
+    def edit(self, version: int, write):
+        """Check the version, run ``write``, and advance the version — **all under one lock.**
+
+        Three separate critical sections is a check-then-act window: two threads validate the same
+        version, both write, and the double-submit the version exists to refuse happens anyway.
+        """
+        with self._lock:
+            self._require_version(version)
+            out = write()
+            self.state.version += 1
+            self._publish()
+            return out
+
     def publish_config_change(self) -> None:
         """A configuration edit advances the version and wakes every listener."""
         with self._lock:
@@ -433,7 +446,19 @@ def make_handler(runner: Runner, operator: Operator,
     #: in-memory half of the same state unguarded — half a concurrency story reads as a whole one.
     held_lock = threading.RLock()
 
+    #: **The one order every path takes these locks in**, outermost first:
+    #:
+    #:     runner._lock  ->  held_lock  ->  the store connection's runner_lock
+    #:
+    #: Any path that takes two of them must take them in this order. Two orderings deadlock, and
+    #: this file had two for exactly one round: `_config_edit` reached the store before `held`, and
+    #: `POST /models` reached `held` before the store.
+    LOCK_ORDER = ("runner._lock", "held_lock", "store.runner_lock")
+
     def _reassign():
+        # Callers hold `held_lock`. Stated rather than assumed: a seat found this writing
+        # `held["assignments"]` and `held["source"]` outside it while `held["registry"]` was
+        # guarded — half a lock reads as a whole one.
         """Re-merge plan and store after an edit, and refresh the provenance.
 
         The plan wins where it says something; the store fills where it is silent. Recomputed after
@@ -447,53 +472,56 @@ def make_handler(runner: Runner, operator: Operator,
         held["source"] = source
         return {**merged, "source": source}
 
-    def _require_current(version):
-        """The same staleness check every other POST makes, and these two did not.
+    def _config_edit(body, write):
+        """Check the version, write, and advance it — **without letting go in between.**
 
-        They took a `version` and only checked it was an **integer** — so two tabs could send
-        conflicting assignments at the same version and the last one silently won. A field named
-        `version` that is not compared is a name standing in for a constraint, in the routes whose
-        change record claimed they "take the run version like every other POST".
+        The first correction did all three and released the lock between each, which is a
+        check-then-act window a seat named precisely: two threads validate version N, both write,
+        both bump, and the double-submit the version exists to refuse happens anyway. `edit()` holds
+        the runner's lock across the whole sequence, so the check is worth making.
+
+        A configuration edit **is** a state change: it advances the version and wakes every
+        listener. That invalidates an answer another tab was about to send, and that is right — the
+        configuration moved under them.
         """
-        runner.require_version(version)
-
-    def _bump():
-        """A configuration edit is a state change, so it advances the version and wakes listeners.
-
-        It invalidates an answer another tab was about to send, and that is right: the
-        configuration moved under them, and they should reload and look at what it is now.
-        """
-        runner.publish_config_change()
-
-    def _assign_node(body):
         if db is None:
             raise ServerError("this runner has no assignment store; start `serve` with one")
-        _require_current(body.get("version"))
+
+        def under_lock():
+            # `held_lock` **before** the store's lock, never after. See LOCK_ORDER.
+            #
+            # The first version of this function took the store's lock inside `write()` and only
+            # then took `held_lock`, while `POST /models` took `held_lock` first and the store's
+            # lock second. Two orderings is a deadlock waiting for two requests: one thread holding
+            # `held_lock` and waiting for the store, another holding the store and waiting for
+            # `held_lock`.
+            #
+            # Introduced by the fix for the check-then-act window one round earlier — the fix
+            # having the defect is this repository's most-recorded shape, and it is why the order
+            # is now a stated rule rather than whatever each call site happened to do.
+            with held_lock:
+                try:
+                    write()
+                except store_mod.StoreError as exc:
+                    raise ServerError(str(exc))
+                return _reassign()
+
+        out = runner.edit(body.get("version"), under_lock)
+        return {**out, "version": runner.state.version}
+
+    def _assign_node(body):
         node_id = str(body.get("node_id") or "")
         raw = body.get("models")
         if not isinstance(raw, list):
             raise ServerError("`models` must be a list of model ids — an empty one clears the node")
-        try:
-            store_mod.set_node_models(db, node_id, [str(m) for m in raw])
-        except store_mod.StoreError as exc:
-            raise ServerError(str(exc))
-        out = _reassign()
-        _bump()
-        return {**out, "version": runner.state.version}
+        return _config_edit(
+            body, lambda: store_mod.set_node_models(db, node_id, [str(m) for m in raw]))
 
     def _assign_seat(body):
-        if db is None:
-            raise ServerError("this runner has no assignment store; start `serve` with one")
-        _require_current(body.get("version"))
         seat = str(body.get("seat") or "")
         model_id = body.get("model_id")
-        try:
-            store_mod.set_seat_model(db, seat, str(model_id) if model_id else None)
-        except store_mod.StoreError as exc:
-            raise ServerError(str(exc))
-        out = _reassign()
-        _bump()
-        return {**out, "version": runner.state.version}
+        return _config_edit(
+            body, lambda: store_mod.set_seat_model(db, seat, str(model_id) if model_id else None))
 
     if db is not None:
         # Read the registry back out of the store, where the store has one.
@@ -665,6 +693,10 @@ def make_handler(runner: Runner, operator: Operator,
                     out = runner.approve(version, str(body.get("gate") or ""),
                                          body.get("node_id"))
                 elif self.path == "/models":
+                  # The same staleness check. A seat pointed out this route was still taking any
+                  # integer while the two beside it had been fixed — the fix stopped one route
+                  # short of the one that writes a file.
+                  runner.require_version(version)
                   with held_lock:
                     try:
                         added = held["registry"].add(
@@ -684,6 +716,8 @@ def make_handler(runner: Runner, operator: Operator,
                         models_mod.save(held["registry"], registry_path)
                     reg = held["registry"]
                     out = {**reg.as_dict(), "leaving": [m.id for m in reg.leaving()]}
+                  runner.publish_config_change()
+                  out = {**out, "version": runner.state.version}
                 elif self.path == "/run/reject":
                     out = runner.reject(version, str(body.get("gate") or ""),
                                         body.get("node_id"), str(body.get("reason") or ""))

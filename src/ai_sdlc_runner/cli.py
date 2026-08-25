@@ -486,6 +486,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                         "seat_models": plan.get("seat_models") or {}}
     resolved_assignments = dict(plan_assignments)
     assignment_source: Dict[str, str] = {}
+    config_registry: Optional[models_mod.Registry] = None
     store_path = args.assignment_store or ".runner/config.sqlite"
     if str(store_path).lower() != "none":
         try:
@@ -494,8 +495,13 @@ def cmd_run(args: argparse.Namespace) -> int:
                 plan_assignments,
                 {"node_models": store_mod.node_models(config_db),
                  "seat_models": store_mod.seat_models(config_db)})
+            # The registry travels with the assignment or the assignment cannot be dispatched.
+            config_registry = store_mod.load_registry(config_db) or None
         except store_mod.StoreError as exc:
             print(f"error: {exc}")
+            return 2
+        except models_mod.ModelError as exc:
+            print(f"error: the assignment store holds a model this runner refuses: {exc}")
             return 2
     try:
         saved = settings_mod.load(args.settings)
@@ -563,7 +569,14 @@ def cmd_run(args: argparse.Namespace) -> int:
             return 2
         seat_models[seat] = command.split()
     try:
-        report = engine.walk(cfg, session_factory(config, seat_models), enabled=True)
+        # **With the registry.** Without it `session_factory` cannot turn a stored model id into
+        # a command — `registry is not None` guards that whole branch — so `run` selected a model
+        # from the store and silently dispatched to the default backend instead.
+        #
+        # The same class as round 1's critical finding, one command over: configuration that looks
+        # connected and does not govern execution. Found by a seat reading the call, not the store.
+        report = engine.walk(
+            cfg, session_factory(config, seat_models, registry=config_registry), enabled=True)
     except (engine.EngineError, policy.PolicyError, CliError) as exc:
         print(f"halted: {exc}")
         _report_pending(journal)
@@ -588,6 +601,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     for node_id, outcome in report.effects.items():
         print(f"effects:       {node_id} applied={outcome['applied']} "
               f"already_met={outcome['already_met']}")
+    filled = sorted(k for k, v in assignment_source.items() if v == store_mod.FROM_STORE)
+    if filled:
+        # `serve` prints its override count and `run` printed nothing, so "neither source is
+        # silent" held on one of the two commands. A seat noticed the asymmetry.
+        print(f"from the store: {len(filled)} assignment(s) the plan did not name — "
+              f"{', '.join(filled[:4])}{' …' if len(filled) > 4 else ''}")
     print(f"visited:       {len(report.visited)} node(s)")
     print(f"asks:          {len(report.asks)}")
     print(f"stopped at:    {report.halted_at} — {report.halt_reason}")
