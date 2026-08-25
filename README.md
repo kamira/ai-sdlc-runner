@@ -506,14 +506,16 @@ tools/
 
 ## Every schema in one place
 
-[`docs/SCHEMAS.md`](docs/SCHEMAS.md) lists all fifteen — the node, the plan, the node spec, the
+[`docs/SCHEMAS.md`](docs/SCHEMAS.md) lists all sixteen — the node, the plan, the node spec, the
 operation, the work order, the answer contract, the journal entry, the conversation turn, the CSV
 columns, the model registry, the settings, the attachment manifest, the run report, and the proposed
 SQLite DDL, and the server's HTTP API. **Four** are closed schemas: a field outside them is refused
 rather than ignored.
 
-Two have pages of their own — [`docs/API.md`](docs/API.md) for the fifteen HTTP routes, and
-[`docs/DATABASE.md`](docs/DATABASE.md) for the proposed SQLite schema. All three pages are pinned by
+Three have pages of their own — [`docs/API.md`](docs/API.md) for the fifteen HTTP routes,
+[`docs/DATABASE.md`](docs/DATABASE.md) for the proposed SQLite schema, and
+[`docs/MODELS.md`](docs/MODELS.md) for the rules that govern models: every refusal, how reach is
+computed, and how a model reaches an ask. All three pages are pinned by
 tests, because the catalogue drifted three ways in a day when nothing checked it.
 
 ---
