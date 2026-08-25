@@ -13,6 +13,8 @@ these files rather than a replacement for them.
 | `round-2-fable-seat.md` | `ROUND 2: pass with changes` |
 | `round-3-codex-seat.md` | `ROUND 3: fail` · `NEXT: build task 12` |
 | `round-3-fable-seat.md` | `ROUND 3: fail` · `NEXT: build task 12` |
+| `readme-codex-seat.md` | `README: not sound` |
+| `readme-fable-seat.md` | `README: sound with changes` |
 
 All three rounds split on the verdict, so none of them passed — a tie does not pass, and that rule
 applies to this repository's own design record or it is not a rule.
