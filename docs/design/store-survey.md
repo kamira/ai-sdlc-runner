@@ -24,8 +24,8 @@ constraint the user set for the whole project.
 | **R7** | **Zero setup for the default.** `runner run --project X` must work with nothing installed and nothing running | the default backend cannot need a server |
 | **R8** | **Python 3.9 → 3.13, Windows and Linux**, and testable in CI on all four cells | `.github/workflows` matrix |
 | **R9** | No licence or operations burden the user did not ask for | — |
-| **R11** | **Every option the user might want is offered** — *「提供所有選擇的可能性」* | the user, when the store was first specified |
 | **R10** | The store holds **every work order verbatim**; at-rest exposure is the same class as the ask journal | design §6 |
+| **R11** | **Every option the user might want is offered** — *「提供所有選擇的可能性」* | the user, when the store was first specified |
 
 Two non-requirements, stated so they stop being argued: **there is no throughput requirement** and
 **there is no scale requirement.** One operator, conversations in the hundreds of turns. Any system
