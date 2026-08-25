@@ -20,22 +20,34 @@ The top level, and the `ship` block inside it — because `ship` is where the si
 lives, and closing the outside while leaving that open would answer the complaint and not the
 finding.
 
-## Types, not only keys
+## Types, and the one dependency inside `ship`
 
-`node_specs` must be an object, `operations` an object of lists. A key of the right name holding the
-wrong shape is the same defect one step in: `"node_specs": []` reads as configured and supplies
-nothing.
+`node_specs` must be an object; `operations` an object of **lists of objects**; `risk` one of the
+grades; `decisions` and `ship` values strings. A key of the right name holding the wrong shape is the
+same defect one step in: `"node_specs": []` reads as configured and supplies nothing, and
+`"operations": {"x": "write stuff"}` makes the engine iterate a string character by character and
+halt on `Got 'w'`.
+
+**And `acc_id` needs `task`.** That is the finding the first version of this module missed: a `ship`
+block with `acc_id` and `acc_body` and no `task` passed every check — the keys are known, the four
+required ones are present — and `record_module` then carried **zero effects**. The acceptance record
+was never written, nothing refused, and the run finished. The same silent dry run this module was
+written to close, one conditional deeper than the misspelling it fixed. Closing the outer case and
+leaving that one was answering the complaint rather than the finding.
 
 **Not exhaustive, and it says so.** This refuses what it can name. It does not validate the interior
 of a node spec — `workorder._check` does that, closed, at render time — and it does not check that a
 node id exists, because a plan may legitimately name nodes for a graph it has not been run against
-yet.
+yet. **Nothing closes an operation's interior**, and that is stated rather than implied: an extra key
+there is accepted and ignored.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
 from typing import Dict, Mapping, Tuple
+
+from . import policy
 
 #: Every key this runner reads from a plan. Anything else is refused.
 #:
@@ -72,7 +84,13 @@ class PlanError(Exception):
 
 
 def check(payload: Mapping[str, object], where: str = "the plan") -> Dict[str, object]:
-    """Refuse a plan this runner would not fully honour, and return it otherwise."""
+    """Refuse the plans this runner can recognise as ones it would not honour.
+
+    **Not "a plan this runner would fully honour"** — the first version of this docstring said that
+    and it was false, which a seat named as the module's own worst line: a name standing in for a
+    constraint, in the module written against exactly that. What it refuses is listed above; what it
+    leaves to another check, or to nobody, is listed there too.
+    """
     if not isinstance(payload, Mapping):
         raise PlanError(f"{where} should be a JSON object with keys like {list(FIELDS[:3])}")
 
@@ -99,6 +117,49 @@ def check(payload: Mapping[str, object], where: str = "the plan") -> Dict[str, o
                     f"{where} assigns {owner!r} a single {type(value).__name__}; `node_models` "
                     f"holds a **list** of model ids, and the order is load-bearing.")
 
+    risk = payload.get("risk")
+    if risk is not None and risk not in policy.RISKS:
+        raise PlanError(
+            f"{where} grades this change {risk!r}; the grades are {list(policy.RISKS)}. Accepted "
+            f"here, it reached the first gate as a crash or a halt about something the plan could "
+            f"have been refused for at the door.")
+
+    autonomy = payload.get("autonomy")
+    if autonomy is not None and not isinstance(autonomy, str):
+        raise PlanError(
+            f"{where} sets `autonomy` to a {type(autonomy).__name__}; it is a verdict name, and a "
+            f"non-string reached `policy.verdict` as an uncaught AttributeError.")
+
+    for node_id, branch in (payload.get("decisions") or {}).items():
+        # **Three forms**, and `_choose`'s own docstring names them: one label always, a sequence
+        # consumed one per visit, or `"frontier"` — read the run rather than a list.
+        #
+        # The first version of this check accepted only a string, and refused the sequence form.
+        # Twenty-five existing tests caught it. That is the other failure mode of a closed schema:
+        # not accepting what it should refuse, but **refusing what it should accept**, which is
+        # worse — a plan that was correct stops working and the message says it is malformed.
+        if isinstance(branch, str):
+            continue
+        if isinstance(branch, (list, tuple)) and all(isinstance(b, str) for b in branch):
+            continue
+        raise PlanError(
+            f"{where} decides {node_id!r} with {type(branch).__name__}; a decision is a branch "
+            f"**name**, a list of names consumed one per visit, or \"frontier\". Anything else "
+            f"reached the engine as a TypeError about lengths rather than a refusal about a plan.")
+
+    for node_id, listed in (payload.get("operations") or {}).items():
+        if not isinstance(listed, (list, tuple)):
+            raise PlanError(
+                f"{where} gives {node_id!r} operations as a {type(listed).__name__}; it is a "
+                f"**list** of operations. A string here is iterated character by character and the "
+                f"run halts on the first letter.")
+        for operation in listed:
+            if not isinstance(operation, Mapping):
+                raise PlanError(
+                    f"{where} gives {node_id!r} an operation that is a "
+                    f"{type(operation).__name__}; each one is an object with `description`, `kind` "
+                    f"and `targets`.")
+
     ship = payload.get("ship")
     if ship is not None:
         _check_ship(ship, where)
@@ -117,6 +178,28 @@ def _check_ship(ship: Mapping[str, object], where: str) -> None:
         raise PlanError(
             f"{where}'s `ship` is missing {missing}. Those are indexed directly, so leaving one out "
             f"is a KeyError partway through a run rather than a refusal before it starts.")
+
+    wrong = sorted(k for k, v in ship.items() if not isinstance(v, str))
+    if wrong:
+        raise PlanError(
+            f"{where}'s `ship` gives {wrong} a non-string value. Every one of them is written into "
+            f"a file or a commit, and a number reached `ship.py` as an AttributeError about "
+            f"`splitlines` before the run had started.")
+
+    # **The dependency inside the block.** `record_effects` is called only `if task`, so `acc_id`
+    # and `acc_body` without one are read by nothing: the acceptance record is never written and the
+    # run reports `finished`. That is the silent dry run this module exists to close, one
+    # conditional deeper than the misspelling — found by a seat, in the block the closure covered.
+    orphaned = sorted(k for k in ("acc_id", "acc_body") if ship.get(k))
+    if orphaned and not ship.get("task"):
+        raise PlanError(
+            f"{where}'s `ship` sets {orphaned} and no `task`. The acceptance effect runs only when "
+            f"a task is named, so those would be read by nothing — the acceptance record silently "
+            f"never written and the run reporting `finished`. Name the task, or remove them.")
+    if ship.get("task") and not ship.get("acc_id"):
+        raise PlanError(
+            f"{where}'s `ship` names a task and no `acc_id`, so the acceptance record has no "
+            f"identity to be written under.")
 
 
 def load(path: str | Path) -> Dict[str, object]:

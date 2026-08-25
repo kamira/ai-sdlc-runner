@@ -143,3 +143,87 @@ def test_the_cli_refuses_a_plan_that_is_not_json(tmp_path):
         env={**__import__("os").environ, "PYTHONPATH": "src", "PYTHONUTF8": "1"})
     assert done.returncode == 2
     assert "not valid JSON" in done.stdout
+
+
+# ── round 2: what the first closing accepted ──────────────────────────────────────────────────
+
+def test_acc_id_without_a_task_is_refused():
+    """The headline of round 2, and the same silent dry run one conditional deeper.
+
+    `record_effects` is called only `if task`, so `acc_id` and `acc_body` without one are read by
+    nothing: the acceptance record is never written and the run reports `finished`. Every key was in
+    `SHIP_FIELDS` and all four required ones were present, so the first closing accepted it —
+    answering the complaint (a misspelt key) and not the finding (ship configuration that silently
+    does nothing).
+    """
+    with pytest.raises(plan.PlanError) as exc:
+        plan.check({"risk": "low", "ship": {**GOOD_SHIP, "acc_id": "ACC-9", "acc_body": "y"}})
+    assert "read by nothing" in str(exc.value)
+    assert "acc_id" in str(exc.value)
+
+
+def test_a_task_with_no_acceptance_id_is_refused():
+    with pytest.raises(plan.PlanError, match="no identity"):
+        plan.check({"risk": "low", "ship": {**GOOD_SHIP, "task": "T"}})
+
+
+def test_the_acceptance_effect_is_reachable_when_the_plan_passes():
+    """The other direction, and the one that matters: a plan this accepts must actually ship."""
+    from ai_sdlc_runner import cli
+    complete = {"risk": "low",
+                "ship": {**GOOD_SHIP, "chg_body": "x", "task": "1", "acc_id": "ACC-9",
+                         "acc_body": "evidence"}}
+    plan.check(complete)
+    effects = cli.effects_provider(complete)("record_module")
+    assert effects, "a plan that passes must produce the effects it configured"
+
+
+@pytest.mark.parametrize("payload, fragment", [
+    ({"risk": "banana"}, "the grades are"),
+    ({"risk": 7}, "the grades are"),
+    ({"autonomy": 42}, "verdict name"),
+    ({"decisions": {"next_module": 7}}, "consumed one per visit"),
+    ({"decisions": {"next_module": [1, 2]}}, "consumed one per visit"),
+    ({"operations": {"x": "write stuff"}}, "character by character"),
+    ({"operations": {"x": ["not an object"]}}, "each one is an object"),
+])
+def test_a_value_the_runner_cannot_use_is_refused_at_the_door(payload, fragment):
+    """Each of these was accepted and became a traceback or a halt somewhere else."""
+    with pytest.raises(plan.PlanError) as exc:
+        plan.check(payload)
+    assert fragment in str(exc.value)
+
+
+@pytest.mark.parametrize("key", ["repo", "chg_id", "branch", "message", "task"])
+def test_a_ship_value_that_is_not_a_string_is_refused(key):
+    """Every one is written into a file or a commit; a number reached `ship.py` as an
+    AttributeError about `splitlines` before the run had started."""
+    with pytest.raises(plan.PlanError, match="non-string"):
+        plan.check({"risk": "low", "ship": {**GOOD_SHIP, key: 123}})
+
+
+def test_the_module_no_longer_claims_to_refuse_what_it_cannot():
+    """`check`'s docstring said "a plan this runner would fully honour" — a name standing in for a
+    constraint, in the module written against exactly that."""
+    # The SUMMARY LINE, not the whole docstring. The corrected docstring quotes the false claim in
+    # order to mark it false, so a search of the whole thing matches the correction and calls it the
+    # defect. Third time this session a check has matched prose explaining a defect rather than the
+    # defect -- the pattern is the finding, not this instance.
+    summary = (plan.check.__doc__ or "").strip().splitlines()[0]
+    assert "would fully honour" not in summary, summary
+    assert 'Not "a plan this runner would fully honour"' in (plan.check.__doc__ or ""), (
+        "the docstring must still say which claim it retracted")
+    assert "Nothing closes an operation's interior" in (plan.__doc__ or ""), (
+        "the module must name what it leaves to nobody, not only what it leaves to another check")
+
+
+def test_all_three_decision_forms_are_accepted():
+    """ names three: a label, a sequence consumed one per visit, and "frontier".
+
+    The first version of the check took only the first, and twenty-five existing tests caught it.
+    That is the other failure mode of a closed schema — refusing what it should accept, which is
+    worse than the reverse: a plan that was correct stops working, and the message calls it
+    malformed.
+    """
+    for form in ("module", ["module", "none"], "frontier"):
+        assert plan.check({"risk": "low", "decisions": {"next_module": form}})

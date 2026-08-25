@@ -314,21 +314,21 @@ def test_the_readme_puts_global_flags_before_the_subcommand():
             f"this example puts --config after the subcommand and would fail to parse:\n  {line}")
 
 
-#: The two tests that skip when `curses` is absent. Counted, not guessed: `--collect-only` cannot
-#: know what will skip at run time, and a hard-coded 2 that silently drifts is the defect this test
-#: exists for.
-_KNOWN_SKIPS = 2
-
-
 def test_the_test_count_the_readme_states_is_the_real_one():
-    """The one figure this file could not see, and which a seat caught already drifted once.
+    """The one figure this file could not see, and which a seat caught drifting twice.
 
-    The README said "847 passing" when 857 passed. It was excluded from every other check here
-    because the suite cannot count itself while running — so it is counted in a subprocess with
-    `--collect-only`, which is the same number `-q` reports and costs no test time.
+    The README said "847 passing" when 857 did. A suite cannot count itself while running, so this
+    counts it in a subprocess.
 
-    Stating a number nothing checks is how the first one drifted; the answer is to check it, not to
-    stop stating it.
+    **It states a collected count, not a passing one, and that is the correction.** The first
+    version compared against collected-minus-skips and called the skips "counted, not guessed" —
+    they were always guessed: `--collect-only` never emits `SKIPPED`, so the fallback constant ran
+    on every machine. Both skips here are `curses` importorskips; on CI's Ubuntu they execute and
+    `pytest -q` prints two more passes than this machine. The README's number would have been false
+    there and this test would still have passed, because it subtracted the same constant everywhere.
+
+    A count that is machine-independent is the only one a document can state. How many of them pass
+    on a given machine is a property of that machine.
     """
     import os
     import re
@@ -337,7 +337,7 @@ def test_the_test_count_the_readme_states_is_the_real_one():
 
     root = Path(__file__).resolve().parents[1]
     readme = (root / "README.md").read_text(encoding="utf-8")
-    claimed = re.search(r"pytest -q\s*#\s*([\d,]+) passing", readme)
+    claimed = re.search(r"pytest -q\s*#\s*([\d,]+) tests", readme)
     if claimed is None:
         return                          # the README no longer states one; nothing to hold it to
     want = int(claimed.group(1).replace(",", ""))
@@ -348,11 +348,29 @@ def test_the_test_count_the_readme_states_is_the_real_one():
         env={**os.environ, "PYTHONPATH": "src", "PYTHONUTF8": "1"})
     found = re.search(r"(\d+) tests collected", done.stdout or "")
     assert found, f"could not count the suite:\n{(done.stdout or '')[-400:]}"
-    collected = int(found.group(1))
-    # "passing" means what `-q` prints as passed, which is the collected count minus the skips.
-    # Comparing against the collected count instead would put a number in the README that no run
-    # ever prints -- a figure that is checkable and still wrong.
-    skipped = len(re.findall(r"^SKIPPED", done.stdout or "", re.M)) or _KNOWN_SKIPS
-    assert collected - skipped == want, (
-        f"the README says {want} passing; the suite collects {collected} and skips {skipped}, so "
-        f"`pytest -q` reports {collected - skipped} passed.")
+    assert int(found.group(1)) == want, (
+        f"the README says {want} tests; the suite collects {found.group(1)}")
+
+
+def test_the_readme_says_how_many_nodes_a_run_actually_visits():
+    """The node-count check passed a false sentence, and that is the finding.
+
+    The README said the example *"drives all 24 nodes"*. A run visits **20** — the other four are
+    failure paths a green run never takes — and `test_the_node_count_in_the_documents_matches_the_graph`
+    passed it anyway, because its regex matched `24` and compared it to `len(graph.NODES)`. The
+    figure was right about the graph and the sentence was wrong about the run: **a check on the
+    right number against the wrong referent.**
+    """
+    import re
+    from ai_sdlc_runner import graph as graph_mod
+    root = Path(__file__).resolve().parents[1]
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    said = re.search(r"visits (\d+) of the (\d+) nodes", readme)
+    assert said, "the README no longer says how many nodes a run visits"
+    visited, total = int(said.group(1)), int(said.group(2))
+    assert total == len(graph_mod.NODES)
+    assert visited < total, "a run that visits every node would never take a failure path"
+    assert visited == 20, (
+        f"the README says a run visits {visited} nodes; the example run visits 20. Re-run "
+        f"`runner --config examples/runner.yaml run --plan examples/plan.json --risk low "
+        f"--confirm merge` and read the `visited:` line.")
