@@ -1,0 +1,473 @@
+<title>Runner Schema Atlas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+
+<style>
+  :root {
+    --ground:   #fcfcfa;
+    --panel:    #f5f4ef;
+    --ink:      #17191e;
+    --muted:    #6e7076;
+    --rule:     #ddd9d0;
+    --rule-firm:#c3bdb0;
+    --slate:    #46536b;
+    --oxide:    #a03e2f;
+    --moss:     #46683c;
+    --sand:     #8a6f3e;
+    --oxide-bg: #f5e6e2;
+    --moss-bg:  #e6ede2;
+    --sand-bg:  #f2ebdc;
+    --slate-bg: #e6e9ef;
+    --shadow:   0 1px 2px rgba(23,25,30,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:   #14161a;
+      --panel:    #1c1f25;
+      --ink:      #e8e6e1;
+      --muted:    #969aa3;
+      --rule:     #2b2f37;
+      --rule-firm:#3d434e;
+      --slate:    #9fb0cf;
+      --oxide:    #e08b78;
+      --moss:     #9cbd8c;
+      --sand:     #d8b878;
+      --oxide-bg: #2e1f1c;
+      --moss-bg:  #1e2a1a;
+      --sand-bg:  #2b2418;
+      --slate-bg: #1e242e;
+      --shadow:   0 1px 2px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:   #14161a;
+    --panel:    #1c1f25;
+    --ink:      #e8e6e1;
+    --muted:    #969aa3;
+    --rule:     #2b2f37;
+    --rule-firm:#3d434e;
+    --slate:    #9fb0cf;
+    --oxide:    #e08b78;
+    --moss:     #9cbd8c;
+    --sand:     #d8b878;
+    --oxide-bg: #2e1f1c;
+    --moss-bg:  #1e2a1a;
+    --sand-bg:  #2b2418;
+    --slate-bg: #1e242e;
+    --shadow:   0 1px 2px rgba(0,0,0,.4);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.62;
+    margin: 0;
+    padding: 3.5rem 1.5rem 6rem;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 68rem; margin: 0 auto; display: flex; flex-direction: column; gap: 4rem; }
+
+  h1, h2, h3 { font-family: Archivo, ui-sans-serif, system-ui, sans-serif; text-wrap: balance; margin: 0; }
+  h1 { font-size: clamp(1.9rem, 4vw, 2.6rem); font-weight: 700; letter-spacing: -.02em; line-height: 1.12; }
+  h2 { font-size: 1.35rem; font-weight: 600; letter-spacing: -.01em; }
+  h3 { font-size: .95rem; font-weight: 600; letter-spacing: -.005em; }
+  p  { margin: 0; max-width: 68ch; }
+  a  { color: var(--slate); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--slate); outline-offset: 2px; }
+
+  code, .m { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: .87em; }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", monospace; font-size: .68rem; font-weight: 500;
+    letter-spacing: .13em; text-transform: uppercase; color: var(--muted);
+  }
+  .lede { font-size: 1.05rem; color: var(--muted); max-width: 62ch; }
+
+  header { display: flex; flex-direction: column; gap: .9rem;
+           border-bottom: 2px solid var(--ink); padding-bottom: 1.6rem; }
+  .stats { display: flex; flex-wrap: wrap; gap: 0 2rem; font-family: "IBM Plex Mono", monospace;
+           font-size: .78rem; color: var(--muted); }
+  .stats b { color: var(--ink); font-weight: 600; }
+
+  section { display: flex; flex-direction: column; gap: 1.4rem; }
+  .sec-head { display: flex; flex-direction: column; gap: .35rem;
+              border-bottom: 1px solid var(--rule); padding-bottom: .7rem; }
+
+  /* ---- state chips ------------------------------------------------------ */
+  .chip {
+    display: inline-flex; align-items: center; gap: .35rem;
+    font-family: "IBM Plex Mono", monospace; font-size: .7rem; font-weight: 500;
+    padding: .12rem .45rem; border-radius: 3px; white-space: nowrap;
+    border: 1px solid transparent;
+  }
+  .chip::before { content: ""; width: 6px; height: 6px; border-radius: 1px; flex: none; }
+  .c-closed { color: var(--oxide); background: var(--oxide-bg); border-color: color-mix(in srgb, var(--oxide) 25%, transparent); }
+  .c-closed::before { background: var(--oxide); }
+  .c-built  { color: var(--moss);  background: var(--moss-bg);  border-color: color-mix(in srgb, var(--moss) 25%, transparent); }
+  .c-built::before  { background: var(--moss); }
+  .c-prop   { color: var(--sand);  background: var(--sand-bg);  border-color: color-mix(in srgb, var(--sand) 30%, transparent); }
+  .c-prop::before   { background: var(--sand); }
+  .c-open   { color: var(--muted); background: transparent; border-color: var(--rule-firm); }
+  .c-open::before   { background: var(--rule-firm); }
+
+  .legend { display: grid; gap: .8rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+            background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 1.1rem 1.25rem; }
+  .legend div { display: flex; flex-direction: column; gap: .3rem; }
+  .legend p { font-size: .82rem; color: var(--muted); }
+
+  /* ---- pipeline --------------------------------------------------------- */
+  .scroll { overflow-x: auto; padding-bottom: .4rem; }
+  .pipe { display: flex; align-items: stretch; gap: 0; min-width: 60rem; }
+  .stage { flex: 1; display: flex; flex-direction: column; gap: .45rem;
+           padding: .95rem 1rem; background: var(--panel);
+           border: 1px solid var(--rule); border-right: none; }
+  .stage:first-child { border-radius: 6px 0 0 6px; }
+  .stage:last-child  { border-right: 1px solid var(--rule); border-radius: 0 6px 6px 0; }
+  .stage .n { font-family: "IBM Plex Mono", monospace; font-size: .66rem; color: var(--muted); letter-spacing: .1em; }
+  .stage .t { font-family: Archivo, sans-serif; font-weight: 600; font-size: .93rem; line-height: 1.25; }
+  .stage .f { font-family: "IBM Plex Mono", monospace; font-size: .72rem; color: var(--muted); line-height: 1.5; }
+  .arrow { display: flex; align-items: center; color: var(--rule-firm); font-size: 1.1rem;
+           padding: 0 .1rem; flex: none; }
+
+  /* ---- tables ----------------------------------------------------------- */
+  table { border-collapse: collapse; width: 100%; font-size: .84rem; }
+  th, td { text-align: left; padding: .5rem .7rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  thead th { font-family: "IBM Plex Mono", monospace; font-size: .68rem; text-transform: uppercase;
+             letter-spacing: .1em; color: var(--muted); font-weight: 500;
+             border-bottom: 1px solid var(--rule-firm); white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: none; }
+  td.mono, th.mono { font-family: "IBM Plex Mono", monospace; }
+  td .note { color: var(--muted); font-size: .95em; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* ---- ER --------------------------------------------------------------- */
+  .er { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); }
+  .tbl { border: 1px solid var(--rule-firm); border-radius: 6px; overflow: hidden; background: var(--panel);
+         box-shadow: var(--shadow); }
+  .tbl.designed { border-style: dashed; background: transparent; box-shadow: none; }
+  .tbl > header { display: flex; align-items: center; justify-content: space-between; gap: .6rem;
+                  padding: .6rem .8rem; background: var(--slate-bg); border: none;
+                  border-bottom: 1px solid var(--rule-firm); }
+  .tbl.designed > header { background: transparent; }
+  .tbl > header .name { font-family: "IBM Plex Mono", monospace; font-weight: 600; font-size: .84rem; }
+  .cols { list-style: none; margin: 0; padding: .5rem 0; }
+  .cols li { display: flex; gap: .5rem; align-items: baseline; padding: .16rem .8rem;
+             font-family: "IBM Plex Mono", monospace; font-size: .75rem; }
+  .cols li .k { color: var(--oxide); font-size: .62rem; letter-spacing: .06em; width: 2.4rem; flex: none; }
+  .cols li .ty { color: var(--muted); margin-left: auto; font-size: .68rem; }
+  .fk-note { font-size: .78rem; color: var(--muted); padding: .5rem .8rem .7rem;
+             border-top: 1px dashed var(--rule); }
+
+  .callout { border-left: 3px solid var(--oxide); background: var(--oxide-bg);
+             padding: .9rem 1.1rem; border-radius: 0 4px 4px 0; display: flex;
+             flex-direction: column; gap: .5rem; }
+  .callout.q { border-left-color: var(--sand); background: var(--sand-bg); }
+  .callout h3 { font-size: .88rem; }
+  .callout p { font-size: .87rem; }
+
+  ul.plain { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: .4rem; font-size: .87rem; }
+  ul.plain li::marker { color: var(--rule-firm); }
+
+  footer { border-top: 1px solid var(--rule); padding-top: 1.2rem; font-size: .8rem; color: var(--muted); }
+
+  @media (max-width: 700px) {
+    body { padding: 2.25rem 1rem 4rem; }
+    main { gap: 3rem; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<main>
+
+<header>
+  <span class="eyebrow">ai-sdlc-runner · schema reference</span>
+  <h1>Runner Schema Atlas</h1>
+  <p class="lede">Sixteen schemas, what each one refuses, and which of them a machine actually
+    enforces. Every figure on this page was read out of the code, not from a document about it.</p>
+  <div class="stats">
+    <span><b>24</b> nodes</span><span><b>7</b> modes</span><span><b>10</b> gates</span>
+    <span><b>6</b> never-automated kinds</span><span><b>4</b> seats, floor <b>3</b></span>
+    <span><b>9</b> turn kinds</span><span><b>17</b> HTTP routes</span><span><b>1084</b> tests</span>
+  </div>
+</header>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">Key</span>
+    <h2>Three axes, and they are independent</h2>
+  </div>
+  <div class="legend">
+    <div>
+      <span class="chip c-closed">closed</span>
+      <p>A field outside the set is <strong>refused</strong>, not ignored. Five schemas are closed
+        and it is enforced in code on every path in.</p>
+    </div>
+    <div>
+      <span class="chip c-open">open</span>
+      <p>Unknown keys are silently accepted and do nothing. The plan file is the one that matters —
+        see the open question below.</p>
+    </div>
+    <div>
+      <span class="chip c-built">built</span>
+      <p>Code creates it, reads it, and writes it. Three of the five database tables.</p>
+    </div>
+    <div>
+      <span class="chip c-prop">designed</span>
+      <p>Written down and created by no code. A table nothing reads is a mechanism nobody invokes.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">Flow</span>
+    <h2>How one ask travels</h2>
+    <p class="lede">Five shapes in sequence. Two of them are closed, and they are the two that cross
+      the boundary into a model.</p>
+  </div>
+  <div class="scroll">
+    <div class="pipe">
+      <div class="stage">
+        <span class="n">01 · <span class="chip c-closed">closed</span></span>
+        <span class="t">Plan file</span>
+        <span class="f">risk · autonomy<br>node_specs · operations<br>decisions · node_models<br>seat_models · ship</span>
+      </div>
+      <span class="arrow">→</span>
+      <div class="stage">
+        <span class="n">02 · <span class="chip c-closed">closed</span></span>
+        <span class="t">Node spec</span>
+        <span class="f">9 fields, exactly<br>scope · objective<br>instructions<br>done_criteria …</span>
+      </div>
+      <span class="arrow">→</span>
+      <div class="stage">
+        <span class="n">03 · <span class="chip c-closed">closed</span></span>
+        <span class="t">Work order</span>
+        <span class="f">17 fields, exactly<br>+ policy_verdict<br>+ capabilities<br>+ permanent_halts</span>
+      </div>
+      <span class="arrow">→</span>
+      <div class="stage">
+        <span class="n">04 · <span class="chip c-open">open</span></span>
+        <span class="t">Answer</span>
+        <span class="f">JSON on stdout<br>verdict | modules<br>module | missing<br>non-zero exit = failed</span>
+      </div>
+      <span class="arrow">→</span>
+      <div class="stage">
+        <span class="n">05 · <span class="chip c-built">append-only</span></span>
+        <span class="t">Conversation turn</span>
+        <span class="f">9 kinds<br>seq is an integer<br>body cannot name<br>seq, kind or at</span>
+      </div>
+    </div>
+  </div>
+  <p style="font-size:.87rem;color:var(--muted)">The work order is <strong>identical for every voice
+    on a panel</strong> — only the answerer differs. That is what makes a panel mean anything, and
+    it is why routing lives in the dispatch factory and never in the order.</p>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">Storage</span>
+    <h2>The SQLite store</h2>
+    <p class="lede">Five tables designed, three built. Foreign keys are real — but only because
+      <code>PRAGMA foreign_keys = ON</code> is set on <em>every</em> connection; it is off by default
+      and per-connection, and without it <code>REFERENCES</code> enforces nothing.</p>
+  </div>
+  <div class="er">
+    <div class="tbl">
+      <header><span class="name">models</span><span class="chip c-built">built</span></header>
+      <ul class="cols">
+        <li><span class="k">PK</span> id <span class="ty">TEXT</span></li>
+        <li><span class="k"></span> vendor <span class="ty">TEXT</span></li>
+        <li><span class="k"></span> name <span class="ty">TEXT</span></li>
+        <li><span class="k"></span> transport <span class="ty">cli | api</span></li>
+        <li><span class="k"></span> command_json <span class="ty">TEXT</span></li>
+        <li><span class="k"></span> endpoint <span class="ty">TEXT</span></li>
+        <li><span class="k"></span> key_env <span class="ty">TEXT</span></li>
+        <li><span class="k"></span> note <span class="ty">TEXT</span></li>
+      </ul>
+      <p class="fk-note"><strong>No <code>reach</code> column.</strong> It is computed from
+        <code>(transport, endpoint)</code> on every read and stripped on save — storing it would let
+        a stale “local” label outlive an endpoint edit.</p>
+    </div>
+
+    <div class="tbl">
+      <header><span class="name">node_assignments</span><span class="chip c-built">built</span></header>
+      <ul class="cols">
+        <li><span class="k">PK</span> node_id <span class="ty">TEXT</span></li>
+        <li><span class="k">PK</span> ordinal <span class="ty">INTEGER</span></li>
+        <li><span class="k">FK</span> model_id <span class="ty">→ models.id</span></li>
+      </ul>
+      <p class="fk-note"><code>ordinal</code>, not a set: a pool’s seeded choice and a model panel’s
+        ask ids both read the list positionally.</p>
+    </div>
+
+    <div class="tbl">
+      <header><span class="name">seat_assignments</span><span class="chip c-built">built</span></header>
+      <ul class="cols">
+        <li><span class="k">PK</span> seat <span class="ty">TEXT</span></li>
+        <li><span class="k">FK</span> model_id <span class="ty">→ models.id</span></li>
+      </ul>
+      <p class="fk-note">One model per seat. A seat is one voice; a list would be a panel inside a
+        panel.</p>
+    </div>
+
+    <div class="tbl designed">
+      <header><span class="name">conversations</span><span class="chip c-prop">designed</span></header>
+      <ul class="cols">
+        <li><span class="k">PK</span> conversation_id <span class="ty">TEXT</span></li>
+        <li><span class="k"></span> project_id <span class="ty">TEXT</span></li>
+        <li><span class="k"></span> project_name <span class="ty">TEXT</span></li>
+        <li><span class="k"></span> schema <span class="ty">INTEGER</span></li>
+        <li><span class="k"></span> run_json <span class="ty">TEXT</span></li>
+      </ul>
+      <p class="fk-note">No <code>opened_at</code> — it would be a second copy of the
+        <code>opened</code> turn’s <code>at</code>.</p>
+    </div>
+
+    <div class="tbl designed">
+      <header><span class="name">turns</span><span class="chip c-prop">designed</span></header>
+      <ul class="cols">
+        <li><span class="k">PK</span> conversation_id <span class="ty">→ conversations</span></li>
+        <li><span class="k">PK</span> seq <span class="ty">INTEGER</span></li>
+        <li><span class="k"></span> kind <span class="ty">one of 9</span></li>
+        <li><span class="k"></span> at <span class="ty">ISO 8601 UTC</span></li>
+        <li><span class="k"></span> body_json <span class="ty">TEXT — body only</span></li>
+      </ul>
+      <p class="fk-note"><code>PRIMARY KEY (conversation_id, seq)</code> is a <strong>real</strong>
+        refusal of a duplicate turn — the guarantee the file backend could only report, never enforce.</p>
+    </div>
+  </div>
+
+  <div class="callout">
+    <h3>Two pragmas persist; three reset on every connection</h3>
+    <p><code>journal_mode</code> and <code>user_version</code> live in the file.
+      <code>foreign_keys</code>, <code>synchronous</code> and <code>busy_timeout</code> are
+      per-connection and reset — getting that backwards is how a foreign key becomes decoration, and
+      three review rounds stated it the wrong way round before it was measured.</p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">Inventory</span>
+    <h2>All sixteen</h2>
+  </div>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th class="num">#</th><th>Schema</th><th class="mono">Defined in</th><th>Enforcement</th>
+            <th>Durable?</th><th>Versioned?</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="num">1</td><td>Node</td><td class="mono">graph.py</td>
+            <td><span class="chip c-open">fixed set</span> <span class="note">cross-rules, checked</span></td><td>in code</td><td>—</td></tr>
+        <tr><td class="num">2</td><td><strong>Plan file</strong></td><td class="mono">plan.py</td>
+            <td><span class="chip c-closed">closed</span> <span class="note">top level <em>and</em> ship</span></td><td>a file you write</td><td>no</td></tr>
+        <tr><td class="num">3</td><td>Node spec</td><td class="mono">workorder.py</td>
+            <td><span class="chip c-closed">closed</span> <span class="note">by key, not by type</span></td><td>inside the plan</td><td>no</td></tr>
+        <tr><td class="num">4</td><td>Operation</td><td class="mono">policy.py</td>
+            <td><span class="chip c-open">declared</span> <span class="note">undeclared → refused</span></td><td>inside the plan</td><td>no</td></tr>
+        <tr><td class="num">5</td><td>Work order</td><td class="mono">workorder.py</td>
+            <td><span class="chip c-closed">closed</span></td><td>in journal + log</td><td>no</td></tr>
+        <tr><td class="num">6</td><td>Answer contract</td><td class="mono">examples/agent.py</td>
+            <td><span class="chip c-open">open</span> <span class="note">3 aliases for one fact</span></td><td>in the log</td><td>no</td></tr>
+        <tr><td class="num">7</td><td>Ask journal entry</td><td class="mono">engine.py</td>
+            <td><span class="chip c-open">open</span></td><td>yes — <em>mutable index</em></td><td>no</td></tr>
+        <tr><td class="num">8</td><td>Conversation turn</td><td class="mono">conversations.py</td>
+            <td><span class="chip c-closed">envelope</span> <span class="note">body may not name seq/kind/at</span></td><td>append-only</td><td><strong>yes</strong></td></tr>
+        <tr><td class="num">9</td><td>CSV export</td><td class="mono">conversations.py</td>
+            <td><span class="chip c-open">11 fixed columns</span></td><td>on export</td><td>no</td></tr>
+        <tr><td class="num">10</td><td>Model registry</td><td class="mono">models.py</td>
+            <td><span class="chip c-closed">closed</span> <span class="note">entry <em>and</em> envelope</span></td><td>SQLite + json</td><td>no</td></tr>
+        <tr><td class="num">11</td><td>Settings</td><td class="mono">settings.py</td>
+            <td><span class="chip c-closed">closed</span></td><td>a file</td><td>no</td></tr>
+        <tr><td class="num">12</td><td>Attachment manifest</td><td class="mono">attachments.py</td>
+            <td><span class="chip c-open">allowlist of types</span></td><td>content-addressed</td><td>no</td></tr>
+        <tr><td class="num">13</td><td>Run report</td><td class="mono">engine.py</td>
+            <td><span class="chip c-open">open</span> <span class="note">state checked at exit</span></td><td>in-memory</td><td>no</td></tr>
+        <tr><td class="num">14</td><td>SQLite DDL</td><td class="mono">DATABASE.md</td>
+            <td><span class="chip c-built">3 built</span> <span class="chip c-prop">2 designed</span></td><td>yes</td><td><strong>user_version</strong></td></tr>
+        <tr><td class="num">15</td><td>HTTP API</td><td class="mono">API.md</td>
+            <td><span class="chip c-open">17 routes</span> <span class="note">8 GET · 9 POST</span></td><td>—</td><td>no</td></tr>
+        <tr><td class="num">16</td><td>Model management</td><td class="mono">MODELS.md</td>
+            <td><span class="chip c-closed">14 refusals</span></td><td>SQLite</td><td>no</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">Constraints</span>
+    <h2>What the closed schemas actually refuse</h2>
+    <p class="lede">Four are enforced in code on every path in. This is the list a reviewer should
+      disagree with if any of it is wrong.</p>
+  </div>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Schema</th><th>Refuses</th><th>Because</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">plan file</td><td>an unknown top-level key · an unknown <code>ship</code> key · a <code>ship</code> missing one of its four indexed keys · a key of the right name holding the wrong shape</td>
+            <td class="note">Six reviews named it. A misspelt <code>ship</code> made a run perform <strong>no side effects and report <code>finished</code></strong>.</td></tr>
+        <tr><td class="mono">node spec</td><td>a missing key, and an extra one</td>
+            <td class="note">Not types. <code>instructions</code> is legally a string <em>or</em> a list, and a list reaches the model as a Python repr — open, and recorded.</td></tr>
+        <tr><td class="mono">work order</td><td>any drift from its 17 fields</td>
+            <td class="note">Asserted on the only render path.</td></tr>
+        <tr><td class="mono">model registry</td><td>an unknown field <strong>and</strong> an unknown top-level key</td>
+            <td class="note">Misspell <code>models</code> and the whole registry used to load as empty — silently.</td></tr>
+        <tr><td class="mono">settings</td><td>unknown keys and wrong types</td>
+            <td class="note">Closed all along; the catalogue failed to credit it for a day.</td></tr>
+        <tr><td class="mono">assignment store</td><td>an unknown node · a node whose mode ignores a list · a model the registry lacks · an undefined seat</td>
+            <td class="note">Four refusals, at the store boundary. <strong>The plan file bypasses all four.</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">For review</span>
+    <h2>What is open, and what that costs</h2>
+  </div>
+
+  <div class="callout">
+    <h3>The plan file was the one open schema that mattered — it is closed now</h3>
+    <p>Every other shape rides inside it, and it was the only entry point with no validation at all.
+      Six reviews named it and one gave the case that decided it: a misspelt <code>ship</code> key
+      made a run perform <strong>no side effects and report <code>finished</code></strong>. A dry run
+      wearing a shipped run’s report, produced by one typo nothing refused.</p>
+    <p>Closed at the top level <em>and</em> inside <code>ship</code>, by key and by shape. It is a
+      behaviour change: a plan carrying a stray key now stops the run, and the refusal names the key
+      and lists what is read.</p>
+  </div>
+
+  <ul class="plain">
+    <li><strong>Only the conversation document carries a version.</strong> Plans, answers, journals,
+      the registry, settings, manifests and run reports all persist or cross a process boundary and
+      none of them can say which shape it is.</li>
+    <li><strong>Three names for one fact.</strong> A decision node’s answer is read as
+      <code>branch</code> or <code>verdict</code> or <code>outcome</code>, first one winning — two of
+      them can disagree inside one answer.</li>
+    <li><strong><code>halt_independent</code> does not check independence.</strong> It always stops
+      for a person, and nothing records or compares <em>who</em> confirmed against who built. There
+      is one operator identity.</li>
+    <li><strong>An <code>api</code> model registers and cannot be dispatched to.</strong> It
+      validates, it lists, it shows its reach — and the first ask routed to it raises.</li>
+    <li><strong>Two processes on one store are not covered.</strong> A lock serialises threads in one
+      process; <code>busy_timeout</code> is all there is between two, and each holds its own cache.
+      Four review rounds have said the harness does not exist.</li>
+  </ul>
+</section>
+
+<footer>
+  Read out of the code on 2026-08-25, after the plan file was closed. Counts pinned by <code class="m">tests/test_schemas.py</code>,
+  <code class="m">test_api_schema.py</code>, <code class="m">test_database_schema.py</code> and
+  <code class="m">test_models_schema.py</code> — the catalogue drifted three ways in a day when
+  nothing checked it.
+</footer>
+
+</main>

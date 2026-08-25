@@ -312,3 +312,47 @@ def test_the_readme_puts_global_flags_before_the_subcommand():
         before, _, after = line.partition("--config")
         assert not re.search(r"\b(run|serve|flow|policy|settings)\b", before), (
             f"this example puts --config after the subcommand and would fail to parse:\n  {line}")
+
+
+#: The two tests that skip when `curses` is absent. Counted, not guessed: `--collect-only` cannot
+#: know what will skip at run time, and a hard-coded 2 that silently drifts is the defect this test
+#: exists for.
+_KNOWN_SKIPS = 2
+
+
+def test_the_test_count_the_readme_states_is_the_real_one():
+    """The one figure this file could not see, and which a seat caught already drifted once.
+
+    The README said "847 passing" when 857 passed. It was excluded from every other check here
+    because the suite cannot count itself while running — so it is counted in a subprocess with
+    `--collect-only`, which is the same number `-q` reports and costs no test time.
+
+    Stating a number nothing checks is how the first one drifted; the answer is to check it, not to
+    stop stating it.
+    """
+    import os
+    import re
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[1]
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    claimed = re.search(r"pytest -q\s*#\s*([\d,]+) passing", readme)
+    if claimed is None:
+        return                          # the README no longer states one; nothing to hold it to
+    want = int(claimed.group(1).replace(",", ""))
+
+    done = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/", "--collect-only", "-q"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(root),
+        env={**os.environ, "PYTHONPATH": "src", "PYTHONUTF8": "1"})
+    found = re.search(r"(\d+) tests collected", done.stdout or "")
+    assert found, f"could not count the suite:\n{(done.stdout or '')[-400:]}"
+    collected = int(found.group(1))
+    # "passing" means what `-q` prints as passed, which is the collected count minus the skips.
+    # Comparing against the collected count instead would put a number in the README that no run
+    # ever prints -- a figure that is checkable and still wrong.
+    skipped = len(re.findall(r"^SKIPPED", done.stdout or "", re.M)) or _KNOWN_SKIPS
+    assert collected - skipped == want, (
+        f"the README says {want} passing; the suite collects {collected} and skips {skipped}, so "
+        f"`pytest -q` reports {collected - skipped} passed.")
