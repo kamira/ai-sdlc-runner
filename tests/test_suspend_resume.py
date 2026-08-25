@@ -202,7 +202,7 @@ def test_nothing_waits_inside_the_walk():
 def test_the_suspended_report_is_returned_not_yielded():
     source = inspect.getsource(engine.walk)
     marker = source.index("report.state = SUSPENDED")
-    assert "return _finish(report, confirmations)" in source[marker:marker + 1400]
+    assert "return _finish(report, confirmations, cfg.conversation)" in source[marker:marker + 1400]
 
 
 def test_a_report_cannot_claim_a_state_the_engine_does_not_know():

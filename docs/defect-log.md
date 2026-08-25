@@ -1,6 +1,6 @@
 # Defect log
 
-Every problem hit while building the operator console and its governance — 25 change records, 849
+Every problem hit while building the operator console and its governance — 26 change records, 901
 tests, five live projects.
 
 Grouped **not by task but by how each one was found**, because that turned out to be the more useful
@@ -13,6 +13,7 @@ fact: the defects that would have shipped silently were almost never the ones th
 | The test suite, unprompted | **3** (+1 intended collision, below) |
 | My own process failures | **10** |
 | Putting the README through the same review | **5** |
+| Reviewing a **design** before its code existed | **14** |
 
 ## On screenshots
 
@@ -440,6 +441,82 @@ Both seats walked a newcomer's path and got stuck in the same place: the example
 Fixed by shipping `examples/` — a plan that drives all 24 nodes and writes real code.
 
 ---
+
+## Found by reviewing a design before its code existed — 14
+
+CHG-20260823-17, the conversation store. The brief went to both seats against a tree with no store
+code in it — the first time in this repository that the practice the README describes was actually
+followed, one change after a seat struck the claim out for being false.
+
+**Both returned `not sound`, and both named the same keystone sentence.** Not a split: unanimous.
+
+### The design could not produce the document the design defined
+
+> *"The `AskJournal` already writes every ask down… The store is therefore **derived**, not a second
+> source of truth."*
+
+Fourteen lines above it, the same brief had defined a conversation as asks **and operator
+decisions** — *"a person answering is as much a turn as a model answering"*. The journal has never
+held one: `record` and `answered` are its only two writers, and confirmations, rejections and
+rulings reach only the in-memory `RunReport`.
+
+I wrote both halves fourteen lines apart and did not notice.
+
+### The journal destroys what it does hold
+
+Confirmed by running it, not by reading:
+
+```
+two fresh runs, one journal directory  ->  entries: 1
+what survives                          ->  {"brief": "SECOND RUN"}
+run_id 1 == run_id 2                   ->  True
+```
+
+Ask ids are positional and `record` overwrites unconditionally. The first conversation is not stale
+in the store — it is gone from the source the design proposed deriving from.
+
+### A loopback host does not constrain a Mongo client
+
+Both seats refused the analogy with `_loopback_origin`, and fable-seat gave the mechanism:
+`MongoClient` performs **topology discovery**. Given a loopback seed that turns out to be a
+replica-set member or a `mongos`, the driver reads the topology *from the server* and connects to
+every member it learns of, including remote ones, without consulting the URI again.
+
+A host check would have answered "local" about a URI while the driver went off-machine — the
+coarse-check defect, in a feature whose entire premise is that the flow is local-only. The fix is
+four URI rules **plus `directConnection=true` forced on the client**; only the last binds the
+driver rather than the string.
+
+### The ordering would have been inherited, and broken
+
+```
+sorted('%03d-x' % n for n in (99,100,101,999,1000))
+['099-x', '100-x', '1000-x', '101-x', '999-x']
+```
+
+`AskJournal.entries()` sorts filenames. A store presenting "the ordered sequence of turns" would
+have gone wrong at the 1000th ask, at a scale where a one-module demo looks fine — which is this
+log's own most-repeated lesson.
+
+### And ten more
+
+`run_id` collides across runs and is not a filename; `--project` defaulting to a directory files
+everything under *"examples"*; CSV formula injection (`=HYPERLINK(…)` in model-produced text); Excel
+truncating silently at 32,767 characters; ``` inside an answer ending a markdown fence; a relaxation
+with nowhere to record at export time, because `export` runs outside any walk; *"must not be
+silent"* naming no mechanism; three backends guaranteeing nothing in common; `<root>/<project>/<run>`
+repeating a hazard `attachments.py` already records; and the answering model appearing in no durable
+record at all.
+
+### The one the seats could not find
+
+The Mongo rule shipped in my first draft with **the same hole CI had caught in `server.py` two
+changes earlier**: `urlsplit("mongodb://[::1].evil.example")` returns host `::1` and drops the rest,
+so the loopback set accepted a domain an attacker registers. A test written for that earlier finding,
+pointed at the new function, failed on its first run.
+
+I had written the correct check once already, in another file, two days before. A fix that does not
+become a habit is a fix that gets to be found twice.
 
 ## What the grouping says
 

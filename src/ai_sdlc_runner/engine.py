@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Sequence
 
+from . import conversations as conversations_mod
 from . import effects as effects_mod
 from . import graph, intake as intake_mod, policy, workorder
 
@@ -326,6 +327,12 @@ class RunReport:
     send_backs: List[Dict[str, object]] = field(default_factory=list)
     #: Gates a person refused, where the run went, and why.
     rejections: List[str] = field(default_factory=list)
+    #: Conversation-store writes that failed. A failed archival write **never** fails a run — an
+    #: archive able to stop work is worse than a gap in an archive — and is never silent either.
+    #: Named field, named moment: the first design of the store said "must not be silent" and named
+    #: no mechanism, which an independent seat pointed out is how a sentence ships with nothing
+    #: checking it. It lands here, in a `note` turn where the store is reachable, and on stderr.
+    store_errors: List[str] = field(default_factory=list)
     #: Ties a person broke, and which way. Kept apart from ``confirmations`` because they answer a
     #: different question — "which branch" rather than "may this pass a gate" — and merging them
     #: would make the audit trail say a gate was confirmed when nobody confirmed anything.
@@ -350,6 +357,7 @@ class RunReport:
             "rulings": list(self.rulings),
             "dispatches": list(self.dispatches),
             "rejections": list(self.rejections),
+            "store_errors": list(self.store_errors),
             "send_backs": [dict(b) for b in self.send_backs],
             "panel_rounds": [dict(r) for r in self.panel_rounds],
             "survey": dict(self.survey) if self.survey else None,
@@ -441,6 +449,16 @@ class RunConfig:
     rulings: Sequence["Ruling"] = ()
     max_steps: int = 200
     journal: Optional[AskJournal] = None
+    #: Where every turn of this run is written down as it happens — see `conversations.py`.
+    #:
+    #: **Not the journal, and not derived from it.** Both review seats refused that design: the
+    #: journal has never held an operator turn, and it overwrites the model turns it does have,
+    #: because its ids are positional and `record` writes unconditionally. The two record different
+    #: facts. The journal answers "what is the current question at position N"; this answers "what
+    #: happened, in order".
+    #:
+    #: ``None`` means no conversation is stored, which is what every existing caller does.
+    conversation: Optional["conversations_mod.Conversation"] = None
 
     @property
     def run_id(self) -> Optional[str]:
@@ -543,7 +561,8 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
          ask_id: Optional[str] = None, node_id: str = "",
          answered: Optional[Mapping[str, Mapping[str, object]]] = None,
          model: Optional[str] = None,
-         asked_before: Optional[Mapping[str, Mapping[str, object]]] = None):
+         asked_before: Optional[Mapping[str, Mapping[str, object]]] = None,
+         conversation=None, role: str = ""):
     """Open a session, ask once, close it — the close guaranteed even if the ask raises.
 
     ``seen`` holds the session **objects**, not their ``id()``: an id is not an identity once the
@@ -562,6 +581,11 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
             return answered[ask_id]
     if journal is not None and ask_id is not None:
         journal.record(ask_id, node_id, seat, order)
+    # The conversation gets the model. `journal.record` has never taken one, so the existing durable
+    # record cannot say which model said what -- which is most of what a panel is for. Found by an
+    # independent seat reading this function's signature against the journal's.
+    if conversation is not None:
+        conversation.ask(ask_id or "", node_id, role, seat, model, order)
     session = _open(factory, seat, model)
     if any(previous is session for previous in seen):
         raise EngineError(
@@ -570,10 +594,18 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
     seen.append(session)
     try:
         result = session.ask(order)
+    except Exception as exc:
+        # An ask that raised is a turn too. Without this the conversation shows a question and then
+        # nothing, which reads as "never answered" rather than "failed", and those are different.
+        if conversation is not None:
+            conversation.unanswered(ask_id or "", f"{type(exc).__name__}: {exc}")
+        raise
     finally:
         session.close()
     if journal is not None and ask_id is not None:
         journal.answered(ask_id, result)
+    if conversation is not None:
+        conversation.answer(ask_id or "", result, model)
     return result
 
 
@@ -952,7 +984,8 @@ def _adjudicate(node: graph.Node, report: "RunReport", seats: int) -> str:
     return reached
 
 
-def _finish(report: "RunReport", confirmations: Dict[str, int]) -> "RunReport":
+def _finish(report: "RunReport", confirmations: Dict[str, int],
+            conversation=None) -> "RunReport":
     """Close out a walk, however it ended.
 
     A confirmation the run never spent is **not** an error: a run can legitimately finish without
@@ -981,6 +1014,18 @@ def _finish(report: "RunReport", confirmations: Dict[str, int]) -> "RunReport":
             f"a {report.state!r} report {'carries' if report.suspended else 'lacks'} suspension "
             f"details — the two must agree, or a caller reading one and not the other gets a "
             f"different answer about whether the run can continue")
+    if conversation is not None:
+        # Every exit from `walk` passes through here, which is why the conversation is closed here
+        # and not after the loop: four of the five ways a walk can end jump past that point, and a
+        # conversation that only closes when the run succeeds is the same defect this function's
+        # own docstring was written for.
+        for relaxed in report.relaxations:
+            conversation.relaxation(relaxed)
+        conversation.close(report.state)
+        for failure in conversation.write_errors:
+            note = f"conversation store: {failure}"
+            if note not in report.store_errors:
+                report.store_errors.append(note)
     return report
 
 
@@ -993,6 +1038,12 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
     if not enabled:
         raise EngineError(
             "the node engine is opt-in and is not enabled. Pass enabled=True — or --engine.")
+    if cfg.conversation is not None:
+        # An instruction is a turn. It lives in `RunConfig` and reaches a work order only as merged
+        # text, so nothing durable has ever recorded *when* it was asked for -- which is most of
+        # what makes a late change reviewable.
+        for nth, text in enumerate(cfg.instructions, start=1):
+            cfg.conversation.instruction(str(text), nth)
 
     graph.validate()
     factory = _as_factory(dispatch)
@@ -1119,7 +1170,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             report.state = STOPPED
             report.halted_at = node.id
             report.halt_reason = tripped
-            return _finish(report, confirmations)
+            return _finish(report, confirmations, cfg.conversation)
 
         verdict = resolve_verdict(node, cfg.risk, cfg.autonomy)
         report.verdicts[node.id] = dict(verdict)
@@ -1145,6 +1196,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     f"{node.gate} at {node.id} was refused by the operator"
                     + (f": {rejection.reason}" if rejection.reason else "")
                     + f" — the run goes to {node.rejects_to}")
+                if cfg.conversation is not None:
+                    cfg.conversation.decision("rejection", node.id, rejection.reason or "")
                 return _Redirect(node.rejects_to)
 
             # A decision naming this node is spent first: it is the more specific answer, and
@@ -1159,6 +1212,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 report.confirmations.append(
                     f"{node.gate} = {verdict['verdict']} at risk {verdict['risk']} at {node.id}, "
                     f"decided by the operator ({approval})")
+                if cfg.conversation is not None:
+                    cfg.conversation.decision("approval", node.id, f"{node.gate} ({approval})")
                 return None
 
             if confirmations.get(node.gate, 0) > 0:
@@ -1166,6 +1221,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 report.confirmations.append(
                     f"{node.gate} = {verdict['verdict']} at risk {verdict['risk']} at {node.id}, "
                     f"confirmed by the operator")
+                if cfg.conversation is not None:
+                    cfg.conversation.decision("approval", node.id, node.gate)
                 return None
 
             # Suspended, not finished. The stop is still a *return* -- no waiting happens inside the
@@ -1193,7 +1250,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             report.halt_reason = (
                 f"{verdict['gate']} = {verdict['verdict']} at risk {verdict['risk']} "
                 f"(per {verdict['source']}) — confirm it to continue")
-            return _finish(report, confirmations)
+            return _finish(report, confirmations, cfg.conversation)
 
         stop = _gate("before")
         if isinstance(stop, _Redirect):
@@ -1217,8 +1274,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     ask_id = f"{len(report.asks):03d}-{node.id}-{model}"
                     result = _ask(factory, _order_for(node, cfg, verdict, carried=carried),
                                   opened, journal=cfg.journal, ask_id=ask_id, node_id=node.id,
-                                  answered=already, model=model,
-                                  asked_before=asked_before)
+                                  answered=already, model=model, asked_before=asked_before,
+                                  conversation=cfg.conversation, role=node.role)
                     if ask_id in already:
                         report.resumed.append(ask_id)
                     report.asks.append(Ask(node.id, node.role, None, result, model=model))
@@ -1259,7 +1316,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                         result = _ask(factory, _order_for(node, cfg, verdict, carried=carried),
                                       opened, journal=cfg.journal, ask_id=ask_id,
                                       node_id=node.id, answered=already, model=model,
-                                      asked_before=asked_before)
+                                      asked_before=asked_before,
+                                      conversation=cfg.conversation, role=node.role)
                         report.asks.append(Ask(node.id, node.role, None, result, model=model))
                         answers.append(result)
                         verdicts[model] = str(
@@ -1289,7 +1347,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     result = _ask(
                         factory, _order_for(node, cfg, verdict, seat), opened, seat=seat,
                         journal=cfg.journal, ask_id=ask_id, node_id=node.id,
-                        answered=already, asked_before=asked_before)
+                        answered=already, asked_before=asked_before,
+                        conversation=cfg.conversation, role=node.role)
                     if ask_id in already:
                         report.resumed.append(ask_id)
                     report.asks.append(Ask(node.id, node.role, seat, result))
@@ -1316,7 +1375,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                             factory,
                             workorder.render(node, spec, verdict, seat=None),
                             opened, journal=cfg.journal, ask_id=ask_id, node_id=node.id,
-                            answered=already, asked_before=asked_before)
+                            answered=already, asked_before=asked_before,
+                            conversation=cfg.conversation, role=node.role)
                         report.asks.append(Ask(node.id, node.role, None, answer))
                         report.options[aspect] = intake_mod.read_options(answer, aspect)
 
@@ -1338,7 +1398,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     }
                     report.halted_at = node.id
                     report.halt_reason = intake_mod.stop_reason(survey, cfg.intake_history)
-                    return _finish(report, confirmations)
+                    return _finish(report, confirmations, cfg.conversation)
 
             elif node.mode == graph.SEAT_PANEL:
                 panel_sessions: List[object] = []
@@ -1346,9 +1406,10 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 for seat in policy.seat_names(seats):
                     result = _ask(
                         factory, _order_for(node, cfg, verdict, seat), opened, seat=seat,
-                        journal=cfg.journal, ask_id=f"{len(report.asks):03d}-{node.id}-{seat}",
-                        node_id=node.id, answered=already,
-                        asked_before=asked_before)
+                        journal=cfg.journal, node_id=node.id, answered=already,
+                        ask_id=f"{len(report.asks):03d}-{node.id}-{seat}",
+                        asked_before=asked_before,
+                        conversation=cfg.conversation, role=node.role)
                     ask_key = f"{len(report.asks):03d}-{node.id}-{seat}"
                     if ask_key in already:
                         report.resumed.append(ask_key)
@@ -1379,7 +1440,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 result = _ask(
                     factory, _order_for(node, cfg, verdict), opened, journal=cfg.journal,
                     ask_id=ask_id, node_id=node.id, answered=already, model=model,
-                                  asked_before=asked_before)
+                    asked_before=asked_before,
+                    conversation=cfg.conversation, role=node.role)
                 if ask_id in already:
                     report.resumed.append(ask_id)
                 report.asks.append(Ask(node.id, node.role, None, result, model=model))
@@ -1400,7 +1462,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             report.state = FINISHED
             report.halted_at = node.id
             report.halt_reason = node.note or node.label
-            return _finish(report, confirmations)
+            return _finish(report, confirmations, cfg.conversation)
 
         if node.branches:
             if panel_outcome is not None:
@@ -1422,6 +1484,10 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     report.rulings.append(
                         f"{node.id} was undecided ({last.get('reason', 'the panel was split')}) "
                         f"and a person chose {ruled.branch!r}")
+                    if cfg.conversation is not None:
+                        cfg.conversation.decision(
+                            "ruling", node.id,
+                            f"undecided; a person chose {ruled.branch!r}")
                     choice = ruled.branch
                 else:
                     # Nobody decided, so the runner does not decide either -- it suspends and says
@@ -1447,7 +1513,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                         f"{node.id} reached no decision — "
                         f"{last.get('reason', 'the panel was split')}. The runner will not pick a "
                         f"side; choose {' or '.join(sorted(node.branches))}")
-                    return _finish(report, confirmations)
+                    return _finish(report, confirmations, cfg.conversation)
             if choice is None:
                 raise EngineError(
                     f"node {node.id!r} branches on {sorted(node.branches)} but the run supplied no "
@@ -1462,4 +1528,4 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
         raise EngineError(
             f"walk exceeded {cfg.max_steps} steps — the flow is cycling without progress")
 
-    return _finish(report, confirmations)
+    return _finish(report, confirmations, cfg.conversation)

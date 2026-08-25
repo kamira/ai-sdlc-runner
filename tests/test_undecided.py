@@ -167,7 +167,7 @@ def test_the_undecided_stop_is_a_return_like_every_other_halt():
     source = inspect.getsource(engine.walk)
     marker = source.index("will not pick a")
     after = source[marker:marker + 500]
-    assert "return _finish(report, confirmations)" in after
+    assert "return _finish(report, confirmations, cfg.conversation)" in after
 
 
 def test_lead_review_has_no_undecided_branch_which_is_why_it_stops():
