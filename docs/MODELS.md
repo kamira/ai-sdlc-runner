@@ -25,10 +25,23 @@ Assignment          "which node, and which seat, gets which model"
 live in different files: the registry is **what exists**, the assignment is **what this change
 does**. A model added to the registry runs nothing until something names it.
 
-| | Where it lives | Closed? |
-|---|---|---|
-| Registry | `models.json` → moving into SQLite | **yes**, entry *and* envelope |
-| Assignment | the plan's `node_models` / `seat_models`, and `--seat-model` | **no** — the plan file is open, and that is a recorded gap |
+| | Where it lives | Persisted by the runner? | Closed? |
+|---|---|---|---|
+| Registry | `models.json` → the `models` table | **yes** — `POST /models` writes it | **yes**, entry *and* envelope |
+| Assignment | the plan's `node_models` / `seat_models`, and `--seat-model` | **no** — read once, never written | **no** — the plan file is open |
+
+### The assignment has no writer, anywhere
+
+`assignments` is built at `cli.py:704` from the plan, held in memory, and exposed **read-only** by
+`GET /config/nodes`. **No POST route touches it and nothing in `src/` writes it.**
+
+So through the console you can **add a model and never assign it**. It appears in `by_model` with
+empty `nodes` and `seats`, forever, until somebody edits the plan file by hand.
+
+That follows from the line `Registry` draws — an assignment is a property of *this change*, not of
+the project, and the plan file is its durable home. But it means "manage models in the console" is
+half a feature, and [`DATABASE.md` §0.2](DATABASE.md) records that whether the assignment should also
+be stored is **an open decision**, not a settled one.
 
 ---
 
