@@ -24,13 +24,13 @@ it, because a schema without its reasons gets "simplified" back into the defect 
 | — | the ask journal (`.runner/asks/*.json`) | a **resume index**, mutable by design; see §5 |
 | the **model assignment** — `node_assignments`, `seat_assignments` | — | **since CHG-20260823-25**; see §0.1 |
 
-### 0.1 · Model configuration is two halves, and only one is persisted here
+### 0.1 · Model configuration is two halves, and both are persisted here
 
 This is the question the schema does not answer on its own, so it is answered here.
 
 | | What it is | Where it lives | Who writes it |
 |---|---|---|---|
-| **Registry** | *which models exist* — `opus` is a `cli` model running `claude -p` | `models.json` today, the `models` table proposed | the operator, through `POST /models`, **and it persists** |
+| **Registry** | *which models exist* — `opus` is a `cli` model running `claude -p` | the `models` table (and `models.json`, still written) | the operator, through `POST /models`, **and it persists** |
 | **Assignment** | *which node and which seat gets which model* | the `node_assignments` / `seat_assignments` tables, **and** the plan | the operator, through `POST /config/nodes` and `POST /config/seats` — **and it persists** |
 
 **Until CHG-20260823-25 the assignment had no writer anywhere in `src/`.** It was built from the

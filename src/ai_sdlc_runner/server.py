@@ -349,6 +349,17 @@ class Runner:
             self._publish()
         return self._advance()
 
+    def require_version(self, version: int) -> None:
+        """Public, because the configuration routes need the same check the run routes make."""
+        with self._lock:
+            self._require_version(version)
+
+    def publish_config_change(self) -> None:
+        """A configuration edit advances the version and wakes every listener."""
+        with self._lock:
+            self.state.version += 1
+            self._publish()
+
     def _require_version(self, version: int) -> None:
         """Task 16. The refusal that turns a double-click into an error instead of two approvals."""
         if version != self.state.version:
@@ -413,6 +424,14 @@ def make_handler(runner: Runner, operator: Operator,
             "assignments": dict(assignments or {}),
             "plan": dict(plan_assignments or {}),
             "source": {}}
+    #: `held` is read-modify-written from request threads, and `ThreadingHTTPServer` gives each
+    #: request its own. `held["registry"] = held["registry"].add(model)` is exactly the shape that
+    #: loses a write: two concurrent `POST /models` both read the same base registry, both add, the
+    #: last save wins, and **both callers are told 200**.
+    #:
+    #: A seat found it. The lock on the SQLite connection secured the database and left the
+    #: in-memory half of the same state unguarded — half a concurrency story reads as a whole one.
+    held_lock = threading.RLock()
 
     def _reassign():
         """Re-merge plan and store after an edit, and refresh the provenance.
@@ -428,9 +447,28 @@ def make_handler(runner: Runner, operator: Operator,
         held["source"] = source
         return {**merged, "source": source}
 
+    def _require_current(version):
+        """The same staleness check every other POST makes, and these two did not.
+
+        They took a `version` and only checked it was an **integer** — so two tabs could send
+        conflicting assignments at the same version and the last one silently won. A field named
+        `version` that is not compared is a name standing in for a constraint, in the routes whose
+        change record claimed they "take the run version like every other POST".
+        """
+        runner.require_version(version)
+
+    def _bump():
+        """A configuration edit is a state change, so it advances the version and wakes listeners.
+
+        It invalidates an answer another tab was about to send, and that is right: the
+        configuration moved under them, and they should reload and look at what it is now.
+        """
+        runner.publish_config_change()
+
     def _assign_node(body):
         if db is None:
             raise ServerError("this runner has no assignment store; start `serve` with one")
+        _require_current(body.get("version"))
         node_id = str(body.get("node_id") or "")
         raw = body.get("models")
         if not isinstance(raw, list):
@@ -439,18 +477,23 @@ def make_handler(runner: Runner, operator: Operator,
             store_mod.set_node_models(db, node_id, [str(m) for m in raw])
         except store_mod.StoreError as exc:
             raise ServerError(str(exc))
-        return _reassign()
+        out = _reassign()
+        _bump()
+        return {**out, "version": runner.state.version}
 
     def _assign_seat(body):
         if db is None:
             raise ServerError("this runner has no assignment store; start `serve` with one")
+        _require_current(body.get("version"))
         seat = str(body.get("seat") or "")
         model_id = body.get("model_id")
         try:
             store_mod.set_seat_model(db, seat, str(model_id) if model_id else None)
         except store_mod.StoreError as exc:
             raise ServerError(str(exc))
-        return _reassign()
+        out = _reassign()
+        _bump()
+        return {**out, "version": runner.state.version}
 
     if db is not None:
         # Read the registry back out of the store, where the store has one.
@@ -622,19 +665,23 @@ def make_handler(runner: Runner, operator: Operator,
                     out = runner.approve(version, str(body.get("gate") or ""),
                                          body.get("node_id"))
                 elif self.path == "/models":
+                  with held_lock:
                     try:
-                        held["registry"] = held["registry"].add(
+                        added = held["registry"].add(
                             models_mod._model_from(dict(body.get("model") or {})))
                     except models_mod.ModelError as exc:
                         raise ServerError(str(exc))
+                    # The store first, because it is the one that can refuse. Writing the file and
+                    # memory before it is what turned a foreign-key refusal into three copies
+                    # disagreeing, with the console showing a model the store had never accepted.
+                    if db is not None:
+                        try:
+                            store_mod.save_registry(db, added)
+                        except store_mod.StoreError as exc:
+                            raise ServerError(str(exc))
+                    held["registry"] = added
                     if registry_path is not None:
                         models_mod.save(held["registry"], registry_path)
-                    if db is not None:
-                        # Both, for now: the file is what an operator on the previous version
-                        # reads, and the store is what assignments reference. Writing one and not
-                        # the other would make a model assignable and invisible, or visible and
-                        # unassignable, depending on which half was dropped.
-                        store_mod.save_registry(db, held["registry"])
                     reg = held["registry"]
                     out = {**reg.as_dict(), "leaving": [m.id for m in reg.leaving()]}
                 elif self.path == "/run/reject":
