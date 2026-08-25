@@ -25,7 +25,7 @@ miscounts its own subject is the thing it warns about, so the count is now check
 | 11 | Settings | [`settings.py`](../src/ai_sdlc_runner/settings.py) | shipped · **closed** |
 | 12 | Attachment manifest | [`attachments.py`](../src/ai_sdlc_runner/attachments.py) | shipped |
 | 13 | Run report | [`engine.py`](../src/ai_sdlc_runner/engine.py) | shipped |
-| 14 | **SQLite DDL** | [`DATABASE.md`](DATABASE.md) | **proposed, not built** |
+| 14 | **SQLite DDL** | [`DATABASE.md`](DATABASE.md) | 3 of 5 tables **built** |
 | 15 | **Server HTTP API** | [`API.md`](API.md) | shipped |
 | 16 | **Model management** — rules, reach, assignment | [`MODELS.md`](MODELS.md) | shipped |
 
@@ -293,7 +293,7 @@ The **dataclass** does not enforce membership — `RunReport(state="banana")` co
 `as_dict()` emits it. `_finish` refuses on every walk exit, so it is enforced at the boundary that
 matters and not by the type.
 
-## 14 · SQLite DDL — **proposed, not built**
+## 14 · SQLite DDL — three of five tables built
 
 The full schema, with every absent column and the finding that removed it, is
 **[`DATABASE.md`](DATABASE.md)** — pinned by `tests/test_database_schema.py`, which executes the
@@ -338,6 +338,10 @@ CREATE TABLE models (
   command_json TEXT NOT NULL DEFAULT '[]', endpoint TEXT NOT NULL DEFAULT '',
   key_env TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '');
 ```
+
+`models`, `node_assignments` and `seat_assignments` are live in
+[`store.py`](../src/ai_sdlc_runner/store.py); `conversations` and `turns` are not created by any
+code yet and arrive with the conversation-store migration.
 
 No `reach` column, no `updated_at`, and **no `opened_at`** — the third one is this round's finding.
 Both earlier seats called `opened_at` a guess and the correction deleted `updated_at` while keeping

@@ -27,6 +27,7 @@ from typing import Dict, List, Optional
 
 from . import attachments as attach_mod
 from . import conversations as conv_mod
+from . import store as store_mod
 from . import engine, models as models_mod, graph, policy, settings as settings_mod, ship, tui, workorder
 
 DEFAULT_CONFIG = "config/runner.yaml"
@@ -693,16 +694,40 @@ def cmd_serve(args: argparse.Namespace) -> int:
         print(f"error: {exc}")
         return 2
 
+    # The assignment store. This is where 「model 模型配置」 actually persists -- both halves of it,
+    # after the ruling that the registry alone was not what was meant.
+    try:
+        db = store_mod.connect(args.assignment_store or (Path(args.token_dir) / "config.sqlite"))
+        if not len(store_mod.load_registry(db)) and len(registry):
+            # One-time migration, and additive: the file is left exactly where it was. Without this
+            # an operator's existing models would be invisible to every assignment, because a
+            # foreign key can only point at a model the store has.
+            store_mod.save_registry(db, registry)
+        else:
+            registry = store_mod.load_registry(db) if len(store_mod.load_registry(db)) else registry
+    except store_mod.StoreError as exc:
+        print(f"error: {exc}")
+        return 2
+
+    # The plan's assignment is this change's declaration; the store's is the project's standing one.
+    # The plan wins where it says something, and `resolve` says which source each one came from.
+    plan_assignments = {"node_models": plan.get("node_models") or {},
+                        "seat_models": plan.get("seat_models") or {}}
+    assignments, assignment_source = store_mod.resolve(
+        plan_assignments,
+        {"node_models": store_mod.node_models(db), "seat_models": store_mod.seat_models(db)})
+
     config = load_config(args.config)
-    factory = session_factory(config, dict(plan.get("seat_models") or {}), registry=registry)
+    factory = session_factory(config, dict(assignments.get("seat_models") or {}),
+                              registry=registry)
     operator = server.Operator.mint(Path(args.token_dir))
     runner = server.Runner(walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
                            make_config=make_config, store=store)
     try:
         httpd = server.serve(runner, operator, port=args.port,
                              registry=registry, registry_path=registry_path,
-                             assignments={"node_models": plan.get("node_models") or {},
-                                          "seat_models": plan.get("seat_models") or {}})
+                             assignments=assignments, db=db,
+                             plan_assignments=plan_assignments)
     except server.ServerError as exc:
         print(f"error: {exc}")
         return 2
@@ -710,6 +735,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
     host, port = httpd.server_address[0], httpd.server_address[1]
     print(f"journal        {journal.dir} — the run's identity, and what a resume reads")
     print(f"attachments    {store.dir} — content-addressed; the filename never becomes a path")
+    overridden = sum(1 for v in assignment_source.values() if v == store_mod.FROM_PLAN)
+    print(f"model config   {args.assignment_store or (Path(args.token_dir) / 'config.sqlite')} — "
+          f"registry and assignments; {overridden} assignment(s) from the plan override it")
     print(f"listening on   http://{host}:{port} — this machine only, no external connections")
     # The fragment is never sent to a server and never lands in a Referer, so one openable link can
     # carry the credential without it being logged anywhere on the way.
@@ -766,6 +794,10 @@ def build_parser() -> argparse.ArgumentParser:
                          "attachments.py for why that is a safety property and not tidiness.")
     pv.add_argument("--models", default=None,
                     help="path to the model registry (default <token-dir>/models.json)")
+    pv.add_argument("--assignment-store", default=None, metavar="FILE",
+                    help="where model configuration persists — the registry AND which node or seat "
+                         "each model is assigned to (default <token-dir>/config.sqlite). An "
+                         "existing models.json is imported once and left where it is.")
     pv.add_argument("--settings", default=None, help="path to settings.json")
     _store_flags(pv)
     pv.set_defaults(func=cmd_serve)

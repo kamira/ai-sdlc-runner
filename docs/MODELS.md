@@ -25,23 +25,46 @@ Assignment          "which node, and which seat, gets which model"
 live in different files: the registry is **what exists**, the assignment is **what this change
 does**. A model added to the registry runs nothing until something names it.
 
-| | Where it lives | Persisted by the runner? | Closed? |
+| | Where it lives | Persisted? | Closed? |
 |---|---|---|---|
-| Registry | `models.json` → the `models` table | **yes** — `POST /models` writes it | **yes**, entry *and* envelope |
-| Assignment | the plan's `node_models` / `seat_models`, and `--seat-model` | **no** — read once, never written | **no** — the plan file is open |
+| Registry | the `models` table (and `models.json`, still written) | **yes** — `POST /models` | **yes**, entry *and* envelope |
+| Assignment | the `node_assignments` / `seat_assignments` tables **and** the plan | **yes** — `POST /config/nodes`, `POST /config/seats` | node and seat and model id all checked |
 
-### The assignment has no writer, anywhere
+### Both halves persist — and this is new
 
-`assignments` is built at `cli.py:704` from the plan, held in memory, and exposed **read-only** by
-`GET /config/nodes`. **No POST route touches it and nothing in `src/` writes it.**
+Until CHG-20260823-25 the assignment had **no writer anywhere in `src/`**: read from the plan at
+startup, held in memory, exposed read-only. Through the console you could add a model and never
+assign it.
 
-So through the console you can **add a model and never assign it**. It appears in `by_model` with
-empty `nodes` and `seats`, forever, until somebody edits the plan file by hand.
+The user ruled that 「模型配置」 means both halves, so [`store.py`](../src/ai_sdlc_runner/store.py)
+now holds them. Two tables, two routes.
 
-That follows from the line `Registry` draws — an assignment is a property of *this change*, not of
-the project, and the plan file is its durable home. But it means "manage models in the console" is
-half a feature, and [`DATABASE.md` §0.2](DATABASE.md) records that whether the assignment should also
-be stored is **an open decision**, not a settled one.
+### Precedence: the plan wins, and it is never silent
+
+An assignment can come from two places:
+
+- the **plan file** — this change's declaration;
+- the **store** — the project's standing assignment, edited through the console.
+
+**The plan wins where it says something; the store fills where the plan is silent.** That is
+`settings.py`'s rule one layer out — *"a flag beats the file"* — and for the same reason: a
+per-change declaration must not be silently overridden by something configured weeks ago.
+
+`GET /config/nodes` returns a **`source`** map beside the merged assignment, saying which of the two
+put each one there. A merged dict alone cannot say, and an override nobody can see is worse than no
+override.
+
+### What the store refuses
+
+| Refused | Because |
+|---|---|
+| a node id the flow does not have | — |
+| a node whose **mode ignores a model list** — `runner`, `follows`, `seat_panel`, `survey` | *a setting that looks configured and does nothing is worse than one that was rejected* |
+| a model id the registry does not have | enforced by a foreign key, and refused **by name**: "assigned a model the project does not have" must not read the same as "assigned nothing" |
+| a seat this runner does not define | checked against every seat, not only the ones today's floor opens — a standing assignment must survive a run that opens more |
+
+Only **registry model ids** can be assigned through the store. A raw command line remains a plan and
+`--seat-model` thing: the registry is what the store can point a foreign key at.
 
 ---
 
