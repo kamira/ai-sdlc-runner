@@ -1,0 +1,2 @@
+agent_command: ["python3", "agent.py"]
+agent_timeout: 60

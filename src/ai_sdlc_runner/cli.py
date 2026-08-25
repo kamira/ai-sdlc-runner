@@ -927,9 +927,10 @@ def build_parser() -> argparse.ArgumentParser:
     pe.add_argument("--conversation", default=None, metavar="ID",
                     help="which conversation; `runner conversations` lists them")
     pe.add_argument("--format", choices=conv_mod.FORMATS, required=True,
-                    help="json (lossless), markdown (for reading), csv (for a spreadsheet, and "
-                         "the lossy one). Asked for rather than defaulted: a default would pick "
-                         "which information you lose.")
+                    help="json (lossless), markdown (for reading), html (a waterfall down the "
+                         "flow, one stop per node visit), csv (for a spreadsheet, and the lossy "
+                         "one). Asked for rather than defaulted: a default would pick which "
+                         "information you lose.")
     pe.add_argument("-o", "--out", default=None, metavar="FILE",
                     help="write here instead of standard output")
     pe.set_defaults(func=cmd_export)
