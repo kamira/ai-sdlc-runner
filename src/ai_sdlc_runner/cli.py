@@ -27,6 +27,7 @@ from typing import Dict, List, Optional
 
 from . import attachments as attach_mod
 from . import conversations as conv_mod
+from . import plan as plan_mod
 from . import store as store_mod
 from . import engine, models as models_mod, graph, policy, settings as settings_mod, ship, tui, workorder
 
@@ -475,7 +476,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         print("error: run needs --plan <file>: the objective, instructions, done-criteria and "
               "branch choices for this change. The governance is ours; the work is not.")
         return 2
-    plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+    try:
+        # Closed. Unknown keys are refused rather than ignored — the plan was the outermost schema
+        # and the only one with no validation at all, and the case that decided it is `ship`: a
+        # misspelt one made a run perform no side effects and report `finished`.
+        plan = plan_mod.load(args.plan)
+    except plan_mod.PlanError as exc:
+        print(f"error: {exc}")
+        return 2
 
     journal = engine.AskJournal(args.ask_journal) if args.ask_journal else None
 
@@ -673,7 +681,14 @@ def cmd_serve(args: argparse.Namespace) -> int:
         print("error: serve needs --plan <file>, the same one `run` takes. A console with no plan "
               "behind it would accept an instruction and quietly answer nothing.")
         return 2
-    plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+    try:
+        # Closed. Unknown keys are refused rather than ignored — the plan was the outermost schema
+        # and the only one with no validation at all, and the case that decided it is `ship`: a
+        # misspelt one made a run perform no side effects and report `finished`.
+        plan = plan_mod.load(args.plan)
+    except plan_mod.PlanError as exc:
+        print(f"error: {exc}")
+        return 2
     try:
         saved = settings_mod.load(args.settings)
     except settings_mod.SettingsError as exc:

@@ -90,6 +90,12 @@ def test_the_closed_count_is_the_number_of_schemas_that_are_actually_closed():
         settings.load(str(scratch))
     closed += 1
 
+    # the plan file — the outermost schema, closed at the top level and inside its ship block
+    from ai_sdlc_runner import plan as plan_mod
+    with pytest.raises(plan_mod.PlanError):
+        plan_mod.check({"risk": "low", "surprise": 1})
+    closed += 1
+
     stated = re.search(r"\*\*(\w+)\*\* schemas are \*\*closed\*\*", TEXT)
     assert stated, "the catalogue no longer states how many schemas are closed"
     words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
