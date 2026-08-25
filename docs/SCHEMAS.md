@@ -3,7 +3,7 @@
 One page, so that "what shape is this?" never needs a code read. Each entry names the file that
 **defines** it — that file is authoritative, this page is a map.
 
-**Four** schemas are **closed**: a field outside them is refused rather than ignored, because a
+**Five** schemas are **closed**: a field outside them is refused rather than ignored, because a
 setting that looks configured and does nothing is worse than one that was rejected. Revision 1 of
 this page said *"two"* in this sentence while its own table marked *three*, and the true number was
 four — `settings.py` enforces closedness and was not credited. A catalogue of closedness that
@@ -13,7 +13,7 @@ miscounts its own subject is the thing it warns about, so the count is now check
 | # | Schema | Defined in | Status |
 |---|---|---|---|
 | 1 | Node | [`graph.py`](../src/ai_sdlc_runner/graph.py) | shipped |
-| 2 | Plan file | [`cli.py`](../src/ai_sdlc_runner/cli.py) | shipped |
+| 2 | Plan file | [`plan.py`](../src/ai_sdlc_runner/plan.py) | shipped · **closed** |
 | 3 | Node spec | [`workorder.py`](../src/ai_sdlc_runner/workorder.py) | shipped · **closed** |
 | 4 | Operation | [`policy.py`](../src/ai_sdlc_runner/policy.py) | shipped |
 | 5 | Work order | [`workorder.py`](../src/ai_sdlc_runner/workorder.py) | shipped · **closed** |
@@ -60,7 +60,19 @@ note: str
 Two biconditionals `validate()` checks rather than infers:
 `role is None ⟺ mode == RUNNER`, and `role == "seat" ⟺ mode in (SEAT_PANEL, SURVEY)`.
 
-## 2 · Plan file
+## 2 · Plan file — **closed**
+
+Closed at **two** levels: the top, and the `ship` block inside it. Unknown keys are refused, and so
+is a key of the right name holding the wrong shape — `"node_specs": []` reads as configured and
+supplies nothing.
+
+It was the outermost schema and the only entry point with **no validation at all**, named by six
+independent seat reviews. The case that decided it: *a plan whose `ship` key is misspelled runs with
+no side effects and reports `finished`* — a dry run wearing a shipped run's report, produced by one
+typo nothing refused.
+
+`ship`'s four indexed keys — `repo`, `chg_id`, `branch`, `message` — are required, because leaving
+one out was a `KeyError` partway through a run rather than a refusal before it started.
 
 ```jsonc
 {
@@ -71,7 +83,11 @@ Two biconditionals `validate()` checks rather than infers:
   "decisions":   { "<node id>": "<branch>" },
   "node_models": { "<node id>": ["<model id>", …] },
   "seat_models": { "<seat>": ["<model id>", …] },
-  "ship": { … }
+  "ship": {
+    "repo": ".", "chg_id": "CHG-…", "branch": "…", "message": "…",   // required
+    "chg_body": "…", "remote": "origin",
+    "task": "…", "acc_id": "ACC-…", "acc_body": "…"                  // optional
+  }
 }
 ```
 
@@ -398,7 +414,7 @@ found these independently.
 | **The `.conversation` marker** and **`_project.json`** | durable, and the marker is load-bearing at resume — stale data there controls re-attachment |
 | **`EffectOutcome`** — `frontier`, `already_met`, `applied`, `out_of_order` | durable report output with a fixed shape |
 | **The intake `Survey` aggregate** | crosses the agent→operator boundary and lands in the run report; adds a computed `complete` absent from the answer contract |
-| **The `ship` block's interior** | entry 2 shows it as literally `{ … }` — and a misspelt `ship` key makes a run do **no side effects** and report `finished` |
+| ~~The `ship` block's interior~~ | **closed** — nine fields, four of them required |
 
 ### Versioning
 

@@ -384,6 +384,11 @@ model should be a decision somebody made, not one they discover later.
 }
 ```
 
+**The plan file is closed too**, at the top level and inside its `ship` block. It was the outermost
+schema and the only entry point with no validation at all, and six independent reviews named it. The
+case that decided it: a misspelt `ship` key made a run perform **no side effects and report
+`finished`** — a dry run wearing a shipped run's report.
+
 The node spec's fields are a **closed schema** — exactly these, no more and no fewer. A field outside
 it is refused rather than ignored, because a setting that looks configured and does nothing is worse
 than one that was rejected. **Every asking node needs one** — 15 of the 24 — and the walk stops at
@@ -509,8 +514,9 @@ tools/
 [`docs/SCHEMAS.md`](docs/SCHEMAS.md) lists all sixteen — the node, the plan, the node spec, the
 operation, the work order, the answer contract, the journal entry, the conversation turn, the CSV
 columns, the model registry, the settings, the attachment manifest, the run report, and the proposed
-SQLite DDL, and the server's HTTP API. **Four** are closed schemas: a field outside them is refused
-rather than ignored.
+SQLite DDL, and the server's HTTP API. **Five** are closed schemas — the plan file, the node spec,
+the work order, the model registry and the settings: a field outside them is refused rather than
+ignored.
 
 Three have pages of their own — [`docs/API.md`](docs/API.md) for the fifteen HTTP routes,
 [`docs/DATABASE.md`](docs/DATABASE.md) for the proposed SQLite schema, and
