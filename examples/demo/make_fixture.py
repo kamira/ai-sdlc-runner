@@ -22,10 +22,13 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -58,7 +61,8 @@ def scrub(line: str) -> str:
 
 def main():
     scenarios = _scenarios()
-    with tempfile.TemporaryDirectory(prefix="fixture-") as tmp:
+    tmp = tempfile.mkdtemp(prefix="fixture-")
+    try:
         work = Path(tmp) / "run"
         proc, console = scenarios.start(work)
         try:
@@ -76,7 +80,14 @@ def main():
             state = console.settle()
             print(f"  finished: {state.get('state')} at {state.get('at')}")
         finally:
+            # `terminate()` asks; it does not wait. Waiting is correct on both platforms; only
+            # Windows *needs* it, because there an open handle keeps the file.
             proc.terminate()
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=15)
 
         source = work / "conv"
         if OUT.exists():
@@ -103,8 +114,32 @@ def main():
             raise SystemExit(f"a path survived scrubbing: {leaked[0][:160]}")
         print(f"  wrote {total:,} bytes to {OUT.relative_to(REPO)}")
 
+    finally:
+        _remove(Path(tmp))
+
     print("\nnow run: python3 examples/demo/build.py")
     return 0
+
+
+def _remove(directory: Path) -> None:
+    """Remove a directory a just-stopped server was writing into.
+
+    Windows only: SQLite's `-wal` and `-shm` companions can outlive `proc.wait()` by a moment while
+    the OS releases the handle, so the removal is retried a few times over a bounded window. POSIX
+    unlinks regardless, so there the first attempt is the only one ever made.
+    """
+    attempts = 6 if os.name == "nt" else 1
+    for attempt in range(attempts):
+        try:
+            shutil.rmtree(directory)
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                print(f"  note: {directory} still held; it contains only the throwaway run")
+                return
+            time.sleep(0.5)
 
 
 if __name__ == "__main__":
