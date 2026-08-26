@@ -37,6 +37,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from . import paths
+
 #: What the runner will hold. Not a guess at what is useful — a list of what it can be given without
 #: having to decide anything about it. Anything else is refused rather than stored as bytes nobody
 #: knows the shape of.
@@ -111,7 +113,7 @@ class Store:
 
     def __init__(self, directory: str | Path):
         self.dir = Path(directory)
-        self.dir.mkdir(parents=True, exist_ok=True)
+        paths.makedirs(self.dir)
 
     @property
     def manifest_path(self) -> Path:
@@ -132,11 +134,11 @@ class Store:
         # Ensured here and not only in __init__: the store owns this directory for the life of the
         # process, and a directory that went away between startup and an upload should be recreated
         # rather than crash a request. Found by clearing the store between runs of a live demo.
-        self.dir.mkdir(parents=True, exist_ok=True)
+        paths.makedirs(self.dir)
         target = self.dir / stored_name(digest)
         if not target.exists():                 # the same bytes twice is the same attachment
             try:
-                target.write_bytes(data)
+                paths.write_bytes(target, data)
             except OSError as exc:
                 # Say what actually happened. Windows raises FileNotFoundError for a path that is
                 # merely too long, about a directory that exists — which is the most misleading
@@ -200,6 +202,7 @@ class Store:
     def _write(self, attachments: Sequence[Attachment]) -> None:
         payload = {"attachments": [a.as_dict() for a in
                                    sorted(attachments, key=lambda a: (a.instruction, a.filename))]}
-        self.manifest_path.write_text(
+        paths.write_text(
+            self.manifest_path,
             json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8")

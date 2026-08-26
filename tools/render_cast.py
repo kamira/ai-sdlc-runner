@@ -117,12 +117,37 @@ def load(cast_dir: Path):
     return steps
 
 
+def script_json(value) -> str:
+    r"""JSON for embedding inside a `<script>` block.
+
+    CHG-20260823-33 fixed exactly this in `conversations.py` and **left this file with the hole**,
+    in the same change, while the record said it was closed "at the JSON level rather than by
+    matching sequences". Both review seats found it independently; reproduced with a recorded
+    command containing `</script><img src=x onerror=…>`, which produced four closing `</script>`
+    strings where there should be one.
+
+    The recorded `command` is whatever was run, so this is reachable by recording a command line
+    that merely *mentions* the string — no attacker required, only somebody demonstrating HTML.
+
+    Escaping `<` at the JSON level is the fix that does not depend on enumerating dangerous
+    sequences: `\u003c` is the same string to JavaScript and nothing to the HTML parser. `U+2028`
+    and `U+2029` go too — legal in JSON, statement terminators in JavaScript.
+
+    This must stay identical to `conversations._script_json`; a test asserts both produce the same
+    output for the same hostile input, because two copies of an escaping rule that drift apart is
+    how one of them stops being applied.
+    """
+    text = json.dumps(value, ensure_ascii=False)
+    return (text.replace("<", "\\u003c").replace(">", "\\u003e")
+                .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
+
+
 def render(steps, title):
     total = steps[-1]["end"] if steps else 0
     real = sum(s["real"] for s in steps) + sum(s["waited"] or 0 for s in steps)
     failed = [s for s in steps if s["exit"] not in (0, None)]
     return _PAGE.replace("__TITLE__", _escape_html(title)) \
-                .replace("__STEPS__", json.dumps(steps, ensure_ascii=False)) \
+                .replace("__STEPS__", script_json(steps)) \
                 .replace("__TOTAL__", f"{total:.1f}") \
                 .replace("__REAL__", f"{real / 60:.1f}") \
                 .replace("__COUNT__", str(len(steps))) \

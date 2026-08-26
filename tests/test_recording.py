@@ -173,3 +173,53 @@ def test_a_failing_step_is_marked_as_one(tmp_path):
     steps = render_cast.load(tmp_path)
     assert [s["exit"] for s in steps] == [0, 2]
     assert "1</b> non-zero exits" in render_cast.render(steps, "t")
+
+
+# ── the injection CHG-33 said it had closed, and had not (CHG-20260823-38) ────────────────────
+
+def test_a_recorded_command_cannot_end_the_script_block(tmp_path):
+    """CHG-20260823-33 fixed this in `conversations.py` and left the sibling tool open, in the same
+    change, while the record said it was closed "at the JSON level rather than by matching
+    sequences". Both review seats found it independently.
+
+    Reachable without an attacker: `session_record.py` puts argv in the header, so recording any
+    command that merely *mentions* `</script>` — demonstrating HTML, grepping for it — poisons the
+    page. Reproduced at four closing tags where there should be one.
+    """
+    hostile = "</script><img src=x onerror=alert(1)>"
+    cast = tmp_path / "000-x.cast"
+    cast.write_text(
+        json.dumps({"version": 2, "timestamp": 0, "duration": 1, "exit_code": 0,
+                    "command": ["echo", hostile], "title": hostile, "note": hostile}) + "\n"
+        + json.dumps([0.0, "o", "ordinary output\n"]) + "\n", encoding="utf-8")
+
+    page = render_cast.render(render_cast.load(tmp_path), hostile)
+    after = page.split("const STEPS =", 1)[1]
+    assert after.count("</script>") == 1, "the payload ended the script block early"
+    assert "</script><img" not in page
+    assert "\u003c/script" in page, "the text must be kept, escaped — not dropped"
+
+
+def test_a_comment_opener_in_a_recorded_command_cannot_swallow_the_page(tmp_path):
+    """`<!--` inside a script block opens a comment that eats everything after it."""
+    cast = tmp_path / "000-x.cast"
+    cast.write_text(
+        json.dumps({"version": 2, "timestamp": 0, "duration": 1, "exit_code": 0,
+                    "command": ["echo", "<!-- swallowed"], "title": "t", "note": ""}) + "\n"
+        + json.dumps([0.0, "o", "out\n"]) + "\n", encoding="utf-8")
+    page = render_cast.render(render_cast.load(tmp_path), "t")
+    assert "<!--" not in page.split("const STEPS =", 1)[1]
+
+
+def test_the_two_escapers_stay_identical():
+    """`render_cast.script_json` and `conversations._script_json` implement one rule in two files.
+
+    Two copies of an escaping rule that drift apart is precisely how one of them stopped being
+    applied, so this compares their output rather than trusting that both were remembered.
+    """
+    from ai_sdlc_runner import conversations as conv
+
+    for probe in ({"why": "</script><!--\u2028x"},
+                  ["<a>", ">", "\u2029"],
+                  {"nested": {"deep": "</SCRIPT >"}}):
+        assert render_cast.script_json(probe) == conv._script_json(probe)

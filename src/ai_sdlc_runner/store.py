@@ -104,6 +104,10 @@ def connect(path: str | Path) -> sqlite3.Connection:
     ```
     """
     file = Path(path)
+    # `makedirs` checks the parent's components; the database's own name is checked here, because
+    # `real()` deliberately does not check — it is a spelling function. A seat found that gap: the
+    # CHG record claimed sqlite got the component refusal and only the directory did.
+    paths.check(file)
     paths.makedirs(file.parent)
     # `check_same_thread=False`, and a lock to make that safe. The server is a
     # `ThreadingHTTPServer` -- **every request is handled in its own thread** -- so a connection

@@ -27,6 +27,7 @@ from typing import Dict, List, Optional
 
 from . import attachments as attach_mod
 from . import conversations as conv_mod
+from . import paths
 from . import plan as plan_mod
 from . import store as store_mod
 from . import engine, models as models_mod, graph, policy, settings as settings_mod, ship, tui, workorder
@@ -297,8 +298,8 @@ def effects_provider(plan: dict):
                 f"the plan ships {chg_id} but supplies no chg_body — the intent has to be written "
                 f"down before anything else happens, and this runner will not invent it")
         path = Path(repo) / "docs" / "changes" / f"{chg_id}.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(body, encoding="utf-8")
+        paths.makedirs(path.parent)
+        paths.write_text(path, body)
 
     sequence = ship.effects_for(
         repo=repo, chg_id=chg_id, branch=settings["branch"], message=settings["message"],
@@ -320,8 +321,8 @@ def effects_provider(plan: dict):
                 f"the plan records acceptance as {acc_id} but supplies no acc_body — an acceptance "
                 f"record with no evidence is the false green this repo keeps catching")
         path = Path(repo) / "docs" / "acceptance" / f"{acc_id}.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(acc_body, encoding="utf-8")
+        paths.makedirs(path.parent)
+        paths.write_text(path, acc_body)
 
     record = ship.record_effects(repo, chg_id, task, acc_id, tick=_tick,
                                  write_acc=_write_acc) if task else []
@@ -399,8 +400,10 @@ def cmd_export(args: argparse.Namespace) -> int:
         # `Path.write_text` grew a `newline=` keyword in 3.10 and this project's floor is 3.9, so
         # the newline is pinned here instead — a CSV whose line endings depend on the OS is a
         # different file on each half of the CI matrix.
-        with io.open(args.out, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(text)
+        # Through `paths`, which pins the newline for the same reason. `--out` is an operator-chosen
+        # path and was one of five writes bypassing the module CHG-20260823-32 claimed every write
+        # went through.
+        paths.write_text(args.out, text)
         print(f"wrote {args.out} ({len(document.get('turns') or [])} turns, {args.format})")
         if args.format == "csv":
             print("note: csv is the lossy form — nested values are JSON text in the *_json "

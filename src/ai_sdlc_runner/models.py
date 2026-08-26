@@ -38,6 +38,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlsplit
 
+from . import paths
+
 CLI = "cli"      #: a command run on this machine
 API = "api"      #: an HTTP endpoint
 TRANSPORTS = (CLI, API)
@@ -292,10 +294,12 @@ def load(path: str | Path) -> Registry:
 
 def save(registry: Registry, path: str | Path) -> None:
     file = Path(path)
-    file.parent.mkdir(parents=True, exist_ok=True)
+    paths.makedirs(file.parent)
     payload = {"models": [
         {k: v for k, v in m.as_dict().items()
          if k not in ("reach", "leaves_this_machine")}     # both are computed; storing them would
         for m in registry.models]}                          # let a stale label outlive the truth
-    file.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    paths.write_text(
+        file,
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
                     encoding="utf-8")

@@ -48,6 +48,10 @@ platform lifts, is **`NAME_MAX` — 255 bytes for a single component**. Measured
 300-char name: OSError errno=22
 ```
 
+**In which unit** is the part this module first got wrong. Windows counts UTF-16 code units; ext4
+and APFS count UTF-8 bytes. Counting bytes everywhere refused a 100-character CJK name — 300 bytes,
+100 units, and legal — with a message asserting no filesystem would take it. See `measure`.
+
 So the honest split is:
 
 | | fixed by | |
@@ -64,7 +68,7 @@ from __future__ import annotations
 import io
 import os
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
 #: Windows' extended-length prefix. Lifts `MAX_PATH` to ~32,767 for the call it is passed to.
 PREFIX = "\\\\?\\"
@@ -82,6 +86,34 @@ class PathTooLong(OSError):
     """A path this machine will not take, refused by name before anything is written."""
 
 
+def measure(part: str) -> Tuple[int, str]:
+    """How long this machine considers one name, **in the unit its filesystem actually counts**.
+
+    This was wrong, and wrong in the worst direction (CHG-20260823-38). The first version counted
+    UTF-8 bytes everywhere, so a 100-character CJK name — 300 bytes, and perfectly legal — was
+    refused with a message asserting that no filesystem here would take it. Measured on this
+    machine:
+
+    ```
+    chars: 100 | utf-8 bytes: 300 | utf-16 units: 100
+    the filesystem ACCEPTED it -> True
+    paths.check REFUSED it
+    ```
+
+    A false refusal is worse than the failure it was written to prevent: the original defect was a
+    confusing error about a real limit, and this was a confident error about a limit that does not
+    exist. It fell hardest on exactly the names least likely to be tested — a Latin name reaches 255
+    bytes and 255 characters together, so nothing in the original test set could have caught it.
+
+    - **Windows** counts UTF-16 code units. An astral character (an emoji) costs two, which is what
+      the API does too.
+    - **ext4 and APFS** count UTF-8 bytes.
+    """
+    if os.name == "nt":
+        return len(part.encode("utf-16-le")) // 2, "UTF-16 code units"
+    return len(part.encode("utf-8")), "bytes"
+
+
 def check(path: str | Path) -> None:
     """Refuse what no prefix can fix, and say which component is at fault.
 
@@ -92,11 +124,12 @@ def check(path: str | Path) -> None:
     for part in Path(os.fspath(path)).parts:
         if part in ("/", "\\") or (len(part) == 3 and part[1:] == ":\\"):
             continue                                  # a root or a drive, not a name
-        if len(part.encode("utf-8")) > NAME_MAX:
+        size, unit = measure(part)
+        if size > NAME_MAX:
             raise PathTooLong(
-                f"{part[:40]}… is {len(part.encode('utf-8'))} bytes as a single path component, "
-                f"and no filesystem here takes more than {NAME_MAX}. The extended-length prefix "
-                f"lifts the total path length and not this — shorten the name.")
+                f"{part[:40]}… is {size} {unit} as a single path component, and this filesystem "
+                f"takes at most {NAME_MAX}. The extended-length prefix lifts the total path length "
+                f"and not this — shorten the name.")
 
 
 def real(path: str | Path) -> str:
@@ -113,7 +146,14 @@ def real(path: str | Path) -> str:
     if os.name != "nt":
         return os.path.abspath(text)
     if text.startswith(PREFIX):
-        return text
+        # Already prefixed — but only *absolute* prefixed paths are meaningful, because the prefix
+        # turns off the resolution that would have made a relative one absolute. Returning it
+        # unchanged handed the OS a path it cannot resolve and called it done (CHG-20260823-38);
+        # a seat found it. Strip, resolve, re-prefix.
+        inner = plain(text)
+        if os.path.isabs(inner):
+            return text
+        text = inner
     absolute = os.path.abspath(text)
     if absolute.startswith("\\\\"):                    # a UNC path: \\server\share\…
         return UNC_PREFIX + absolute[2:]
