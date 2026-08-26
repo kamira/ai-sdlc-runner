@@ -352,8 +352,7 @@ def _report_pending(journal) -> None:
 
 def _read_store(args: argparse.Namespace):
     try:
-        return conv_mod.backend(args.store, root=args.store_root, uri=args.store_uri,
-                                remote=args.store_remote == "allow")
+        return conv_mod.backend(args.store, root=args.store_root)
     except conv_mod.ConversationError as exc:
         print(f"error: {exc}")
         raise SystemExit(2)
@@ -382,18 +381,10 @@ def cmd_export(args: argparse.Namespace) -> int:
     `json` is lossless, and a silent default would pick which information the operator loses.
     """
     back = _read_store(args)
-    if args.store_remote == "allow" and args.project and args.conversation:
-        # The case the design was written to fix and the first code did not: `export` runs outside
-        # any walk, so `RunReport.relaxations` does not exist at the moment the relaxation is
-        # actually used. A seat found the fix present for `run` and `serve` and absent here -- the
-        # one invocation most likely to reach a remote store. So it is recorded in the document,
-        # which is the only durable thing an export has.
-        try:
-            conv_mod.Conversation(
-                back, args.project, conversation_id=args.conversation
-            ).relaxation("--store-remote allow: exported from a store whose locality was not checked")
-        except conv_mod.ConversationError as exc:
-            print(f"warning: could not record the relaxation: {exc}", file=sys.stderr)
+    # `--store-remote allow` recorded a relaxation here, because `export` runs outside any walk and
+    # `RunReport.relaxations` does not exist at the moment it would be used. Both are gone with the
+    # remote backend (CHG-20260823-35): there is no store that can be off this machine, so there is
+    # no locality to relax and nothing truthful to record.
     if not args.project or not args.conversation:
         print("error: export needs --project NAME and --conversation ID. "
               "`runner conversations --project NAME` lists them.")
@@ -433,19 +424,14 @@ def _store_flags(parser: argparse.ArgumentParser) -> None:
                              "is no default, because a directory name is a location rather than a "
                              "project. The name is stored as data — a hash of it is what touches "
                              "the filesystem.")
+    # Kept as a choice of one. `mongo` and `tinydb` are refused **by name**, saying they were
+    # removed and when — `unknown store 'mongo'` reads as a typo to someone whose config worked
+    # last week.
     parser.add_argument("--store", choices=conv_mod.BACKENDS, default="file",
-                        help="which document store (default file). A backend whose package is "
-                             "missing refuses by name; it never falls back to `file`.")
+                        help="which conversation store (only `file`; `mongo` and `tinydb` were "
+                             "removed in CHG-20260823-35 and are refused by name).")
     parser.add_argument("--store-root", default=None, metavar="DIR",
-                        help="where the file/tinydb store lives (default .runner/conversations)")
-    parser.add_argument("--store-uri", default=None, metavar="URI",
-                        help="the mongo URI. Must be loopback, single-host, no +srv, no "
-                             "replicaSet, and directConnection is forced — a host check alone does "
-                             "not stop topology discovery connecting off-machine.")
-    parser.add_argument("--store-remote", choices=("refuse", "allow"), default="refuse",
-                        help="`allow` sends conversations to a non-loopback store and records a "
-                             "relaxation in the conversation itself. The whole operating flow is "
-                             "local-only; this is the one way out and it is never silent.")
+                        help="where the store lives (default .runner/conversations)")
 
 
 def _open_conversation(args: argparse.Namespace, journal_dir=None, run=None):
@@ -458,14 +444,11 @@ def _open_conversation(args: argparse.Namespace, journal_dir=None, run=None):
     if not getattr(args, "project", None):
         return None
     try:
-        back = conv_mod.backend(args.store, root=args.store_root, uri=args.store_uri,
-                                remote=args.store_remote == "allow")
+        back = conv_mod.backend(args.store, root=args.store_root)
         conv = conv_mod.Conversation.resume_or_open(back, args.project, journal_dir, run=run)
     except conv_mod.ConversationError as exc:
         print(f"error: {exc}")
         raise SystemExit(2)
-    if args.store_remote == "allow":
-        conv.relaxation("--store-remote allow: the locality checks on the store were skipped")
     return conv
 
 

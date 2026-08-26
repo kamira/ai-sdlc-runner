@@ -264,10 +264,8 @@ runner export --project "Login page" --conversation <id> --format markdown -o ta
 
 | Flag | |
 |---|---|
-| `--store file\|tinydb\|mongo` | which document store (default `file`). A missing package **refuses by name** and never falls back |
-| `--store-root DIR` | where `file` and `tinydb` live (default `.runner/conversations`) |
-| `--store-uri URI` | the mongo URI — loopback only unless relaxed |
-| `--store-remote refuse\|allow` | `allow` sends conversations off this machine, and records that it did |
+| `--store file` | the conversation store. One backend since CHG-20260823-35; `mongo` and `tinydb` are refused **by name**, saying they were removed |
+| `--store-root DIR` | where it lives (default `.runner/conversations`) |
 | `--format json\|markdown\|html\|playback\|csv` | on `export`. Required, because only `json` is lossless and a default would choose what you lose. `html` is a waterfall down the flow — one stop per node visit, the model's side and the operator's side marked apart; `playback` is the same walk as something you press play on. See [docs/RECORDING.md](docs/RECORDING.md) |
 
 A store write that fails **never fails the run**, and is never silent: a line on stderr the moment
@@ -287,21 +285,29 @@ injection, and where a relaxation is recorded. Their verdicts are committed whol
 [`docs/design/reviews/`](docs/design/reviews/) and the design that answers them is
 [`docs/design/conversation-store.md`](docs/design/conversation-store.md).
 
-**On a Mongo store, a loopback host is not the check.** `MongoClient` performs topology discovery:
-given a loopback seed that turns out to be a replica-set member or a `mongos`, it reads the topology
-*from the server* and connects to every member it learns of. So the URI must be `mongodb://` (not
-`+srv`), single-host, a host that **round-trips** to loopback or a unix socket, and carrying only
-options on an **allowlist** — and `directConnection=true` is **forced on the client**, which is the
-one of the five that constrains the driver rather than the string.
+**The Mongo and TinyDB backends were removed** in CHG-20260823-35, on the ruling
+*「只留 sqlite + file，移除 mongo 和 tinydb」*. Roughly 250 lines went with them, most of it URI
+hardening: `MongoClient` performs topology discovery, so a loopback *host* was never the check — a
+loopback seed that turns out to be a replica-set member is read from the server and every member it
+names gets connected to. That needed a single-host `mongodb://` URI, a host that **round-tripped**
+to loopback, an option **allowlist**, and `directConnection=true` forced on the client. A seat got
+past an earlier denylist version of it twice.
 
-The allowlist is there because the first version named the two dangerous options instead, and a seat
-got past it twice: `?proxyHost=…&proxyPort=…` keeps the seed loopback and routes the connection
-through somebody else's SOCKS proxy, and `?replicaset=` walked past a check spelled `replicaSet`. A
-tunnel to a remote mongod remains out of scope — no URI can reveal one.
+None of that is needed by a directory of files, and the `store-uri` and `store-remote` flags went
+with it: no store can be off this machine now, so there is no locality to relax, and a flag that no
+longer changes anything is the "looks configured and does nothing" this repository refuses
+everywhere else. (Written without their leading dashes on purpose: a gate here asserts that every
+option this file names in flag form still exists, and it should not learn an exception for prose.)
+
+**One guarantee was genuinely weakened, and it is worth naming.** A duplicate `seq` used to be
+*refused* at write time by Mongo's unique index and TinyDB's check. Neither exists now: the `file`
+backend cannot refuse one without a read per append, so a duplicate is **detected at read time and
+prevented nowhere**. The design declares one writer per conversation, which is why this is
+acceptable — and it is the first line that has to change if a writer ever becomes concurrent.
 
 The store holds every work order verbatim and is **exactly as sensitive as the ask journal already
-sitting beside it**, and no better protected: the `file` backend is created `0700` best-effort,
-which does little on Windows, and a local `mongod` typically has no auth at all.
+sitting beside it**, and no better protected: it is created `0700` best-effort, which does little on
+Windows.
 
 `csv` is the lossy export and says so structurally rather than in a note row — CSV has no comments.
 Nested values are JSON text in `*_json` columns, every cell is defused against spreadsheet formula
@@ -610,7 +616,7 @@ first one winning — so two of them disagreeing inside one answer resolves sile
 ## Testing
 
 ```bash
-pytest -q          # 1182 tests
+pytest -q          # 1166 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

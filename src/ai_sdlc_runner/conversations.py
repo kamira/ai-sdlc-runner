@@ -68,10 +68,23 @@ NOTE = "note"
 CLOSED = "closed"
 KINDS = (OPENED, INSTRUCTION, ASK, ANSWER, UNANSWERED, DECISION, RELAXATION, NOTE, CLOSED)
 
-#: The three backends the user asked for — *「提供所有選擇的可能性」*. A backend whose package is
-#: missing **refuses by name**; it never falls back to ``file``. "I asked for Mongo and got a
-#: directory" is this repository's oldest mistake wearing a config field.
-BACKENDS = ("file", "tinydb", "mongo")
+#: One backend (CHG-20260823-35). There were three — *「提供所有選擇的可能性」* — and the person
+#: then ruled *「只留 sqlite + file，移除 mongo 和 tinydb」*.
+#:
+#: Kept as a tuple of one rather than deleted, because `backend()` still refuses an unknown kind
+#: **by name**: "I asked for Mongo and got a directory" is this repository's oldest mistake wearing
+#: a config field, and it stays refused now that Mongo is gone rather than silently becoming a
+#: directory. `--store mongo` gets a refusal that says the backend was removed and when.
+BACKENDS = ("file",)
+
+#: Named so the refusal can tell "never existed" from "removed, and here is what replaced it". A
+#: config field that stops working deserves better than `unknown store 'mongo'`.
+RETIRED = {
+    "mongo": "removed in CHG-20260823-35; the model registry lives in SQLite (`store.py`) and "
+             "conversations in the file store",
+    "tinydb": "removed in CHG-20260823-35; it was the document backend with neither SQLite's "
+              "durability nor the file store's readability",
+}
 
 #: How much of the project-name hash becomes a directory. 128 bits, and the reason is the same one
 #: `attachments.py` records: a full sha256 is 64 characters, and added to a project path of any
@@ -88,27 +101,6 @@ SPREADSHEET_CELL_LIMIT = 32767
 #: spreadsheet, and ``=HYPERLINK(...)`` is an exfiltration channel — reached, in a local-only
 #: project, through the export whose stated purpose is to be opened in a spreadsheet.
 FORMULA_LEADERS = ("=", "+", "-", "@", "\t", "\r")
-
-#: The **only** Mongo URI options that may appear without `--store-remote allow`, lower-cased.
-#:
-#: An allowlist, and the reason is a finding: the first version refused `replicaSet` and
-#: `directConnection=false` by name and passed everything else straight to `MongoClient`. A seat
-#: found `?proxyHost=attacker.example&proxyPort=1080` accepted — the seed host stays loopback while
-#: the driver sends the whole connection through a SOCKS proxy off this machine. A denylist answers
-#: "safe" about every option nobody thought of, which is this repository's second-most-frequent
-#: defect written as a config field.
-#:
-#: Matched case-insensitively, because Mongo's option parsing is and the same seat showed
-#: `?replicaset=rs0` walking past the check that refused `replicaSet=rs0`.
-MONGO_OPTIONS = frozenset({
-    "directconnection", "authsource", "appname", "connecttimeoutms", "sockettimeoutms",
-    "servselectiontimeoutms", "serverselectiontimeoutms", "maxpoolsize", "minpoolsize",
-    "retrywrites", "retryreads", "w", "journal", "readpreference", "uuidrepresentation",
-})
-
-#: What counts as loopback in a Mongo URI. Same set the server uses for `Origin`, and for the same
-#: reason; see `local_mongo_uri` for why the analogy stops there.
-LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 #: The marker written beside a journal so a resumed walk re-attaches to the conversation it started
 #: rather than minting a second one. The journal directory is already the one durable place a run
@@ -138,114 +130,6 @@ def project_id(name: str) -> str:
 
 def new_conversation_id() -> str:
     return uuid.uuid4().hex[:ID_CHARS]
-
-
-def local_mongo_uri(uri: str) -> str:
-    """Refuse a Mongo URI that would take the conversation off this machine, and return it hardened.
-
-    **The host check alone does not constrain the driver**, which is what both seats refused about
-    the first design. `MongoClient` performs topology discovery: given a loopback seed that turns
-    out to be a replica-set member or a `mongos`, it reads the topology *from the server* and
-    connects to every member it learns of, including remote ones, without consulting the URI again.
-    A host check would answer "local" about a URI while the driver went off-machine — a coarse check
-    answering safe about something it had not examined, which is the second-most-frequent defect in
-    this repository's record.
-
-    So five things hold, and only the last one constrains the client:
-
-    1. scheme is ``mongodb`` — ``mongodb+srv://`` is a DNS seedlist lookup by construction
-    2. exactly one host
-    3. the host is loopback, **or** a percent-encoded unix socket path — genuinely local, allowed
-    4. no ``replicaSet=``
-    5. ``directConnection=true`` is forced
-
-    Out of scope, and said rather than implied: an SSH tunnel is loopback at the socket and remote
-    at the destination, and no URI can tell. The threat model is a URI somebody pasted, not a
-    determined operator.
-    """
-    if not isinstance(uri, str) or not uri.strip():
-        raise ConversationError("a mongo store needs a URI")
-    text = uri.strip()
-    try:
-        parts = urlsplit(text)
-    except ValueError as exc:
-        # A malformed URI is refused, never raised through. `urlsplit` raises `Invalid IPv6 URL` on
-        # some inputs under some Pythons and not others — CI found that in CHG-20260823-16 after it
-        # passed on one interpreter, and which inputs raise is not something one Python can tell you.
-        raise ConversationError(f"refused: not a URI this can check ({exc})") from None
-    if parts.scheme == "mongodb+srv":
-        raise ConversationError(
-            "refused: mongodb+srv:// resolves its hosts from DNS, so nothing in the URI says where "
-            "the data goes. Use mongodb:// with a loopback host, or --store-remote allow")
-    if parts.scheme != "mongodb":
-        raise ConversationError(f"refused: {parts.scheme or '(none)'}:// is not a mongo URI")
-    netloc = parts.netloc.rsplit("@", 1)[-1]
-    if "," in netloc:
-        raise ConversationError(
-            "refused: several hosts. One of them being loopback says nothing about the others")
-    try:
-        host = (parts.hostname or "").lower()
-    except ValueError as exc:
-        raise ConversationError(f"refused: not a host this can check ({exc})") from None
-    socket_path = _unix_socket(netloc)
-    if not socket_path:
-        # The host must **round-trip**, not merely parse. `urlsplit` reads
-        # `mongodb://[::1].evil.example` as host `::1` and silently drops the rest, so a hostname
-        # check alone accepts a domain an attacker registers. This is the same defect CI caught in
-        # `server._loopback_origin` two changes ago, and it was already present here until a test
-        # written for that finding was pointed at this function.
-        literal = f"[{host}]" if ":" in host else host
-        port = f":{parts.port}" if parts.port else ""
-        if f"{literal}{port}" != netloc.lower():
-            raise ConversationError(
-                f"refused: {netloc!r} is not a host this can check. It parses to {host!r} and the "
-                f"rest is dropped, which is how a lookalike domain gets read as loopback.")
-    if not socket_path and host not in LOOPBACK_HOSTS:
-        raise ConversationError(
-            f"refused: {host or '(no host)'} is not loopback. The whole operating flow is "
-            f"local-only; a conversation carries every work order and every instruction verbatim. "
-            f"Pass --store-remote allow to send it there anyway, and it is recorded.")
-    query = {k.lower(): v for k, v in
-             parse_qs(parts.query, keep_blank_values=True).items()}
-    unknown = sorted(set(query) - MONGO_OPTIONS)
-    if unknown:
-        raise ConversationError(
-            f"refused: {', '.join(unknown)} — this checks an allowlist, because a rule that names "
-            f"the dangerous options answers 'safe' about every option nobody thought of. "
-            f"`proxyHost` is the one that showed it: a loopback seed and the whole connection "
-            f"through somebody else's SOCKS proxy. Pass --store-remote allow to skip the checks, "
-            f"and it is recorded.")
-    if query.get("directconnection", ["true"])[0].lower() == "false":
-        raise ConversationError(
-            "refused: directConnection=false lets topology discovery widen the connection past the "
-            "host you named")
-    return text
-
-
-def _unix_socket(netloc: str) -> bool:
-    """Is this netloc a unix socket path, rather than a name that merely looks like one?
-
-    **A `.sock` suffix is not a socket and a `%2f` anywhere is not a path.** The first version tested
-    exactly that, and a seat got `mongodb://remote.evil.sock` accepted without `--store-remote
-    allow`: a registrable DNS name, which the driver resolves and dials over TCP, classified as
-    "genuinely local" on the strength of how it ends. `mongodb://remote.evil.example%2f:27017`
-    passed the same way. Both skipped the loopback test entirely, because the check that decides
-    *whether* to apply the loopback test was the coarse one.
-
-    A unix socket in a MongoDB URI is a **percent-encoded absolute path**. So it is decoded and
-    required to be one: it starts at the root and it ends `.sock`. `remote.evil.sock` has no root
-    and `remote.evil.example%2f` decodes to a relative path, so neither is one.
-    """
-    decoded = unquote(netloc.split("?", 1)[0])
-    return decoded.startswith("/") and decoded.endswith(".sock")
-
-
-def _hardened(uri: str) -> str:
-    """``directConnection=true``, forced. Points 1-4 above constrain the URI; this constrains the
-    driver, and without it the other four are decoration."""
-    if "directconnection=" in uri.lower():
-        return uri
-    return uri + ("&" if "?" in uri else "?") + "directConnection=true"
 
 
 @dataclass
@@ -309,10 +193,12 @@ class FileBackend(Backend):
     line is written. There is no read-modify-write to lose a concurrent turn, and a crash costs at
     most the line being written — which the reader reports rather than silently dropping.
 
-    This is the default, and it is a directory of files. The user asked for a NoSQL DB and this is
-    not one; fable-seat was right that the honest thing is to name that rather than argue it away.
-    It is a document store with the filesystem as its index. `--store tinydb` and `--store mongo`
-    are real document databases and are one flag away.
+    It is a directory of files: a document store with the filesystem as its index, and not a NoSQL
+    database. fable-seat was right that the honest thing is to name that rather than argue it away —
+    and it is worth more now than when there were alternatives, because since CHG-20260823-35 there
+    are none. The two real document backends were removed by ruling; this is the only conversation
+    store, and calling it a document store is a description of its shape, not a claim about its
+    guarantees.
     """
 
     def __init__(self, root: str | Path):
@@ -417,147 +303,17 @@ class FileBackend(Backend):
         return out
 
 
-class _DocumentBackend(Backend):
-    """Shared shape for the two real document databases: one row per turn, plus a header row.
+def backend(kind: str, root: Optional[str] = None) -> Backend:
+    """Open one. An unknown kind is refused by name rather than defaulted.
 
-    ``(conversation_id, seq)`` is unique and a duplicate is **refused**, never silently overwritten —
-    which is the one guarantee that makes an append-only log worth reading back.
+    A **retired** kind is refused by name too, and told what happened to it. `unknown store 'mongo'`
+    would read as a typo to someone whose config worked last week.
     """
-
-    def _rows(self, cid: str) -> List[Dict[str, object]]:
-        raise NotImplementedError
-
-    def _insert(self, row: Mapping[str, object]) -> None:
-        raise NotImplementedError
-
-    def open_conversation(self, header: Mapping[str, object]) -> None:
-        if self._rows(str(header["conversation_id"])):
-            raise ConversationError("refused: that conversation id already has turns")
-        self._insert({"conversation_id": header["conversation_id"], "seq": -1,
-                      "project_id": header["project"]["id"], "header": dict(header)})  # type: ignore[index]
-
-    #: Whether `_insert` refuses a duplicate ``(conversation_id, seq)`` on its own. Mongo does, with
-    #: a unique index; TinyDB has no such thing, so it needs the scan. Declared rather than assumed,
-    #: because a pre-scan on top of an index is quadratic and a missing one loses a turn silently.
-    enforces_unique_seq = False
-
-    def append(self, header: Mapping[str, object], turn: Turn) -> None:
-        cid = str(header["conversation_id"])
-        if not self.enforces_unique_seq and any(r.get("seq") == turn.seq for r in self._rows(cid)):
-            raise ConversationError(f"refused: seq {turn.seq} is already written for {cid}")
-        self._insert({"conversation_id": cid, "project_id": header["project"]["id"],  # type: ignore[index]
-                      **turn.as_dict()})
-
-    def read(self, pid: str, cid: str) -> Dict[str, object]:
-        rows = self._rows(cid)
-        if not rows:
-            raise ConversationError(f"no conversation {cid}")
-        header = next((r["header"] for r in rows if r.get("seq") == -1), {})
-        turns = [{k: v for k, v in r.items() if k not in ("conversation_id", "project_id")}
-                 for r in rows if r.get("seq", -1) >= 0]
-        return _assemble(header, turns, [])
-
-
-class TinyDBBackend(_DocumentBackend):
-    """A single-file document database, for somebody who wants one file rather than a tree."""
-
-    def __init__(self, path: str | Path):
-        try:
-            from tinydb import Query, TinyDB  # noqa: F401
-        except ImportError:
-            raise ConversationError(
-                "the tinydb store needs the `tinydb` package, and it is not installed. This does "
-                "not fall back to the file store: you asked for a document database, and quietly "
-                "handing you a directory instead is a name standing in for a constraint."
-            ) from None
-        from tinydb import TinyDB
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self._db = TinyDB(str(path))
-        self._table = self._db.table("turns")
-
-    def _rows(self, cid: str) -> List[Dict[str, object]]:
-        from tinydb import Query
-        return sorted(self._table.search(Query().conversation_id == cid),
-                      key=lambda r: r.get("seq", -1))
-
-    def _insert(self, row: Mapping[str, object]) -> None:
-        self._table.insert(dict(row))
-
-    def conversations(self, pid: Optional[str] = None) -> List[Dict[str, object]]:
-        from tinydb import Query
-        q = Query()
-        rows = self._table.search((q.seq == -1) & (q.project_id == pid)) if pid \
-            else self._table.search(q.seq == -1)
-        return [r["header"] for r in rows if "header" in r]
-
-    def projects(self) -> List[Dict[str, object]]:
-        seen: Dict[str, Dict[str, object]] = {}
-        for head in self.conversations():
-            p = head.get("project") or {}
-            if p.get("id"):
-                seen[str(p["id"])] = dict(p)
-        return [seen[k] for k in sorted(seen)]
-
-
-class MongoBackend(_DocumentBackend):
-    """A real document database, for somebody who already runs one — with the locality rule that
-    `local_mongo_uri` documents, including the `directConnection=true` that actually enforces it."""
-
-    enforces_unique_seq = True
-
-    def __init__(self, uri: str, remote: bool = False, database: str = "ai_sdlc_runner"):
-        try:
-            import pymongo  # noqa: F401
-        except ImportError:
-            raise ConversationError(
-                "the mongo store needs the `pymongo` package, and it is not installed. This does "
-                "not fall back to the file store — see the tinydb backend for why."
-            ) from None
-        import pymongo
-        self.relaxed = bool(remote)
-        target = uri if remote else _hardened(local_mongo_uri(uri))
-        self._client = pymongo.MongoClient(target, serverSelectionTimeoutMS=3000)
-        self._turns = self._client[database]["turns"]
-        self._turns.create_index([("conversation_id", 1), ("seq", 1)], unique=True)
-
-    def _rows(self, cid: str) -> List[Dict[str, object]]:
-        return [{k: v for k, v in r.items() if k != "_id"}
-                for r in self._turns.find({"conversation_id": cid}).sort("seq", 1)]
-
-    def _insert(self, row: Mapping[str, object]) -> None:
-        import pymongo
-        try:
-            self._turns.insert_one(dict(row))
-        except pymongo.errors.DuplicateKeyError:
-            raise ConversationError(
-                f"refused: seq {row.get('seq')} is already written for "
-                f"{row.get('conversation_id')}") from None
-
-    def conversations(self, pid: Optional[str] = None) -> List[Dict[str, object]]:
-        query: Dict[str, object] = {"seq": -1}
-        if pid:
-            query["project_id"] = pid
-        return [r["header"] for r in self._turns.find(query) if "header" in r]
-
-    def projects(self) -> List[Dict[str, object]]:
-        seen: Dict[str, Dict[str, object]] = {}
-        for head in self.conversations():
-            p = head.get("project") or {}
-            if p.get("id"):
-                seen[str(p["id"])] = dict(p)
-        return [seen[k] for k in sorted(seen)]
-
-
-def backend(kind: str, root: Optional[str] = None, uri: Optional[str] = None,
-            remote: bool = False) -> Backend:
-    """Open one. An unknown kind is refused by name rather than defaulted."""
+    if kind in RETIRED:
+        raise ConversationError(f"the {kind} store was {RETIRED[kind]}")
     if kind not in BACKENDS:
         raise ConversationError(f"unknown store {kind!r}; one of {', '.join(BACKENDS)}")
-    if kind == "file":
-        return FileBackend(root or ".runner/conversations")
-    if kind == "tinydb":
-        return TinyDBBackend(root or ".runner/conversations/conversations.json")
-    return MongoBackend(uri or "mongodb://127.0.0.1:27017", remote=remote)
+    return FileBackend(root or ".runner/conversations")
 
 
 def _assemble(header: Mapping[str, object], turns: Sequence[Mapping[str, object]],
@@ -572,11 +328,17 @@ def _assemble(header: Mapping[str, object], turns: Sequence[Mapping[str, object]
     doc["turns"] = sorted((dict(t) for t in turns), key=lambda t: int(t.get("seq", 0)))
     if partial:
         doc["incomplete_lines"] = list(partial)
-    # `file` cannot refuse a duplicate seq at write time without a read per append, and the design
-    # already declares one writer per conversation. So the guarantee is stated where it is true: a
-    # duplicate is **refused** by the two backends that can (Mongo's unique index, TinyDB's check)
-    # and **reported** by the reader. The first version claimed all three refused, which was a
-    # guarantee two of them did not keep -- a name standing in for a constraint, found by a seat.
+    # A duplicate `seq` is **reported here and refused nowhere** — and that is now the whole of it.
+    #
+    # `file` cannot refuse one at write time without a read per append, and the design declares one
+    # writer per conversation. Until CHG-20260823-35 the sentence continued "...but Mongo's unique
+    # index and TinyDB's check do refuse it", and that clause is what made the guarantee sound
+    # stronger than it was. Both backends are gone, so the honest statement is the short one:
+    # detection is at read time, by this scan, and nothing prevents the write.
+    #
+    # Worth writing down because it is the one guarantee this removal genuinely weakened. It was
+    # available on two backends nobody was measured using; it is available on none now. If a writer
+    # ever becomes concurrent, this is the line that has to change first.
     seen, repeated = set(), []
     for t in doc["turns"]:
         n = int(t.get("seq", 0))
