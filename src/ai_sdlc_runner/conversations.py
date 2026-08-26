@@ -733,10 +733,22 @@ def _summary(turn: Mapping[str, object]) -> str:
         seat = f" · {turn['seat']}" if turn.get("seat") else ""
         return f"{role}{seat}"
     if kind == ANSWER:
+        # What actually came back, in the answerer's own words where it said anything. The first
+        # version fell through to the bare word "answered" whenever the interesting keys were empty
+        # — which is most review answers, since `{"missing": [], "problems": []}` means "nothing
+        # wrong". A log of 150 lines reading "answered" is not a log (CHG-20260823-39).
         result = turn.get("result") or {}
-        for key in ("verdict", "module", "modules", "missing"):
+        for key in ("verdict", "module", "modules", "note", "why"):
             if key in result and result[key] not in (None, "", [], {}):
-                return f"{key}: {json.dumps(result[key], ensure_ascii=False)[:70]}"
+                said = json.dumps(result[key], ensure_ascii=False).strip('"')
+                extra = f" · {result['why']}" if key == "verdict" and result.get("why") else ""
+                return f"{key}: {said}{extra}"[:110]
+        empties = [k for k in ("missing", "problems", "unsafe") if k in result]
+        if empties and all(not result[k] for k in empties):
+            return "nothing " + ", ".join(empties)          # an empty list is an answer, not a gap
+        for key in empties:
+            if result[key]:
+                return f"{key}: {json.dumps(result[key], ensure_ascii=False)[:80]}"
         return "answered"
     if kind == DECISION:
         return f"{turn.get('decision')} at {turn.get('at_node')}"
@@ -744,6 +756,11 @@ def _summary(turn: Mapping[str, object]) -> str:
         return str(turn.get("text") or "")[:90]
     if kind == CLOSED:
         return str(turn.get("state") or "")
+    if kind == OPENED:
+        # It had no `text` and no `why`, so it fell through to an empty string and rendered as a
+        # card with a blank line — the first thing anybody opening the log sees.
+        project = turn.get("project")
+        return f"conversation opened for {project}" if project else "conversation opened"
     return str(turn.get("text") or turn.get("why") or "")[:90]
 
 
@@ -1072,7 +1089,10 @@ min-height:26rem;max-height:33rem;overflow-y:auto;padding:.9rem}
 border-radius:0 6px 6px 0;padding:.5rem .75rem;margin-bottom:.45rem}
 .turn.model{border-left-color:var(--model)}
 .turn.operator{border-left-color:var(--operator)}
-.turn.new{border-color:var(--live)}
+.turn.on{border-color:var(--live);box-shadow:0 0 0 2px var(--accent-soft)}
+.turn.ahead{opacity:.42}
+.turn{cursor:pointer}
+.turn details{cursor:auto}
 .th{display:flex;align-items:baseline;gap:.45rem;font-size:.68rem;
 font-family:"IBM Plex Mono",monospace}
 .who{text-transform:uppercase;letter-spacing:.08em;font-weight:600;color:var(--runner)}
@@ -1105,8 +1125,9 @@ font-variant-numeric:tabular-nums;min-width:6.5rem;text-align:right}
   <h1>__TITLE__</h1>
   <p class="meta">conversation __CID__ · <b>__NTURNS__</b> turns · <b>__NSTOPS__</b> stops on the
     flow · <b>__TOTAL__</b>s of playback from <b>__REAL__</b> min of real time
-    <span class="dim">(a turn plays for at least 0.35s however fast it was; a pause over 2s plays
-    as 2s and says what it really took)</span></p>
+    <span class="dim">(every turn is listed below — press play to walk them in order, or click one
+    to jump there. A turn plays for at least 0.35s however fast it was; a pause over 2s plays as 2s
+    and says what it really took.)</span></p>
 </header>
 <div class="layout">
   <ol class="rail" id="rail"></ol>
@@ -1150,36 +1171,62 @@ function upto(t) {
   return n;
 }
 
+// The whole log is built ONCE, at load. The clock then moves a highlight through it rather than
+// revealing it.
+//
+// The first version rendered only the turns up to the clock, and the clock starts at zero — so
+// opening the page showed exactly **one** turn, the `opened` one. 305 answers sat in the payload,
+// invisible until somebody pressed play and waited. A reader reasonably concluded the responses had
+// not been recorded (CHG-20260823-39).
+//
+// A recording has to be a readable log first and a replay second. Nothing is hidden now; play walks
+// the highlight, and everything ahead of it is dimmed rather than absent.
+function build() {
+  const html = [];
+  TURNS.forEach((x, i) => {
+    if (x.waited) html.push('<p class="gap">— waited ' +
+      (x.waited >= 60 ? (x.waited / 60).toFixed(1) + ' min' : Math.round(x.waited) + 's') + ' —</p>');
+    html.push('<article class="turn ' + x.who + '" data-i="' + i + '">' +
+      '<div class="th"><span class="who">' + x.who + '</span>' +
+      '<span class="verb">' + esc(x.verb) + '</span>' +
+      (x.model ? '<span class="mdl">' + esc(x.model) + '</span>' : '') +
+      '<span class="seq">#' + x.seq + '</span></div>' +
+      '<p class="sum">' + esc(x.sum) + '</p>' +
+      '<details><summary>full</summary><pre>' + esc(x.full) + '</pre></details></article>');
+  });
+  stage.innerHTML = html.join('');
+  return [...stage.querySelectorAll('.turn')];
+}
+
+const CARDS = build();
+
 function draw() {
   const n = upto(clock);
   if (n !== shown) {
     shown = n;
-    const html = [];
-    for (let i = 0; i <= n; i++) {
-      const x = TURNS[i];
-      if (x.waited) html.push('<p class="gap">— waited ' +
-        (x.waited >= 60 ? (x.waited / 60).toFixed(1) + ' min' : Math.round(x.waited) + 's') +
-        ' —</p>');
-      html.push('<article class="turn ' + x.who + (i === n ? ' new' : '') + '">' +
-        '<div class="th"><span class="who">' + x.who + '</span>' +
-        '<span class="verb">' + esc(x.verb) + '</span>' +
-        (x.model ? '<span class="mdl">' + esc(x.model) + '</span>' : '') +
-        '<span class="seq">#' + x.seq + '</span></div>' +
-        '<p class="sum">' + esc(x.sum) + '</p>' +
-        '<details><summary>full</summary><pre>' + esc(x.full) + '</pre></details></article>');
-    }
-    stage.innerHTML = html.join('');
-    stage.scrollTop = stage.scrollHeight;
+    CARDS.forEach((card, i) => {
+      card.classList.toggle('on', i === n);
+      card.classList.toggle('ahead', i > n);
+    });
+    if (n >= 0 && playing) CARDS[n].scrollIntoView({block: 'nearest'});
     const at = n >= 0 ? TURNS[n].stop : -1;
     [...rail.children].forEach((li, i) => {
       li.classList.toggle('on', i === at);
       li.classList.toggle('seen', i <= at);
     });
-    if (at >= 0) rail.children[at].scrollIntoView({block: 'nearest'});
+    if (at >= 0 && playing) rail.children[at].scrollIntoView({block: 'nearest'});
   }
   timeLabel.textContent = clock.toFixed(1) + ' / ' + TOTAL + 's';
   scrub.value = clock;
 }
+
+// Clicking a turn moves the clock to it, so reading and replaying are the same surface.
+stage.addEventListener('click', function (e) {
+  const card = e.target.closest('.turn');
+  if (!card || e.target.closest('details')) return;
+  stop();
+  seek(TURNS[Number(card.dataset.i)].t);
+});
 
 function seek(t) { clock = Math.max(0, Math.min(TOTAL, t)); shown = -1; draw(); }
 function stop() { playing = false; last = null; playBtn.textContent = 'Play'; }
