@@ -8,6 +8,7 @@ that answered it.
 import csv
 import io
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -643,3 +644,109 @@ def test_html_is_one_of_the_formats_the_cli_offers():
     assert "html" in conv.FORMATS
     cli_source = Path(conv.__file__).with_name("cli.py").read_text(encoding="utf-8")
     assert "a waterfall down the" in cli_source, "the flag's help must say what html is"
+
+
+# ── playback: the run as something you press play on ──────────────────────────────────────────
+
+def _at(second, micro=0):
+    return f"2026-08-26T10:00:{second:02d}.{micro:06d}+00:00"
+
+
+def _timed(tmp_path, stamps):
+    """A document with the timestamps we want, built directly — the store stamps `at` itself, and
+    a test that cannot choose the times cannot test what the times do."""
+    turns = []
+    for n, stamp in enumerate(stamps):
+        turns.append({"seq": n, "kind": conv.ASK, "at": stamp, "node_id": f"n{n}",
+                      "ask_id": f"{n:03d}-n{n}", "role": "engineer", "seat": None,
+                      "model": "opus", "brief": {}})
+    return {"conversation_id": "c1", "project": {"id": "p", "name": "P"}, "turns": turns}
+
+
+def test_an_instant_run_still_plays_at_a_readable_pace(tmp_path):
+    """A stand-in agent answers in milliseconds, and the first real export was **3 seconds for 55
+    turns** — accurate, and unwatchable. Every turn gets a floor on the playback clock."""
+    document = _timed(tmp_path, [_at(0, m) for m in (0, 1000, 2000, 3000, 4000)])
+    page = conv.export_conversation(document, "playback")
+    total = float(re.search(r'TOTAL = parseFloat\("([0-9.]+)"\)', page).group(1))
+    assert total >= 4 * conv.MIN_BEAT - 0.01, f"{total}s for five turns is not watchable"
+
+
+def test_a_long_wait_plays_short_and_says_what_it_really_took(tmp_path):
+    """The other half of the same honesty: compressed, and named as compressed."""
+    document = _timed(tmp_path, [_at(0), _at(40)])
+    page = conv.export_conversation(document, "playback")
+    total = float(re.search(r'TOTAL = parseFloat\("([0-9.]+)"\)', page).group(1))
+    assert total <= conv.IDLE_CAP + 0.01, "forty seconds of waiting became forty of playback"
+    assert '"waited": 40.0' in page, "the real duration must reach the page"
+
+
+def test_relative_duration_survives_the_compression(tmp_path):
+    """A slow turn must still read as slower than a fast one, or the replay has flattened the only
+    thing it was showing."""
+    document = _timed(tmp_path, [_at(0), _at(0, 1000), _at(30)])
+    page = conv.export_conversation(document, "playback")
+    times = [t["t"] for t in json.loads(re.search(r"const TURNS = (\[.*?\]), RAIL",
+                                                  page, re.S).group(1))]
+    quick, slow = times[1] - times[0], times[2] - times[1]
+    assert slow > quick * 3, f"the slow turn ({slow}) does not read as slower than {quick}"
+
+
+def test_the_replay_and_the_waterfall_agree_about_the_shape(tmp_path):
+    """Two renderings of one run must not disagree about where a stop begins. They share `_stops`
+    for exactly this reason; this is the test that keeps them sharing it."""
+    document = _walked(tmp_path)
+    stops, _ = conv._stops(document["turns"])
+    waterfall = conv.export_conversation(document, "html")
+    replay = conv.export_conversation(document, "playback")
+    rail = json.loads(re.search(r"RAIL = (\[.*?\]), TOTAL", replay, re.S).group(1))
+    assert len(rail) == len(stops) == waterfall.count('class="stop"')
+
+
+def test_a_timestamp_that_will_not_parse_gets_a_beat_not_an_invented_duration(tmp_path):
+    """`_seconds` returns None rather than 'now' or zero. A replay whose whole claim is that the
+    timings are real must not manufacture one for a turn it cannot read."""
+    assert conv._seconds("not a time") is None
+    assert conv._seconds("") is None
+    document = _timed(tmp_path, [_at(0), "not a time", _at(1)])
+    page = conv.export_conversation(document, "playback")
+    assert '"waited": null' in page or '"waited":null' in page or "waited" in page
+
+
+def test_what_a_model_wrote_is_escaped_in_the_replay_too(tmp_path):
+    c = conv.Conversation(_store(tmp_path), "P").open()
+    c.answer("00-x", {"why": "<img src=x onerror=alert(1)>"}, "m")
+    page = conv.export_conversation(c.document(), "playback")
+    assert "<img src=x" not in page
+    assert "&lt;img" in page or "\u003c" in page
+
+
+def test_playback_is_one_of_the_formats_the_cli_offers():
+    assert conv.FORMATS == ("json", "markdown", "csv", "html", "playback")
+
+
+def test_an_answer_containing_a_closing_script_tag_cannot_end_the_script_block(tmp_path):
+    """The vector the escaping is actually for. `<img …>` inside a JS string is inert; a literal
+    `</script>` is not — the HTML parser ends the block there and parses the rest as markup, so an
+    answer becomes executable page content. `<!--` opens a comment that eats the rest of the page.
+
+    A model writes these by accident the moment it is asked about HTML, which this project's own
+    tide example does.
+    """
+    c = conv.Conversation(_store(tmp_path), "P").open()
+    c.answer("00-x", {"why": "</script><script>alert(1)</script> and <!-- a comment"}, "m")
+    page = conv.export_conversation(c.document(), "playback")
+
+    body = page.split("const TURNS =", 1)[1]
+    assert "</script><script>" not in body
+    assert "<!--" not in body
+    assert body.count("</script>") == 1, "the only </script> must be the one that closes the player"
+    assert "\u003c/script" in page, "the text is kept, escaped — not dropped"
+
+
+def test_a_line_separator_in_an_answer_does_not_break_the_script():
+    """U+2028 is legal inside a JSON string and a line terminator in JavaScript: unescaped, it ends
+    the statement mid-string and the whole player fails to parse."""
+    got = conv._script_json({"why": "a\u2028b\u2029c"})
+    assert "\u2028" not in got and "\u2029" not in got, "the raw separator reached the page"
+    assert "\\u2028" in got and "\\u2029" in got, "escaped, not dropped"

@@ -242,14 +242,15 @@ text_or_state · body_json · over_spreadsheet_cell_limit
 `_json` suffixes and the flag column **are** the "this is lossy" notice — CSV has no comments, and a
 note row is a data row to every consumer. Every cell is defused against formula execution.
 
-`FORMATS = ("json", "markdown", "csv", "html")`, and `--format` is **required**: a default
-would decide for you which information you lose.
+`FORMATS = ("json", "markdown", "csv", "html", "playback")`, and `--format` is **required**: a
+default would decide for you which information you lose.
 
 | | keeps | loses |
 |---|---|---|
 | `json` | everything | — |
 | `markdown` | every turn, in order | the envelope, and the shape of the walk |
 | `html` | every turn *and* the shape of the walk | nothing, but it is a page rather than data |
+| `playback` | the shape *and* the duration | exact timings — the clock is compressed, and the page says so |
 | `csv` | the columns above | nested bodies, past the cell limit |
 
 The **HTML** export groups turns into *stops*: consecutive turns at one `node_id`. Consecutive, not
@@ -451,3 +452,14 @@ examples; **the schema catalogue had no test at all**, and drifted in three chec
 day of being written — the attachment id, the closed count, and the pragma arithmetic.
 [`tests/test_schemas.py`](../tests/test_schemas.py) now pins what is checkable. The rest is prose,
 and prose is not run.
+
+`playback` renders the same stops as `html` — they share `_stops()`, and a test asserts they agree,
+because two renderings of one run that disagree about its shape make both untrustworthy.
+
+Its clock is **legible rather than literal, and says which on the page**: a turn plays for at least
+`MIN_BEAT` (0.35s) however fast it was, and a pause over `IDLE_CAP` (2s) plays as 2s with its real
+length named. A turn whose `at` will not parse gets a beat, never an invented duration.
+
+Model text is escaped for **script context** here, not markup: `<`, `>`, `U+2028`, `U+2029` at the
+JSON level. A literal `</script>` inside an answer ends the block early and the rest of the payload
+parses as page content — and a model writes that sequence the moment it is asked about HTML.
