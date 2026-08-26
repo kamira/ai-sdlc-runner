@@ -70,6 +70,68 @@ NODE_SPEC_FIELDS = (
 VERDICT_FIELDS = ("gate", "risk", "verdict", "source", "tightened")
 
 
+#: Fields that must **say something**, not merely exist (CHG-20260823-34).
+#:
+#: `_check` tested `f not in supplied` — the presence of the key. A key whose value was `""` passed,
+#: and `render()` copied the blank into the order it dispatched. Measured: a plan with
+#: `scope: ""`, `objective: ""` on the build nodes ran the entire 24-node flow, 25 asks, four files,
+#: exit 0. Nothing refused it and nothing warned. That is this project's dominant defect class — a
+#: name standing in for a constraint — in the work-order builder itself.
+CONTENTFUL_FIELDS = (
+    "scope",                  # the field whose whole job is to be a boundary
+    "objective",              # without it, "done" is undefined and nothing can be measured
+    "instructions",           # the payload of the ask; blank is an ask spent on nothing
+    "done_criteria",          # blank means the node can declare itself done vacuously
+    "acceptance_predicate",   # a blank predicate examines nothing by construction
+    "workdir",                # `.` is a location; `""` is not
+)
+
+#: The three that are legitimately empty, and stay that way.
+#:
+#: Named here rather than left implicit because a refusal that only scolds invites the caller to pad
+#: `idempotence_probes` with a fake probe to be safe — manufacturing the very defect the rule exists
+#: to stop. `expected_outputs` is `[]` on 14 of the 15 nodes in `examples/plan.json`: review and gate
+#: nodes genuinely produce nothing, and a blanket rule would refuse this repository's own example.
+MAY_BE_EMPTY = ("input_artifacts", "expected_outputs", "idempotence_probes")
+
+
+def _blank(value: object) -> bool:
+    """Empty after strip, or a sequence that is empty or holds only blanks.
+
+    Whitespace counts as blank: `" "` is the same defect one character deeper.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple)):
+        return not value or all(_blank(item) for item in value)
+    return False
+
+
+def content_problem(node_id: str, spec: Mapping[str, object], where: str,
+                    fields: Sequence[str] = CONTENTFUL_FIELDS) -> Optional[str]:
+    """The refusal message for blank required fields, or None if there is nothing to refuse.
+
+    Returns the message rather than raising, so `plan.py` can raise `PlanError` and `render` can
+    raise `WorkOrderError` off **one** definition of what blank means. Two copies of this rule
+    drifting apart would give a plan that loads and will not dispatch.
+
+    Only fields that are *present* are examined — a missing key is `_check`'s complaint, and
+    reporting it twice in different words helps nobody.
+    """
+    blank = [f for f in fields if f in spec and _blank(spec[f])]
+    if not blank:
+        return None
+    return (
+        f"{where}: node spec {node_id!r} leaves {blank} blank. The field is present and says "
+        f"nothing — which reads as configured and constrains nothing, the same silent pass as a "
+        f"missing key one level down; the old check tested that the key existed, not that the value "
+        f"said anything. Write the constraint: a node genuinely unconstrained must say so in words, "
+        f"because 'any file in the repository' is a scope and '' is not. "
+        f"{list(MAY_BE_EMPTY)} may be empty; these may not.")
+
+
 class WorkOrderError(Exception):
     """Raised when an order cannot be rendered truthfully — never softened into a partial one."""
 
@@ -98,6 +160,14 @@ def render(node, node_spec: Mapping[str, object], verdict: Mapping[str, object],
     """
     _check("node spec", node_spec, NODE_SPEC_FIELDS)
     _check("policy verdict", verdict, VERDICT_FIELDS)
+
+    # All six, including `instructions` — this runs on the value *after* the engine has appended
+    # any `--instruction` text, which is the value that will actually be dispatched. `plan.check`
+    # deliberately skips that one field at load time, for the same reason: a plan may legitimately
+    # leave it blank and let the engine supply it.
+    problem = content_problem(node.id, node_spec, "refused")
+    if problem:
+        raise WorkOrderError(problem)
 
     role = policy.role(node.role)
     instructions = str(node_spec["instructions"])

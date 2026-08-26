@@ -35,8 +35,10 @@ was never written, nothing refused, and the run finished. The same silent dry ru
 written to close, one conditional deeper than the misspelling it fixed. Closing the outer case and
 leaving that one was answering the complaint rather than the finding.
 
-**Not exhaustive, and it says so.** This refuses what it can name. It does not validate the interior
-of a node spec — `workorder._check` does that, closed, at render time — and it does not check that a
+**Not exhaustive, and it says so.** This refuses what it can name. Of a node spec's interior it
+checks only that five required fields are not **blank** (CHG-20260823-34) — `workorder` still owns
+the closed field set, at render time, and owns `instructions` alone because the engine may fill it
+in between here and there. It does not check that a
 node id exists, because a plan may legitimately name nodes for a graph it has not been run against
 yet. **Nothing closes an operation's interior**, and that is stated rather than implied: an extra key
 there is accepted and ignored.
@@ -47,7 +49,7 @@ import json
 from pathlib import Path
 from typing import Dict, Mapping, Tuple
 
-from . import policy
+from . import policy, workorder
 
 #: Every key this runner reads from a plan. Anything else is refused.
 #:
@@ -116,6 +118,23 @@ def check(payload: Mapping[str, object], where: str = "the plan") -> Dict[str, o
                 raise PlanError(
                     f"{where} assigns {owner!r} a single {type(value).__name__}; `node_models` "
                     f"holds a **list** of model ids, and the order is load-bearing.")
+
+    # A node spec whose fields are present but blank (CHG-20260823-34). Checked here as well as at
+    # render time so it costs no asks: a blank `engineer_build` refused only at dispatch surfaces
+    # after `intake_review` through `pm_signoff` have already spent seven of them.
+    #
+    # **Five fields, not six.** `instructions` is deliberately absent: `engine.py` joins any
+    # `--instruction` text onto the node spec's own, and line 515 reads
+    # `own = spec.get("instructions") or ()` — explicitly tolerating a blank. A plan that leaves
+    # every node's `instructions` empty and supplies the text on the command line is coherent and
+    # works today, so refusing it at the door would be this same defect inverted: a check answering
+    # "malformed" about something it had not examined.
+    at_load = tuple(f for f in workorder.CONTENTFUL_FIELDS if f != "instructions")
+    for node_id, spec in (payload.get("node_specs") or {}).items():
+        if isinstance(spec, Mapping):
+            problem = workorder.content_problem(node_id, spec, where, at_load)
+            if problem:
+                raise PlanError(problem)
 
     risk = payload.get("risk")
     if risk is not None and risk not in policy.RISKS:

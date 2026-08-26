@@ -92,20 +92,43 @@ def test_the_run_says_when_three_seats_are_one_model(tmp_path):
 
 # ── the finding, recorded as it behaves ───────────────────────────────────────────────────────
 
-def test_a_blank_spec_is_not_yet_refused_and_the_readme_says_so(tmp_path):
-    """An open finding: `objective: ""` renders a valid work order because `workorder._check` tests
-    key presence, not content.
+def test_a_blank_spec_is_refused_before_a_single_ask(tmp_path):
+    """`objective: ""` used to render a valid work order, because the check tested key presence and
+    not content: 25 asks, four files, exit 0. CHG-20260823-34 closed it at both ends.
 
-    This test asserts the **current** behaviour and will fail the day it is fixed — deliberately.
-    The README states the outcome as measured, so the fix and the documentation have to move
-    together rather than the page quietly becoming wrong.
+    The previous version of this test asserted the **broken** behaviour on purpose, so that the fix
+    could not land without the README moving with it. It worked — this test, the README's scenario C
+    and the results table all changed in one commit.
     """
     code, output, asks, built = _run("C", tmp_path)
-    assert code == 0 and asks == 25 and len(built) == 4, (
-        "if this now refuses, the fix landed: update this test and the README's scenario C and "
-        "results table in the same change")
-    assert "open finding" in README
-    assert "workorder.py" in README, "the README must name where the cause is"
+    assert code == 2
+    assert asks == 0, "a blank spec must cost nothing to find out"
+    assert built == []
+    assert "engineer_build" in output, "the refusal must name the node"
+
+
+def test_the_refusal_names_the_blank_fields_and_not_the_ones_allowed_to_be_blank(tmp_path):
+    """The whole ruling in one assertion.
+
+    Scenario C blanks three fields; only two of them are defects. `expected_outputs` is `[]` on 14
+    of the 15 nodes in `examples/plan.json` — a review node produces nothing — so a rule refusing
+    every blank would refuse this repository's own example. That is the same coarse check inverted,
+    and it is the failure mode a rule like this actually has.
+    """
+    _, output, _, _ = _run("C", tmp_path)
+    assert "'scope'" in output and "'objective'" in output
+    assert "leaves ['scope', 'objective']" in output, (
+        "expected_outputs was blanked too and must not be in the refusal")
+    assert "may be empty" in output, "the refusal must name the boundary, or callers pad to be safe"
+
+
+def test_the_example_plan_survives_the_rule_it_documents():
+    """The adversarial half: the rule must not refuse the plan the example ships with."""
+    from ai_sdlc_runner import plan as plan_mod
+
+    for name in ("examples/tide-spa/plan.json", "examples/plan.json"):
+        path = EXAMPLE.parent.parent / name
+        plan_mod.check(json.loads(path.read_text(encoding="utf-8")), name)
 
 
 # ── the page and the plan the README describes ────────────────────────────────────────────────
