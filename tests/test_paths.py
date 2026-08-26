@@ -122,12 +122,28 @@ def test_the_check_agrees_with_what_the_filesystem_actually_does(tmp_path, name)
         f"{'accepted' if accepted_by_check else 'refused'} it")
 
 
-def test_a_cjk_name_the_filesystem_takes_is_not_refused(tmp_path):
+def test_a_cjk_name_is_judged_by_the_platform_that_will_store_it(tmp_path):
     """Named on its own because it is the regression, and because this repository is operated in
-    Chinese: a project called \u4e00\u9031\u6c23\u8c61 nested a few directories deep hit a refusal that was untrue."""
+    Chinese: a project called \u4e00\u9031\u6c23\u8c61 nested a few directories deep hit a refusal that was untrue.
+
+    **The first version of this test made the same mistake as the defect it was written for.** It
+    asserted `check` accepts a 100-character CJK name \u2014 true on Windows, where that is 100 UTF-16
+    units, and false on ext4, where it is 300 bytes and genuinely too long. CI caught it: Windows
+    green, Ubuntu red. A platform truth written as a universal one, in the test fixing a platform
+    truth written as a universal one.
+
+    So it asserts the *rule* instead: the count uses the platform's unit, and `check` agrees with
+    what the platform will actually store.
+    """
     name = "\u7bc0" * 100
-    paths.check(tmp_path / name)
-    assert paths.measure(name)[0] == (100 if os.name == "nt" else 300)
+    size, unit = paths.measure(name)
+    if os.name == "nt":
+        assert (size, unit) == (100, "UTF-16 code units")
+        paths.check(tmp_path / name)                     # legal on NTFS, and was being refused
+    else:
+        assert (size, unit) == (300, "bytes")
+        with pytest.raises(paths.PathTooLong):
+            paths.check(tmp_path / name)                 # genuinely too long on ext4
 
 
 # ── the prefix's own conditions, each one a way to get it wrong ────────────────────────────────
