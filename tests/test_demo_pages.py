@@ -121,3 +121,86 @@ def test_the_agents_the_demos_use_do_not_pick_the_next_module_by_missing_file(tm
         assert answers[4] == "", (
             f'{demo["example"]}: a fifth build answered {answers[4]!r} instead of reporting '
             f"nothing to do — the frontier would never empty")
+
+
+# ── the recording demo ────────────────────────────────────────────────────────────────────────
+
+def test_the_recording_is_rendered_by_the_shipped_exporter():
+    """Not by anything local to `examples/demo/`. The page is a demonstration **of the feature**, so
+    if `--format playback` breaks, this page must break with it rather than keep working from a
+    private copy of the renderer."""
+    import ast
+
+    source = (DEMO / "build.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and ast.unparse(n.func).endswith("export_conversation")]
+    assert calls, "the recording page must go through conversations.export_conversation"
+    assert any(ast.unparse(a) == "'playback'" or ast.unparse(a) == '"playback"'
+               for call in calls for a in call.args), "it must ask for the playback format"
+
+
+def test_the_recording_replays_a_real_console_driven_run():
+    """The point of the fixture: it holds what a person typed and what a person decided. A CLI run
+    has neither, and a recording of one shows only the model's half.
+
+    Asserted against the conversation, not against the rendered payload: the page's field names are
+    the exporter's business and a test that pinned them would fail on a rename that changed nothing.
+    What must hold is that the *run* has both operator kinds in it.
+    """
+    from ai_sdlc_runner import conversations as conv
+
+    back = conv.backend("file", root=DEMO / "conversations")
+    entry = back.conversations()[0]
+    document = conv.Conversation(back, entry["project"]["name"],
+                                 conversation_id=entry["conversation_id"]).document()
+    kinds = {t["kind"] for t in document["turns"]}
+    assert conv.INSTRUCTION in kinds, "no instruction turn; this was not typed by a person"
+    assert conv.DECISION in kinds, "no decision turn; no gate was approved by a person"
+    assert sum(t["kind"] == conv.INSTRUCTION for t in document["turns"]) == 2, (
+        "the fixture should carry both instructions — the brief and the follow-up")
+
+    page = GENERATED["recording.html"]
+    assert '"who": "operator"' in page or '"who":"operator"' in page, (
+        "the page does not mark the operator's turns apart")
+
+
+def test_no_absolute_path_from_the_machine_that_recorded_it_survives():
+    """The `opened` turn records the journal directory the run happened in. Nobody needs a
+    stranger's temp path in their repository, so `make_fixture.py` scrubs it — and this is what
+    stops a refreshed fixture from quietly reintroducing one."""
+    import re
+
+    for path in sorted((DEMO / "conversations").rglob("*")):
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        found = re.findall(r'[A-Za-z]:\\[^"]*|/(?:home|Users|tmp)/[^"]*', text)
+        assert not found, f"{path.name} still names a real path: {found[0][:90]}"
+    assert "<journal>" in (DEMO / "conversations").rglob("*.jsonl").__next__().read_text(
+        encoding="utf-8"), "the placeholder is missing; scrubbing may have stopped running"
+
+
+def test_the_fixture_holds_exactly_one_conversation():
+    """`build.py` refuses otherwise rather than picking one. Two conversations in the fixture would
+    make the demo page depend on directory ordering."""
+    from ai_sdlc_runner import conversations as conv
+
+    listed = conv.backend("file", root=DEMO / "conversations").conversations()
+    assert len(listed) == 1, f"the fixture holds {len(listed)} conversations"
+
+
+def test_the_recording_is_linked_from_the_index():
+    index = GENERATED["index.html"]
+    assert 'href="recording.html"' in index
+    assert build.RECORDING["title"] in index
+
+
+def test_the_fixture_is_not_so_large_that_nobody_will_clone_it():
+    """A demo is worth some bytes and not unlimited ones. This is a ceiling with a reason rather
+    than a number: a real console run with two instructions is about a third of a megabyte, and if
+    a refresh ever produces several times that, something re-walked that should not have."""
+    total = sum(p.stat().st_size for p in (DEMO / "conversations").rglob("*") if p.is_file())
+    assert total < 900_000, (
+        f"the fixture is {total:,} bytes. The 902 KB version was two redundant re-walks caused by "
+        f"an agent that could not report itself finished — check for that before raising this.")
