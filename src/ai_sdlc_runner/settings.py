@@ -39,7 +39,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional, Tuple
 
-from . import policy, tui
+from . import paths, policy, tui
 
 DEFAULT_PATH = "config/settings.json"
 
@@ -188,8 +188,8 @@ def load(path: str = DEFAULT_PATH) -> Settings:
 def save(settings: Settings, path: str = DEFAULT_PATH) -> None:
     """Write the settings file. Sorted keys and a trailing newline, so a diff is readable."""
     p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(settings.as_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    paths.makedirs(p.parent)
+    paths.write_text(p, json.dumps(settings.as_dict(), indent=2, sort_keys=True) + "\n")
 
 
 def edit(settings: Settings, *, input_fn=input, stream_out=None) -> Optional[Settings]:

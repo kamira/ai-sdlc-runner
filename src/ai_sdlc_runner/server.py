@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional
 
 from . import attachments as attach_mod
+from . import paths
 from . import engine, graph, models as models_mod, policy, store as store_mod
 
 #: The only addresses this server will bind. Not a default — a rule. A runner that can merge
@@ -133,12 +134,12 @@ class Operator:
 
     @classmethod
     def mint(cls, directory: Path) -> "Operator":
-        directory.mkdir(parents=True, exist_ok=True)
+        paths.makedirs(directory)
         path = directory / "operator.token"
         token = secrets.token_urlsafe(32)
-        path.write_text(token + "\n", encoding="utf-8")
+        paths.write_text(path, token + "\n")
         try:
-            os.chmod(path, 0o600)
+            paths.chmod(path, 0o600)
         except OSError:                            # pragma: no cover - filesystems without modes
             pass
         name = os.environ.get("USER") or os.environ.get("USERNAME") or "operator"
