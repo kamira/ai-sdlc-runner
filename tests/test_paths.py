@@ -227,13 +227,35 @@ def test_unlink_removes_a_deep_file(tmp_path):
 
 # ── the coverage claim, and the two holes under it (CHG-20260823-38) ──────────────────────────
 
-def test_every_module_that_writes_goes_through_this_one():
+#: Direct writes that are allowed, each with the reason it does not need the long-path module.
+#:
+#: The first version of the audit below was a **blanket ban**: no module may write directly, ever.
+#: That replaced one over-broad claim ("every file write goes through it") with an over-broad rule,
+#: which is the same defect wearing a test's clothes — the operator said so:
+#:
+#:     paths 是根據流程走的，不一定每個節點都會遇到
+#:
+#: Which writes can reach a deep path depends on the flow that runs, not on the module the call
+#: sits in. So the audit is now an **allowlist with reasons**: a direct write is a decision somebody
+#: made and wrote down, rather than something silently permitted or absolutely forbidden. Adding an
+#: entry costs a sentence; that is the point.
+ALLOWED_DIRECT_WRITES = {
+    # (module, function called) : why it does not go through paths.py
+}
+
+
+def test_a_direct_write_is_either_routed_through_this_module_or_written_down():
     """CHG-20260823-32 said "every file write now goes through it" and wired three modules of eight.
 
     Both review seats named it the worst thing in that batch: a name standing in for a constraint,
     inside the change written to fix that class. `attachments.py` was the sharpest case — the module
     `paths.py`'s own docstring cites as the historical victim, still carrying its 32-character
     hash workaround and still writing directly.
+
+    What this asserts is *not* that a direct write is forbidden. It is that a direct write is
+    **accounted for** — either it goes through `paths`, or it is in `ALLOWED_DIRECT_WRITES` with a
+    reason. A rule that simply banned them would be the same over-broad claim one level up, and
+    would refuse a legitimate write to a temp directory on a path no flow can make deep.
 
     Read out of the syntax tree, not grepped, so a comment mentioning `write_text` cannot satisfy it.
     """
@@ -254,8 +276,34 @@ def test_every_module_that_writes_goes_through_this_one():
             bare = called.rsplit(".", 1)[-1]
             if bare in ("write_text", "write_bytes", "mkdir") or called in (
                     "os.makedirs", "os.chmod", "os.unlink", "os.remove", "io.open"):
+                if (module.name, called) in ALLOWED_DIRECT_WRITES:
+                    continue
                 offenders.append(f"{module.name}:{node.lineno} {called}")
-    assert not offenders, "these writes bypass paths.py: " + ", ".join(offenders)
+    assert not offenders, (
+        "these writes neither go through paths.py nor appear in ALLOWED_DIRECT_WRITES with a "
+        "reason: " + ", ".join(offenders))
+
+
+def test_the_allowlist_gives_a_reason_for_every_entry():
+    """An allowlist whose entries carry no reason is a blanket permission spelled out longhand."""
+    for key, why in ALLOWED_DIRECT_WRITES.items():
+        assert isinstance(why, str) and len(why.split()) >= 4, (
+            f"{key} is exempted without a usable reason: {why!r}")
+
+
+def test_the_audit_still_catches_a_bypass():
+    """The audit's own failure mode is finding nothing because it looks for the wrong shapes.
+
+    So it is run against a module that definitely bypasses — this test file — and asserted to
+    notice. Without this, deleting a call shape from the list above would silently retire the check
+    while leaving it green.
+    """
+    import ast
+
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    found = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and ast.unparse(n.func) in ("io.open", "os.unlink")]
+    assert found, "this file no longer contains a direct write for the audit to recognise"
 
 
 def test_the_sqlite_database_name_is_checked_too(tmp_path):

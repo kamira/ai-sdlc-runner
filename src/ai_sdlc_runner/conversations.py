@@ -586,8 +586,19 @@ class Conversation:
 
 
 def _now() -> str:
+    """The wall clock, to the millisecond.
+
+    It was `timespec="seconds"`, and at one second of resolution **18 turns of a real run shared a
+    timestamp**. The order still survived — `seq` is the ordering and always was — but the *timing*
+    did not, and for a two-sided conversation the timing is most of what a reader wants: how long
+    the model took, how long a person hesitated before approving.
+
+    Milliseconds are enough for that and stop short of pretending to more precision than the
+    surrounding I/O has. Reading is unaffected: `fromisoformat` parses both spellings, so
+    conversations already stored at second resolution still load.
+    """
     from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
 # ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -834,6 +845,7 @@ def _playback(document: Mapping[str, object]) -> str:
     # One clock across the whole run, advanced by the real gap between turns or by IDLE_CAP,
     # whichever is smaller. `waited` carries the real figure so the page can name what it skipped.
     clock, previous = 0.0, None
+    previous_at: Optional[float] = None
     play: List[Dict[str, object]] = []
     for index, stop in enumerate(stops):
         for turn in stop["turns"]:                                # type: ignore[union-attr]
@@ -861,7 +873,15 @@ def _playback(document: Mapping[str, object]) -> str:
                 "sum": _summary(turn),
                 "full": json.dumps(body, ensure_ascii=False, indent=2, sort_keys=True),
                 "waited": waited,
+                # The wall clock, and the real gap since the turn before it. The replay always had
+                # the *order* — it is a timeline — but a card showed only `#seq`, so you could see
+                # that an instruction preceded an answer without seeing when either happened or how
+                # long the model took. For a two-sided conversation that is most of what a reader is
+                # looking for.
+                "at": str(turn.get("at") or "").replace("T", " ")[11:19],
+                "gap": None if now is None or previous_at is None else round(now - previous_at, 2),
             })
+            previous_at = now if now is not None else previous_at
 
     rail = [{"node": s["node"] or "—", "visit": s["visit"],
              "repeat": visits[s["node"]] > 1 and bool(s["node"]),
@@ -1099,6 +1119,8 @@ font-family:"IBM Plex Mono",monospace}
 .turn.model .who{color:var(--model)}
 .turn.operator .who{color:var(--operator)}
 .verb,.mdl{color:var(--muted)}
+.clk{color:var(--muted);font-variant-numeric:tabular-nums}
+.gp{color:var(--operator);font-variant-numeric:tabular-nums}
 .seq{margin-left:auto;color:var(--rule2)}
 .sum{margin:.2rem 0 0;font-size:.83rem;word-break:break-word}
 details{margin-top:.3rem}
@@ -1125,9 +1147,10 @@ font-variant-numeric:tabular-nums;min-width:6.5rem;text-align:right}
   <h1>__TITLE__</h1>
   <p class="meta">conversation __CID__ · <b>__NTURNS__</b> turns · <b>__NSTOPS__</b> stops on the
     flow · <b>__TOTAL__</b>s of playback from <b>__REAL__</b> min of real time
-    <span class="dim">(every turn is listed below — press play to walk them in order, or click one
-    to jump there. A turn plays for at least 0.35s however fast it was; a pause over 2s plays as 2s
-    and says what it really took.)</span></p>
+    <span class="dim">(every turn is listed below with the time it happened and the gap since the
+    one before it — press play to walk them in order, or click one to jump there. The playback clock
+    is compressed: a turn plays for at least 0.35s however fast it was, and a pause over 2s plays as
+    2s. The times on the cards are the real ones.)</span></p>
 </header>
 <div class="layout">
   <ol class="rail" id="rail"></ol>
@@ -1152,6 +1175,11 @@ const timeLabel = document.getElementById('time'), speed = document.getElementBy
 let clock = 0, playing = false, last = null, shown = -1;
 
 const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+// How long after the turn before it. Sub-second gaps are the stand-in agent answering
+// instantly and are not worth a line; anything a person would notice gets one.
+const fmtGap = s => s >= 60 ? (s / 60).toFixed(1) + 'm'
+  : s >= 1 ? s.toFixed(1) + 's'
+  : s >= 0.02 ? Math.round(s * 1000) + 'ms' : '';
 
 RAIL.forEach((r, i) => {
   const li = document.createElement('li');
@@ -1187,9 +1215,11 @@ function build() {
     if (x.waited) html.push('<p class="gap">— waited ' +
       (x.waited >= 60 ? (x.waited / 60).toFixed(1) + ' min' : Math.round(x.waited) + 's') + ' —</p>');
     html.push('<article class="turn ' + x.who + '" data-i="' + i + '">' +
-      '<div class="th"><span class="who">' + x.who + '</span>' +
+      '<div class="th"><span class="clk">' + esc(x.at || '') + '</span>' +
+      '<span class="who">' + x.who + '</span>' +
       '<span class="verb">' + esc(x.verb) + '</span>' +
       (x.model ? '<span class="mdl">' + esc(x.model) + '</span>' : '') +
+      (x.gap ? '<span class="gp">+' + fmtGap(x.gap) + '</span>' : '') +
       '<span class="seq">#' + x.seq + '</span></div>' +
       '<p class="sum">' + esc(x.sum) + '</p>' +
       '<details><summary>full</summary><pre>' + esc(x.full) + '</pre></details></article>');
