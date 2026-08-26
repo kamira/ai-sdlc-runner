@@ -227,3 +227,84 @@ def test_all_three_decision_forms_are_accepted():
     """
     for form in ("module", ["module", "none"], "frontier"):
         assert plan.check({"risk": "low", "decisions": {"next_module": form}})
+
+
+# ── blank required fields (CHG-20260823-34) ───────────────────────────────────────────────────
+
+def _spec(**over):
+    from ai_sdlc_runner import workorder
+    spec = {f: f"the {f}" for f in workorder.NODE_SPEC_FIELDS}
+    spec.update({"input_artifacts": [], "expected_outputs": [], "idempotence_probes": [],
+                 "workdir": "."})
+    spec.update(over)
+    return spec
+
+
+def test_a_blank_required_field_is_refused_at_the_door():
+    """Refused at load so it costs no asks: a blank `engineer_build` caught only at dispatch
+    surfaces after seven asks have already been spent reaching it."""
+    with pytest.raises(plan.PlanError) as caught:
+        plan.check({"node_specs": {"engineer_build": _spec(objective="")}})
+    assert "objective" in str(caught.value)
+    assert "engineer_build" in str(caught.value)
+
+
+def test_whitespace_is_blank():
+    """`" "` is the same defect one character deeper."""
+    with pytest.raises(plan.PlanError):
+        plan.check({"node_specs": {"n": _spec(scope="   ")}})
+
+
+def test_a_list_of_blanks_is_blank():
+    """`done_criteria` is a string in some plans and a list in others. Both forms have an empty
+    case, and a list holding only empty strings supplies no criterion either."""
+    with pytest.raises(plan.PlanError):
+        plan.check({"node_specs": {"n": _spec(done_criteria=[])}})
+    with pytest.raises(plan.PlanError):
+        plan.check({"node_specs": {"n": _spec(done_criteria=["", "  "])}})
+
+
+@pytest.mark.parametrize("field", ["input_artifacts", "expected_outputs", "idempotence_probes"])
+def test_the_three_that_may_be_empty_still_may(field):
+    """The inverted defect this rule could easily have been. `expected_outputs` is `[]` on 14 of the
+    15 nodes in `examples/plan.json`; refusing it would refuse the repository's own example."""
+    plan.check({"node_specs": {"n": _spec(**{field: []})}})
+
+
+def test_instructions_may_be_blank_at_load_because_the_engine_may_supply_them():
+    """The one field the two boundaries disagree about, and the disagreement is deliberate.
+
+    `engine.py` joins `--instruction` text onto the node spec's own, and reads
+    `own = spec.get("instructions") or ()` — explicitly tolerating a blank. A plan that leaves every
+    node's `instructions` empty and supplies the text on the command line is coherent and works, so
+    refusing it here would be this same defect inverted.
+    """
+    plan.check({"node_specs": {"n": _spec(instructions="")}})
+
+
+def test_render_does_refuse_a_blank_instructions_because_by_then_nothing_can_fill_it():
+    """The other half: by render time the engine has already appended whatever it had. Still blank
+    means there is genuinely nothing to say."""
+    from ai_sdlc_runner import graph, workorder
+
+    verdict = {"gate": "g", "risk": "low", "verdict": "allow", "source": "grade",
+               "tightened": False}
+    with pytest.raises(workorder.WorkOrderError) as caught:
+        workorder.render(graph.NODES[0], _spec(instructions=""), verdict)
+    assert "instructions" in str(caught.value)
+
+
+def test_a_missing_key_is_not_reported_twice_in_different_words():
+    """Absence is `_check`'s complaint. Reporting it again as 'blank' helps nobody."""
+    from ai_sdlc_runner import workorder
+
+    assert workorder.content_problem("n", {"scope": "x"}, "w") is None
+
+
+def test_one_definition_of_blank_serves_both_boundaries():
+    """Two copies of this rule drifting apart give a plan that loads and will not dispatch."""
+    from ai_sdlc_runner import workorder
+
+    assert set(workorder.CONTENTFUL_FIELDS) | set(workorder.MAY_BE_EMPTY) == \
+        set(workorder.NODE_SPEC_FIELDS), "every field must be on exactly one of the two lists"
+    assert not set(workorder.CONTENTFUL_FIELDS) & set(workorder.MAY_BE_EMPTY)

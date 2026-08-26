@@ -38,14 +38,17 @@ shows you the one field that matters, next to the reason it matters.
 |---|---|---|---|---|---|
 | **A** | — | 0 | 25 | 4 | at `merge`, waiting for a person |
 | **B** | `operations.engineer_build.kind` → `deploy` | 0 | 7 | 0 | permanent halt at `engineer_build` |
-| **C** | `scope`/`objective`/`expected_outputs` → `""` | 0 | 25 | 4 | **nowhere — see below** |
+| **C** | `scope`/`objective`/`expected_outputs` → `""` | 2 | 0 | 0 | refused at the door |
 | **D** | `operations` → `operationz` | 2 | 0 | 0 | refused at the door |
 | **E** | `ship.acc_id` with no `task` | 2 | 0 | 0 | refused at the door |
 
 Read the *asks spent* column alongside the *exit* column. That is the whole argument for refusing at
-load time: **D** and **E** are malformed plans and cost nothing to find out. **B** is a well-formed
-plan that describes work no grade of risk permits, so it is found where the work would happen — but
-only after seven asks were spent getting there.
+load time: **C**, **D** and **E** are malformed plans and cost nothing to find out. **B** is a
+well-formed plan that describes work no grade of risk permits, so it is found where the work would
+happen — but only after seven asks were spent getting there.
+
+**C used to be the exception**, and the row above is what changed. It ran the whole flow on a spec
+that said nothing — 25 asks, four files, exit 0 — until CHG-20260823-34.
 
 ---
 
@@ -103,33 +106,45 @@ things the runner will not do regardless of how the plan is written.
 This is also the realistic shape of the mistake. Nobody writes a plan whose every operation is a
 deploy. Somebody writes an ordinary build plan and puts one deploy in the middle of it.
 
-## C · a spec with nothing in it — an open finding
+## C · a spec with nothing in it
 
 `scope`, `objective` and `expected_outputs` set to `""` on the build nodes. The fields are
 **present**, so the closed schema accepts the shape.
 
-The run completed. 25 asks, all four files, exit 0, straight to the merge gate. Nothing refused it
-and nothing warned.
+Zero asks, exit 2:
 
-The cause is in `src/ai_sdlc_runner/workorder.py`:
-
-```python
-missing = [f for f in required if f not in supplied]
+```
+error: plan.json: node spec 'engineer_build' leaves ['scope', 'objective'] blank. The field is
+present and says nothing — which reads as configured and constrains nothing, the same silent pass
+as a missing key one level down; the old check tested that the key existed, not that the value
+said anything. Write the constraint: a node genuinely unconstrained must say so in words, because
+'any file in the repository' is a scope and '' is not. ['input_artifacts', 'expected_outputs',
+'idempotence_probes'] may be empty; these may not.
 ```
 
-That tests whether the *key* is there. A key whose value is `""` passes, and `render()` copies the
-blank into the work order it dispatches. This is the defect class the rest of the project is
-organised against — a name standing in for a constraint — sitting in the work-order builder itself,
-and it was found by running the example rather than by reading the code.
+Two things in that message are worth reading closely.
 
-It is recorded here as it behaves, not as it should behave, because a README that describes the fix
-before the fix exists is the same defect one layer up. The change record carries the finding and the
-review; when the refusal lands, this section and the table above change together.
+**It names `scope` and `objective` and not `expected_outputs`** — although the mutation blanked all
+three. `expected_outputs` is `[]` on 14 of the 15 nodes in [`examples/plan.json`](../plan.json),
+because a review node genuinely produces nothing. A rule that refused every blank would refuse this
+repository's own example, which is the same coarse check inverted. Both review seats reached that
+exclusion independently.
 
-The honest limit on any fix: `input_artifacts`, `idempotence_probes` and `expected_outputs` are
-legitimately empty on real nodes — a review node produces no outputs and has no probes — so a rule
-that refuses every blank refuses `examples/plan.json`. Which fields may be blank is exactly the
-question, and answering it "all of them" or "none of them" would be the same coarse check inverted.
+**It names the boundary out loud.** A refusal that only scolds invites the reader to pad
+`idempotence_probes` with a fake probe to be safe — manufacturing the defect the rule exists to
+stop.
+
+### How this one was found
+
+By **running** the example, not by reading the code. `workorder._check` tested
+`[f for f in required if f not in supplied]` — the presence of the *key*. A key whose value was
+`""` passed, and `render()` copied the blank into the order it dispatched. This project's dominant
+defect class — a name standing in for a constraint — sitting in the work-order builder itself.
+
+It is checked at both ends now: at load, so it costs no asks, and at render, which is the choke
+point every dispatch passes through including callers that never open a plan file. `instructions` is
+the one field checked at render only — the engine may legitimately fill it in from `--instruction`
+between the two.
 
 ## D · operations, misspelled
 

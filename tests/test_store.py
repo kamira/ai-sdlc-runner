@@ -474,7 +474,13 @@ def test_a_stored_assignment_reaches_an_actual_dispatch(tmp_path):
     def factory(seat=None, model=None):
         return Recorder(model)
 
-    spec = {field: "" for field in workorder.NODE_SPEC_FIELDS}
+    # A spec with content in it. The first version was `{field: "" for field in NODE_SPEC_FIELDS}`
+    # — enough keys to satisfy a check that only counted them, which is exactly the defect
+    # CHG-20260823-34 closed. This test is about which *model* gets dispatched, so the spec only has
+    # to be real, not elaborate.
+    spec = {field: f"{field} for the dispatch test" for field in workorder.NODE_SPEC_FIELDS}
+    spec.update({"input_artifacts": [], "expected_outputs": [], "idempotence_probes": [],
+                 "workdir": "."})
     cfg = engine.RunConfig(
         node_specs={node.id: dict(spec) for node in graph.NODES},
         decisions={}, risk="low",
