@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# The recording fixture is compared byte for byte by tests/test_demo_pages.py, so git must
+# not rewrite its line endings on checkout.
+examples/demo/conversations/** -text

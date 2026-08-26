@@ -425,9 +425,11 @@ parsed with `json.loads`. Three complete, comment-free, working examples are in
 | **tide-spa** | one brief run five times, each differing by a single field — **where a run stops and why** | [read](examples/tide-spa/README.md) |
 | **weather-spa** | the **console** path: a brief typed by a person, a gate approved by clicking | [read](examples/weather-spa/README.md) |
 
-The pages they build are at [`examples/demo/`](examples/demo/index.html), generated from the agents
-that build them rather than copied — a demo page kept by hand is a screenshot with an `.html`
-extension.
+The pages they build are at [`examples/demo/`](examples/demo/index.html), along with
+[a console-driven run replayed](examples/demo/recording.html) — what a person typed, what the model
+answered, and where the walk stopped to be approved. All of it is generated (the recording by
+`--format playback` itself) and byte-compared by the suite, because a demo page kept by hand is a
+screenshot with an `.html` extension.
 
 ```bash
 runner --config examples/minimal/runner.yaml run --plan examples/minimal/plan.json --risk low --confirm merge
@@ -626,7 +628,7 @@ first one winning — so two of them disagreeing inside one answer resolves sile
 ## Testing
 
 ```bash
-pytest -q          # 1194 tests
+pytest -q          # 1201 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

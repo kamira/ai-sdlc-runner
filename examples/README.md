@@ -27,17 +27,39 @@ python3 examples/weather-spa/scenarios.py
 The two scenario drivers write nothing into the repository: each run gets its own temporary
 directory, and `weather-spa` also gets its own port and its own server, stopped again afterwards.
 
-## The pages they build
+## The pages they build, and a run replayed
 
-[`demo/index.html`](demo/index.html) — the products, each inlined into one self-contained file.
+[`demo/index.html`](demo/index.html) — three pages:
 
-They are **generated from the agents that build them**, by `demo/build.py`, and the suite
-regenerates and compares. A demo page copied by hand is a screenshot with an `.html` extension; it
-goes stale the first time the agent changes and nothing notices.
+| | |
+|---|---|
+| [`demo/tide.html`](demo/tide.html) | what `tide-spa`'s agent writes, inlined into one file |
+| [`demo/weather.html`](demo/weather.html) | what `weather-spa`'s agent writes, likewise |
+| [`demo/recording.html`](demo/recording.html) | a console-driven run **replayed** — what a person typed, what the model answered, where the walk stopped to be approved |
 
 ```bash
 python3 examples/demo/build.py
 ```
+
+Everything there is **generated**, and the suite regenerates and byte-compares. A demo page copied
+by hand is a screenshot with an `.html` extension: it goes stale the first time the agent changes
+and nothing notices.
+
+The recording is rendered by the shipped exporter — `export_conversation(document, "playback")` —
+rather than by anything local to that directory, so if the format breaks the page breaks with it.
+
+It replays a **committed conversation** rather than a fresh run, because a recording carries
+wall-clock timestamps and a page rebuilt every time could never be compared against a committed one.
+The fixture in [`demo/conversations/`](demo/conversations/) is what a real console-driven run wrote,
+with the recording machine's absolute paths scrubbed out. Refresh it with:
+
+```bash
+python3 examples/demo/make_fixture.py
+```
+
+It is about 320 KB, which is most of what this directory weighs. That is a real run with two
+instructions and a re-walk; a much larger one means something re-walked that should not have, and a
+test says so.
 
 ## What the three have in common
 
