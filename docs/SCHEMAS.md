@@ -17,7 +17,7 @@ miscounts its own subject is the thing it warns about, so the count is now check
 | 3 | Node spec | [`workorder.py`](../src/ai_sdlc_runner/workorder.py) | shipped · **closed** |
 | 4 | Operation | [`policy.py`](../src/ai_sdlc_runner/policy.py) | shipped |
 | 5 | Work order | [`workorder.py`](../src/ai_sdlc_runner/workorder.py) | shipped · **closed** |
-| 6 | Answer contract | [`examples/agent.py`](../examples/agent.py) | shipped |
+| 6 | Answer contract | [`examples/minimal/agent.py`](../examples/minimal/agent.py) | shipped |
 | 7 | Ask journal entry | [`engine.py`](../src/ai_sdlc_runner/engine.py) | shipped |
 | 8 | Conversation document + turn | [`conversations.py`](../src/ai_sdlc_runner/conversations.py) | shipped |
 | 9 | Export formats — CSV columns, HTML stops | [`conversations.py`](../src/ai_sdlc_runner/conversations.py) | shipped |
@@ -168,7 +168,7 @@ JSON on stdout. A non-zero exit is a failed attempt.
 **Three names for one fact.** `_answered_branch` reads `answer.get("branch") or
 answer.get("verdict") or answer.get("outcome")` — `branch` wins silently, so an answer carrying two
 of them that disagree resolves to whichever is first, with nothing said. Seat verdicts accept
-`verdict` or `outcome` the same way. `examples/agent.py` documents only `verdict`.
+`verdict` or `outcome` the same way. `examples/minimal/agent.py` documents only `verdict`.
 
 And `engineer_build`'s `{"module": ...}` is **not enforced**: an answer that omits it never shrinks
 the frontier, so the run loops to `max_steps` and dies 200 steps from the cause.

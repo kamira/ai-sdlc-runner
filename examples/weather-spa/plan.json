@@ -1,0 +1,491 @@
+{
+  "risk": "low",
+  "decisions": {
+    "next_module": "frontier",
+    "feedback": "done"
+  },
+  "node_specs": {
+    "intake": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "intake_review": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "pm_plan": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "pm_confirm": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "lead_assess": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "pm_signoff": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "next_module": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "engineer_build": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "engineer_selfverify": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "lead_task_review": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "record_module": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "fix_pass": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "re_review": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "halt_second_fail": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "lead_review": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "review_failed": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "qa_verify": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "qa_accept": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "acceptance_failed": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "pr": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "merge": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "close_out": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "feedback": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "done": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    }
+  },
+  "operations": {
+    "intake": [
+      {
+        "description": "intake: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "intake_review": [
+      {
+        "description": "intake_review: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "pm_plan": [
+      {
+        "description": "pm_plan: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "pm_confirm": [
+      {
+        "description": "pm_confirm: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "lead_assess": [
+      {
+        "description": "lead_assess: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "pm_signoff": [
+      {
+        "description": "pm_signoff: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "next_module": [
+      {
+        "description": "next_module: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "engineer_build": [
+      {
+        "description": "write one module file",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "engineer_selfverify": [
+      {
+        "description": "engineer_selfverify: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "lead_task_review": [
+      {
+        "description": "lead_task_review: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "record_module": [
+      {
+        "description": "record_module: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "fix_pass": [
+      {
+        "description": "fix_pass: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "re_review": [
+      {
+        "description": "re_review: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "halt_second_fail": [
+      {
+        "description": "halt_second_fail: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "lead_review": [
+      {
+        "description": "lead_review: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "review_failed": [
+      {
+        "description": "review_failed: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "qa_verify": [
+      {
+        "description": "qa_verify: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "qa_accept": [
+      {
+        "description": "qa_accept: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "acceptance_failed": [
+      {
+        "description": "acceptance_failed: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "pr": [
+      {
+        "description": "pr: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "merge": [
+      {
+        "description": "merge: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "close_out": [
+      {
+        "description": "close_out: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "feedback": [
+      {
+        "description": "feedback: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "done": [
+      {
+        "description": "done: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ]
+  }
+}

@@ -1,40 +1,8 @@
-"""The agent the runner dispatches to. One process per ask: work order on stdin, JSON on stdout.
-
-It builds a real single-page app — a tide-table viewer — one module per `engineer_build` visit.
-Nothing here is a stub: the files it writes are the files the browser loads.
-"""
-import json
-import sys
-from pathlib import Path
-
-OUT = Path(__file__).resolve().parent / "site"
-
-MODULES = {
-    "markup": ("index.html", """<!doctype html>
+<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Tide Table — Porthcurno</title><link rel="stylesheet" href="styles.css">
-</head><body>
-  <header>
-    <p class="eyebrow">SW Cornwall &middot; 50.0413&deg;N 5.6552&deg;W</p>
-    <h1>Porthcurno</h1>
-    <p class="sub" id="today"></p>
-  </header>
-  <main>
-    <section class="now" id="now" aria-live="polite"></section>
-    <section>
-      <h2>Next six tides</h2>
-      <ol class="tides" id="tides"></ol>
-    </section>
-    <section>
-      <h2>Twelve hours</h2>
-      <div class="chartwrap"><canvas id="chart" width="720" height="200"></canvas></div>
-    </section>
-  </main>
-  <footer>Built by ai-sdlc-runner. Heights are a demonstration curve, not a forecast.</footer>
-<script src="tides.js"></script><script src="app.js"></script></body></html>
-"""),
-    "styles": ("styles.css", """:root{--ink:#11202b;--ground:#f7f9fa;--panel:#fff;--rule:#dbe4e8;
+<title>Tide Table — Porthcurno</title><style>
+:root{--ink:#11202b;--ground:#f7f9fa;--panel:#fff;--rule:#dbe4e8;
 --sea:#1d6a8c;--sea-soft:#e3eff4;--muted:#5d7280;--high:#b5551f}
 *{box-sizing:border-box}
 body{margin:0;background:var(--ground);color:var(--ink);
@@ -66,8 +34,28 @@ canvas{display:block;width:100%;height:200px}
 footer{padding:2rem 1.25rem 3rem;color:var(--muted);font-size:.8rem}
 @media (prefers-color-scheme:dark){:root{--ink:#e7eef2;--ground:#0e1519;--panel:#151f25;
 --rule:#25333b;--sea:#2b7fa4;--sea-soft:#17262e;--muted:#8ea3b0}}
-"""),
-    "tides": ("tides.js", """// The model: a semidiurnal curve, 12h25m period, sampled and turned into events.
+
+</style>
+</head><body>
+  <header>
+    <p class="eyebrow">SW Cornwall &middot; 50.0413&deg;N 5.6552&deg;W</p>
+    <h1>Porthcurno</h1>
+    <p class="sub" id="today"></p>
+  </header>
+  <main>
+    <section class="now" id="now" aria-live="polite"></section>
+    <section>
+      <h2>Next six tides</h2>
+      <ol class="tides" id="tides"></ol>
+    </section>
+    <section>
+      <h2>Twelve hours</h2>
+      <div class="chartwrap"><canvas id="chart" width="720" height="200"></canvas></div>
+    </section>
+  </main>
+  <footer>Built by ai-sdlc-runner. Heights are a demonstration curve, not a forecast.</footer>
+<script>
+// The model: a semidiurnal curve, 12h25m period, sampled and turned into events.
 const PERIOD_MIN = 745;          // 12h25m — the real semidiurnal interval
 const MEAN = 3.1, AMP = 2.4;     // metres
 
@@ -94,8 +82,10 @@ function clock(minutes) {
 }
 
 window.Tides = { heightAt, tideEvents, clock, PERIOD_MIN };
-"""),
-    "app": ("app.js", """// The view: reads the model, writes the DOM, draws the curve.
+
+</script>
+<script>
+// The view: reads the model, writes the DOM, draws the curve.
 (function () {
   const { heightAt, tideEvents, clock } = window.Tides;
   const now = new Date();
@@ -146,54 +136,5 @@ window.Tides = { heightAt, tideEvents, clock, PERIOD_MIN };
   g.fillStyle = ink; g.beginPath();
   g.arc(0, y(level), 4, 0, Math.PI * 2); g.fill();
 })();
-"""),
-}
 
-ORDER = ["markup", "styles", "tides", "app"]
-
-
-def main():
-    order = json.loads(sys.stdin.read())
-    node = order["node_id"]
-    seat = order.get("seat")
-
-    if node == "intake_review":
-        # Every aspect is supplied by the brief, so nothing is missing.
-        print(json.dumps({"missing": [], "problems": [], "unsafe": []}))
-        return
-    if seat:
-        print(json.dumps({"verdict": "pass", "why": f"{seat}: read the brief and the module"}))
-        return
-    if node == "pm_plan":
-        print(json.dumps({"modules": ORDER}))
-        return
-    if node == "engineer_build":
-        OUT.mkdir(parents=True, exist_ok=True)
-        # Compare content; do not count files. Picking "the next module whose file is missing" works
-        # exactly once: on a second walk all four exist, so it answers with the last module forever,
-        # `next_module: frontier` never advances, and the run dies at the 200-step cap. That failure
-        # is `examples/weather-spa` scenario C, and this agent used to have it.
-        for key in ORDER:
-            name, body = MODULES[key]
-            path = OUT / name
-            if path.exists() and path.read_text(encoding="utf-8") == body:
-                continue
-            path.write_text(body, encoding="utf-8")
-            print(json.dumps({"module": key, "wrote": name}))
-            return
-        # Saying "nothing to do" is what lets the frontier empty and the loop finish.
-        print(json.dumps({"module": "", "wrote": "",
-                          "note": "every module already matches the brief"}))
-        return
-
-    # Read out of the graph rather than guessed: the first version answered "pass" at pm_confirm,
-    # whose branches are ['no','yes'], and the run halted on an answer that named no branch.
-    branches = {
-        "pm_confirm": "yes", "pm_signoff": "yes", "next_module": "module",
-        "lead_task_review": "pass", "re_review": "pass", "lead_review": "pass",
-        "qa_accept": "pass", "feedback": "done",
-    }
-    print(json.dumps({"verdict": branches.get(node, "pass"), "note": f"{node} ok"}))
-
-
-main()
+</script></body></html>

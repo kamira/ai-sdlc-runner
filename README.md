@@ -416,18 +416,28 @@ that you did.
 ### A plan you can actually run
 
 The snippets above are illustrative and **will not run** — they are `jsonc`, and `plan.json` is
-parsed with `json.loads`. A complete, comment-free, working example is in
-[`examples/`](examples/):
+parsed with `json.loads`. Three complete, comment-free, working examples are in
+[`examples/`](examples/README.md), each with its own README:
+
+| | what it shows | |
+|---|---|---|
+| **minimal** | the smallest plan this runner accepts, and the answer contract | [read](examples/minimal/README.md) |
+| **tide-spa** | one brief run five times, each differing by a single field — **where a run stops and why** | [read](examples/tide-spa/README.md) |
+| **weather-spa** | the **console** path: a brief typed by a person, a gate approved by clicking | [read](examples/weather-spa/README.md) |
+
+The pages they build are at [`examples/demo/`](examples/demo/index.html), generated from the agents
+that build them rather than copied — a demo page kept by hand is a screenshot with an `.html`
+extension.
 
 ```bash
-runner --config examples/runner.yaml run --plan examples/plan.json --risk low --confirm merge
+runner --config examples/minimal/runner.yaml run --plan examples/minimal/plan.json --risk low --confirm merge
 ```
 
 That **visits 20 of the 24 nodes** — the other four are failure paths a green run never takes —
 asks 17 questions, writes a real `greet.py`, and finishes. It is three
-files: [`plan.json`](examples/plan.json) (15 node specs and 15 operation blocks),
-[`runner.yaml`](examples/runner.yaml), and [`agent.py`](examples/agent.py) — which is also the only
-place **the answer contract** is written down:
+files: [`plan.json`](examples/minimal/plan.json) (15 node specs and 15 operation blocks),
+[`runner.yaml`](examples/minimal/runner.yaml), and [`agent.py`](examples/minimal/agent.py) — which
+is also the only place **the answer contract** is written down:
 
 | The node | must answer |
 |---|---|
@@ -616,7 +626,7 @@ first one winning — so two of them disagreeing inside one answer resolves sile
 ## Testing
 
 ```bash
-pytest -q          # 1166 tests
+pytest -q          # 1194 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

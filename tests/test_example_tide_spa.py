@@ -111,7 +111,7 @@ def test_the_refusal_names_the_blank_fields_and_not_the_ones_allowed_to_be_blank
     """The whole ruling in one assertion.
 
     Scenario C blanks three fields; only two of them are defects. `expected_outputs` is `[]` on 14
-    of the 15 nodes in `examples/plan.json` — a review node produces nothing — so a rule refusing
+    of the 15 nodes in `examples/minimal/plan.json` — a review node produces nothing — so a rule refusing
     every blank would refuse this repository's own example. That is the same coarse check inverted,
     and it is the failure mode a rule like this actually has.
     """
@@ -126,7 +126,7 @@ def test_the_example_plan_survives_the_rule_it_documents():
     """The adversarial half: the rule must not refuse the plan the example ships with."""
     from ai_sdlc_runner import plan as plan_mod
 
-    for name in ("examples/tide-spa/plan.json", "examples/plan.json"):
+    for name in ("examples/tide-spa/plan.json", "examples/minimal/plan.json"):
         path = EXAMPLE.parent.parent / name
         plan_mod.check(json.loads(path.read_text(encoding="utf-8")), name)
 
