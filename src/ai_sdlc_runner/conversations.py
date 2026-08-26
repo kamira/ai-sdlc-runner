@@ -44,6 +44,7 @@ import re
 import sys
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -831,7 +832,7 @@ def _now() -> str:
 # Export — 「JSON, Markdown, CSV 都支援，但用戶可選哪種形式匯出」
 # ──────────────────────────────────────────────────────────────────────────────────────────────
 
-FORMATS = ("json", "markdown", "csv", "html")
+FORMATS = ("json", "markdown", "csv", "html", "playback")
 
 #: The CSV columns. Fixed, because "one row per turn" is not something anybody can implement or
 #: check against. A ``_json`` suffix says the cell holds JSON text — which is also the only honest
@@ -849,6 +850,8 @@ def export_conversation(document: Mapping[str, object], fmt: str) -> str:
         return _markdown(document)
     if fmt == "html":
         return _html(document)
+    if fmt == "playback":
+        return _playback(document)
     return _csv(document)
 
 
@@ -982,6 +985,164 @@ def _summary(turn: Mapping[str, object]) -> str:
     return str(turn.get("text") or turn.get("why") or "")[:90]
 
 
+#: A pause longer than this plays as this, with the real length named on the page. The same figure
+#: `tools/render_cast.py` uses, for the same reason: a run that waited six minutes for CI is not a
+#: review anybody sits through at true speed, and one that silently cuts the wait cannot tell a slow
+#: answer from a fast one.
+IDLE_CAP = 2.0
+
+#: The floor a turn gets on the playback clock, however fast it really was.
+#:
+#: Without it the first real export was **3 seconds for 55 turns**: a stand-in agent answers in
+#: milliseconds, so the whole run flashed past unreadably while being, strictly, accurate. A
+#: recording nobody can watch has not recorded anything.
+#:
+#: It compresses the *ratio* rather than erasing it — a 40-second seat still lands at the 2-second
+#: cap against a neighbour's 0.35, which is the six-to-one a reader actually notices. The page says
+#: both figures, so the compression is visible rather than implied.
+MIN_BEAT = 0.35
+
+
+def _script_json(value: object) -> str:
+    r"""JSON for embedding inside a `<script>` block.
+
+    The waterfall escapes model text for *markup*, because that is where it lands. This one lands
+    inside a script element, where the rules are different and stricter: the HTML parser stops the
+    script at the first literal `</script>` **inside the string**, so an answer containing that text
+    ends the block early and everything after it is parsed as markup. `<!--` opens a comment that
+    swallows the rest.
+
+    Found by a test that put `<img src=x onerror=…>` in an answer and looked for it in the page — it
+    was there, raw. Escaping `<` at the JSON level is the fix that does not depend on noticing every
+    sequence: `\u003c` is the same string to JavaScript and nothing to the HTML parser. `U+2028` and
+    `U+2029` go too — legal in JSON, line terminators in JavaScript.
+    """
+    text = json.dumps(value, ensure_ascii=False)
+    return (text.replace("<", "\\u003c").replace(">", "\\u003e")
+                .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
+
+
+def _seconds(stamp: object) -> Optional[float]:
+    """An ISO timestamp as epoch seconds, or None if it will not parse.
+
+    None rather than 0.0 or "now": a turn whose time cannot be read must not be given a *plausible*
+    one, because the whole point of the replay is that the timings are real.
+    """
+    if not stamp:
+        return None
+    text = str(stamp)
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _playback(document: Mapping[str, object]) -> str:
+    """The run as something you press play on.
+
+    The waterfall answers *what happened*; this answers *watch it happen* — which node was reached
+    when, how long a seat took to answer, where the walk sat still. `markdown` and `html` both
+    flatten the run's duration away, and duration is where a review notices that one node took
+    forty times longer than its neighbours.
+
+    Real gaps are compressed and **said to be compressed**. A recording that quietly removes the
+    waiting is telling you the run was fast.
+    """
+    project = (document.get("project") or {})
+    turns = list(document.get("turns") or [])
+    stops, visits = _stops(turns)
+
+    # One clock across the whole run, advanced by the real gap between turns or by IDLE_CAP,
+    # whichever is smaller. `waited` carries the real figure so the page can name what it skipped.
+    clock, previous = 0.0, None
+    play: List[Dict[str, object]] = []
+    for index, stop in enumerate(stops):
+        for turn in stop["turns"]:                                # type: ignore[union-attr]
+            now = _seconds(turn.get("at"))
+            waited = None
+            if previous is not None and now is not None:
+                gap = max(0.0, now - previous)
+                if gap > IDLE_CAP:
+                    waited, clock = round(gap, 1), clock + IDLE_CAP
+                else:
+                    clock += max(gap, MIN_BEAT)
+            elif play:
+                clock += MIN_BEAT       # no readable timestamp: a beat, not an invented duration
+            if now is not None:
+                previous = now
+            who, verb = _VOICES.get(str(turn.get("kind")), ("runner", str(turn.get("kind"))))
+            body = {k: v for k, v in turn.items() if k not in ("seq", "kind", "at", "node_id")}
+            play.append({
+                "t": round(clock, 3),
+                "stop": index,
+                "who": who,
+                "verb": verb,
+                "seq": turn.get("seq"),
+                "model": turn.get("model") or turn.get("backend") or "",
+                "sum": _summary(turn),
+                "full": json.dumps(body, ensure_ascii=False, indent=2, sort_keys=True),
+                "waited": waited,
+            })
+
+    rail = [{"node": s["node"] or "—", "visit": s["visit"],
+             "repeat": visits[s["node"]] > 1 and bool(s["node"]),
+             "at": (str(s["turns"][0].get("at") or "")            # type: ignore[union-attr]
+                    .replace("T", " ")[11:19])}
+            for s in stops]
+
+    counts: Dict[object, int] = {}
+    for turn in turns:
+        counts[turn.get("kind")] = counts.get(turn.get("kind"), 0) + 1
+    real = 0.0
+    first, last = _seconds(turns[0].get("at")) if turns else None, \
+        _seconds(turns[-1].get("at")) if turns else None
+    if first is not None and last is not None:
+        real = max(0.0, last - first)
+
+    return (_REPLAY
+            .replace("__TITLE__", _escape(project.get("name", "conversation")))
+            .replace("__CID__", _escape(document.get("conversation_id", "?")))
+            .replace("__TURNS__", _script_json(play))
+            .replace("__RAIL__", _script_json(rail))
+            .replace("__TOTAL__", f"{(play[-1]['t'] if play else 0):.1f}")
+            .replace("__NTURNS__", str(len(turns)))
+            .replace("__NSTOPS__", str(len(stops)))
+            .replace("__REAL__", f"{real / 60:.1f}"))
+
+
+def _stops(turns: Sequence[Mapping[str, object]]):
+    """Group the turns into the stops the walk actually made. Shared by `html` and `playback`.
+
+    Consecutive turns at one node are one stop. **Consecutive**, not gathered — a node revisited
+    later is a *second* stop, and collapsing the two hides the loop both formats exist to show.
+
+    Two renderings reading the same run must agree about its shape, so this is one function rather
+    than two copies: the waterfall and the replay differ in how they *present* a stop, never in
+    where a stop begins.
+    """
+    stops: List[Dict[str, object]] = []
+    for turn in turns:
+        # An `answer` carries `ask_id` and no `node_id` — it belongs to the ask above it, and
+        # reading it as its own stop split every pair in two: 53 stops for 55 turns, which is a
+        # list wearing a waterfall's markup.
+        node = turn.get("node_id") or turn.get("at_node") or ""
+        if not node and turn.get("ask_id"):
+            named = str(turn["ask_id"]).split("-", 1)
+            node = named[1] if len(named) > 1 else ""
+            if stops and node.startswith(str(stops[-1]["node"])):
+                node = stops[-1]["node"]          # `000-lead_review-defect` belongs to lead_review
+        if stops and stops[-1]["node"] == node:
+            stops[-1]["turns"].append(turn)       # type: ignore[union-attr]
+        else:
+            stops.append({"node": node, "turns": [turn]})
+
+    visits: Dict[object, int] = {}
+    for stop in stops:
+        visits[stop["node"]] = visits.get(stop["node"], 0) + 1
+        stop["visit"] = visits[stop["node"]]
+    return stops, visits
+
+
 def _html(document: Mapping[str, object]) -> str:
     """The conversation as a waterfall down time, its stops the nodes the run walked.
 
@@ -993,29 +1154,7 @@ def _html(document: Mapping[str, object]) -> str:
     """
     project = (document.get("project") or {})
     turns = list(document.get("turns") or [])
-
-    # Consecutive turns at one node are one stop. Consecutive, not grouped — a node revisited later
-    # is a **second** stop, and collapsing the two would hide the loop the waterfall exists to show.
-    stops = []
-    for turn in turns:
-        # An `answer` carries `ask_id` and no `node_id` — it belongs to the ask above it, and
-        # reading it as its own stop split every pair in two: 53 stops for 55 turns, which is a
-        # list wearing a waterfall's markup.
-        node = turn.get("node_id") or turn.get("at_node") or ""
-        if not node and turn.get("ask_id"):
-            named = str(turn["ask_id"]).split("-", 1)
-            node = named[1] if len(named) > 1 else ""
-            if stops and node.startswith(stops[-1]["node"]):
-                node = stops[-1]["node"]          # `000-lead_review-defect` belongs to lead_review
-        if stops and stops[-1]["node"] == node:
-            stops[-1]["turns"].append(turn)
-        else:
-            stops.append({"node": node, "turns": [turn]})
-
-    visits = {}
-    for stop in stops:
-        visits[stop["node"]] = visits.get(stop["node"], 0) + 1
-        stop["visit"] = visits[stop["node"]]
+    stops, visits = _stops(turns)
 
     rows = []
     for stop in stops:
@@ -1127,5 +1266,185 @@ li.stop::before,.when::after{{display:none}}.when{{text-align:left}}}}
 <ol class="flow">
 {rows}
 </ol>
+</body></html>
+"""
+
+
+_REPLAY = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>__TITLE__ — replay</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{--ink:#16191f;--ground:#f6f5f2;--panel:#fff;--rule:#e0dcd4;--rule2:#c4bdb1;
+--runner:#5d6b7a;--model:#1d6a8c;--operator:#a2542c;--muted:#6b6f76;--live:#1d6a8c}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--ink:#e7e5e0;--ground:#12151a;
+--panel:#191d23;--rule:#282d35;--rule2:#3b414a;--runner:#93a3b4;--model:#5aa8c9;
+--operator:#d99a63;--muted:#949aa2;--live:#5aa8c9}}
+:root[data-theme="dark"]{--ink:#e7e5e0;--ground:#12151a;--panel:#191d23;--rule:#282d35;
+--rule2:#3b414a;--runner:#93a3b4;--model:#5aa8c9;--operator:#d99a63;--muted:#949aa2;--live:#5aa8c9}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);
+font:15px/1.6 "IBM Plex Sans",ui-sans-serif,system-ui,sans-serif}
+.wrap{max-width:74rem;margin:0 auto;padding:2rem 1.25rem 4rem}
+header.top{border-bottom:2px solid var(--ink);padding-bottom:1rem;margin-bottom:1.4rem}
+h1{margin:0;font-size:1.65rem;letter-spacing:-.02em}
+.meta{margin:.3rem 0 0;font-family:"IBM Plex Mono",monospace;font-size:.72rem;color:var(--muted)}
+.meta b{color:var(--ink)}
+.dim{opacity:.75}
+.layout{display:grid;grid-template-columns:15rem 1fr;gap:1.3rem;align-items:start}
+ol.rail{list-style:none;margin:0;padding:0;max-height:33rem;overflow-y:auto;
+border:1px solid var(--rule);border-radius:8px;background:var(--panel)}
+ol.rail li{border-bottom:1px solid var(--rule);padding:.4rem .7rem;
+border-left:3px solid transparent;cursor:pointer;opacity:.42}
+ol.rail li:last-child{border-bottom:none}
+ol.rail li.seen{opacity:1}
+ol.rail li.on{border-left-color:var(--live);background:var(--ground)}
+.rn{font-family:"IBM Plex Mono",monospace;font-size:.76rem;word-break:break-word}
+.rt{font-family:"IBM Plex Mono",monospace;font-size:.64rem;color:var(--muted)}
+.nth{margin-left:.35rem;font-size:.6rem;letter-spacing:.07em;text-transform:uppercase;
+color:var(--operator);border:1px solid var(--rule2);border-radius:3px;padding:0 .25rem}
+.stage{border:1px solid var(--rule);border-radius:8px;background:var(--panel);
+min-height:26rem;max-height:33rem;overflow-y:auto;padding:.9rem}
+.turn{border-left:3px solid var(--runner);background:var(--ground);border:1px solid var(--rule);
+border-radius:0 6px 6px 0;padding:.5rem .75rem;margin-bottom:.45rem}
+.turn.model{border-left-color:var(--model)}
+.turn.operator{border-left-color:var(--operator)}
+.turn.new{border-color:var(--live)}
+.th{display:flex;align-items:baseline;gap:.45rem;font-size:.68rem;
+font-family:"IBM Plex Mono",monospace}
+.who{text-transform:uppercase;letter-spacing:.08em;font-weight:600;color:var(--runner)}
+.turn.model .who{color:var(--model)}
+.turn.operator .who{color:var(--operator)}
+.verb,.mdl{color:var(--muted)}
+.seq{margin-left:auto;color:var(--rule2)}
+.sum{margin:.2rem 0 0;font-size:.83rem;word-break:break-word}
+details{margin-top:.3rem}
+summary{cursor:pointer;font-size:.67rem;color:var(--muted);font-family:"IBM Plex Mono",monospace}
+pre{margin:.3rem 0 0;padding:.5rem .6rem;background:var(--panel);border:1px solid var(--rule);
+border-radius:4px;font-size:.7rem;overflow-x:auto;max-height:18rem;
+font-family:"IBM Plex Mono",ui-monospace,monospace}
+.gap{font-family:"IBM Plex Mono",monospace;font-size:.67rem;color:var(--muted);
+font-style:italic;margin:.3rem 0 .45rem}
+.bar{display:flex;align-items:center;gap:.7rem;margin-top:.8rem}
+button.play{background:var(--live);color:#fff;border:0;border-radius:6px;cursor:pointer;
+padding:.45rem .95rem;font:600 .82rem/1 "IBM Plex Sans",sans-serif;min-width:5rem}
+input[type=range]{flex:1;accent-color:var(--live)}
+select{background:var(--panel);color:var(--ink);border:1px solid var(--rule);border-radius:6px;
+padding:.35rem .4rem;font:.76rem "IBM Plex Mono",monospace}
+.time{font-family:"IBM Plex Mono",monospace;font-size:.73rem;color:var(--muted);
+font-variant-numeric:tabular-nums;min-width:6.5rem;text-align:right}
+:focus-visible{outline:2px solid var(--live);outline-offset:2px}
+@media(max-width:780px){.layout{grid-template-columns:1fr}ol.rail{max-height:12rem}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style></head><body>
+<div class="wrap">
+<header class="top">
+  <h1>__TITLE__</h1>
+  <p class="meta">conversation __CID__ · <b>__NTURNS__</b> turns · <b>__NSTOPS__</b> stops on the
+    flow · <b>__TOTAL__</b>s of playback from <b>__REAL__</b> min of real time
+    <span class="dim">(a turn plays for at least 0.35s however fast it was; a pause over 2s plays
+    as 2s and says what it really took)</span></p>
+</header>
+<div class="layout">
+  <ol class="rail" id="rail"></ol>
+  <div>
+    <div class="stage" id="stage"></div>
+    <div class="bar">
+      <button class="play" id="play">Play</button>
+      <input type="range" id="scrub" min="0" max="__TOTAL__" step="0.05" value="0">
+      <select id="speed"><option value="0.5">0.5x</option>
+        <option value="1" selected>1x</option><option value="2">2x</option>
+        <option value="4">4x</option><option value="8">8x</option></select>
+      <span class="time" id="time">0.0 / __TOTAL__s</span>
+    </div>
+  </div>
+</div>
+</div>
+<script>
+const TURNS = __TURNS__, RAIL = __RAIL__, TOTAL = parseFloat("__TOTAL__");
+const rail = document.getElementById('rail'), stage = document.getElementById('stage');
+const scrub = document.getElementById('scrub'), playBtn = document.getElementById('play');
+const timeLabel = document.getElementById('time'), speed = document.getElementById('speed');
+let clock = 0, playing = false, last = null, shown = -1;
+
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+RAIL.forEach((r, i) => {
+  const li = document.createElement('li');
+  li.innerHTML = '<div class="rn">' + esc(r.node) +
+    (r.repeat ? '<span class="nth">visit ' + r.visit + '</span>' : '') +
+    '</div><div class="rt">' + esc(r.at) + '</div>';
+  li.onclick = () => {
+    const first = TURNS.find(t => t.stop === i);
+    if (first) { stop(); seek(first.t); }
+  };
+  rail.appendChild(li);
+});
+
+function upto(t) {
+  let n = -1;
+  for (let i = 0; i < TURNS.length; i++) if (TURNS[i].t <= t) n = i; else break;
+  return n;
+}
+
+function draw() {
+  const n = upto(clock);
+  if (n !== shown) {
+    shown = n;
+    const html = [];
+    for (let i = 0; i <= n; i++) {
+      const x = TURNS[i];
+      if (x.waited) html.push('<p class="gap">— waited ' +
+        (x.waited >= 60 ? (x.waited / 60).toFixed(1) + ' min' : Math.round(x.waited) + 's') +
+        ' —</p>');
+      html.push('<article class="turn ' + x.who + (i === n ? ' new' : '') + '">' +
+        '<div class="th"><span class="who">' + x.who + '</span>' +
+        '<span class="verb">' + esc(x.verb) + '</span>' +
+        (x.model ? '<span class="mdl">' + esc(x.model) + '</span>' : '') +
+        '<span class="seq">#' + x.seq + '</span></div>' +
+        '<p class="sum">' + esc(x.sum) + '</p>' +
+        '<details><summary>full</summary><pre>' + esc(x.full) + '</pre></details></article>');
+    }
+    stage.innerHTML = html.join('');
+    stage.scrollTop = stage.scrollHeight;
+    const at = n >= 0 ? TURNS[n].stop : -1;
+    [...rail.children].forEach((li, i) => {
+      li.classList.toggle('on', i === at);
+      li.classList.toggle('seen', i <= at);
+    });
+    if (at >= 0) rail.children[at].scrollIntoView({block: 'nearest'});
+  }
+  timeLabel.textContent = clock.toFixed(1) + ' / ' + TOTAL + 's';
+  scrub.value = clock;
+}
+
+function seek(t) { clock = Math.max(0, Math.min(TOTAL, t)); shown = -1; draw(); }
+function stop() { playing = false; last = null; playBtn.textContent = 'Play'; }
+
+function tick(now) {
+  if (!playing) return;
+  if (last !== null) clock += ((now - last) / 1000) * parseFloat(speed.value);
+  last = now;
+  if (clock >= TOTAL) { clock = TOTAL; stop(); }
+  draw();
+  if (playing) requestAnimationFrame(tick);
+}
+
+playBtn.onclick = () => {
+  if (playing) { stop(); return; }
+  if (clock >= TOTAL) { clock = 0; shown = -1; }
+  playing = true; playBtn.textContent = 'Pause'; last = null;
+  requestAnimationFrame(tick);
+};
+scrub.oninput = () => { stop(); seek(parseFloat(scrub.value)); };
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.key === ' ') { e.preventDefault(); playBtn.click(); }
+  if (e.key === 'ArrowRight') { stop(); seek(clock + 5); }
+  if (e.key === 'ArrowLeft') { stop(); seek(clock - 5); }
+});
+draw();
+</script>
 </body></html>
 """
