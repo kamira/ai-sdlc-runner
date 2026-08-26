@@ -858,7 +858,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="where model configuration persists — the registry AND which node or seat "
                          "each model is assigned to (default <token-dir>/config.sqlite). An "
                          "existing models.json is imported once and left where it is.")
-    pv.add_argument("--settings", default=None, help="path to settings.json")
+    # Not `default=None`: this flag shadows the global `--settings`, whose default exists
+    # precisely so nobody has to pass it. With None it reached `Path(None)` and `runner
+    # serve` — the dashboard, in its plainest form — died with a raw TypeError.
+    pv.add_argument("--settings", default=settings_mod.DEFAULT_PATH,
+                    help=f"path to the settings file (default {settings_mod.DEFAULT_PATH})")
     _store_flags(pv)
     pv.set_defaults(func=cmd_serve)
 

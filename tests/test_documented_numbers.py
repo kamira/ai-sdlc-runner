@@ -372,5 +372,6 @@ def test_the_readme_says_how_many_nodes_a_run_actually_visits():
     assert visited < total, "a run that visits every node would never take a failure path"
     assert visited == 20, (
         f"the README says a run visits {visited} nodes; the example run visits 20. Re-run "
-        f"`runner --config examples/runner.yaml run --plan examples/plan.json --risk low "
+        f"`runner --config examples/minimal/runner.yaml run --plan examples/minimal/plan.json "
+        f"--risk low "
         f"--confirm merge` and read the `visited:` line.")

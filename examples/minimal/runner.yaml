@@ -1,4 +1,4 @@
 # What each ask is dispatched to. One process per ask.
-agent_command: ["python3", "examples/agent.py"]
+agent_command: ["python3", "examples/minimal/agent.py"]
 agent_timeout: 60
 agent_retries: 0    # retries are for a backend that FAILED TO ANSWER, never for an answer you dislike

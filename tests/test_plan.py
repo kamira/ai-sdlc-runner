@@ -27,7 +27,7 @@ GOOD_SHIP = {"repo": ".", "chg_id": "CHG-1", "branch": "b", "message": "m"}
 
 def test_the_shipped_example_still_loads():
     """The refusal must not refuse the plan the README tells people to run."""
-    loaded = plan.load(ROOT / "examples" / "plan.json")
+    loaded = plan.load(ROOT / "examples" / "minimal" / "plan.json")
     assert set(loaded) <= set(plan.FIELDS)
     assert loaded["risk"] == "low"
 
@@ -267,7 +267,7 @@ def test_a_list_of_blanks_is_blank():
 @pytest.mark.parametrize("field", ["input_artifacts", "expected_outputs", "idempotence_probes"])
 def test_the_three_that_may_be_empty_still_may(field):
     """The inverted defect this rule could easily have been. `expected_outputs` is `[]` on 14 of the
-    15 nodes in `examples/plan.json`; refusing it would refuse the repository's own example."""
+    15 nodes in `examples/minimal/plan.json`; refusing it would refuse the repository's own example."""
     plan.check({"node_specs": {"n": _spec(**{field: []})}})
 
 

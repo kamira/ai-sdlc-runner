@@ -13,7 +13,7 @@ What each kind of node must answer is the part a README sentence cannot carry, s
   a seat at intake   {"missing": [...], "problems": [...], "unsafe": [...]}
   anything else      any JSON object
 
-Run it:  runner --config examples/runner.yaml run --plan examples/plan.json --risk low
+Run it:  runner --config examples/minimal/runner.yaml run --plan examples/minimal/plan.json --risk low
 """
 import json
 import pathlib

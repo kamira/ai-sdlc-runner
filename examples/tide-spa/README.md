@@ -125,7 +125,7 @@ said anything. Write the constraint: a node genuinely unconstrained must say so 
 Two things in that message are worth reading closely.
 
 **It names `scope` and `objective` and not `expected_outputs`** — although the mutation blanked all
-three. `expected_outputs` is `[]` on 14 of the 15 nodes in [`examples/plan.json`](../plan.json),
+three. `expected_outputs` is `[]` on 14 of the 15 nodes in [`examples/minimal/plan.json`](../minimal/plan.json),
 because a review node genuinely produces nothing. A rule that refused every blank would refuse this
 repository's own example, which is the same coarse check inverted. Both review seats reached that
 exclusion independently.
