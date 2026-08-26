@@ -197,91 +197,7 @@ def test_a_failed_store_write_never_fails_a_run_and_is_never_silent(tmp_path):
     assert "store_errors" in engine.RunReport().as_dict()
 
 
-# ── the mongo locality rule ───────────────────────────────────────────────────────────────────
-
-@pytest.mark.parametrize("uri, why", [
-    ("mongodb+srv://cluster.example.com/db", "resolves its hosts from DNS"),
-    ("mongodb://reports.example.com:27017", "not loopback"),
-    ("mongodb://localhost.evil.example:27017", "not loopback"),
-    ("mongodb://127.0.0.1,remote.example.com:27017", "several hosts"),
-    ("mongodb://127.0.0.1:27017/?replicaSet=rs0", "replicaset"),
-    ("mongodb://127.0.0.1:27017/?directConnection=false", "directConnection=false"),
-    ("http://127.0.0.1:27017", "not a mongo URI"),
-    ("mongodb://[::1].evil.example", "refused"),
-    ("", "needs a URI"),
-])
-def test_a_uri_that_could_leave_this_machine_is_refused(uri, why):
-    with pytest.raises(conv.ConversationError) as exc:
-        conv.local_mongo_uri(uri)
-    assert why in str(exc.value)
-
-
-@pytest.mark.parametrize("uri", [
-    # The one that showed a denylist was the wrong shape: the seed host stays loopback while the
-    # whole connection goes through somebody else's SOCKS proxy. Found by a seat, on the code.
-    "mongodb://127.0.0.1/db?proxyHost=attacker.example&proxyPort=1080",
-    "mongodb://127.0.0.1/?tlsCAFile=//attacker.example/share/ca.pem",
-    # Mongo's option parsing is case-insensitive; the first version's two named refusals were not.
-    "mongodb://127.0.0.1/?replicaset=rs0",
-    "mongodb://127.0.0.1/?directconnection=false",
-])
-def test_an_option_the_rule_never_examined_is_refused_rather_than_assumed_safe(uri):
-    """A denylist answers "safe" about every option nobody thought of.
-
-    That is this repository's second-most-frequent defect, and the round-1 review had already found
-    it *in the design* of this very check — where it was about the host rather than the options. It
-    came back one layer down in the code that answered the finding.
-    """
-    with pytest.raises(conv.ConversationError):
-        conv.local_mongo_uri(uri)
-
-
-@pytest.mark.parametrize("uri", [
-    "mongodb://localhost:27017",
-    "mongodb://127.0.0.1:27017/runner",
-    "mongodb://[::1]:27017",
-    "mongodb://user:pw@127.0.0.1:27017",
-    "mongodb://%2Ftmp%2Fmongodb-27017.sock",          # a unix socket is genuinely local
-])
-def test_a_genuinely_local_uri_is_accepted(uri):
-    assert conv.local_mongo_uri(uri) == uri
-
-
-def test_direct_connection_is_forced_because_the_host_check_alone_does_not_constrain_the_driver():
-    """The finding both seats made: `MongoClient` performs topology discovery.
-
-    Given a loopback seed that is a replica-set member or a `mongos`, the driver reads the topology
-    *from the server* and connects to every member it learns of, including remote ones, without
-    consulting the URI again. Points 1-4 constrain the URI; this is the one that constrains the
-    client, and without it the other four are decoration.
-    """
-    assert conv._hardened("mongodb://127.0.0.1:27017").endswith("?directConnection=true")
-    assert conv._hardened("mongodb://127.0.0.1:27017/db?w=1").endswith("&directConnection=true")
-    assert conv._hardened("mongodb://x/?directConnection=true").count("directConnection") == 1
-
-
 # ── backends ──────────────────────────────────────────────────────────────────────────────────
-
-@pytest.mark.parametrize("kind, package", [("tinydb", "tinydb"), ("mongo", "pymongo")])
-def test_a_missing_backend_refuses_by_name_and_never_falls_back_to_file(kind, package):
-    """"I asked for Mongo and got a directory" is this repository's oldest mistake in a config field.
-
-    Neither package is installed here, so this refusal is the path actually exercised. Where the
-    package *is* present the test skips, and the skip is printed (`pytest -rs` in CI) rather than
-    counted as a pass.
-    """
-    pytest.importorskip
-    try:
-        __import__(package)
-    except ImportError:
-        pass
-    else:
-        pytest.skip(f"{package} is installed here, so the refusal path cannot be reached")
-    with pytest.raises(conv.ConversationError) as exc:
-        conv.backend(kind)
-    assert package in str(exc.value)
-    assert "does not fall back" in str(exc.value)
-
 
 def test_an_unknown_backend_is_refused_by_name():
     with pytest.raises(conv.ConversationError) as exc:
@@ -511,22 +427,6 @@ def test_a_duplicate_seq_is_reported_where_it_cannot_be_refused(tmp_path):
     assert back.read(c.project["id"], c.id)["duplicate_seqs"] == [1]
 
 
-def test_a_name_that_merely_ends_in_sock_is_not_a_socket():
-    """`mongodb://remote.evil.sock` is a registrable DNS name the driver dials over TCP.
-
-    The first version tested a `.sock` suffix and a `%2f` substring, and a seat got both past it
-    without `--store-remote allow` — the check deciding *whether* to apply the loopback test was
-    itself the coarse one, inside the function written to stop exactly that.
-    """
-    for hostile in ("mongodb://remote.evil.sock",
-                    "mongodb://remote.evil.example%2f:27017",
-                    "mongodb://evil%2Fx.sock"):
-        with pytest.raises(conv.ConversationError):
-            conv.local_mongo_uri(hostile)
-    # A real socket is an absolute path, and stays allowed.
-    assert conv.local_mongo_uri("mongodb://%2Ftmp%2Fmongodb-27017.sock")
-
-
 def test_a_store_failure_reaches_the_operator_at_the_end_of_a_run_too():
     """Two channels: stderr at the moment of failure, and the report's summary at the end."""
     cli = Path(conv.__file__).with_name("cli.py").read_text(encoding="utf-8")
@@ -750,3 +650,77 @@ def test_a_line_separator_in_an_answer_does_not_break_the_script():
     got = conv._script_json({"why": "a\u2028b\u2029c"})
     assert "\u2028" not in got and "\u2029" not in got, "the raw separator reached the page"
     assert "\\u2028" in got and "\\u2029" in got, "escaped, not dropped"
+
+
+# ── the two backends that were removed (CHG-20260823-35) ──────────────────────────────────────
+
+@pytest.mark.parametrize("kind", ["mongo", "tinydb"])
+def test_a_removed_backend_is_refused_by_name_and_told_what_happened_to_it(kind):
+    """`unknown store 'mongo'` reads as a typo to someone whose config worked last week.
+
+    The ruling was 「只留 sqlite + file，移除 mongo 和 tinydb」. A backend that is gone must say it is
+    gone — the alternative this repository has shipped twice is a setting that quietly stops meaning
+    anything.
+    """
+    with pytest.raises(conv.ConversationError) as caught:
+        conv.backend(kind)
+    message = str(caught.value)
+    assert kind in message
+    assert "removed" in message and "CHG-20260823-35" in message
+    assert "unknown store" not in message, "a retired kind is not an unknown one"
+
+
+def test_an_actually_unknown_store_is_still_refused_and_never_defaulted():
+    """The oldest mistake in this repository is 'I asked for X and got a directory'. It stays
+    refused now that there is only one backend to fall back to."""
+    with pytest.raises(conv.ConversationError) as caught:
+        conv.backend("postgres")
+    assert "unknown store" in str(caught.value)
+
+
+def test_nothing_reaches_for_the_removed_packages():
+    """A removal that leaves the import behind is not a removal."""
+    source = Path(conv.__file__).read_text(encoding="utf-8")
+    for banned in ("import pymongo", "from tinydb", "import tinydb", "MongoClient"):
+        assert banned not in source, f"{banned} survives the removal"
+
+
+def test_the_locality_flags_went_with_the_backend_that_needed_them():
+    """`--store-uri` and `--store-remote` existed only for Mongo. With no store that can be off this
+    machine there is no locality to relax, and a flag that no longer changes anything is exactly the
+    'looks configured and does nothing' this repository refuses everywhere else.
+
+    Asked of the **parser**, not of the source: the first version grepped `cli.py` and failed on
+    the comment explaining why the flags are gone. That is the third time this session a check has
+    read vocabulary instead of the thing it claims.
+    """
+    from ai_sdlc_runner import cli
+
+    parser = cli.build_parser()
+    known = {action.dest for action in parser._actions}
+    for subparser in [a for a in parser._actions if hasattr(a, "choices") and a.choices]:
+        for sub in (subparser.choices or {}).values():
+            if hasattr(sub, "_actions"):
+                known |= {action.dest for action in sub._actions}
+
+    assert "store_uri" not in known and "store_remote" not in known
+    assert "store_root" in known, "the flag that still means something must still be there"
+
+
+def test_a_duplicate_seq_is_reported_and_the_docstring_no_longer_claims_it_is_refused(tmp_path):
+    """The one guarantee this removal genuinely weakened, tested as it now stands.
+
+    Mongo's unique index and TinyDB's check did refuse a duplicate at write time. Both are gone, so
+    detection is at read time and nothing prevents the write. The module says so; this asserts the
+    behaviour rather than the sentence.
+    """
+    back = _store(tmp_path)
+    c = conv.Conversation(back, "P").open()
+    c.note("one")
+    path = next((tmp_path / "conversations").rglob("*.jsonl"))
+    with io.open(path, "a", encoding="utf-8", newline="\n") as fh:
+        fh.write(json.dumps({"seq": 1, "kind": "note", "at": "2026-08-26T00:00:00+00:00",
+                             "text": "a duplicate nobody refused"}) + "\n")
+
+    document = conv.Conversation(back, "P", conversation_id=c.id).document()
+    assert document.get("duplicate_seqs") == [1], "the reader must report what the writer allowed"
