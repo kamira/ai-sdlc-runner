@@ -724,3 +724,77 @@ def test_a_duplicate_seq_is_reported_and_the_docstring_no_longer_claims_it_is_re
 
     document = conv.Conversation(back, "P", conversation_id=c.id).document()
     assert document.get("duplicate_seqs") == [1], "the reader must report what the writer allowed"
+
+
+# ── the log must be readable without pressing play (CHG-20260823-39) ──────────────────────────
+
+def test_every_turn_is_in_the_page_at_load_not_only_after_playing(tmp_path):
+    """The replay rendered only the turns up to the clock, and the clock starts at zero — so opening
+    it showed **one** turn while 305 sat in the payload, invisible. A reader concluded the responses
+    had not been recorded, which is a fair reading of a page showing one line.
+
+    A recording has to be a readable log first and a replay second.
+
+    The cards are built by the page's own script at load, so they are not in the served markup and
+    pytest has no engine to run it — the DOM count (306 of 306, against the demo fixture) was
+    verified in a browser. What is checkable here is the two halves that were actually wrong: every
+    turn reaches the payload, and the builder walks the **whole array** rather than a clock-bounded
+    slice.
+    """
+    document = _walked(tmp_path)
+    page = conv.export_conversation(document, "playback")
+
+    payload = json.loads(re.search(r"const TURNS = (\[.*?\]), RAIL", page, re.S).group(1)
+                         .replace("\\u003c", "<").replace("\\u003e", ">"))
+    assert len(payload) == len(document["turns"]), "a turn never reached the page"
+
+    builder = page.split("function build()", 1)[1].split("function draw()", 1)[0]
+    assert "TURNS.forEach" in builder, "the builder must walk every turn"
+    assert "<= n" not in builder, "the builder is bounded by the clock again"
+
+
+def test_the_clock_dims_what_is_ahead_rather_than_hiding_it(tmp_path):
+    page = conv.export_conversation(_walked(tmp_path), "playback")
+    assert ".turn.ahead{opacity" in page, "turns ahead of the clock must be dimmed, not absent"
+    assert "classList.toggle('ahead'" in page
+
+
+def test_a_turn_can_be_clicked_to_move_the_clock_to_it(tmp_path):
+    """Reading and replaying should be one surface, not two."""
+    page = conv.export_conversation(_walked(tmp_path), "playback")
+    assert "stage.addEventListener('click'" in page
+    assert "data-i=" in page
+
+
+# ── an answer's line has to say what came back ────────────────────────────────────────────────
+
+def test_an_answer_that_found_nothing_says_so_rather_than_just_answered(tmp_path):
+    """`{"missing": [], "problems": [], "unsafe": []}` means "nothing wrong" — the commonest review
+    answer there is. It rendered as the bare word "answered", so a log of 150 lines said "answered"
+    150 times and told a reader nothing."""
+    turn = {"kind": conv.ANSWER, "result": {"missing": [], "problems": [], "unsafe": []}}
+    assert conv._summary(turn) == "nothing missing, problems, unsafe"
+
+
+def test_an_answer_that_found_something_names_it(tmp_path):
+    turn = {"kind": conv.ANSWER, "result": {"missing": ["a done-criterion"], "problems": []}}
+    assert "a done-criterion" in conv._summary(turn)
+
+
+def test_a_verdict_carries_its_reason_where_there_is_one(tmp_path):
+    turn = {"kind": conv.ANSWER, "result": {"verdict": "pass", "why": "read the brief"}}
+    got = conv._summary(turn)
+    assert "pass" in got and "read the brief" in got
+
+
+def test_the_opened_turn_is_not_a_blank_line(tmp_path):
+    """It has no `text` and no `why`, so it fell through to "" — and it is the first card anybody
+    sees."""
+    assert conv._summary({"kind": conv.OPENED, "project": "P"}).strip()
+    assert conv._summary({"kind": conv.OPENED}).strip()
+
+
+def test_no_turn_in_a_real_run_renders_a_blank_summary(tmp_path):
+    """The general form. A card with an empty line is a card that says nothing happened."""
+    for turn in _walked(tmp_path)["turns"]:
+        assert conv._summary(turn).strip(), f"turn {turn['seq']} ({turn['kind']}) summarises to ''"
