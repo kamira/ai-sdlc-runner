@@ -148,10 +148,15 @@ CREATE TABLE seat_assignments (
 );
 ```
 
-Five tables. **Three of them are built** — `models`, `node_assignments`, `seat_assignments`, in
-[`store.py`](../src/ai_sdlc_runner/store.py). `conversations` and `turns` are **not created by any
-code yet** and arrive with the conversation-store migration: a table nothing reads or writes is a
-mechanism nobody invokes, and this repository has a test that refuses those.
+Five tables, and **all five are built** (CHG-20260823-41). `models`, `node_assignments` and
+`seat_assignments` arrived at schema 1; `conversations` and `turns` at schema 2, with the
+conversation-store migration this document had been describing for four rounds.
+
+That sentence used to read *"`conversations` and `turns` are not created by any code yet"*, with the
+reason attached: a table nothing reads or writes is a mechanism nobody invokes, and this repository
+has a test that refuses those. The test is
+`test_the_tables_it_draws_are_the_tables_the_code_builds`, and it is what caught the schema atlas
+still calling them *designed* the moment they were built.
 
 ---
 
@@ -205,7 +210,7 @@ overwrote `seq` and `at`. Now refused.
 
 | Constraint | Refuses | Verified |
 |---|---|---|
-| `PRIMARY KEY (conversation_id, seq)` | a duplicate turn — **a real refusal**, which neither the JSONL nor the TinyDB backend could give | `UNIQUE constraint failed` |
+| `PRIMARY KEY (conversation_id, seq)` | a duplicate turn — **a real refusal**, which neither the JSONL nor the TinyDB backend could give | `UNIQUE constraint failed: turns.conversation_id, turns.seq` |
 | `REFERENCES conversations(...)` | a turn with no conversation — **only with `foreign_keys=ON`** | an orphan inserts fine without it |
 | `conversations.conversation_id PRIMARY KEY` | reopening a conversation id | — |
 | `models.id PRIMARY KEY` | two models with one id | — |

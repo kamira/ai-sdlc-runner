@@ -47,7 +47,7 @@ from . import graph, models as models_mod, paths, policy
 
 #: Bumped when the tables change. Read and compared at open — a version nobody consults is a number,
 #: not a mechanism, which is what an earlier draft of the design was pulled up for.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 #: The modes that do **something** with a list of models. The other four ignore it entirely, and
 #: assigning to them is refused rather than stored: a setting that looks configured and does nothing
@@ -194,7 +194,17 @@ def _migrate(db: sqlite3.Connection) -> None:
             # the half-built state the last two rounds were about cannot occur at all.
             for statement in _SCHEMA_1:
                 db.execute(statement)
-            db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            db.execute("PRAGMA user_version = 1")
+    if found < 2:
+        # Schema 2 adds the conversation tables. Same rules as schema 1 and for the same reasons:
+        # the shape is verified before anything is created, individual statements inside one
+        # transaction, and the version is stamped inside that transaction so a crash cannot leave a
+        # half-built store blessed as current.
+        _verify_or_refuse(db)
+        with _locked(db), db:
+            for statement in _SCHEMA_2:
+                db.execute(statement)
+            db.execute("PRAGMA user_version = 2")
     db.commit()
 
 
@@ -226,12 +236,47 @@ _SCHEMA_1 = (
        )""",
 )
 
-#: What each table must hold at schema 1. Compared column for column when a table already exists at
-#: version 0 — a table's *name* says nothing about whether it is the table this runner wrote.
+#: Schema 2 — the conversation store (CHG-20260823-41), exactly as `docs/DATABASE.md` specifies.
+#:
+#: The primary key is the point. `PRIMARY KEY (conversation_id, seq)` is a **real refusal** of a
+#: duplicate turn, which neither the JSONL backend nor the removed TinyDB one could give: CHG-35 had
+#: to record that a duplicate `seq` was "reported and refused nowhere". It is refused now, at the
+#: moment of the write, by the database.
+#:
+#: No `opened_at`. Two seats called it a guess and a third round removed it — it would be a second
+#: copy of the OPENED turn's `at`, and two sources for one fact is what the `turns` table exists to
+#: avoid. `SELECT at FROM turns WHERE conversation_id = ? AND seq = 0` is the answer.
+_SCHEMA_2 = (
+    """CREATE TABLE IF NOT EXISTS conversations (
+         conversation_id TEXT PRIMARY KEY,
+         project_id      TEXT NOT NULL,
+         project_name    TEXT NOT NULL,
+         schema          INTEGER NOT NULL,
+         run_json        TEXT NOT NULL DEFAULT '{}'
+       )""",
+    """CREATE INDEX IF NOT EXISTS conversations_by_project
+         ON conversations(project_id)""",
+    # `body_json` holds ONLY the body. The envelope lives in its own columns because the shipped
+    # code once had a body key overwrite `seq` and `at`, which is the two-truths problem in its
+    # sharpest form.
+    """CREATE TABLE IF NOT EXISTS turns (
+         conversation_id TEXT NOT NULL REFERENCES conversations(conversation_id),
+         seq             INTEGER NOT NULL,
+         kind            TEXT NOT NULL,
+         at              TEXT NOT NULL,
+         body_json       TEXT NOT NULL,
+         PRIMARY KEY (conversation_id, seq)
+       )""",
+)
+
+#: What each table must hold. Compared column for column when a table already exists at an older
+#: version — a table's *name* says nothing about whether it is the table this runner wrote.
 _EXPECTED = {
     "models": ("id", "vendor", "name", "transport", "command_json", "endpoint", "key_env", "note"),
     "node_assignments": ("node_id", "ordinal", "model_id"),
     "seat_assignments": ("seat", "model_id"),
+    "conversations": ("conversation_id", "project_id", "project_name", "schema", "run_json"),
+    "turns": ("conversation_id", "seq", "kind", "at", "body_json"),
 }
 
 
