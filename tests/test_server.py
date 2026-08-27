@@ -756,3 +756,119 @@ def test_only_attach_reaches_advance_without_a_state_gate():
             ungated.append(func.name)
     assert ungated == ["attach"], (
         f"the set of entry points reaching _advance without a state gate has changed: {ungated}")
+
+
+# ── the lost wakeup in the gate itself (CHG-20260823-44) ──────────────────────────────────────
+
+def test_an_action_arriving_as_the_walk_decides_to_stop_is_not_stranded(tmp_path):
+    """The window CHG-43's own gate left open.
+
+    The walk took the lock, saw nothing waiting, and **returned while `_walking` was still true** —
+    `_walking` was cleared afterwards, in a `finally`, under a second acquisition of the lock.
+    Between those two, a caller could take the lock, see `_walking` true, set `_walk_again`, and
+    have it cleared out from under them by a walk that had already decided to stop.
+
+    Forced deterministically: the attachment is posted from inside the gap, by a walk that blocks
+    on its *second* call while another thread attaches.
+    """
+    from ai_sdlc_runner import attachments
+
+    walks, entered_second = [], threading.Event()
+    release_second = threading.Event()
+
+    def walk(cfg):
+        walks.append(tuple(cfg.instructions))
+        if len(walks) == 2:
+            entered_second.set()
+            release_second.wait(timeout=10)
+        report = engine.RunReport()
+        report.state = engine.FINISHED
+        return report
+
+    runner = server.Runner(
+        walk=walk,
+        make_config=lambda i, a, r, art=(), rej=(), hist=(): _make_config(i, a, r, art, rej, hist),
+        store=attachments.Store(tmp_path / "att"))
+
+    # First walk runs to completion; during it, one attachment arrives, so the gate loops. The
+    # second walk blocks, and a further attachment arrives while it is inside.
+    first = threading.Thread(target=lambda: runner.start("go", 0), daemon=True)
+    first.start()
+    while not walks:
+        time.sleep(0.01)
+    runner.attach(runner.state.version, "one.md", b"1")
+
+    assert entered_second.wait(timeout=10), "the gate never looped for the first attachment"
+    runner.attach(runner.state.version, "two.md", b"2")
+    release_second.set()
+    first.join(timeout=10)
+
+    assert len(walks) == 3, (
+        f"the second attachment was stranded: {len(walks)} walks for two mid-walk attachments")
+    assert runner._walk_again is False
+    assert runner._walking is False
+
+
+def test_the_gate_never_rests_with_something_still_flagged(tmp_path):
+    """The invariant, hammered.
+
+    `_walk_again` true while `_walking` false means an operator's action is sitting there with
+    nobody to act on it. Many callers, short walks, then assert the resting state is coherent.
+    """
+    from ai_sdlc_runner import attachments
+
+    walks = []
+
+    def walk(cfg):
+        walks.append(1)
+        report = engine.RunReport()
+        report.state = engine.FINISHED
+        return report
+
+    runner = server.Runner(
+        walk=walk,
+        make_config=lambda i, a, r, art=(), rej=(), hist=(): _make_config(i, a, r, art, rej, hist),
+        store=attachments.Store(tmp_path / "att"))
+    runner.start("go", 0)
+
+    def poke(n):
+        for i in range(12):
+            try:
+                runner.attach(runner.state.version, f"a{n}-{i}.md", f"{n}{i}".encode())
+            except server.ServerError:
+                pass                      # a stale version, which is the API doing its job
+    threads = [threading.Thread(target=poke, args=(n,)) for n in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=20)
+
+    assert runner._walking is False, "a walk is still marked in flight after everything joined"
+    assert runner._walk_again is False, (
+        "an action is flagged for a walk that will never come; it will be picked up by an "
+        "unrelated future caller, which will then walk twice")
+
+
+def test_the_release_and_the_decision_are_one_critical_section():
+    """Structural, and stated as such.
+
+    The two behavioural tests above can only catch this window when the interleaving happens to
+    occur. What makes it *impossible* is that `_walking = False` and the check that found nothing
+    waiting sit inside the same `with self._lock`. That is what this asserts.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    source = textwrap.dedent(inspect.getsource(server.Runner._advance))
+    tree = ast.parse(source)
+    together = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.With):
+            continue
+        body = ast.unparse(node)
+        if "self._walking = False" in body and "if not self._walk_again" in body:
+            together = True
+    assert together, (
+        "`_walking = False` is not in the same locked block as the `_walk_again` check, which is "
+        "the lost wakeup CHG-20260823-44 closed")
