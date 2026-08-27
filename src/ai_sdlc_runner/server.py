@@ -220,6 +220,10 @@ class Runner:
         self._make_config = make_config
         self._store = store
         self._lock = threading.RLock()
+        #: Whether a walk is in flight, and whether something arrived while it was. Both are read
+        #: and written only under `_lock`; the walk itself runs outside it. See `_advance`.
+        self._walking = False
+        self._walk_again = False
         self._listeners: List["queue.Queue[str]"] = []
         self.state = RunState()
 
@@ -396,7 +400,55 @@ class Runner:
                 f"this run is waiting for {wanted}, and that is not what you sent.")
 
     def _advance(self) -> Dict[str, object]:
-        """Run the walk to its next return. **Nothing blocks inside it** — task 1's guarantee."""
+        """Run the walk to its next return — **one at a time**, and never dropping what arrived.
+
+        `_advance` deliberately does not hold `self._lock`: a walk dispatches models and can take
+        minutes, and holding the lock across it would make the whole HTTP surface unresponsive.
+        That is task 1's guarantee and it is right.
+
+        What it did not do was stop a **second** walk starting. `attach()` and `instruct()` mutate
+        the state under the lock, release it, and call this; an attachment posted while a walk was
+        in flight therefore began a second concurrent walk over the same `Conversation` object.
+        Both review seats found it. CHG-20260823-42 made the consequence survivable — the turn
+        writes serialise and a collision is refused rather than silently rolled back — but two walks
+        over one run is still two walks over one run.
+
+        Three ways to close it, and the two rejected ones are worth recording:
+
+        * **Hold a lock across the walk.** Correct and unacceptable: it reintroduces exactly the
+          unresponsiveness `_advance` exists to avoid.
+        * **Refuse the second caller** (`409, a walk is already running`). Honest, non-blocking —
+          and it silently discards the effect of the operator's instruction, because the walk
+          already in flight captured its config before that instruction existed. The action would be
+          recorded in the state and never acted on, which is this project's own worst failure shape.
+        * **Coalesce.** The second caller's change is already committed to the state; it returns
+          immediately with the current snapshot, and the *running* walk is told to go round again
+          when it finishes. One walk at a time, and nothing an operator did is dropped.
+
+        Coalesce. A caller that arrives during a walk gets `running` back — which is true — and its
+        instruction is walked by the loop below rather than by a second thread.
+        """
+        with self._lock:
+            if self._walking:
+                # Recorded, not walked twice. The running walk will pick this up when it returns.
+                self._walk_again = True
+                return self.state.snapshot()
+            self._walking = True
+
+        try:
+            while True:
+                snapshot = self._walk_once()
+                with self._lock:
+                    if not self._walk_again:
+                        return snapshot
+                    # Something arrived mid-walk. Go round again, with the state as it is now.
+                    self._walk_again = False
+        finally:
+            with self._lock:
+                self._walking = False
+
+    def _walk_once(self) -> Dict[str, object]:
+        """One walk, exactly as before. Called only by `_advance`, only one at a time."""
         try:
             report = self._walk(self._make_config(tuple(self.state.instructions),
                                                   tuple(self.state.approvals),
