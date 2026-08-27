@@ -230,8 +230,16 @@ runner --config runner.yaml run --plan plan.json --risk medium --ask-journal .ru
 ### Where the agent runs
 
 `agent_command` is run with its working directory set to **the directory holding the `runner.yaml`
-that named it** — `agent_cwd`, which defaults to exactly that and can be set explicitly. A relative
-path in `agent_command` therefore means one thing no matter where you are standing.
+that named it** — `agent_cwd`, which defaults to exactly that. A relative path in `agent_command`
+therefore means one thing no matter where you are standing.
+
+`agent_cwd` can be set explicitly. A relative value is resolved **against the config file**, the
+same rule as everything else in it; an absolute value is used as written.
+
+**It applies only to the command `runner.yaml` names.** A `--seat-model` command was typed in your
+shell and runs there, and so does a command named by the models registry. Until CHG-20260823-51
+every spawned command was relocated into the config's directory, which let a same-named file beside
+the config silently stand in for an operator's own review seat.
 
 It did not always. Before CHG-20260823-48 the command inherited **your shell's** directory, nothing
 said so, and the three shipped examples disagreed about which directory they meant — `minimal` wrote
@@ -675,7 +683,7 @@ first one winning — so two of them disagreeing inside one answer resolves sile
 ## Testing
 
 ```bash
-pytest -q          # 1319 tests
+pytest -q          # 1330 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

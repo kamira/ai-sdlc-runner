@@ -829,3 +829,36 @@ def test_two_files_in_one_project_claiming_one_id_are_not_called_already_here(tm
         f"one id was both imported and skipped, from two files: {report}")
     assert any("a-second-copy.jsonl" in n for n in _refused(report)), (
         f"the second file claiming the same id was not refused by name: {_refused(report)}")
+
+
+def test_one_unreadable_conversation_in_the_target_does_not_stop_the_import(tmp_path):
+    """CHG-20260823-47's own defect 4, mirrored onto the target side (CHG-20260823-51).
+
+    `in_target` was a dict comprehension over `into.conversations()`, so a single conversation
+    already in the target whose header lacked `project` raised `KeyError` out of the whole
+    expression. The blanket `except` above it caught that as "(the target) could not be listed" and
+    returned: **zero imported**, and the offending conversation unnamed.
+
+    That is exactly the shape CHG-47 fixed on the source side — "one stray file, zero imports, file
+    unnamed" — inside the change whose Risk section says "a stray file no longer aborts the store".
+    One review seat called it a defect; the other saw the same mechanism and judged it consistent
+    with the backend contract. The record was wrong either way.
+    """
+    ids = _legacy(tmp_path, ["A", "B"])
+
+    target = _file(tmp_path / "target-store")
+    # A conversation already in the target, written by hand without a project.
+    pid_dir = (tmp_path / "target-store" / "legacy" / "no-project-here")
+    pid_dir.mkdir(parents=True)
+    (pid_dir / "_project.json").write_text('{"id": "no-project-here"}', encoding="utf-8")
+    (pid_dir / "deadbeef.jsonl").write_text(
+        json.dumps({"header": {"conversation_id": "deadbeef", "schema": 1}}) + "\n",
+        encoding="utf-8")
+
+    report = conv.import_file_store(tmp_path / "legacy", target)
+
+    assert sorted(report["imported"]) == sorted(ids.values()), (
+        f"one unreadable conversation in the target stopped the whole import: {report}")
+    named = [e["conversation_id"] for e in report["refused"]]
+    assert any("deadbeef" in n for n in named), (
+        f"the unreadable target conversation was not named: {named}")
