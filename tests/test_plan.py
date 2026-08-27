@@ -217,6 +217,34 @@ def test_the_module_no_longer_claims_to_refuse_what_it_cannot():
         "the module must name what it leaves to nobody, not only what it leaves to another check")
 
 
+def test_no_public_docstring_in_the_module_still_makes_the_retracted_claim():
+    """The retraction reached `check` and stopped there.
+
+    `load`'s summary line said "refuse it if this runner would not fully honour it" — the same claim,
+    one function along, where the test above does not look. It survived four days and an acceptance
+    round found it (CHG-20260827-10).
+
+    So the check widens from one docstring to every public one in the module. A retraction that only
+    covers the line somebody happened to test is a retraction with a gap the same shape as the claim.
+    """
+    import inspect
+
+    offenders = []
+    for name, value in vars(plan).items():
+        if name.startswith("_") or not inspect.isfunction(value):
+            continue
+        if getattr(value, "__module__", None) != plan.__name__:
+            continue
+        doc = value.__doc__ or ""
+        summary = doc.strip().splitlines()[0] if doc.strip() else ""
+        if "fully honour" in summary:
+            offenders.append(f"{name}: {summary}")
+
+    assert not offenders, (
+        "these docstrings still promise what this module cannot deliver, which is the exact claim "
+        f"CHG-20260823-30 retracted: {offenders}")
+
+
 def test_all_three_decision_forms_are_accepted():
     """ names three: a label, a sequence consumed one per visit, and "frontier".
 

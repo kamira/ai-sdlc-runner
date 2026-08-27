@@ -251,9 +251,19 @@ def test_a_conversation_with_an_unreadable_line_is_refused_not_silently_shortene
     assert target.conversations() == []
 
 
-def test_one_bad_conversation_does_not_stop_the_others(tmp_path):
+def test_a_good_conversation_after_a_dirty_legacy_store_still_imports(tmp_path):
     """It used to raise out of the loop, so every conversation after it in iteration order was
-    silently not imported either."""
+    silently not imported either.
+
+    Renamed by CHG-20260827-03. This was `test_one_bad_conversation_does_not_stop_the_others`, and
+    so is the parametrised test further down this file — CHG-45's, over the `DIRT` shapes. Python
+    keeps the last definition of a name, so from the day CHG-45 landed **this test stopped being
+    collected**, and nobody noticed because the replacement is stronger and the suite stayed green.
+    Dead code that looks like coverage, found by the acceptance round of 2026-08-27.
+
+    It is renamed rather than deleted: `_dirty_legacy` is not one of the `DIRT` shapes, so this case
+    is real coverage the parametrised test does not have.
+    """
     _dirty_legacy(tmp_path)
     good = conv.Conversation(_file(tmp_path), "Q").open()
     good.note("fine")

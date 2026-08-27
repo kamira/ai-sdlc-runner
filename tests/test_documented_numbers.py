@@ -375,3 +375,214 @@ def test_the_readme_says_how_many_nodes_a_run_actually_visits():
         f"`runner --config examples/minimal/runner.yaml run --plan examples/minimal/plan.json "
         f"--risk low "
         f"--confirm merge` and read the `visited:` line.")
+
+
+def test_a_knowledge_entry_marked_superseded_in_the_index_says_so_in_its_body():
+    """An INDEX row and a body are two places saying one thing, which is two chances to leave one
+    stale — and one of them was.
+
+    KN-3's row said superseded from the day CHG-20260823-01 landed. Its body went on describing
+    `DashboardModel` and `render_snapshot`, deleted by that same change, in the present tense. The
+    task that claimed to have marked "KN-1/2/3 ... in body as well as index" was ticked with two of
+    three done, and it stayed that way until an acceptance round read the body.
+
+    A reader who lands on a section heading does not see the index. Closed by CHG-20260827-09.
+    """
+    import re
+
+    text = (ROOT / "docs" / "knowledge" / "knowledge.md").read_text(encoding="utf-8")
+
+    marked = set()
+    for row in re.findall(r"^\|\s*(KN-\d+)\s*\|(.*)$", text, re.M):
+        entry, rest = row
+        if "superseded" in rest.lower():
+            marked.add(entry)
+    assert marked, "no INDEX row is marked superseded; has the table changed shape?"
+
+    bodies = dict(re.findall(r"^##\s+(KN-\d+)\s*[—-].*?$\n(.*?)(?=^##\s|\Z)",
+                             text, re.M | re.S))
+
+    missing = []
+    for entry in sorted(marked):
+        body = bodies.get(entry)
+        if body is None:
+            missing.append(f"{entry}: marked superseded in the INDEX and has no body section")
+        elif not re.search(r"^>\s*\*\*Superseded", body, re.M):
+            missing.append(f"{entry}: INDEX says superseded, body does not")
+
+    assert not missing, (
+        "a knowledge entry retired in the index and not in its own body reads as current to "
+        f"anyone who arrives at the heading: {missing}")
+
+
+def _readme_flow_diagram() -> str:
+    """The fenced block under `## The flow`, located structurally rather than by line number."""
+    import re
+
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    section = re.search(r"^##\s+The flow\s*$(.*?)(?=^##\s)", text, re.M | re.S)
+    assert section, "README has no `## The flow` section; has it been renamed?"
+    fenced = re.findall(r"^```\n(.*?)^```", section.group(1), re.M | re.S)
+    assert fenced, "the flow section has no fenced diagram"
+    return "\n".join(fenced)
+
+
+def test_every_node_in_the_graph_is_drawn_in_the_readme_diagram():
+    """The count was checked. The drawing was not.
+
+    `test_the_node_count_in_the_documents_matches_the_graph` compares the *sentence* "24 nodes"
+    against the graph, so a node dropped from the picture while the sentence stayed correct passed
+    CI. The diagram was complete — by inspection, checked by hand during the acceptance round of
+    2026-08-27, which is a different thing from by construction. Closed by CHG-20260827-08.
+
+    This is the completeness half; the count test is the arithmetic half, and neither substitutes
+    for the other.
+    """
+    from ai_sdlc_runner import graph
+
+    drawn = _readme_flow_diagram()
+    missing = [node.id for node in graph.NODES if node.id not in drawn]
+    assert not missing, (
+        f"the README's flow diagram does not draw {missing}. The node count sentence can still be "
+        f"correct while this is true, which is why it is checked separately.")
+
+
+def test_the_completeness_check_would_notice_a_node_left_out():
+    """Proof it can fail. A check whose failure mode nobody has seen is a check nobody should trust.
+
+    Rather than mutate the README, the assertion is run against a diagram with one node removed —
+    the same string operation the real test performs, on a copy.
+    """
+    from ai_sdlc_runner import graph
+
+    drawn = _readme_flow_diagram()
+    dropped = graph.NODES[-1].id
+    sabotaged = drawn.replace(dropped, "…")
+    missing = [node.id for node in graph.NODES if node.id not in sabotaged]
+    assert dropped in missing, (
+        "removing a node from the drawing did not register as missing, so the real check could "
+        "not catch it either")
+
+
+def _defect_log():
+    return (ROOT / "docs" / "defect-log.md").read_text(encoding="utf-8")
+
+
+def _defect_log_rows():
+    """The `| Where it came from | Count |` table, as (label, count)."""
+    import re
+
+    rows = []
+    for label, count in re.findall(
+            r"^\|\s*(?!Where it came from)(?!-)(.+?)\s*\|\s*\*\*(\d+)\*\*.*?\|\s*$",
+            _defect_log(), re.M):
+        rows.append((label, int(count)))
+    return rows
+
+
+def test_the_defect_logs_table_sums_to_the_total_it_states():
+    """The one document whose figures nothing checked — inside a change that claimed every figure
+    was recomputed.
+
+    `docs/defect-log.md` is deliberately **not** in DOCS: it quotes its own historical wrong figures
+    on purpose ("two of thirty-two" against a table summing to 35), and a blanket numbers check
+    would fail on the quotations. So the check is targeted at the arithmetic the file actually
+    asserts about itself. Added by CHG-20260827-11.
+    """
+    import re
+
+    rows = _defect_log_rows()
+    assert rows, "the defect log's count table was not found; has it changed shape?"
+
+    stated = re.search(r"sums to\s*\n?\*\*(\d+)\*\*", _defect_log())
+    assert stated, "the defect log no longer states what its table sums to"
+
+    assert sum(n for _, n in rows) == int(stated.group(1)), (
+        f"the table sums to {sum(n for _, n in rows)} and the file says {stated.group(1)}")
+
+
+def test_every_defect_log_group_heading_agrees_with_its_row_in_the_table():
+    """Two places saying one number is two chances to leave one stale, and one was.
+
+    `## Found in the fix for the last review — 12` sat above a table row reading **13**, with the
+    stated total agreeing with the row. Two of the three numbers agreed, so the heading was the
+    stale one — the third time this file has miscounted itself, and the first time a check found it
+    rather than a reader.
+
+    Counting `###` subsections would be the wrong check: several sections carry more than one
+    finding, so the heading is not a subsection count and never was.
+    """
+    import re
+
+    text = _defect_log()
+    headings = {}
+    for title, count in re.findall(r"^##\s+(.*?)\s*[—-]\s*(\d+)\b.*$", text, re.M):
+        headings[title.strip().lower()] = int(count)
+    assert headings, "no numbered group headings found"
+
+    # The table's label and the heading are worded differently on purpose — the table reads as a
+    # list of sources, the heading as a section title — so they are matched on their distinctive
+    # words rather than on equality.
+    keys = {
+        "an independent seat": "found by an independent seat",
+        "only by running it": "found only by running it",
+        "the test suite, unprompted": "found by the test suite, unprompted",
+        "my own process failures": "my own process failures",
+        "putting the readme": "found by putting the readme itself through review",
+        "before its code existed": "found by reviewing a design before its code existed",
+        "that answered": "found by reviewing the code that answered the design",
+        "the last review": "found in the fix for the last review",
+    }
+
+    # KN-17: a qualified count is two claims, and the bare number is the ambiguous one.
+    # One row is qualified in both places and the two spellings disagree about what the bare
+    # number counts: the table reads `**4** (+1 intended collision, below)` and the heading reads
+    # `3, plus one intended collision`. Which of 3 and 4 is the count of *defects* is not decidable
+    # from the document, and the sum-to-79 depends on the table's 4. Guessing would put a number
+    # into a file about wrong numbers, so the qualified row is checked for its qualifier and not
+    # for equality, and the ambiguity is recorded in ACC-20260827-11 instead.
+    qualified = "unprompted"
+
+    disagreements = []
+    for label, count in _defect_log_rows():
+        plain = re.sub(r"\*+", "", label).lower()
+        if qualified in plain:
+            heading_text = next(
+                (line for line in text.splitlines()
+                 if line.startswith("## ") and qualified in line.lower()), "")
+            assert "intended collision" in heading_text, (
+                "the qualified row lost its qualifier in the heading, so the two numbers are now "
+                "claiming to count the same thing and do not")
+            continue
+        heading = next((h for fragment, h in keys.items() if fragment in plain), None)
+        if heading is None:
+            disagreements.append(f"table row {label!r} matches no group heading")
+            continue
+        if heading not in headings:
+            disagreements.append(f"no `## {heading} — N` heading for table row {label!r}")
+        elif headings[heading] != count:
+            disagreements.append(
+                f"{heading!r}: heading says {headings[heading]}, table says {count}")
+
+    assert not disagreements, disagreements
+
+
+def test_kn17_and_the_check_that_implements_it_name_each_other():
+    """A rule and its mechanism that do not name each other are a paragraph and a coincidence.
+
+    KN-14 was exactly that for four days: a rule in the README with nothing behind it, broken by
+    the round that wrote it down. KN-17 is a rule about a skip inside another test, which is even
+    easier to lose — rename the check and the entry describes something that no longer exists;
+    delete the entry and the skip becomes an unexplained exception somebody will "fix" by guessing.
+
+    Added by CHG-20260827-16.
+    """
+    knowledge = (ROOT / "docs" / "knowledge" / "knowledge.md").read_text(encoding="utf-8")
+    source = Path(__file__).read_text(encoding="utf-8")
+
+    check = "test_every_defect_log_group_heading_agrees_with_its_row_in_the_table"
+    assert "KN-17" in knowledge, "KN-17 is gone; the skip below is now unexplained"
+    assert check in knowledge, (
+        f"KN-17 no longer names {check}, so a reader of the rule cannot find the mechanism")
+    assert "KN-17" in source, (
+        f"the skip in {check} no longer names KN-17, so a reader of the code cannot find the rule")

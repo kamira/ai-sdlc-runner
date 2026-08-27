@@ -18,6 +18,7 @@
 | KN-6 | pattern | node-engine / idempotence | An operation may be an **effect** only if it leaves a probeable postcondition in the ledger, git or the forge; constructing one without a probe raises. Probes describe the **postcondition, not the action**, and read the world rather than any record the runner wrote. Unanswerable **raises** — never `False`. Nothing already true is re-applied, before or after the frontier. | active |
 | KN-7 | pattern | node-engine / sessions | Every **asking** node gets its own session: opened, asked once, closed in a `finally`; a factory that returns a session it already returned is refused. A multi-seat review is several asks, so each seat is its own session. The question is journalled **before** the session opens, so a dropped session costs the answer and not the question. | active |
 | KN-8 | pattern | governance / wiring | A mechanism is not built until something calls it. Three rounds here shipped a correct piece that nothing reached — an engine ignoring its own policy verdict, an `adjudicate` no caller invoked, a `PERMANENT_HALTS` list printed into every order and never checked — and each passed its own suite. The test that matters is the one that fails when the wire is cut. | active |
+| KN-17 | pattern | governance / vocabularies | **A count that carries a qualifier is two claims, and the bare number is the ambiguous one.** `**4** (+1 intended collision)` and `3, plus one intended collision` are the same total spelled two ways: the totals agree and the bare numbers do not, because they count different things. No check can settle which is meant, and one that guesses writes an invented figure into the document it is auditing. Assert the qualifier survives on both sides; hand the unit to a person. | active |
 | KN-16 | pattern | governance / checks | **A name is evidence only if it constrains what happens.** `pytest` names a job; `python` names an execution engine and the argument is the program. Vouching for the second is vouching for everything. And a vouch covers the tool, not the command line — `docker volume rm` from an operator who vouched for `docker` is not vouched work. | active |
 | KN-15 | pattern | governance / checks | **A recogniser needs three answers, not two.** "No dangerous pattern matched" is not "safe" — it is "I did not recognise this". Five destructive commands declared ordinary ran a flow to completion because a blacklist's silence was read as assent, and the disclosure meant to catch that was keyed on *having named a target* rather than on one being **recognised**. Unknown must be its own state, and it is not the safe one. | active |
 | KN-14 | practice | governance / verification | **Freeze the tree before verification, and do not touch it until every seat reports.** A verifier found the working tree change under it mid-audit — and the change was to the safety check it was auditing. An acceptance round whose subject moved has verified nothing, however good its findings are. | active |
@@ -70,6 +71,18 @@ is explicit and validating (ai-guideline §5). Lock files belong to the governed
 this runner repo.
 
 ## KN-3 — Dashboard / curses conventions
+
+> **Superseded by CHG-20260823-01.** The dashboard went with the four-stage path: `dashboard.py`,
+> `DashboardModel` and `render_snapshot` were deleted and nothing reads them. What survives is
+> `tui`'s selector and its high-risk confirmation. The operator's view is now the console
+> (`server.py` plus `console/index.html`), which is a different design with different conventions —
+> see CHG-20260823-11.
+>
+> Kept as the record of why the curses conventions existed, which is what a reader of the history
+> will need. *(The INDEX row said superseded from the day of CHG-20260823-01; this body did not,
+> and described the deleted module in the present tense for four days. Found by the acceptance
+> round of 2026-08-27 and closed by CHG-20260827-09.)*
+
 *tags: dashboard · source: CHG-20260617-02, CHG-20260617-03, CHG-20260703-04, CHG-20260703-05 · tier: pattern*
 
 The interactive view is a **terminal `curses`** app (stdlib only, consistent with the runner's
@@ -448,7 +461,15 @@ half is the one that matters. When measuring your own mechanism, an outside samp
 extra; it is the only part of the measurement that can surprise you.
 
 ## KN-14 — Freeze the tree before verification
-*tags: governance · source: CHG-20260823-06 · tier: practice*
+*tags: governance · source: CHG-20260823-06, CHG-20260827-13 · tier: practice*
+
+> **The mechanism: `python tools/frozen_tree.py`.** Run it before a verification round and record
+> what it prints; it reports the commit the round is verifying, and refuses — naming the files —
+> when the tree is not that commit. Until CHG-20260827-13 this entry was advice only, and on
+> 2026-08-27 an acceptance round of this repository's own ledger broke it: eleven verifiers against
+> one shared worktree, several mutating `src/` to prove tests bite, one of them finding another's
+> uncommitted cut mid-audit. The evidence survived; the method did not. A rule nothing enforces is
+> a rule the people who wrote it down break.
 
 A verifier began an acceptance round on a clean tree, and partway through found
 `M src/ai_sdlc_runner/engine.py` — because the implementer was still working. The edit changed the
@@ -571,3 +592,44 @@ vs. whole. Bounded name vs. execution engine.
 
 When a check keeps failing in a new way after each fix, the useful question stops being "what else
 should be on the list" and becomes **"what am I still treating as one thing that is actually two?"**
+
+## KN-17 — A qualified count is two claims
+
+*tags: governance · source: CHG-20260827-11, CHG-20260827-16 · tier: pattern*
+
+`docs/defect-log.md` states one group's count in two places:
+
+| where | says |
+|---|---|
+| the table | `**4** (+1 intended collision, below)` |
+| the section heading | `3, plus one intended collision` |
+
+Four-plus-one against three-plus-one. **The totals agree. The bare numbers do not** — one counts the
+intended collision and the other does not — and the document does not say which unit it means.
+
+Three pieces of evidence point three ways: the closing summary says *"the four suite-caught
+defects"*; the stated sum of 79 needs the table's 4; the section holds four `###` subsections, one
+of which is the collision. None of them settles it, because the question is not arithmetic. It is
+**what the number counts**, and that was never written down.
+
+**The rule.** A count with a qualifier beside it is two claims — a total and a subtotal — and which
+one the bare number carries has to be stated, not inferred. Where it is not stated, a check can hold
+the invariant it *can* verify (the qualifier survives on both sides, so the two numbers stay visibly
+about different things) and must hand the rest to a person. It must not pick.
+
+**Why not pick.** This is a document about counts that went stale, which has now miscounted itself
+three times. A check that guessed would put an invented figure into the file it is auditing, and the
+invention would then be the citable one — worse than the ambiguity, because the ambiguity is at
+least visible. The same instinct as KN-9's closed vocabulary: an unrecognised value is a failure,
+never a pass, and *"I cannot tell"* must never render as *"it is fine"*.
+
+**The mechanism.** `tests/test_documented_numbers.py::test_every_defect_log_group_heading_agrees_with_its_row_in_the_table`
+compares every group heading against its table row and **skips exactly this one**, asserting instead
+that the qualifier is present on both sides. The skip names this entry in its own comment;
+`test_kn17_and_the_check_that_implements_it_name_each_other` keeps the two in step. A rule and its
+mechanism that do not name each other are a paragraph and a coincidence — KN-14 was that for four
+days.
+
+**Left open on purpose:** whether the suite found 3 defects unprompted or 4. Settling it needs
+somebody who knows what the fifth item was; the user has decided the numbers stay as they are until
+then.

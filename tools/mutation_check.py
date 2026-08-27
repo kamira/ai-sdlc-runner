@@ -205,6 +205,29 @@ MUTATIONS: List[Mutation] = [
         '''    return "".join(c if (c.isprintable() or c == " ") else''',
         '''    return str(value) or "".join(c if (c.isprintable() or c == " ") else''',
         "tests/test_conversations_sqlite.py"),
+
+    Mutation(
+        "clock", "the turn clock loses millisecond resolution again",
+        SRC / "conversations.py",
+        '''    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")''',
+        '''    return datetime.now(timezone.utc).isoformat(timespec="seconds")''',
+        "tests/test_conversations.py"),
+
+    Mutation(
+        "finish", "the unspent-confirmation report goes back to success-only",
+        SRC / "engine.py",
+        '''    unspent = {gate: n for gate, n in confirmations.items() if n > 0}''',
+        '''    unspent = ({gate: n for gate, n in confirmations.items() if n > 0}
+               if report.halted_at == "done" else {})''',
+        "tests/test_settings.py"),
+
+    Mutation(
+        "finish", "a gate stop is finished twice, so it complains twice",
+        SRC / "engine.py",
+        '''            # Already finished inside `_gate`; see the `before` site above.
+            return stop''',
+        '''            return _finish(stop, confirmations)''',
+        "tests/test_settings.py"),
 ]
 
 

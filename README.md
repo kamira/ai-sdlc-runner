@@ -529,7 +529,10 @@ in CI and refuses a record whose status says finished with no acceptance record 
 one of mine.
 
 **Substantial changes go to two independent seats**, each with the same brief, neither seeing the
-other, against a frozen tree. Their verdicts are committed whole in
+other, against a frozen tree — `python tools/frozen_tree.py` says whether it is one, printing the
+commit being verified or naming the files that differ from it. That check exists because the rule
+did not have one: on 2026-08-27 an acceptance round of this repository's own ledger ran eleven
+verifiers against a single shared worktree and broke it (CHG-20260827-13). Their verdicts are committed whole in
 [`docs/design/reviews/`](docs/design/reviews/) rather than summarised — a summary is where an
 objection gets softened, and this repository's recorded history is disagreement being flattened.
 
@@ -683,7 +686,7 @@ first one winning — so two of them disagreeing inside one answer resolves sile
 ## Testing
 
 ```bash
-pytest -q          # 1330 tests
+pytest -q          # 1362 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is
