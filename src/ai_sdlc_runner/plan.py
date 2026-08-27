@@ -222,7 +222,16 @@ def _check_ship(ship: Mapping[str, object], where: str) -> None:
 
 
 def load(path: str | Path) -> Dict[str, object]:
-    """Read a plan file and refuse it if this runner would not fully honour it."""
+    """Read a plan file, and put it through `check`.
+
+    The retracted claim lived here too. CHG-20260823-30 corrected `check`'s summary line and pinned
+    it with a test that reads `check.__doc__` — so this line went on promising a plan "this runner
+    would fully honour" for four more days, one function along, where the test did not look. Found
+    by the acceptance round of 2026-08-27 and closed by CHG-20260827-10.
+
+    What `check` refuses is listed in the module docstring; so is what it leaves to another check
+    and what it leaves to nobody.
+    """
     file = Path(path)
     if not file.is_file():
         raise PlanError(f"no plan at {file}")

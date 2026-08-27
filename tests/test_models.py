@@ -258,3 +258,37 @@ def test_a_seat_naming_something_that_is_not_a_model_falls_back_to_argv():
                                   seat_models={"defect": "not-a-model"},
                                   registry=models.Registry())
     assert factory(seat="defect").argv == ["not-a-model"]
+
+
+def test_a_registry_with_an_unknown_top_level_key_is_refused(tmp_path):
+    """CHG-20260823-21's other refusal, which nothing tested until CHG-20260827-07.
+
+    A seat found that `{"models": [], "modelz": [...]}` loaded as an **empty registry**: one typo
+    and every model you configured is gone, with no message. The fix closed the envelope; no test
+    was written for it, so an acceptance-round verifier had to drive it by hand to confirm it fires.
+
+    The refusal must name the offending key. "invalid registry" sends the reader back to a file
+    they have already re-read twice — the typo is the thing they cannot see.
+    """
+    from ai_sdlc_runner import models as models_mod
+
+    written = tmp_path / "models.json"
+    written.write_text(json.dumps({"models": [], "modelz": [{"id": "opus"}]}),
+                       encoding="utf-8")
+
+    with pytest.raises(models_mod.ModelError) as caught:
+        models_mod.load(str(written))
+
+    message = str(caught.value)
+    assert "modelz" in message, f"the refusal does not name the offending key: {message}"
+    assert "models" in message, "the refusal should say what the key was probably meant to be"
+
+
+def test_a_registry_whose_envelope_is_correct_still_loads(tmp_path):
+    """The over-refusal direction. A closed envelope that refuses the legitimate shape is worse
+    than the open one it replaced."""
+    from ai_sdlc_runner import models as models_mod
+
+    written = tmp_path / "models.json"
+    written.write_text(json.dumps({"models": []}), encoding="utf-8")
+    assert models_mod.load(str(written)) is not None

@@ -450,6 +450,28 @@ def cmd_conversations(args: argparse.Namespace) -> int:
     return 0
 
 
+def _store_kind(value: str) -> str:
+    """`--store`'s vocabulary, resolved where the vocabulary lives.
+
+    This was `choices=conv_mod.BACKENDS`, and the comment above the flag said `mongo` and `tinydb`
+    were "refused by name". They were not: argparse checks `choices` before anything else runs, so
+    a person typing `--store mongo` got `invalid choice: 'mongo'` and the refusal
+    CHG-20260823-35 wrote — the one that says the store was *removed*, and when — was unreachable
+    from the CLI. It had been unreachable since that change's own commit, so it was never true
+    rather than having drifted. Found by the acceptance round of 2026-08-27 (CHG-20260827-01).
+
+    argparse applies `type` before `choices`, so owning the check here is what lets the real
+    refusal through. The wording is `conversations`', not a second copy of it: one vocabulary,
+    consulted from two places.
+    """
+    if value in conv_mod.RETIRED:
+        raise argparse.ArgumentTypeError(f"the {value} store was {conv_mod.RETIRED[value]}")
+    if value not in conv_mod.BACKENDS:
+        raise argparse.ArgumentTypeError(
+            f"unknown store {value!r}; one of {', '.join(conv_mod.BACKENDS)}")
+    return value
+
+
 def _printable(value: object) -> str:
     """A string safe to send to a terminal, whatever it came from.
 
@@ -550,10 +572,12 @@ def _store_flags(parser: argparse.ArgumentParser) -> None:
                              "is no default, because a directory name is a location rather than a "
                              "project. The name is stored as data — a hash of it is what touches "
                              "the filesystem.")
-    # Kept as a choice of one. `mongo` and `tinydb` are refused **by name**, saying they were
-    # removed and when — `unknown store 'mongo'` reads as a typo to someone whose config worked
-    # last week.
-    parser.add_argument("--store", choices=conv_mod.BACKENDS, default="sqlite",
+    # `mongo` and `tinydb` are refused **by name**, saying they were removed and when —
+    # `unknown store 'mongo'` reads as a typo to someone whose config worked last week. That is
+    # `_store_kind`'s job and not `choices`': see its docstring for why `choices` made this
+    # comment false for four days.
+    parser.add_argument("--store", type=_store_kind, default="sqlite",
+                        metavar="{%s}" % ",".join(conv_mod.BACKENDS),
                         help="which conversation store. `sqlite` is the store (CHG-20260823-41); "
                              "`file` is the JSONL layout that came before it, kept so an existing "
                              "one can be read and imported. `mongo` and `tinydb` were removed in "
