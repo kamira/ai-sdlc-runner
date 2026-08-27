@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -33,6 +34,46 @@ from . import store as store_mod
 from . import engine, models as models_mod, graph, policy, settings as settings_mod, ship, tui, workorder
 
 DEFAULT_CONFIG = "config/runner.yaml"
+
+
+def _where(path: object) -> str:
+    """A path recorded so it still means something in another shell.
+
+    `run.journal` was resolved and `run.plan`, in the same dict literal, was `str(args.plan)` — as
+    typed. Two runs of two different plan files from two directories therefore recorded the
+    identical string `"ex/plan.json"`, verified by running them. One dict, two frames of reference,
+    and the half that was raw is the half naming what the run actually did.
+
+    Nothing reads this field back; it is provenance. That is the argument for resolving it rather
+    than against — a field nothing consumes is one nobody notices is wrong, and its only reader is
+    a person asking months later which plan produced a conversation.
+
+    An empty or absent value stays empty: `Path("").resolve()` is the working directory, which
+    would record a confident answer to a question nobody asked.
+
+    ## `resolve()` is not enough on Python 3.9 / Windows
+
+    Before Python 3.10, `Path.resolve()` on Windows returned a **non-existent** relative path
+    unchanged (bpo-38671), and this repository supports `>=3.9`. So the first version of this
+    function recorded `plan.json` verbatim there — the exact defect it exists to prevent, on a
+    supported platform, and it went green on four of five CI jobs.
+
+    `os.path.abspath` makes the path absolute by string arithmetic against the working directory,
+    with no filesystem access and no version to depend on. `resolve()` still runs afterwards, on an
+    already-absolute path, because following symlinks is the part worth having.
+
+    The two integration tests could not have caught this: they walk a real run, so their plan file
+    exists, and an existing path resolves fine everywhere. Only the unit test naming a file that is
+    not there did.
+    """
+    if not path:
+        return ""
+    absolute = Path(os.path.abspath(str(path)))
+    try:
+        return str(absolute.resolve())
+    except OSError:
+        # A path the OS will not resolve is still absolute, and still worth recording.
+        return str(absolute)
 
 
 def load_config(path: str) -> dict:
@@ -615,7 +656,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     conversation = _open_conversation(
         args, journal_dir=args.ask_journal,
         run={"journal": str(Path(args.ask_journal).resolve()) if args.ask_journal else None,
-             "plan": str(args.plan)})
+             "plan": _where(args.plan)})
     cfg = engine.RunConfig(
         conversation=conversation,
         node_specs=plan.get("node_specs", {}),
@@ -784,7 +825,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     store = attach_mod.Store(args.attachments or (Path(args.token_dir) / "attachments"))
     conversation = _open_conversation(args, journal_dir=journal.dir,
                                       run={"journal": str(journal.dir.resolve()),
-                                           "plan": str(args.plan or "")})
+                                           "plan": _where(args.plan)})
 
     def make_config(instructions, approvals, rulings, artifacts=(), rejections=(),
                     intake_history=()):
