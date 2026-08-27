@@ -1,5 +1,10 @@
 # The minimal example
 
+> **Where to run this from:** anywhere. `agent_command` in `runner.yaml` resolves against
+> that file's own directory (`agent_cwd`, CHG-20260823-48), so the repository root, this
+> directory, and an unrelated one all behave identically —
+> `tests/test_examples_run_from_anywhere.py` drives all three from two of them.
+
 The smallest plan this runner accepts, and the smallest agent that can answer it. One module:
 `greet(name) -> str`.
 

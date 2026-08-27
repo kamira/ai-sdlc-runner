@@ -1,5 +1,10 @@
 # The weather example — driven through the console
 
+> **Where to run this from:** anywhere. `agent_command` in `runner.yaml` resolves against
+> that file's own directory (`agent_cwd`, CHG-20260823-48), so the repository root, this
+> directory, and an unrelated one all behave identically —
+> `tests/test_examples_run_from_anywhere.py` drives all three from two of them.
+
 `examples/tide-spa` drives `runner run` from a plan file. This one starts `runner serve` and talks
 to it the way the **operator console** does: a brief typed into a box, a gate approved by clicking a
 button.

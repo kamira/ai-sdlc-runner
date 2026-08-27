@@ -189,3 +189,11 @@ cython_debug/
 # Build output from running the shipped examples (CHG-20260823-47: driving
 # examples/weather-spa through the console left this untracked in the worktree).
 examples/*/site/
+examples/*/greet.py
+
+# `examples/minimal/agent.py` writes greet.py beside itself. Before CHG-20260823-48 it
+# wrote into whatever directory the operator stood in, and a copy was committed to the
+# repository root in PR #49 and lived there for thirty changes. Ignored so an operator
+# running the pre-48 command cannot commit it again; the behaviour itself is caught by
+# tests/test_examples_run_from_anywhere.py.
+/greet.py
