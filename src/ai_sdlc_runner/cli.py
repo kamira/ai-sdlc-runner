@@ -76,6 +76,27 @@ def _where(path: object) -> str:
         return str(absolute)
 
 
+def _anchor(config: dict, config_file: Path) -> dict:
+    """Give `agent_cwd` its meaning: a directory, relative to the config file that named it.
+
+    `setdefault` alone was not enough, and a review seat found why. An explicit `agent_cwd: sub`
+    survived as the bare string `"sub"`, which `subprocess.run` then resolved against **the
+    operator's shell** — the config-sourced-path-resolved-against-the-shell defect, inside the key
+    CHG-20260823-48 introduced to remove it. README.md said the same file's `agent_command` "means
+    one thing no matter where you are standing" and that `agent_cwd` "can be set explicitly"; both
+    could not be true at once.
+
+    An absolute `agent_cwd` is left alone: somebody who wrote one meant it.
+    """
+    here = config_file.resolve().parent
+    given = config.get("agent_cwd")
+    if not given:
+        config["agent_cwd"] = str(here)
+    elif not Path(str(given)).is_absolute():
+        config["agent_cwd"] = str((here / str(given)).resolve())
+    return config
+
+
 def load_config(path: str) -> dict:
     """Read runner.yaml. PyYAML if present, else a small reader for the flat keys we use.
 
@@ -91,8 +112,7 @@ def load_config(path: str) -> dict:
     try:
         import yaml
         loaded = yaml.safe_load(text) or {}
-        loaded.setdefault("agent_cwd", str(p.resolve().parent))
-        return loaded
+        return _anchor(loaded, p)
     except ImportError:
         config: Dict[str, object] = {}
         for line in text.splitlines():
@@ -110,8 +130,7 @@ def load_config(path: str) -> dict:
                 except json.JSONDecodeError:
                     pass
             config[key.strip()] = raw.strip('"').strip("'")
-        config.setdefault("agent_cwd", str(p.resolve().parent))
-        return config
+        return _anchor(config, p)
 
 
 # --------------------------------------------------------------------------------------
@@ -250,7 +269,21 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
     # Not "resolve the path inside `agent_command` relative to the config". That is an argv list,
     # and deciding which element is a path means guessing — `agent.py` from a flag, a script from a
     # bare program name. A heuristic there would be a name standing in for a constraint.
-    cwd = config.get("agent_cwd") or None
+    #
+    # ## It belongs to the command the CONFIG named, and to nothing else (CHG-20260823-51)
+    #
+    # CHG-48 applied it to every `_Process`, including argv from `--seat-model` — which the operator
+    # typed in their own shell, and which CHG-20260823-49's own doctrine says is therefore relative
+    # to that shell. A review seat demonstrated the consequence and it is the worst thing in this
+    # area: with a same-named file sitting beside the config, `--seat-model conformance="python3
+    # agent.py"` ran **that** file instead of the operator's, it answered `pass` where theirs
+    # answered `fail`, and the run printed `lead_review → pass` and `finished`. A review seat was
+    # substituted and nothing said so. Every shipped example keeps an `agent.py` beside its
+    # `runner.yaml`, so the collision is not exotic.
+    #
+    # Registry commands are excluded for the same reason with less drama: they are named by
+    # `--models` or the assignment database, not by this file, and CHG-48 did not claim to move them.
+    config_cwd = config.get("agent_cwd") or None
 
     def factory(seat: Optional[str] = None, model: Optional[str] = None):
         argv = None
@@ -274,12 +307,19 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
                     f"yet, and pretending otherwise would send the work to the default and report "
                     f"it as {model!r}.")
             argv = list(entry.command)
+        # `from_config` is the whole condition for applying `agent_cwd`: this argv came out of the
+        # runner.yaml, so it travels with it. A seat command was typed in the operator's shell and a
+        # registry command was named somewhere else; both keep the shell's directory, which is what
+        # they meant before CHG-20260823-48 and what they mean again.
+        from_config = False
         if argv is None:
-            argv = seat_models.get(seat) or default
+            seat_argv = seat_models.get(seat)
+            argv = seat_argv or default
+            from_config = not seat_argv and argv is default
         if not argv:
             return _Stub()
         return _Process(list(argv) if isinstance(argv, list) else str(argv).split(),
-                        timeout, retries, cwd=cwd)
+                        timeout, retries, cwd=config_cwd if from_config else None)
 
     return factory
 

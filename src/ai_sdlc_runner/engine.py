@@ -709,6 +709,29 @@ def _followed_model(node: graph.Node, report: "RunReport") -> Optional[str]:
 FRONTIER = "frontier"
 
 
+#: Keys an agent uses to say something went wrong, alongside whatever else it answered. A non-empty
+#: value in any of them contradicts an empty `module`, which claims completion.
+FAILURE_KEYS = ("error", "errors", "failure", "failed", "traceback", "exception")
+
+
+def _went_wrong(result: Mapping[str, object]) -> str:
+    """The failure an answer reports, or "" if it reports none.
+
+    A non-zero exit already raises in the dispatcher, so this is for the agent that exits 0 and says
+    in its own JSON that it could not do the work. Read as *evidence*, not as a verdict: it decides
+    only that "no module" cannot also mean "all done".
+    """
+    for key in FAILURE_KEYS:
+        value = result.get(key)
+        if isinstance(value, bool):
+            if value:
+                return key
+            continue
+        if value:
+            return f"{key}: {str(value)[:120]}"
+    return ""
+
+
 def _frontier(node: graph.Node, report: "RunReport") -> str:
     """Is there another module to build? Answered from the run's own record.
 
@@ -747,11 +770,25 @@ def _frontier(node: graph.Node, report: "RunReport") -> str:
                 planned = [str(m) for m in named]      # the latest plan wins; it is the current one
 
     built: set = set()
-    #: What the engineer said the last time it was asked. `None` means it has not been asked, or
-    #: answered without addressing the question at all — see below for why those are not the same as
-    #: answering "nothing".
+    #: What the engineer said the last time it was asked, **since the current plan was made**.
+    #: `None` means it has not been asked under this plan, or answered without addressing the
+    #: question at all — see below for why those are not the same as answering "nothing".
     last_word: Optional[str] = None
     for ask in report.asks:
+        if ask.node_id == "pm_plan" and isinstance(ask.result, Mapping) \
+                and isinstance(ask.result.get("modules"), (list, tuple)):
+            # A new plan retires the engineer's previous last word. CHG-20260823-50 kept it, and a
+            # review seat drove the consequence through the real CLI: `{"module": ""}` said once
+            # became **permanent**. `next_module` is the only ordinary route into `engineer_build`
+            # (`engineer_selfverify.rejects_to` needs the builder to have just run), so the engineer
+            # could never be asked again — a second instruction planning two more modules produced
+            # `lead_review → pass`, `state: finished`, and nothing on disk.
+            #
+            # CHG-20260823-50's task table asserted "'Nothing left' is not a latch — [x]", and the
+            # test written for it appended an `engineer_build` ask by hand that the shipped graph
+            # cannot reach. It asserted over a history no run can produce.
+            last_word = None
+            continue
         if ask.node_id != "engineer_build" or not isinstance(ask.result, Mapping):
             continue
         if "module" not in ask.result:
@@ -759,6 +796,17 @@ def _frontier(node: graph.Node, report: "RunReport") -> str:
             # crashed, timed out or replied with prose must not be read as reporting completion.
             continue
         name = str(ask.result.get("module") or "")
+        if not name and _went_wrong(ask.result):
+            # "Nothing left to build" and "something failed" are two different claims, and an
+            # answer making both at once is not one this runner will resolve. It used to be read as
+            # completion: a seat drove `{"module": "", "error": "compiler failed"}` all the way to
+            # `merge` and `finished` with the planned module never written.
+            raise EngineError(
+                f"node {node.id!r}: the engineer answered with no module *and* reported a failure "
+                f"({_went_wrong(ask.result)!r}). Those are two different claims — 'there is "
+                f"nothing left to build' and 'I could not build it' — and this runner will not "
+                f"choose between them. Fix the backend so it answers one of them, or record the "
+                f"failure and stop.")
         last_word = name
         if name:
             built.add(name)
@@ -770,6 +818,25 @@ def _frontier(node: graph.Node, report: "RunReport") -> str:
             f"`pm_plan` must answer with a `modules` list for the loop to know when it is done — "
             f"an empty frontier and an unstated one are not the same thing.")
     if remaining and last_word == "":
+        # Recorded, because **nothing downstream verifies it**. Both seats checked: `lead_review`
+        # adjudicates whatever verdict strings the seats return, `qa_verify` is a branchless step
+        # that accepts any JSON object, and no node compares `pm_plan.modules`, `expected_outputs`
+        # or the filesystem. CHG-20260823-50 claimed review "stands between a silently empty build
+        # and a merge"; it does not, and that claim was written without being checked.
+        #
+        # This runner does not inspect work products, so it cannot decide whether "nothing left"
+        # is true — the artefacts may genuinely predate the run, which is the case CHG-50 fixed.
+        # What it can do is refuse to be silent about ending a loop with planned work unrecorded.
+        note = (f"{node.id}: the engineer reported nothing left to build while the current plan "
+                f"still names {len(remaining)} module(s) with no build recorded this run "
+                f"({', '.join(remaining[:5])}{'…' if len(remaining) > 5 else ''}). The loop ended "
+                f"on the engineer's word; no node after this one checks it.")
+        # `getattr`, because a note must never be able to break a decision. `_frontier` answers
+        # which branch the walk takes; if the place to write the note is missing the walk still has
+        # to be routed. Found by a stub report in the suite that carried `asks` and nothing else.
+        notes = getattr(report, "dispatches", None)
+        if notes is not None and note not in notes:
+            notes.append(note)
         # CHG-20260823-50. The engineer is the only party that knows what is left: the work order
         # does not name a module, so the runner never tells it which one to build. When it answers
         # `{"module": ""}` it is saying there is nothing left, and the previous version of this

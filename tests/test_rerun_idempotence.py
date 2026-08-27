@@ -104,6 +104,10 @@ def _report(**asks):
     class _Report:
         def __init__(self, items):
             self.asks = items
+            #: Carried because the real `RunReport` has it and `_frontier` writes a note there
+            #: (CHG-20260823-51). A stub that omits a field the subject writes to is a stub testing
+            #: a different function.
+            self.dispatches = []
 
     return engine, _Ask, _Report
 
@@ -140,15 +144,27 @@ def test_an_engineer_that_did_not_answer_does_not_end_the_loop():
 
 
 def test_a_later_plan_reopens_the_loop_after_an_empty_answer():
-    """"Nothing left" is about now, not for ever. A second instruction that plans more modules must
-    put the loop back to work — the empty answer is the engineer's last word, not a latch."""
-    assert _frontier_over([
-        ("pm_plan", {"modules": ["markup"]}),
-        ("engineer_build", {"module": "markup"}),
-        ("engineer_build", {"module": ""}),
-        ("pm_plan", {"modules": ["markup", "charts"]}),
-        ("engineer_build", {"module": "charts"}),
-    ]) == "none"
+    """Retired to `tests/test_frontier_latch.py`, which drives the real CLI (CHG-20260823-51).
+
+    What stood here asserted over this history:
+
+        pm_plan[markup] → build markup → build "" → pm_plan[markup, charts] → build charts
+
+    with that last `engineer_build` **appended by hand**. Reaching `engineer_build` in the shipped
+    graph requires `next_module` to answer `"module"` — the very thing under test — so the history
+    is one no run can produce, and the assertion never examined the reopening moment. The claim it
+    was written for was false: a review seat drove the real CLI and found the empty answer was
+    permanent.
+
+    Kept as a named marker rather than deleted, because "this claim is covered elsewhere" is worth
+    saying out loud where somebody would otherwise notice the coverage missing.
+    """
+    from pathlib import Path as _P
+    covering = _P(__file__).with_name("test_frontier_latch.py")
+    assert covering.is_file(), "the file that took over this claim is gone"
+    body = covering.read_text(encoding="utf-8")
+    assert "def test_a_second_instruction_gets_its_modules_built" in body, (
+        "the replacement test for the latch is not in test_frontier_latch.py")
 
 
 def test_everything_planned_is_built_still_ends_the_loop():
