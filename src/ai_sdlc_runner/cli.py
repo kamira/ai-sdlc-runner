@@ -377,6 +377,20 @@ def cmd_conversations(args: argparse.Namespace) -> int:
     return 0
 
 
+def _printable(value: object) -> str:
+    """A string safe to send to a terminal, whatever it came from.
+
+    Conversation ids and refusal reasons are taken from files this runner did not write. A legacy
+    store holding a conversation whose id is `evil\x1b]0;pwned\x07` retitles the operator's terminal
+    window when the import names it, and `\x1b[31m` recolours everything printed after. The escapes
+    reached the terminal intact — verified by running it. Every C0 and C1 control character is shown
+    as its escape instead; nothing else is altered, so CJK ids print as themselves.
+    """
+    return "".join(c if (c.isprintable() or c == " ") else
+                   ("\\x%02x" % ord(c) if ord(c) < 0x100 else "\\u%04x" % ord(c))
+                   for c in str(value))
+
+
 def _import(args: argparse.Namespace, back) -> int:
     """Copy a JSONL store into this one, once, and leave the files where they are.
 
@@ -392,20 +406,21 @@ def _import(args: argparse.Namespace, back) -> int:
     print(f"imported {len(imported)} conversation(s), {report['turns']} turns, "
           f"from {args.import_from}")
     for cid in imported:
-        print(f"  + {cid}")
+        print(f"  + {_printable(cid)}")
     if skipped:
         # Skipped rather than merged: a turn whose `seq` matches and whose body differs has no
         # answer that is not a guess.
         print(f"skipped {len(skipped)} already here, whole:")
         for cid in skipped:
-            print(f"  = {cid}")
+            print(f"  = {_printable(cid)}")
     if refused:
         # The bucket the first version did not have. A conversation the importer will not touch is
         # the thing an operator most needs to be told about, and it used to arrive as a traceback
         # after a partial write.
         print(f"\nREFUSED {len(refused)}, left on disk:")
         for entry in refused:
-            print(f"  ! {entry['conversation_id']}: {entry['why']}")
+            print(f"  ! {_printable(entry['conversation_id'])}: "
+                  f"{_printable(entry['why'])}")
     print(f"\n{args.import_from} is untouched. Check the import, then remove it yourself.")
     return 2 if refused else 0
 

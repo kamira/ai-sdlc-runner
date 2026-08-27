@@ -1,7 +1,12 @@
 # Defect log
 
-Every problem hit while building the operator console and its governance — 26 change records, 915
-tests, five live projects.
+Every problem hit while building the operator console and its governance — 68 change
+records, 1295 tests, five live projects.
+
+The counts in this file are the ones that keep going stale, and a stale count here is the same
+defect class the file is about. They are re-derived when it is edited: the table below sums to
+**79**, and the two numbers in this sentence are `docs/changes/*.md` and the suite's collected
+total at the head this shipped from.
 
 Grouped **not by task but by how each one was found**, because that turned out to be the more useful
 fact: the defects that would have shipped silently were almost never the ones the test suite caught.
@@ -10,11 +15,12 @@ fact: the defects that would have shipped silently were almost never the ones th
 |---|---|
 | An independent seat, reading a record or the code | **13** |
 | Only by running it on a real project | **9** |
-| The test suite, unprompted | **3** (+1 intended collision, below) |
+| The test suite, unprompted | **4** (+1 intended collision, below) |
 | My own process failures | **10** |
 | Putting the README through the same review | **5** |
 | Reviewing a **design** before its code existed | **14** |
 | Reviewing the **code that answered** that design | **11** |
+| The **fix for the last review**, three rounds running | **13** |
 
 ## On screenshots
 
@@ -22,13 +28,17 @@ There are none for these. The screenshot tool could not composite the browser pa
 work — every attempt returned *"the Browser pane is not displayed, so the page is not compositing
 frames"* — and by the time it worked, every defect below was already fixed.
 
-It would have helped less than it sounds: **four of these thirty-five had a consequence visible on a screen**
-— the ineffective *add to the brief*, the missing dispatch line, the first-click exception, and the
-stale-token 401. The rest were tracebacks, failing assertions, or wrong values in a JSON response.
+It would have helped less than it sounds: **four of these 79 had a consequence visible on a
+screen** — the ineffective *add to the brief*, the missing dispatch line, the first-click exception,
+and the stale-token 401. The rest were tracebacks, failing assertions, or wrong values in a JSON
+response.
 
 So the honest version of this section is narrower than the one that stood here first, which said
 *"two of thirty-two"* against a table summing to 35 and concluded screenshots "would not have helped
-much". Both seats caught the arithmetic. A screenshot would not have shown any of the four *causes*,
+much". Both seats caught the arithmetic — and then it went stale again anyway: the sentence above
+said *"four of these thirty-five"* while the table summed to 65, and it shipped that way through six
+more changes before CHG-20260823-47 re-derived it. Twice caught, twice re-broken, which is the
+argument for deriving the number rather than writing it. A screenshot would not have shown any of the four *causes*,
 but it would have documented what an operator saw, and that is worth something. What is quoted below
 is captured output where the entry says so and retrospective prose where it does not.
 
@@ -555,6 +565,18 @@ field naming no mechanism.
 
 The test guarding it asserted that a dict key existed and called that "never silent".
 
+### And then the fix for that did it again, the same afternoon
+
+Fixing the cross-project case made `source.read(pid, cid)`'s **directory** provably agree with the
+header and left the **filename** unchecked. `source.read` resolves to `<pid>/<cid>.jsonl`, so a
+second file in the same project claiming one id was compared against the first, found equal, and
+reported "already here".
+
+That is the defect above, one axis over, inside the function written to remove it, four hours old.
+Found by reading the diff before sending it — not by the suite, and not by the mutation table
+written the same hour, because a mutation table can only break a rule someone has already thought
+of.
+
 ### Nine more
 
 The ask recorded before the session opened, so three of the four ways an ask can fail left no
@@ -570,6 +592,92 @@ Nothing here was found by the test suite, which was green at 901 passing through
 eleven are this log's own two most-named defects, reproduced **inside the functions written to fix
 them one round earlier**. A fix that does not become a habit gets found twice, and this is the page
 where that keeps being written down.
+
+## Found in the fix for the last review — 12
+
+The importer has now been written four times. CHG-41, -42, -45 and -47, each one answering defects a
+review found in the one before. Three of the first three shipped a defect **of the class they had
+just fixed**.
+
+| | fixed | introduced |
+|---|---|---|
+| CHG-42 | CHG-41's partial import | a **silent** loss via `rglob` — the call a comment sixty lines above forbids for exactly that reason |
+| CHG-45 | that silent loss | a scan that flattened filenames across projects, **silently** |
+| CHG-46 | the O(n²) listing | a full disk filed as damage to three source conversations, and three writes to a target already known to be broken |
+
+Neither seat found any of this by reading. Both found it by building a store and running the
+importer at it.
+
+### The scan written to prevent a silent omission omitted silently
+
+`_walk_store` returned bare filenames, flattened across projects, into a set. Two projects each
+holding an unreadable `shared.jsonl` produced **one** refusal; the other vanished, report clean.
+
+The test shipped beside it used **one project**. The flattening it introduced was never exercised
+once.
+
+### A test that passed on the failure its own name forbids
+
+```python
+def test_a_directory_named_like_a_conversation_does_not_stop_the_import(...):
+    ...
+    assert good.id in report["imported"] or report["refused"]
+```
+
+When the directory **did** stop the import, `imported` was empty and `refused` held one entry saying
+the store could not be listed — so the `or` was satisfied and the test went green. It shipped, and
+the task was marked `[x]`.
+
+This is the third instance in this file of "a test that reads vocabulary instead of the claim", and
+the first one where the vocabulary was in the *assertion operator* rather than in a string.
+
+### A refusal that accuses the operator of tampering with their own data
+
+`import_conversation` coerces `at` to a string and `seq` to an int; the collision check compared raw
+source turns against normalised stored ones. A legacy turn with no `at` imported cleanly and was
+then refused on **every** later run with:
+
+> Same id, different conversation — this runner will not choose between them.
+
+False, and the advice attached to it is to delete the target copy. A wrong refusal that invites a
+deletion is worse than a crash, because a crash does not get obeyed.
+
+### Nine more
+
+A stray file under the store root aborting the entire import with the file unnamed; a third level
+skipped in silence and the import reported clean; `cp A/x.jsonl B/` reported "skipped, already here,
+whole" after comparing the original with itself, putting one id in both `imported` and `skipped`; a
+`.jsonl` **directory** aborting the store; two files claiming one id undetected despite -46 claiming
+otherwise; terminal escapes in a conversation id reaching the terminal intact, verified by running
+it; `-46`'s index storing `""` for a header with no project id; a `.part` file left behind by a
+failed write; and `except Exception` swallowing a locked database as a source-conversation problem.
+
+### What this group is for
+
+The other groups say *who* found a defect. This one says something worse and more useful: **the
+place a defect is most likely to appear is inside the function written to remove one.** Four rounds,
+three repeats, all in the same eighty lines.
+
+CHG-47 is the first of the four to test its own tests. Every fix was reverted in place and the suite
+re-run; 6 of 6 mutations went red. That table is the only thing in four rounds that would have
+caught the `or`.
+
+It is also not coverage. I chose the six mutations, and I chose them from what a seat had just told
+me. A class nobody has named yet still has nothing pointing at it.
+
+### One more for the suite's own column
+
+`test_documented_numbers.py::test_the_test_count_the_readme_states_is_the_real_one` failed on
+CHG-20260823-47: the README said 1285 tests and the suite collected 1295, because the change added
+ten. Nobody wrote that test to catch this change; it does not know what an importer is. It knows
+that **a number stated in prose drifts from the thing it describes**, which is a shape, not a
+defect.
+
+That is the third time one of the two class-catching tests has paid for itself, and it is the
+argument for writing more of them rather than more tests that name a specific bug. It also lands in
+the same round as a hand-written table of counts in *this file* going stale twice — caught once by
+both seats, then re-broken and shipped through six more changes. The difference between the two is
+that one of them is checked by a program.
 
 ## What the grouping says
 

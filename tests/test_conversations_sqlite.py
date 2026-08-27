@@ -445,8 +445,17 @@ def test_a_directory_named_like_a_conversation_does_not_stop_the_import(tmp_path
     (tmp_path / "legacy" / conv.project_id("A") / "fake.jsonl").mkdir()
 
     report = conv.import_file_store(tmp_path / "legacy", _sqlite(tmp_path))
-    assert good.id in report["imported"] or report["refused"], (
-        "a directory named *.jsonl neither imported the good conversation nor was refused by name")
+
+    # The assertion this replaces was `good.id in report["imported"] or report["refused"]`. The
+    # `or` made it pass on the exact abort its own name forbids: when the directory stopped the
+    # import, `imported` was empty and `refused` held one entry saying the *store* could not be
+    # listed, so the second operand was truthy and the test went green. It shipped, and a seat
+    # found it rather than the suite. Both halves are required now, separately.
+    assert good.id in report["imported"], (
+        f"the directory named *.jsonl stopped the good conversation importing: {report}")
+    named = [e["conversation_id"] for e in report["refused"]]
+    assert any("fake.jsonl" in n for n in named), (
+        f"the directory was not refused by the name of the file it is: {named}")
 
 
 def test_a_store_past_max_path_still_reports_what_it_could_not_read(tmp_path):
@@ -476,8 +485,12 @@ def test_a_store_past_max_path_still_reports_what_it_could_not_read(tmp_path):
 
     report = conv.import_file_store(root, conv.backend("sqlite", root=tmp_path / "db"))
     assert good.id in report["imported"]
-    assert [r["conversation_id"] for r in report["refused"]] == ["junk"], (
-        f"the unreadable file vanished from a deep store: {report}")
+    named = [r["conversation_id"] for r in report["refused"]]
+    # CHG-20260823-47: `["junk"]` is what this asserted, and the bare stem was the defect — it is
+    # what let two projects' `shared.jsonl` collapse into one entry. A refusal names the file.
+    assert named == [f"{conv.project_id('P')}/junk.jsonl"], (
+        f"the unreadable file vanished from a deep store, or was named too vaguely to find: "
+        f"{report}")
 
 
 def test_a_staging_file_left_by_a_dead_import_is_named(tmp_path):
@@ -608,3 +621,211 @@ def test_the_target_is_read_only_where_an_id_actually_collides(tmp_path):
     assert len(second["skipped"]) == 6
     assert sorted(target.reads) == sorted(ids)
     assert target.listed == 1
+
+
+# ── CHG-20260823-47: the importer, told what it is looking at ─────────────────────────────────────
+#
+# Every test below constructs a state one of the two seats produced against CHG-45/-46 and asserts
+# the behaviour, not the vocabulary. Each was watched failing against the previous commit first.
+
+
+class _Breaks:
+    """A target whose writes fail the way a full disk fails. Nothing about the source is wrong."""
+
+    def __init__(self, inner, error=None):
+        self.inner, self.attempts = inner, 0
+        self.error = error or OSError(28, "No space left on device")
+
+    def import_conversation(self, header, turns):
+        self.attempts += 1
+        raise self.error
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
+def _legacy(tmp_path, projects, turns=1):
+    back = _file(tmp_path)
+    ids = {}
+    for name in projects:
+        c = conv.Conversation(back, name).open()
+        for _ in range(turns):
+            c.note("x")
+        c.close("finished")
+        ids[name] = c.id
+    return ids
+
+
+def _refused(report):
+    return [e["conversation_id"] for e in report["refused"]]
+
+
+def test_a_broken_target_is_tried_once_and_named_as_the_target(tmp_path):
+    """CHG-46 filed a full disk as damage to each source conversation, three times over.
+
+    Both seats found it independently. The report said three of the operator's conversations were
+    bad; none of them was. Worse than the wrong words: the loop kept writing to a target it had
+    already been told was broken, which on four hundred conversations is four hundred attempts.
+    """
+    _legacy(tmp_path, ["A", "B", "C"])
+    target = _Breaks(_sqlite(tmp_path))
+
+    report = conv.import_file_store(tmp_path / "legacy", target)
+
+    assert target.attempts == 1, (
+        f"the target failed on the first write and was written to {target.attempts} times")
+    assert _refused(report) == ["(the target)"], (
+        f"a broken target was reported as broken source conversations: {_refused(report)}")
+
+
+def test_source_dirt_is_still_refused_one_at_a_time(tmp_path):
+    """The other half of the same claim: telling target failures apart must not turn a single dirty
+    source conversation into an abort. Without this, `TargetError` could be made to pass the test
+    above by stopping on everything."""
+    ids = _legacy(tmp_path, ["A", "B"])
+    (tmp_path / "legacy" / conv.project_id("A") / "junk.jsonl").write_text(
+        "NOT JSON\n", encoding="utf-8")
+
+    report = conv.import_file_store(tmp_path / "legacy", _sqlite(tmp_path))
+
+    assert sorted(report["imported"]) == sorted(ids.values())
+    assert any("junk.jsonl" in n for n in _refused(report)), _refused(report)
+
+
+def test_two_projects_holding_the_same_filename_are_two_refusals(tmp_path):
+    """`_walk_store` returned **bare filenames**, flattened across projects, so `A/shared.jsonl` and
+    `B/shared.jsonl` collapsed to one entry in a set. Two unreadable files produced one refusal and
+    the other vanished with a clean report — the same silent omission the scan exists to prevent,
+    reintroduced by the fix for it.
+
+    The shipped test for the scan used **one** project, so the flattening was never exercised. That
+    is why this one uses two.
+    """
+    _legacy(tmp_path, ["A", "B"])
+    for name in ("A", "B"):
+        (tmp_path / "legacy" / conv.project_id(name) / "shared.jsonl").write_text(
+            "NOT JSON\n", encoding="utf-8")
+
+    report = conv.import_file_store(tmp_path / "legacy", _sqlite(tmp_path))
+
+    shared = [n for n in _refused(report) if "shared.jsonl" in n]
+    assert len(shared) == 2, f"two unreadable files, {len(shared)} refusal(s): {_refused(report)}"
+    assert len(set(shared)) == 2, (
+        f"both refusals name the same thing, so an operator cannot tell which file to remove: "
+        f"{shared}")
+
+
+def test_a_file_directly_under_the_store_root_does_not_stop_the_import(tmp_path):
+    """It raised `NotADirectoryError` out of `FileBackend.conversations`, which the importer caught
+    as "(the store) could not be listed" and then returned from. One stray file meant **not one**
+    conversation imported, and the report did not say which file."""
+    ids = _legacy(tmp_path, ["A", "B"])
+    (tmp_path / "legacy" / "stray.jsonl").write_text("{}\n", encoding="utf-8")
+
+    report = conv.import_file_store(tmp_path / "legacy", _sqlite(tmp_path))
+
+    assert sorted(report["imported"]) == sorted(ids.values()), (
+        f"one stray file stopped the whole store importing: {report}")
+    assert any("stray.jsonl" in n for n in _refused(report)), _refused(report)
+
+
+def test_a_third_level_is_reported_rather_than_skipped_in_silence(tmp_path):
+    """The walk assumed exactly `<root>/<project>/<file>`. A subdirectory inside a project was
+    skipped without a word, so a subtree of conversations could sit in the store and the report
+    would call the import clean. This runner does not read it; it must not imply it did."""
+    ids = _legacy(tmp_path, ["A"])
+    buried = tmp_path / "legacy" / conv.project_id("A") / "archive"
+    buried.mkdir()
+    (buried / "buried.jsonl").write_text("{}\n", encoding="utf-8")
+
+    report = conv.import_file_store(tmp_path / "legacy", _sqlite(tmp_path))
+
+    assert list(report["imported"]) == [ids["A"]]
+    assert any("archive" in n for n in _refused(report)), (
+        f"a directory the import did not descend into went unmentioned: {_refused(report)}")
+
+
+def test_a_copied_file_whose_header_names_another_project_is_refused(tmp_path):
+    """`cp A/x.jsonl B/` leaves a file whose header still names project A.
+
+    CHG-46 claimed "two files claiming one id is still caught". It was not: the collision read used
+    the id from the *header*, so `source.read(pid_from_header, cid)` re-opened the **original**
+    file and compared it with itself. The copy was reported "skipped, already here, whole" without
+    ever being read, and the same id appeared in both `imported` and `skipped`.
+    """
+    ids = _legacy(tmp_path, ["A", "B"])
+    pa, pb = conv.project_id("A"), conv.project_id("B")
+    original = tmp_path / "legacy" / pa / f"{ids['A']}.jsonl"
+    (tmp_path / "legacy" / pb / f"{ids['A']}.jsonl").write_text(
+        original.read_text(encoding="utf-8"), encoding="utf-8")
+
+    report = conv.import_file_store(tmp_path / "legacy", _sqlite(tmp_path))
+
+    assert not (set(report["imported"]) & set(report["skipped"])), (
+        f"one id was both imported and skipped: {report}")
+    assert any(pb[:8] in n and ids["A"][:8] in n for n in _refused(report)), (
+        f"the misfiled copy was not refused by where it actually is: {_refused(report)}")
+    assert ids["A"] in report["imported"], "the original should still import"
+
+
+@pytest.mark.parametrize("kind", ["sqlite", "file"])
+def test_importing_twice_skips_rather_than_accusing_the_operator(tmp_path, kind):
+    """`import_conversation` coerces `at` to a string and `seq` to an int. The collision check
+    compared **raw** source turns against **normalised** stored ones, so a legacy turn with no `at`
+    — or a `seq` of `"7"` — imported cleanly and was refused on every later run, with a message
+    asserting *"Same id, different conversation"* about the operator's own data and advising them
+    to delete the target copy. A false accusation is worse than a crash: it invites a deletion.
+    """
+    ids = _legacy(tmp_path, ["A"])
+    cid = ids["A"]
+    path = tmp_path / "legacy" / conv.project_id("A") / f"{cid}.jsonl"
+    path.write_text(path.read_text(encoding="utf-8")
+                    + json.dumps({"seq": "7", "kind": "note", "text": "legacy"}) + "\n",
+                    encoding="utf-8")
+
+    into = conv.backend(kind, root=tmp_path / f"db-{kind}")
+    first = conv.import_file_store(tmp_path / "legacy", into)
+    assert list(first["imported"]) == [cid], f"{first}"
+
+    second = conv.import_file_store(tmp_path / "legacy", into)
+    assert list(second["skipped"]) == [cid], (
+        f"the same store imported twice accused the operator instead of skipping: {second}")
+    assert not second["refused"], _refused(second)
+
+
+def test_the_cli_does_not_send_a_conversations_own_bytes_to_the_terminal(tmp_path):
+    """A store this runner did not write holds whatever it holds. A conversation id of
+    `evil\x1b]0;pwned\x07` retitles the operator's terminal window when the import names it, and
+    `\x1b[31m` recolours everything printed after. Verified reaching the terminal intact through
+    `cli._import` before this."""
+    from ai_sdlc_runner import cli
+
+    out = cli._printable("evil\x1b]0;pwned\x07\x1b[31mRED\x1b[0m")
+    assert "\x1b" not in out and "\x07" not in out, repr(out)
+    assert "pwned" in out, "escaping must not delete the evidence, only defuse it"
+    assert cli._printable("\u5c08\u6848\u7532") == "\u5c08\u6848\u7532", (
+        "a CJK project name is printable and must be left exactly as it is")
+
+
+def test_two_files_in_one_project_claiming_one_id_are_not_called_already_here(tmp_path):
+    """Found by reading CHG-47's own fix, not by a seat.
+
+    `source.read(pid, cid)` resolves to `<pid>/<cid>.jsonl`. The header-vs-directory check made
+    `pid` provably right and left `cid` unchecked, so a file named anything else whose header
+    claimed an id caused a **different file** to be read and reported under this one's name. Two
+    files in one project claiming one id: the second was compared against the first, found equal,
+    and called "already here" — the cross-project defect this change fixed, one axis over.
+    """
+    ids = _legacy(tmp_path, ["A"])
+    cid = ids["A"]
+    here = tmp_path / "legacy" / conv.project_id("A")
+    (here / "a-second-copy.jsonl").write_text(
+        (here / f"{cid}.jsonl").read_text(encoding="utf-8"), encoding="utf-8")
+
+    report = conv.import_file_store(tmp_path / "legacy", _sqlite(tmp_path))
+
+    assert cid in report["imported"], f"the real file should still import: {report}"
+    assert cid not in report["skipped"], (
+        f"one id was both imported and skipped, from two files: {report}")
+    assert any("a-second-copy.jsonl" in n for n in _refused(report)), (
+        f"the second file claiming the same id was not refused by name: {_refused(report)}")

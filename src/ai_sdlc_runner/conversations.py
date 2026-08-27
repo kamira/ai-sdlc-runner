@@ -48,7 +48,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import paths
@@ -334,9 +334,21 @@ class FileBackend(Backend):
         staging = final.with_name(final.name + ".part")
         lines = [json.dumps({"header": dict(header)}, ensure_ascii=False, sort_keys=True)]
         lines += [json.dumps(dict(row), ensure_ascii=False, sort_keys=True) for row in turns]
-        paths.write_text(staging, "\n".join(lines) + "\n")
-        os.replace(paths.real(staging), paths.real(final))
-        self._own(final)
+        try:
+            paths.write_text(staging, "\n".join(lines) + "\n")
+            os.replace(paths.real(staging), paths.real(final))
+            self._own(final)
+        except OSError as exc:
+            # A full disk, a read-only mount, a path the filesystem will not take. None of that is
+            # the source conversation's fault, and every later write would fail identically — so it
+            # is raised as a target failure, which stops the import instead of being filed as damage
+            # to this conversation and four hundred more after it.
+            try:
+                paths.unlink(staging)                # no `.part` left to be mistaken for residue
+            except OSError:
+                pass
+            raise TargetError(
+                f"the target could not be written ({type(exc).__name__}: {exc})") from exc
 
 
 class SqliteBackend(Backend):
@@ -508,84 +520,151 @@ class SqliteBackend(Backend):
                       json.dumps({k: v for k, v in row.items() if k not in Turn.ENVELOPE},
                                  ensure_ascii=False, sort_keys=True))
                      for row in turns])
-        except sqlite3.Error as exc:
+        except sqlite3.IntegrityError as exc:
             raise ConversationError(
                 f"refused: conversation {cid} was not imported ({exc}). Nothing of it was "
                 f"written.") from exc
+        except (sqlite3.Error, OSError) as exc:
+            # Not this conversation's fault: the database is locked, gone, out of room or of a
+            # shape this runner cannot write. Every later write would fail the same way.
+            raise TargetError(f"the target could not be written ({type(exc).__name__}: {exc})") \
+                from exc
+
+
+class TargetError(ConversationError):
+    """The place being written to is broken — not the conversation being written.
+
+    A separate type because the importer must do opposite things with them. A dirty source
+    conversation is refused and the next one tried; a target out of disk, disconnected or locked
+    means every remaining write will fail too, and trying four hundred more of them is not
+    resilience. CHG-20260823-46 filed a full disk as damage to each of three source conversations
+    and kept going — both seats found it.
+    """
+
+
+def _inventory(root: str | Path) -> List[Dict[str, object]]:
+    """Every file in the store, with **where it is** and either its header or why there is none.
+
+    One walk, one record per file, nothing subtracted from anything. The previous version built two
+    sets — filename stems and conversation ids — and subtracted them, which lost two things:
+
+    * **project identity.** `_walk_store` returned bare filenames flattened across projects, so
+      `A/shared.jsonl` and `B/shared.jsonl` collapsed to one entry. Two unreadable files produced
+      one refusal and the other **vanished with a clean report** — the same silent omission the
+      scan was written to prevent, reintroduced by the fix for it, and invisible to a test that
+      used one project.
+    * **which physical file.** A refusal named a stem, so an operator could not tell which of two
+      identically-named files to remove.
+
+    A record is `{"project": …, "name": …, "cid": …, "why": …}`; exactly one of `cid` and `why` is
+    set.
+    """
+    out: List[Dict[str, object]] = []
+    base = Path(root)
+    for project in sorted(paths.listdir(base)):
+        here = base / project
+        try:
+            entries = sorted(paths.listdir(here))
+        except OSError as exc:
+            # A FILE sitting directly under the store root. It used to raise `NotADirectoryError`
+            # out of `FileBackend.conversations`, which the importer reported as
+            # "(the store) could not be listed" and then returned — so one stray file meant NOT ONE
+            # conversation was imported, and the report did not say which file.
+            out.append({"project": "", "name": project, "cid": None,
+                        "why": f"not a project directory ({type(exc).__name__})"})
+            continue
+        for name in entries:
+            path = here / name
+            if not name.endswith(".jsonl"):
+                if name == "_project.json":
+                    continue                         # the marker this backend writes itself
+                # Everything else. A THIRD level (`root/project/subdir/x.jsonl`) is the case that
+                # matters: the previous walk skipped it in silence, so a whole subtree of
+                # conversations could sit in the store and the report would call the import clean.
+                # This runner does not read it and will not pretend it did.
+                out.append({"project": project, "name": name, "cid": None,
+                            "why": "a staging file left by an import that did not finish"
+                                   if name.endswith(".jsonl.part") else
+                                   "not a conversation file; nothing here reads it, and if it is a "
+                                   "directory its contents were not imported"})
+                continue
+            try:
+                with paths.open_(path, encoding="utf-8") as handle:
+                    first = handle.readline()   # closed here: on Windows an open handle on a file
+                                                # in the store blocks a later rename of it, and the
+                                                # store is a directory the operator still owns
+                header = (json.loads(first or "{}") or {}).get("header") or {}
+                cid = str(header["conversation_id"])
+                in_header = str((header.get("project") or {})["id"])
+            except Exception as exc:
+                # A directory named `*.jsonl`, an unreadable line, a header naming nothing. Each is
+                # one file's problem and none of them may stop the store being imported: the shipped
+                # test for this asserted `imported or refused`, and the `or` passed on the abort.
+                out.append({"project": project, "name": name, "cid": None,
+                            "why": f"no readable header ({type(exc).__name__})"})
+                continue
+            if in_header != project:
+                # `cp A/x.jsonl B/` leaves a file whose header still names project A. Reading it by
+                # the header's project re-reads the ORIGINAL file and compares it with itself, so
+                # the copy was reported "skipped, already here, whole" without ever being read.
+                out.append({"project": project, "name": name, "cid": None,
+                            "why": f"the header names project {in_header[:12]}… and the file is "
+                                   f"in {project[:12]}…"})
+                continue
+            if name != f"{cid}.jsonl":
+                # The other half of the same guarantee. `source.read(pid, cid)` resolves to
+                # `<pid>/<cid>.jsonl`, so unless BOTH the directory and the filename agree with the
+                # header, the importer reads a file it was not looking at and reports the result
+                # under this one's name. Two files in one project claiming one id is the case that
+                # bites: the second would be compared against the first and called "already here".
+                out.append({"project": project, "name": name, "cid": None,
+                            "why": f"the header names conversation {cid[:12]}\u2026 and the file "
+                                   f"is not named for it"})
+                continue
+            out.append({"project": project, "name": name, "cid": cid, "why": None})
+    return out
 
 
 def import_file_store(root: str | Path, into: Backend) -> Dict[str, object]:
     """Copy a JSONL store into another backend — **whole conversations only**.
 
-    `docs/DATABASE.md` §6 requires a dirty conversation to be *refused whole, named, and left on
-    disk*, and the import to be *atomic per conversation*. Three attempts:
+    `docs/DATABASE.md` §6: a dirty conversation is *refused whole, named, and left on disk*, and the
+    import is *atomic per conversation*. Four attempts, each answering a review of the last:
 
-    * **CHG-41** did neither: 3 of 7 turns imported, and the retry called the stump "already here".
-    * **CHG-42** made it atomic and added a preflight — for the two dirty shapes that had burned it.
-      Both seats then broke it six more ways. Five aborted the whole migration on the first bad
-      file; one vanished with a clean report.
-    * **This** stops trusting the input at all.
+    | | |
+    |---|---|
+    | CHG-41 | imported 3 of 7 turns, then called the stump "already here" |
+    | CHG-42 | atomic, and preflighted the two shapes that had burned CHG-41 |
+    | CHG-45 | per-conversation `except Exception`; `paths.listdir` instead of `rglob` |
+    | CHG-47 | one inventory; source and target failures told apart; comparison normalised |
 
-    ## Every conversation is independent, whatever goes wrong
+    ## Source dirt is refused; a broken target stops the run
 
-    The loop's `try` used to wrap only `into.import_conversation` and catch only
-    `ConversationError`. Everything else — `source.read`, `_assemble`, the header lookups, and any
-    non-sqlite error inside the import — fell outside it, so a bare `42` on a line, a `"seq": "x"`,
-    a turn with no `kind`, a header with no `project`, a filename that disagrees with the id inside
-    it, or a **directory** named `*.jsonl` each killed the migration and everything after it in
-    iteration order. Four arrived as raw tracebacks.
+    `except Exception` around each conversation was the right instrument for *source* dirt and the
+    wrong one for everything else. A target out of disk was filed as damage to each source
+    conversation in turn, and the loop kept writing to it. Target failures raise `TargetError` now
+    and stop the import with `(the target)` named.
 
-    Now each conversation is read, checked and written inside one `except Exception`, and anything
-    that goes wrong lands in `refused` **by name**. "One bad conversation does not stop the others"
-    is a claim this can keep.
+    ## Both sides of a collision are normalised before they are compared
 
-    ## Nothing is listed with `glob`
-
-    The unreadable-header scan used `Path(root).rglob("*.jsonl")`. Sixty lines above,
-    `FileBackend.conversations` carries a comment saying exactly why glob must not be used here:
-    it goes through the OS with the plain path, so a store past MAX_PATH lists as **empty** rather
-    than raising. Measured at a 322-character root: `rglob` found 0 files, `paths.listdir` found 2,
-    and a `junk.jsonl` with an unreadable header vanished from the import with a clean report and
-    exit 0 — the precise failure this scan was added to prevent, produced by the scan.
-
-    ## The target is listed once
-
-    `_already_there` called `into.conversations()` for **every source conversation**. On a SQLite
-    target that is a SELECT over a growing table; on a **file** target it re-opens and re-parses
-    the first line of every file in the store, every time. Both seats named it. Measured, file
-    target:
-
-    ```
-    conversations   seconds   ms each   vs 2x smaller
-              100      3.86      38.6              -
-              200     11.43      57.1          2.96x
-              400     43.40     108.5          3.80x        (4.00x is quadratic)
-    ```
-
-    The target's ids are now read **once**, before the loop, and a conversation in the target is
-    read only when its id actually collides — which is the rare case, and unavoidable when it
-    happens, because deciding "already here" honestly means comparing the turns.
-
-    ## "Already here" means the same conversation, not the same number of turns
-
-    `_already_there` compared id and **count**. A target holding the same id and the same number of
-    completely unrelated turns was reported as "skipped, already here" while the source's content
-    was never imported — a coarse check answering *safe* about content it had never examined.
-    The turns are compared now.
+    `import_conversation` coerces `at` to a string and `seq` to an int; the comparison used the
+    **raw** source turns against the **normalised** stored ones. A legacy turn with no `at`, or a
+    `seq` of `"7"`, therefore imported cleanly and was refused on every later run — with a message
+    asserting *"Same id, different conversation"* about the operator's own data and advising them to
+    delete the target copy. That is worse than a crash.
     """
-    source = FileBackend(root)
     report: Dict[str, object] = {"imported": [], "skipped": [], "refused": [], "turns": 0}
+    source = FileBackend(root)
 
-    def refuse(cid: str, why: str) -> None:
-        report["refused"].append({"conversation_id": cid, "why": why})  # type: ignore[union-attr]
+    def refuse(name: str, why: str) -> None:
+        report["refused"].append({"conversation_id": name, "why": why})  # type: ignore[union-attr]
 
-    try:
-        listed = source.conversations()
-    except Exception as exc:                      # a store that cannot even be listed
-        refuse("(the store)", f"could not be listed: {type(exc).__name__}: {exc}")
-        return report
+    files = _inventory(root)
+    for record in files:
+        if record["why"]:
+            where = f"{record['project']}/{record['name']}" if record["project"] else record["name"]
+            refuse(str(where), f"{record['why']}; left on disk")
 
-    # The target's ids, read once. See the docstring for what reading them per conversation cost.
     try:
         in_target = {str(row["conversation_id"]): str(row["project"]["id"])  # type: ignore[index]
                      for row in into.conversations()}
@@ -593,29 +672,13 @@ def import_file_store(root: str | Path, into: Backend) -> Dict[str, object]:
         refuse("(the target)", f"could not be listed: {type(exc).__name__}: {exc}")
         return report
 
-    # Through `paths`, never `glob` — see the docstring. A `.part` file is a staging file from an
-    # import that died; it is named so an operator can see it, because leaving it unmentioned is
-    # how the last two versions of this function went wrong.
-    on_disk, residue = set(), []
-    for name in _walk_store(Path(root)):
-        if name.endswith(".jsonl"):
-            on_disk.add(name[: -len(".jsonl")])
-        elif name.endswith(".jsonl.part"):
-            residue.append(name)
-    for name in sorted(residue):
-        refuse(name, "a staging file left by an import that did not finish; it is not a "
-                     "conversation and was not read")
-    for cid in sorted(on_disk - {str(row["conversation_id"]) for row in listed}):
-        refuse(cid, "no readable header line, or a header naming a different conversation; "
-                    "left on disk")
-
-    for row in listed:
-        cid = str(row["conversation_id"])
+    for record in files:
+        if not record["cid"]:
+            continue
+        cid, pid = str(record["cid"]), str(record["project"])
         try:
-            pid = str(row["project"]["id"])       # type: ignore[index]
             document = source.read(pid, cid)
             turns = list(document.get("turns") or [])
-
             damage = []
             if document.get("duplicate_seqs"):
                 damage.append(f"duplicate seq {document['duplicate_seqs']}")
@@ -624,25 +687,27 @@ def import_file_store(root: str | Path, into: Backend) -> Dict[str, object]:
             missing = sorted({k for t in turns for k in ("seq", "kind") if k not in t})
             if missing:
                 damage.append(f"turn(s) with no {', '.join(missing)}")
-            if damage:
-                refuse(cid, "; ".join(damage) + "; left on disk")
-                continue
+        except Exception as exc:                       # this one file; the others are unaffected
+            refuse(cid, f"{type(exc).__name__}: {exc}")
+            continue
+        if damage:
+            refuse(cid, "; ".join(damage) + "; left on disk")
+            continue
 
-            already = None
+        try:
             if cid in in_target:
-                # Only now, and only for this one conversation.
-                already = list(into.read(in_target[cid], cid).get("turns") or [])
-            if already is not None:
-                if already == turns:
-                    report["skipped"].append(cid)          # type: ignore[union-attr]
-                elif len(already) != len(turns):
-                    refuse(cid, f"already in the target with {len(already)} of {len(turns)} "
-                                f"turns — a previous import did not finish. Remove it there and "
-                                f"import again.")
+                held = list(into.read(in_target[cid], cid).get("turns") or [])
+                mine = [_for_comparison(t) for t in turns]
+                if [_for_comparison(t) for t in held] == mine:
+                    report["skipped"].append(cid)      # type: ignore[union-attr]
+                elif len(held) != len(turns):
+                    refuse(cid, f"already in the target with {len(held)} of {len(turns)} turns — a "
+                                f"previous import did not finish. Remove it there and import "
+                                f"again.")
                 else:
-                    refuse(cid, f"already in the target with {len(turns)} turns that are not "
-                                f"these ones. Same id, different conversation — this runner will "
-                                f"not choose between them.")
+                    refuse(cid, f"already in the target with {len(turns)} turns that are not these "
+                                f"ones. Same id, different conversation — this runner will not "
+                                f"choose between them.")
                 continue
 
             header = {
@@ -652,27 +717,42 @@ def import_file_store(root: str | Path, into: Backend) -> Dict[str, object]:
                 "run": dict(document.get("run") or {}),
             }
             into.import_conversation(header, turns)
-            in_target[cid] = str(header["project"].get("id", ""))   # type: ignore[union-attr]
+            in_target[cid] = pid
+        except (TargetError, OSError) as exc:
+            # Every remaining write would fail the same way. Stopping is the conservative act;
+            # continuing is four hundred more writes to something already broken.
+            #
+            # `OSError` is caught here as well as `TargetError`, and that is deliberate. Both
+            # backends now translate their own write failures, but making the classification depend
+            # on each backend remembering to do so is a name standing in for a constraint — the
+            # third-party backend that forgets gets its full disk filed as damage to four hundred
+            # source conversations, which is exactly the defect this replaced. A disk error
+            # escaping a *write* is about the place being written, whoever raised it. Source I/O
+            # sits in the earlier block and is still refused per conversation.
+            refuse("(the target)", f"{exc}. The import stopped here; nothing after this was "
+                                   f"attempted, and the store is untouched.")
+            return report
+        except ConversationError as exc:
+            refuse(cid, str(exc))
+            continue
         except Exception as exc:
-            # EVERY failure lands here, by name. The previous version caught `ConversationError`
-            # around one call and let five other exception types kill the migration.
             refuse(cid, f"{type(exc).__name__}: {exc}")
             continue
-        report["imported"].append(cid)                     # type: ignore[union-attr]
+        report["imported"].append(cid)                 # type: ignore[union-attr]
         report["turns"] = int(report["turns"]) + len(turns)
     return report
 
 
-def _walk_store(root: Path) -> List[str]:
-    """Every filename under a store root, through `paths` rather than `glob`.
+def _for_comparison(turn: Mapping[str, object]) -> Tuple[object, ...]:
+    """A turn reduced to what survives a round trip through a backend.
 
-    Two levels is the layout (`<root>/<project_id>/<conversation_id>.jsonl`), and walking it
-    explicitly rather than globbing is what makes it work past MAX_PATH.
+    `import_conversation` coerces `seq` to an int and `at` to a string, so comparing a raw source
+    turn with a stored one made a legacy turn with no `at` — or a `seq` of `"7"` — look like a
+    different conversation on every re-import.
     """
-    names: List[str] = []
-    for entry in paths.listdir(root):
-        names.extend(paths.listdir(root / entry))
-    return names
+    body = {k: v for k, v in turn.items() if k not in Turn.ENVELOPE}
+    return (int(turn.get("seq", 0)), str(turn.get("kind") or ""), str(turn.get("at") or ""),
+            json.dumps(body, ensure_ascii=False, sort_keys=True))
 
 
 def backend(kind: str, root: Optional[str] = None) -> Backend:
