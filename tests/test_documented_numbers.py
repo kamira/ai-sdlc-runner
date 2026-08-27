@@ -534,6 +534,7 @@ def test_every_defect_log_group_heading_agrees_with_its_row_in_the_table():
         "the last review": "found in the fix for the last review",
     }
 
+    # KN-17: a qualified count is two claims, and the bare number is the ambiguous one.
     # One row is qualified in both places and the two spellings disagree about what the bare
     # number counts: the table reads `**4** (+1 intended collision, below)` and the heading reads
     # `3, plus one intended collision`. Which of 3 and 4 is the count of *defects* is not decidable
@@ -564,3 +565,24 @@ def test_every_defect_log_group_heading_agrees_with_its_row_in_the_table():
                 f"{heading!r}: heading says {headings[heading]}, table says {count}")
 
     assert not disagreements, disagreements
+
+
+def test_kn17_and_the_check_that_implements_it_name_each_other():
+    """A rule and its mechanism that do not name each other are a paragraph and a coincidence.
+
+    KN-14 was exactly that for four days: a rule in the README with nothing behind it, broken by
+    the round that wrote it down. KN-17 is a rule about a skip inside another test, which is even
+    easier to lose — rename the check and the entry describes something that no longer exists;
+    delete the entry and the skip becomes an unexplained exception somebody will "fix" by guessing.
+
+    Added by CHG-20260827-16.
+    """
+    knowledge = (ROOT / "docs" / "knowledge" / "knowledge.md").read_text(encoding="utf-8")
+    source = Path(__file__).read_text(encoding="utf-8")
+
+    check = "test_every_defect_log_group_heading_agrees_with_its_row_in_the_table"
+    assert "KN-17" in knowledge, "KN-17 is gone; the skip below is now unexplained"
+    assert check in knowledge, (
+        f"KN-17 no longer names {check}, so a reader of the rule cannot find the mechanism")
+    assert "KN-17" in source, (
+        f"the skip in {check} no longer names KN-17, so a reader of the code cannot find the rule")
