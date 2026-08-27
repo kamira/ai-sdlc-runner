@@ -128,6 +128,13 @@ MUTATIONS: List[Mutation] = [
         "tests/test_examples_run_from_anywhere.py"),
 
     Mutation(
+        "provenance", "the plan a run walked is recorded as the operator's keystrokes again",
+        SRC / "cli.py",
+        '''             "plan": _where(args.plan)})''',
+        '''             "plan": str(args.plan)})''',
+        "tests/test_run_provenance.py"),
+
+    Mutation(
         "cli", "refusal text goes to the terminal with its control characters intact",
         SRC / "cli.py",
         '''    return "".join(c if (c.isprintable() or c == " ") else''',

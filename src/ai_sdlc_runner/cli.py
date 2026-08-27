@@ -35,6 +35,30 @@ from . import engine, models as models_mod, graph, policy, settings as settings_
 DEFAULT_CONFIG = "config/runner.yaml"
 
 
+def _where(path: object) -> str:
+    """A path recorded so it still means something in another shell.
+
+    `run.journal` was resolved and `run.plan`, in the same dict literal, was `str(args.plan)` — as
+    typed. Two runs of two different plan files from two directories therefore recorded the
+    identical string `"ex/plan.json"`, verified by running them. One dict, two frames of reference,
+    and the half that was raw is the half naming what the run actually did.
+
+    Nothing reads this field back; it is provenance. That is the argument for resolving it rather
+    than against — a field nothing consumes is one nobody notices is wrong, and its only reader is
+    a person asking months later which plan produced a conversation.
+
+    An empty or absent value stays empty: `Path("").resolve()` is the working directory, which
+    would record a confident answer to a question nobody asked.
+    """
+    if not path:
+        return ""
+    try:
+        return str(Path(str(path)).resolve())
+    except OSError:
+        # A path the OS will not resolve is still worth recording as it was given.
+        return str(path)
+
+
 def load_config(path: str) -> dict:
     """Read runner.yaml. PyYAML if present, else a small reader for the flat keys we use.
 
@@ -615,7 +639,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     conversation = _open_conversation(
         args, journal_dir=args.ask_journal,
         run={"journal": str(Path(args.ask_journal).resolve()) if args.ask_journal else None,
-             "plan": str(args.plan)})
+             "plan": _where(args.plan)})
     cfg = engine.RunConfig(
         conversation=conversation,
         node_specs=plan.get("node_specs", {}),
@@ -784,7 +808,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     store = attach_mod.Store(args.attachments or (Path(args.token_dir) / "attachments"))
     conversation = _open_conversation(args, journal_dir=journal.dir,
                                       run={"journal": str(journal.dir.resolve()),
-                                           "plan": str(args.plan or "")})
+                                           "plan": _where(args.plan)})
 
     def make_config(instructions, approvals, rulings, artifacts=(), rejections=(),
                     intake_history=()):
