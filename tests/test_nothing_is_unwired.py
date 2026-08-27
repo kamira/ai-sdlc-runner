@@ -236,3 +236,56 @@ def test_every_role_the_flow_uses_is_named_in_the_summary(capsys):
     summary = capsys.readouterr().out.splitlines()[-1]
     for role in graph.roles_used():
         assert role in summary
+
+
+def _test_names(source: str):
+    """Top-level `def test_*` names in one module, in the order the file defines them."""
+    import ast
+
+    return [n.name for n in ast.parse(source).body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name.startswith("test")]
+
+
+def test_no_test_module_defines_the_same_test_name_twice():
+    """A shadowed test is coverage that looks present and is not collected.
+
+    `tests/test_conversations_sqlite.py` carried two functions called
+    `test_one_bad_conversation_does_not_stop_the_others` — CHG-42's and CHG-45's. Python keeps the
+    last one, so CHG-42's stopped running the day CHG-45 landed. Nothing broke, because the
+    replacement was stronger; nothing reported it either, for four days, until an acceptance round
+    counted the collected items and found six where the file appeared to define seven.
+
+    Same family as this module's other check: a thing that reads as present and is not. The suite
+    cannot notice a test it never collects, so the check has to read the file rather than run it.
+    """
+    from collections import Counter
+    from pathlib import Path
+
+    duplicates = {}
+    for module in sorted(Path(__file__).resolve().parent.glob("test_*.py")):
+        counted = Counter(_test_names(module.read_text(encoding="utf-8")))
+        repeated = {name: n for name, n in counted.items() if n > 1}
+        if repeated:
+            duplicates[module.name] = repeated
+
+    assert not duplicates, (
+        "these test names are defined more than once in one module, so only the last of each is "
+        f"collected and the rest never run: {duplicates}")
+
+
+def test_the_duplicate_name_check_reads_definitions_rather_than_text():
+    """Proof it can fail, and proof it does not cry wolf.
+
+    A name in a string or a comment is not a definition — the mention of
+    `test_one_bad_conversation_does_not_stop_the_others` in the docstring above must not trip it,
+    or the check gets switched off the first time somebody writes about a test.
+    """
+    planted = (
+        "def test_alpha():\n    pass\n"
+        "def test_alpha():\n    pass\n"
+        "# def test_beta():\n"
+        "NOTE = 'def test_beta():'\n"
+        "def test_beta():\n    pass\n")
+    names = _test_names(planted)
+    assert names.count("test_alpha") == 2, "the check must see a real redefinition"
+    assert names.count("test_beta") == 1, "a name in a comment or a string is not a definition"

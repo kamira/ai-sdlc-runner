@@ -670,6 +670,67 @@ def test_a_removed_backend_is_refused_by_name_and_told_what_happened_to_it(kind)
     assert "unknown store" not in message, "a retired kind is not an unknown one"
 
 
+@pytest.mark.parametrize("kind", sorted(conv.RETIRED))
+def test_the_person_who_types_a_removed_backend_is_the_one_who_sees_the_refusal(kind):
+    """The test above passes with the CLI wire cut, because it never touches the CLI.
+
+    It did pass with the wire cut, for four days. `--store` was declared `choices=BACKENDS`, and
+    argparse checks `choices` before anything the program does, so `runner export --store mongo`
+    printed `invalid choice: 'mongo'` — the typo-style message CHG-20260823-35 wrote its refusal to
+    avoid — while the refusal itself sat in `backend()` with no CLI path reaching it. The comment
+    above the flag said the opposite. Found by the acceptance round of 2026-08-27.
+
+    So this test drives the **CLI**, in a subprocess, which is the only place the defect existed.
+    Its sibling above checks the vocabulary; this one checks that a person can reach it.
+    """
+    import os
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    done = subprocess.run(
+        [sys.executable, "-m", "ai_sdlc_runner.cli", "export", "--store", kind,
+         "--format", "json"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(root),
+        env={**os.environ, "PYTHONPATH": "src", "PYTHONUTF8": "1"})
+
+    said = done.stdout + done.stderr
+    assert done.returncode != 0, said
+    assert "removed" in said and "CHG-20260823-35" in said, said
+    assert "invalid choice" not in said, (
+        f"argparse refused {kind!r} before the store could say it was removed:{chr(10)}{said}")
+
+
+def test_every_store_option_goes_through_the_one_checker():
+    """One vocabulary, or the next `--store` added somewhere re-opens the same hole.
+
+    Structural on purpose: the defect was a *declaration*, so what has to be pinned is how the
+    argument is declared, not what one invocation of it does.
+    """
+    import ast
+
+    source = (Path(__file__).resolve().parents[1] / "src" / "ai_sdlc_runner" / "cli.py")
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+
+    declarations = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not (isinstance(node.func, ast.Attribute) and node.func.attr == "add_argument"):
+            continue
+        if not any(isinstance(a, ast.Constant) and a.value == "--store" for a in node.args):
+            continue
+        declarations.append({k.arg: k.value for k in node.keywords})
+
+    assert declarations, "no `--store` argument found; has it been renamed?"
+    for keywords in declarations:
+        assert "choices" not in keywords, (
+            "`--store` is back on `choices=`, which refuses a retired backend before the "
+            "refusal that explains it can run")
+        checker = keywords.get("type")
+        assert isinstance(checker, ast.Name) and checker.id == "_store_kind", (
+            "`--store` must resolve its kind through `_store_kind`")
+
+
 def test_an_actually_unknown_store_is_still_refused_and_never_defaulted():
     """The oldest mistake in this repository is 'I asked for X and got a directory'. It stays
     refused now that there is only one backend to fall back to."""
@@ -798,3 +859,111 @@ def test_no_turn_in_a_real_run_renders_a_blank_summary(tmp_path):
     """The general form. A card with an empty line is a card that says nothing happened."""
     for turn in _walked(tmp_path)["turns"]:
         assert conv._summary(turn).strip(), f"turn {turn['seq']} ({turn['kind']}) summarises to ''"
+
+
+# --------------------------------------------------------------------------------------
+# the clock (CHG-20260827-05)
+# --------------------------------------------------------------------------------------
+
+def test_a_turn_is_stamped_to_the_millisecond(tmp_path):
+    """CHG-20260823-40 said the resolution was "asserted both ways". Nothing asserted it.
+
+    That change's own commit touched only `tests/test_paths.py` under `tests/`, so no test for the
+    clock was ever written — and reverting `_now()` to `timespec="seconds"` left 147 conversation,
+    demo and recording tests green. An acceptance-round verifier did exactly that and reported it.
+
+    The forward direction, which nothing guarded: a turn written now carries milliseconds. The
+    reason it matters is the reason the change was made — two turns in the same second are
+    indistinguishable at second resolution, and the committed fixture has stretches of them.
+    """
+    c = conv.Conversation(_store(tmp_path), "P", journal_dir=None).open()
+    c.note("first")
+    c.note("second")
+    c.close("finished")
+
+    stamps = [t["at"] for t in c.document()["turns"]]
+    for at in stamps:
+        seconds, _, fraction = at.partition("+")[0].rpartition(".")
+        assert seconds, f"{at!r} carries no fractional second at all"
+        assert len(fraction) == 3, f"{at!r} is not stamped to the millisecond"
+
+
+def test_a_turn_stored_at_second_resolution_still_loads(tmp_path):
+    """The backward direction, deliberately rather than by accident.
+
+    It was covered only as a side effect of a test about duplicate `seq` that happened to use a
+    second-resolution stamp. A compatibility path exercised by coincidence is one that disappears
+    the day the unrelated test is rewritten.
+    """
+    from datetime import datetime
+
+    back = _store(tmp_path)
+    c = conv.Conversation(back, "P", journal_dir=None).open()
+    c.note("written now")
+    c.close("finished")
+
+    document = c.document()
+    old = "2026-08-26T00:00:00+00:00"
+    document["turns"][0]["at"] = old
+
+    # It must parse, and it must parse to the moment it spells — not merely fail to raise.
+    assert datetime.fromisoformat(old).year == 2026
+    rendered = conv.export_conversation(document, "markdown")
+    assert old.split("T")[0] in rendered, "a second-resolution stamp vanished from the export"
+
+
+def test_a_node_name_reaching_the_rail_cannot_end_the_script_block(tmp_path):
+    """The replay writes **two** script payloads and only one of them was guarded.
+
+    `_script_json` is called for `__TURNS__` and for `__RAIL__`. The test above covers the first.
+    Removing the call from the second left all 81 conversation and recording tests green — found by
+    an acceptance-round verifier who cut it and looked, and recorded as CHG-20260827-06.
+
+    The rail carries node names rather than model prose, so the exposure is smaller than the one
+    the sibling test guards. It is still the second emitter in the change whose whole subject was
+    unguarded emitters, and "smaller" is not a reason for a payload to go unchecked.
+    """
+    hostile = "build</script><script>alert(1)</script>"
+    c = conv.Conversation(_store(tmp_path), "P").open()
+    c.ask("00-x", hostile, "engineer", None, "m", {"brief": "b"})
+    page = conv.export_conversation(c.document(), "playback")
+
+    # `const TURNS = …, RAIL = …` is one statement, so the rail is what follows `, RAIL = ` up to
+    # the end of that line — not a block of its own.
+    rail = page.split(", RAIL = ", 1)[1].split("\n", 1)[0]
+    assert hostile not in rail, "the node name reached the rail payload unescaped"
+    assert "</script><script>" not in rail
+    # And the name is still *there*, escaped — a rail that solved this by dropping the node would
+    # pass the assertions above and show the reader nothing.
+    assert "alert(1)" in rail
+
+
+def test_a_turn_body_cannot_rewrite_its_own_envelope(tmp_path):
+    """CHG-20260823-21's headline refusal, which nothing tested until CHG-20260827-07.
+
+    It fires — an acceptance-round verifier confirmed that by constructing the input and watching
+    the error. That is evidence it works today and none at all that it will still be called
+    tomorrow, which is the difference between a mechanism and a tested one.
+
+    The check sits deliberately **outside** `_guarded`: a body colliding with the envelope is a bug
+    in the caller, not a disk that filled up, and swallowing it into `write_errors` would let a run
+    carry on having never stored the turn.
+    """
+    c = conv.Conversation(_store(tmp_path), "P").open()
+
+    # `kind` is the signature's own positional parameter, so a body carrying it never reaches the
+    # check -- Python refuses the call first. Worth asserting rather than assuming: it is the
+    # reason this loop covers two of the three envelope names and not all three.
+    with pytest.raises(TypeError):
+        c.turn("note", kind="something else")
+
+    reachable = [f for f in conv.Turn.ENVELOPE if f != "kind"]
+    assert reachable, "the envelope has no field reachable through turn(); has the API changed?"
+    for field in sorted(reachable):
+        with pytest.raises(conv.ConversationError) as caught:
+            c.turn("note", **{field: 999})
+        message = str(caught.value)
+        assert field in message, f"the refusal does not name {field!r}: {message}"
+    # The conversation is still usable: a refused turn is refused, not a poisoned store.
+    c.note("after the refusals")
+    assert [t["kind"] for t in c.document()["turns"]] == ["opened", "note"]

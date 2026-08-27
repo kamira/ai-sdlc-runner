@@ -763,6 +763,16 @@ def test_only_attach_reaches_advance_without_a_state_gate():
 def test_an_action_arriving_as_the_walk_decides_to_stop_is_not_stranded(tmp_path):
     """The window CHG-43's own gate left open.
 
+    **This test does not catch that window.** Reintroducing it — clearing `_walking` in a separate
+    lock acquisition — leaves this test passing; only
+    `test_the_release_and_the_decision_are_one_critical_section` fails. Verified by an
+    acceptance-round verifier who put the window back and ran it (CHG-20260827-15), and reported at
+    the time by CHG-20260823-45.
+
+    Keep it: it covers coalescing under a forced arrival, which is worth having. Do not cite it as
+    the guard on the lost wakeup, and do not "upgrade" the structural test away on the strength of
+    it — for a window this narrow, the structural test is the load-bearing one.
+
     The walk took the lock, saw nothing waiting, and **returned while `_walking` was still true** —
     `_walking` was cleared afterwards, in a `finally`, under a second acquisition of the lock.
     Between those two, a caller could take the lock, see `_walking` true, set `_walk_again`, and
@@ -814,6 +824,11 @@ def test_the_gate_never_rests_with_something_still_flagged(tmp_path):
 
     `_walk_again` true while `_walking` false means an operator's action is sitting there with
     nobody to act on it. Many callers, short walks, then assert the resting state is coherent.
+
+    Same limit as the test above, and worth stating twice because both were cited for it: with the
+    lost-wakeup window reintroduced, this passes. It hammers the invariant in the states the
+    scheduler happens to produce; it cannot make the interleaving happen. The guard on that window
+    is `test_the_release_and_the_decision_are_one_critical_section` (CHG-20260827-15).
     """
     from ai_sdlc_runner import attachments
 
@@ -853,8 +868,15 @@ def test_the_release_and_the_decision_are_one_critical_section():
     """Structural, and stated as such.
 
     The two behavioural tests above can only catch this window when the interleaving happens to
-    occur. What makes it *impossible* is that `_walking = False` and the check that found nothing
-    waiting sit inside the same `with self._lock`. That is what this asserts.
+    occur — and it does not occur: put the window back and both of them pass while this one fails.
+    That was measured, twice (CHG-20260823-45, then again by the acceptance round of 2026-08-27),
+    so it is a fact about this file rather than a caution.
+
+    **This is the test that holds the property.** What makes the window *impossible* is that
+    `_walking = False` and the check that found nothing waiting sit inside the same
+    `with self._lock`. That is what this asserts, and asserting the shape of the code is the right
+    instrument here: a race that needs a scheduler coincidence is not reliably reachable from a
+    behavioural test, and pretending otherwise is how the wrong test gets trusted (CHG-20260827-15).
     """
     import ast
     import inspect
@@ -886,3 +908,69 @@ def test_the_release_and_the_decision_are_one_critical_section():
     assert together, (
         "`_walking = False` is not cleared under `self._lock` on the branch that found nothing "
         "waiting — the lost wakeup CHG-20260823-44 closed")
+
+
+# --------------------------------------------------------------------------------------
+# the console's panels (CHG-20260827-02)
+#
+# Structural, and stated as such in every test below. There is no JavaScript engine in this
+# environment, so none of these proves the panels *render*; what they prove is that the chain which
+# has to exist for rendering to happen has not been cut. That matters because it had been cut-able:
+# deleting `drawFlow` and `drawModels` entirely left the whole suite green, which an acceptance
+# round established on 2026-08-27 and both verifying engines reported independently.
+# --------------------------------------------------------------------------------------
+
+def _console_page() -> str:
+    import pathlib
+
+    return (pathlib.Path(server.__file__).parent
+            / "console" / "index.html").read_text(encoding="utf-8")
+
+
+def test_every_endpoint_the_console_calls_is_one_the_server_answers():
+    """Structural. A page calling a route that does not exist fails only in a browser.
+
+    The reverse direction is deliberately **not** asserted: the server answers routes the console
+    does not use, and that is fine — `runner serve` is an HTTP surface, not only this page's
+    backend.
+    """
+    import re
+
+    page = _console_page()
+    called = set(re.findall(r'api\("(?:GET|POST)",\s*"([^"]+)"', page))
+    assert called, "the console calls no endpoints at all; has `api(` been renamed?"
+
+    source = __import__("inspect").getsource(server)
+    missing = [route for route in sorted(called) if f'"{route}"' not in source]
+    assert not missing, (
+        f"the console calls {missing}, which `server.py` has no handler for")
+
+
+def test_the_flow_panel_is_drawn_and_something_calls_it():
+    """Structural. `drawFlow` existing is not the property — being reached is.
+
+    Deleting the function, or the call, left the suite green before CHG-20260827-02.
+    """
+    page = _console_page()
+    assert "function drawFlow()" in page, "the flow panel's renderer is gone"
+    calls = page.count("drawFlow()")
+    assert calls >= 2, (
+        f"`drawFlow` is defined and called {calls - 1} time(s) — a renderer nothing reaches draws "
+        f"nothing")
+    assert 'api("GET", "/flow")' in page, "the flow panel no longer asks the server for the flow"
+
+
+def test_the_models_panel_is_drawn_and_can_say_a_model_is_dispatched_nowhere():
+    """Structural, and the sentence is the point.
+
+    CHG-20260823-12 exists to answer "where is this model actually used", and the answer that
+    carries the most information is **nowhere**. A panel that silently omits unused models answers
+    the opposite question.
+    """
+    page = _console_page()
+    assert "function drawModels()" in page, "the models panel's renderer is gone"
+    assert page.count("drawModels()") >= 2, "`drawModels` is defined and never called"
+    assert 'api("GET", "/config/nodes")' in page, (
+        "the models panel no longer asks the server which node uses which model")
+    assert "nothing dispatches to it" in page, (
+        "the models panel lost the sentence it exists to be able to say")

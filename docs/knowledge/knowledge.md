@@ -70,6 +70,18 @@ is explicit and validating (ai-guideline §5). Lock files belong to the governed
 this runner repo.
 
 ## KN-3 — Dashboard / curses conventions
+
+> **Superseded by CHG-20260823-01.** The dashboard went with the four-stage path: `dashboard.py`,
+> `DashboardModel` and `render_snapshot` were deleted and nothing reads them. What survives is
+> `tui`'s selector and its high-risk confirmation. The operator's view is now the console
+> (`server.py` plus `console/index.html`), which is a different design with different conventions —
+> see CHG-20260823-11.
+>
+> Kept as the record of why the curses conventions existed, which is what a reader of the history
+> will need. *(The INDEX row said superseded from the day of CHG-20260823-01; this body did not,
+> and described the deleted module in the present tense for four days. Found by the acceptance
+> round of 2026-08-27 and closed by CHG-20260827-09.)*
+
 *tags: dashboard · source: CHG-20260617-02, CHG-20260617-03, CHG-20260703-04, CHG-20260703-05 · tier: pattern*
 
 The interactive view is a **terminal `curses`** app (stdlib only, consistent with the runner's
@@ -448,7 +460,15 @@ half is the one that matters. When measuring your own mechanism, an outside samp
 extra; it is the only part of the measurement that can surprise you.
 
 ## KN-14 — Freeze the tree before verification
-*tags: governance · source: CHG-20260823-06 · tier: practice*
+*tags: governance · source: CHG-20260823-06, CHG-20260827-13 · tier: practice*
+
+> **The mechanism: `python tools/frozen_tree.py`.** Run it before a verification round and record
+> what it prints; it reports the commit the round is verifying, and refuses — naming the files —
+> when the tree is not that commit. Until CHG-20260827-13 this entry was advice only, and on
+> 2026-08-27 an acceptance round of this repository's own ledger broke it: eleven verifiers against
+> one shared worktree, several mutating `src/` to prove tests bite, one of them finding another's
+> uncommitted cut mid-audit. The evidence survived; the method did not. A rule nothing enforces is
+> a rule the people who wrote it down break.
 
 A verifier began an acceptance round on a clean tree, and partway through found
 `M src/ai_sdlc_runner/engine.py` — because the implementer was still working. The edit changed the

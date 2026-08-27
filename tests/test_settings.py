@@ -157,6 +157,53 @@ def test_a_confirmation_the_run_never_reached_is_reported_not_dropped():
     assert any("more time(s) than the run stopped at it" in line for line in report.confirmations)
 
 
+def _unspent(report):
+    return [line for line in report.confirmations
+            if "more time(s) than the run stopped at it" in line]
+
+
+def test_a_walk_that_stops_reports_the_confirmation_it_never_reached():
+    """The exit the test above does **not** cover, and the one the fix was actually for.
+
+    CHG-20260823-05 moved this report into `_finish` precisely because four of the five ways a walk
+    can end jumped past its old position. The only behavioural test written for it ends at `done` —
+    the single exit that always worked — so regressing `_finish` to success-only left the suite
+    green. Verified by an acceptance-round verifier doing exactly that; recorded as CHG-20260827-04.
+    """
+    report = engine.walk(_cfg(instructions="drop the production database", node="pm_plan",
+                              undeclared="refuse", confirmed=("merge", "merge")),
+                         _dispatch, enabled=True)
+    assert report.state == "stopped"
+    assert report.halted_at != "done"
+    assert _unspent(report), (
+        f"a stopped run dropped an unspent confirmation: {report.confirmations}")
+
+
+def test_a_walk_that_suspends_reports_the_confirmation_it_never_reached():
+    """The other broken exit: the run is waiting for a person, and still owes them this."""
+    report = engine.walk(_cfg(risk="high", confirmed=("merge", "merge")), _dispatch, enabled=True)
+    assert report.state == "suspended"
+    assert report.halted_at != "done"
+    assert _unspent(report), (
+        f"a suspended run dropped an unspent confirmation: {report.confirmations}")
+
+
+def test_the_unspent_confirmation_is_reported_once_and_not_once_per_finish():
+    """A gate stop ran `_finish` twice, so one over-confirmation produced two complaints.
+
+    `_gate` finishes the report itself — it has `cfg.conversation` and the call site in `walk` does
+    not — and `walk` then finished the same report again, appending the lines a second time. Found
+    while writing the two tests above, which is the point of driving an exit rather than reading it.
+
+    The count in the sentence was right both times, so nothing looked wrong unless you read the
+    report: two lines each saying "2 more time(s)" for a gate confirmed twice.
+    """
+    report = engine.walk(_cfg(risk="high", confirmed=("merge", "merge")), _dispatch, enabled=True)
+    assert len(_unspent(report)) == 1, (
+        f"the same unspent confirmation is reported {len(_unspent(report))} times: "
+        f"{report.confirmations}")
+
+
 # --------------------------------------------------------------------------------------
 # settings: what the user sets, in the GUI
 # --------------------------------------------------------------------------------------

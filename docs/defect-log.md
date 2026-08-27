@@ -593,7 +593,7 @@ eleven are this log's own two most-named defects, reproduced **inside the functi
 them one round earlier**. A fix that does not become a habit gets found twice, and this is the page
 where that keeps being written down.
 
-## Found in the fix for the last review — 12
+## Found in the fix for the last review — 13
 
 The importer has now been written four times. CHG-41, -42, -45 and -47, each one answering defects a
 review found in the one before. Three of the first three shipped a defect **of the class they had

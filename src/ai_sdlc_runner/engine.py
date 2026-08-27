@@ -1334,7 +1334,12 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             node_id = stop.to
             continue
         if stop is not None:
-            return _finish(stop, confirmations)
+            # `_gate` has already run this through `_finish` — with `cfg.conversation`, which this
+            # call site does not have. Finishing it a second time appended the unspent-confirmation
+            # lines twice, so an operator who over-confirmed one gate read two complaints about it.
+            # Found while writing the test for CHG-20260827-04, by the same mechanism the round
+            # keeps recommending: drive the exit that was never driven.
+            return stop
 
         answers: List[Mapping[str, object]] = []
         panel_outcome: Optional[str] = None
@@ -1529,7 +1534,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             node_id = stop.to
             continue
         if stop is not None:
-            return _finish(stop, confirmations)
+            # Already finished inside `_gate`; see the `before` site above.
+            return stop
 
         stop = _run_effects(node, cfg, report)
         if stop is not None:
