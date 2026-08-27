@@ -97,11 +97,32 @@ def test_the_two_provenance_fields_agree_with_each_other(tmp_path):
             f"run.{field} is recorded relative while the other field is absolute: {ran}")
 
 
-def test_a_run_with_no_plan_records_no_plan(tmp_path):
+def test_a_run_with_no_plan_records_no_plan():
     """`Path("").resolve()` is the working directory. Resolving an absent value would record a
     confident answer to a question nobody asked — the runner's own most-repeated defect class."""
     from ai_sdlc_runner import cli
 
     assert cli._where(None) == ""
     assert cli._where("") == ""
-    assert Path(cli._where("plan.json")).is_absolute()
+
+
+def test_a_plan_that_does_not_exist_is_still_recorded_as_a_place():
+    """The case CI caught and this machine could not.
+
+    Before Python 3.10, `Path.resolve()` on Windows returned a **non-existent** relative path
+    unchanged (bpo-38671), and `requires-python` here is `>=3.9`. The first version of `_where`
+    used `resolve()` alone and recorded `plan.json` verbatim on that combination — the defect the
+    function exists to prevent, on a supported platform, green on four of the five CI jobs.
+
+    The two tests above it walk a real run, so their plan file **exists** and resolves fine
+    everywhere. A path that is not there is the only input that separates the two implementations,
+    which is why this test names one.
+    """
+    from ai_sdlc_runner import cli
+
+    for missing in ("plan.json", "no/such/plan.json", "./plan.json"):
+        recorded = cli._where(missing)
+        assert Path(recorded).is_absolute(), (
+            f"_where({missing!r}) recorded {recorded!r}, which is not a place. On Python 3.9 for "
+            f"Windows `Path.resolve()` alone leaves a non-existent relative path unchanged.")
+        assert Path(recorded).name == "plan.json"

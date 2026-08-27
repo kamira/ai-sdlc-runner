@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -49,14 +50,30 @@ def _where(path: object) -> str:
 
     An empty or absent value stays empty: `Path("").resolve()` is the working directory, which
     would record a confident answer to a question nobody asked.
+
+    ## `resolve()` is not enough on Python 3.9 / Windows
+
+    Before Python 3.10, `Path.resolve()` on Windows returned a **non-existent** relative path
+    unchanged (bpo-38671), and this repository supports `>=3.9`. So the first version of this
+    function recorded `plan.json` verbatim there — the exact defect it exists to prevent, on a
+    supported platform, and it went green on four of five CI jobs.
+
+    `os.path.abspath` makes the path absolute by string arithmetic against the working directory,
+    with no filesystem access and no version to depend on. `resolve()` still runs afterwards, on an
+    already-absolute path, because following symlinks is the part worth having.
+
+    The two integration tests could not have caught this: they walk a real run, so their plan file
+    exists, and an existing path resolves fine everywhere. Only the unit test naming a file that is
+    not there did.
     """
     if not path:
         return ""
+    absolute = Path(os.path.abspath(str(path)))
     try:
-        return str(Path(str(path)).resolve())
+        return str(absolute.resolve())
     except OSError:
-        # A path the OS will not resolve is still worth recording as it was given.
-        return str(path)
+        # A path the OS will not resolve is still absolute, and still worth recording.
+        return str(absolute)
 
 
 def load_config(path: str) -> dict:
