@@ -43,6 +43,7 @@ import os
 import re
 import sqlite3
 import sys
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -189,6 +190,17 @@ class Backend:
     def projects(self) -> List[Dict[str, object]]:
         raise NotImplementedError
 
+    def import_conversation(self, header: Mapping[str, object],
+                            turns: Sequence[Mapping[str, object]]) -> None:
+        """Write a whole conversation, or none of it.
+
+        A separate verb from `open_conversation` + `append` on purpose: those are the path a *run*
+        takes, one turn at a time as it happens, and no transaction spans them because there is no
+        moment at which a run knows its own last turn. An import does know, so it can promise
+        something a run cannot — and the contract is declared where both backends can keep it.
+        """
+        raise NotImplementedError
+
 
 class FileBackend(Backend):
     """JSON Lines under ``<root>/<project_id>/<conversation_id>.jsonl``.
@@ -306,6 +318,26 @@ class FileBackend(Backend):
                 out.append(json.loads(paths.read_text(marker)))
         return out
 
+    def import_conversation(self, header: Mapping[str, object],
+                            turns: Sequence[Mapping[str, object]]) -> None:
+        """One file, written once — the whole conversation or nothing.
+
+        Built beside the target and moved into place, so a crash part-way leaves the store without
+        the conversation rather than with part of it. That is the guarantee the SQLite backend gets
+        from a transaction, by the only means a directory of files has.
+        """
+        pid = str(header["project"]["id"])           # type: ignore[index]
+        cid = str(header["conversation_id"])
+        final = self._path(pid, cid)
+        if paths.exists(final):
+            raise ConversationError(f"refused: {final.name} already exists")
+        staging = final.with_name(final.name + ".part")
+        lines = [json.dumps({"header": dict(header)}, ensure_ascii=False, sort_keys=True)]
+        lines += [json.dumps(dict(row), ensure_ascii=False, sort_keys=True) for row in turns]
+        paths.write_text(staging, "\n".join(lines) + "\n")
+        os.replace(paths.real(staging), paths.real(final))
+        self._own(final)
+
 
 class SqliteBackend(Backend):
     """The conversation store, in the database (CHG-20260823-41).
@@ -348,7 +380,7 @@ class SqliteBackend(Backend):
         project = dict(header["project"])            # type: ignore[arg-type]
         cid = str(header["conversation_id"])
         try:
-            with self.db:
+            with self._store._locked(self.db), self.db:
                 self.db.execute(
                     "INSERT INTO conversations "
                     "(conversation_id, project_id, project_name, schema, run_json) "
@@ -366,7 +398,7 @@ class SqliteBackend(Backend):
         row = turn.as_dict()
         body = {k: v for k, v in row.items() if k not in Turn.ENVELOPE}
         try:
-            with self.db:
+            with self._store._locked(self.db), self.db:
                 self.db.execute(
                     "INSERT INTO turns (conversation_id, seq, kind, at, body_json) "
                     "VALUES (?, ?, ?, ?, ?)",
@@ -380,10 +412,20 @@ class SqliteBackend(Backend):
             raise ConversationError(
                 f"refused: turn {row['seq']} already exists in conversation {cid}. The file store "
                 f"could only report a duplicate at read time; this one refuses the write.") from exc
+        except sqlite3.OperationalError as exc:
+            # `SQLITE_BUSY` after the busy timeout, mostly. It escaped as a raw `OperationalError`,
+            # which `_guarded` does not catch — so a lock contention surfaced as a traceback rather
+            # than as a `write_errors` entry. Named, so the caller can tell it from a refusal.
+            raise ConversationError(
+                f"could not write turn {row['seq']} of conversation {cid}: {exc}") from exc
 
     # -- reading ----------------------------------------------------------------------------
 
     def read(self, pid: str, cid: str) -> Dict[str, object]:
+        with self._store._locked(self.db):
+            return self._read(pid, cid)
+
+    def _read(self, pid: str, cid: str) -> Dict[str, object]:
         found = self.db.execute(
             "SELECT project_id, project_name, schema, run_json FROM conversations "
             "WHERE conversation_id = ?", (cid,)).fetchone()
@@ -410,48 +452,172 @@ class SqliteBackend(Backend):
     def conversations(self, pid: Optional[str] = None) -> List[Dict[str, object]]:
         sql = ("SELECT conversation_id, project_id, project_name FROM conversations "
                "{where}ORDER BY conversation_id")
-        if pid:
-            rows = self.db.execute(sql.format(where="WHERE project_id = ? "), (pid,))
-        else:
-            rows = self.db.execute(sql.format(where=""))
+        with self._store._locked(self.db):
+            if pid:
+                rows = self.db.execute(sql.format(where="WHERE project_id = ? "), (pid,)).fetchall()
+            else:
+                rows = self.db.execute(sql.format(where="")).fetchall()
         return [{"conversation_id": cid, "project": {"id": p, "name": n}}
                 for cid, p, n in rows]
 
     def projects(self) -> List[Dict[str, object]]:
-        return [{"id": p, "name": n} for p, n in self.db.execute(
-            "SELECT DISTINCT project_id, project_name FROM conversations ORDER BY project_name")]
+        with self._store._locked(self.db):
+            rows = self.db.execute(
+                "SELECT DISTINCT project_id, project_name FROM conversations "
+                "ORDER BY project_name").fetchall()
+        return [{"id": p, "name": n} for p, n in rows]
+
+    def turn_count(self, cid: str) -> int:
+        """How many turns are stored for this conversation.
+
+        Exists so the importer can tell "already here, whole" from "there is a stump here from a
+        run that failed half way" — the distinction that made a truncation permanent.
+        """
+        with self._store._locked(self.db):
+            return int(self.db.execute(
+                "SELECT COUNT(*) FROM turns WHERE conversation_id = ?", (cid,)).fetchone()[0])
+
+    def import_conversation(self, header: Mapping[str, object],
+                            turns: Sequence[Mapping[str, object]]) -> None:
+        """Write a whole conversation, or none of it.
+
+        `docs/DATABASE.md` §6 required this in bold and the first implementation did not do it:
+        `open_conversation` committed, then each `append` committed, so a duplicate `seq` half way
+        through left the header and the turns before it behind. **Measured: 3 of 7 turns, and the
+        retry then skipped it as "already here" — permanent, silent truncation of the operator's
+        history, by the migration meant to preserve it.**
+
+        One transaction. A failure rolls the whole conversation back, including its row in
+        `conversations`, so a retry sees nothing and can try again.
+        """
+        project = dict(header["project"])            # type: ignore[arg-type]
+        cid = str(header["conversation_id"])
+        try:
+            with self._store._locked(self.db), self.db:
+                self.db.execute(
+                    "INSERT INTO conversations "
+                    "(conversation_id, project_id, project_name, schema, run_json) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (cid, str(project["id"]), str(project["name"]),
+                     int(header.get("schema", SCHEMA)),
+                     json.dumps(header.get("run") or {}, ensure_ascii=False, sort_keys=True)))
+                self.db.executemany(
+                    "INSERT INTO turns (conversation_id, seq, kind, at, body_json) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    [(cid, int(row["seq"]), str(row["kind"]), str(row.get("at") or ""),
+                      json.dumps({k: v for k, v in row.items() if k not in Turn.ENVELOPE},
+                                 ensure_ascii=False, sort_keys=True))
+                     for row in turns])
+        except sqlite3.Error as exc:
+            raise ConversationError(
+                f"refused: conversation {cid} was not imported ({exc}). Nothing of it was "
+                f"written.") from exc
 
 
 def import_file_store(root: str | Path, into: Backend) -> Dict[str, object]:
-    """Copy a JSONL store into another backend, once, leaving the files where they are.
+    """Copy a JSONL store into another backend — **whole conversations only** (CHG-20260823-42).
 
-    The same shape `models.json` got: an existing store is imported and **not deleted**, because a
-    migration that removes its own source has no way back if it was wrong.
+    `docs/DATABASE.md` §6 stated the policy in bold and the first version of this function honoured
+    none of it:
 
-    A conversation already present in the target is skipped rather than merged. Merging would mean
-    deciding what to do about a turn whose `seq` matches but whose body differs, and there is no
-    answer to that which is not a guess.
+    > a conversation carrying duplicate `seq` values is **refused whole, named, and left on disk**
+    > — never partially imported
+    >
+    > be **atomic per conversation** — a failure leaves no half-populated conversation
+
+    What it did instead, measured by both review seats independently: a conversation with a
+    duplicate `seq` imported **3 of 7 turns**, crashed, aborted every conversation after it, and —
+    worst — the retry reported the stump as `skipped, already here`. The truncation was permanent,
+    silent, and produced by the migration whose whole job is to preserve the history.
+
+    So, in order:
+
+    1. **Read first, decide, then write.** `_assemble` already computes `duplicate_seqs` and
+       `incomplete_lines`; both were ignored. A conversation carrying either is refused by name and
+       left where it is.
+    2. **One transaction per conversation** — `Backend.import_conversation`. A failure writes
+       nothing at all, so a retry is a retry rather than a second helping of the same stump.
+    3. **A short conversation in the target is not "already here".** Skipping is by id *and* turn
+       count; a target copy shorter than its source is reported as damaged rather than passed over.
+    4. **One bad conversation does not stop the others.** Each is independent; the report says which
+       went and which did not.
+
+    Nothing is ever deleted from the source. A migration that removes its own source has no way back
+    if it was wrong.
     """
     source = FileBackend(root)
-    report: Dict[str, object] = {"imported": [], "skipped": [], "turns": 0}
-    existing = {str(row["conversation_id"]) for row in into.conversations()}
+    report: Dict[str, object] = {"imported": [], "skipped": [], "refused": [], "turns": 0}
 
-    for listed in source.conversations():
-        cid = str(listed["conversation_id"])
-        pid = str(listed["project"]["id"])           # type: ignore[index]
-        if cid in existing:
-            report["skipped"].append(cid)            # type: ignore[union-attr]
-            continue
+    listed = source.conversations()
+    # A file whose header line is missing or unparseable is not listed by `FileBackend`, so it would
+    # have vanished from the import with no bucket in the report. Counted here, by name, because
+    # "there were files I could not read" is a different answer from "there was nothing".
+    on_disk = {p.stem for p in Path(root).rglob("*.jsonl")}
+    unreadable = sorted(on_disk - {str(row["conversation_id"]) for row in listed})
+    for cid in unreadable:
+        report["refused"].append(                                    # type: ignore[union-attr]
+            {"conversation_id": cid, "why": "no readable header line; left on disk"})
+
+    for row in listed:
+        cid = str(row["conversation_id"])
+        pid = str(row["project"]["id"])                              # type: ignore[index]
         document = source.read(pid, cid)
-        header = {k: v for k, v in document.items() if k != "turns"}
-        into.open_conversation(header)
-        for row in document.get("turns") or []:
-            body = {k: v for k, v in row.items() if k not in Turn.ENVELOPE}
-            into.append(header, Turn(seq=int(row["seq"]), kind=str(row["kind"]),
-                                     at=str(row.get("at") or ""), body=body))
-            report["turns"] = int(report["turns"]) + 1
-        report["imported"].append(cid)               # type: ignore[union-attr]
+        turns = list(document.get("turns") or [])
+
+        damage = []
+        if document.get("duplicate_seqs"):
+            damage.append(f"duplicate seq {document['duplicate_seqs']}")
+        if document.get("incomplete_lines"):
+            damage.append(f"incomplete line(s) at {document['incomplete_lines']}")
+        if damage:
+            report["refused"].append(                                # type: ignore[union-attr]
+                {"conversation_id": cid, "why": "; ".join(damage) + "; left on disk"})
+            continue
+
+        already = _already_there(into, cid)
+        if already is not None:
+            if already == len(turns):
+                report["skipped"].append(cid)                        # type: ignore[union-attr]
+            else:
+                # The shape a failed earlier run leaves. Reported rather than skipped, because
+                # skipping is what made the truncation permanent.
+                report["refused"].append({                           # type: ignore[union-attr]
+                    "conversation_id": cid,
+                    "why": f"already in the target with {already} of {len(turns)} turns — a "
+                           f"previous import did not finish. Remove it there and import again."})
+            continue
+
+        # Only the four fields a header actually holds. `_assemble` adds computed keys
+        # (`duplicate_seqs`, `incomplete_lines`) and the first version carried them straight into
+        # the target: dropped silently by SQLite, and written into a **file** target's header as a
+        # permanent fake fact that `_assemble` would then re-emit for ever.
+        header = {
+            "conversation_id": cid,
+            "project": dict(document.get("project") or {}),
+            "schema": document.get("schema", SCHEMA),
+            "run": dict(document.get("run") or {}),
+        }
+        try:
+            into.import_conversation(header, turns)
+        except ConversationError as exc:
+            report["refused"].append(                                # type: ignore[union-attr]
+                {"conversation_id": cid, "why": str(exc)})
+            continue
+        report["imported"].append(cid)                               # type: ignore[union-attr]
+        report["turns"] = int(report["turns"]) + len(turns)
     return report
+
+
+def _already_there(into: Backend, cid: str) -> Optional[int]:
+    """How many turns the target already holds for this id, or None if it holds none."""
+    for row in into.conversations():
+        if str(row["conversation_id"]) == cid:
+            counter = getattr(into, "turn_count", None)
+            if counter is not None:
+                return counter(cid)
+            document = into.read(str(row["project"]["id"]), cid)     # type: ignore[index]
+            return len(document.get("turns") or [])
+    return None
 
 
 def backend(kind: str, root: Optional[str] = None) -> Backend:
@@ -522,6 +688,10 @@ class Conversation:
             "run": dict(run or {}),
         }
         self._seq = 0
+        #: Guards `_seq` and the write that consumes it. A run is one writer by design; the
+        #: server can nonetheless start a second walk over this object (`_advance` runs
+        #: outside its own lock), and two threads reading `_seq` both got the same number.
+        self._turn_lock = threading.RLock()
         #: Store writes that failed. **A failed store write never fails a run** — and is never
         #: silent either: it lands here, in `RunReport.store_errors`, and on stderr. The first
         #: design said "must not be silent" and named no mechanism, which is how a sentence ships
@@ -648,9 +818,12 @@ class Conversation:
             raise ConversationError(
                 f"turn body carries {collided}, which name the turn's own identity. A body that "
                 f"can rewrite its envelope makes seq, kind and at unreliable for every reader.")
-        t = Turn(seq=self._seq, kind=kind, at=_now(), body=dict(body))
-        self._seq += 1
-        self._guarded(lambda: self.store.append(self.header, t), f"turn {t.seq} ({kind})")
+        # Allocate and write under one lock, so two threads cannot be handed the same `seq`.
+        # Outside it, the number was read, incremented and used in three separate steps.
+        with self._turn_lock:
+            t = Turn(seq=self._seq, kind=kind, at=_now(), body=dict(body))
+            self._seq += 1
+            self._guarded(lambda: self.store.append(self.header, t), f"turn {t.seq} ({kind})")
         return t
 
     def instruction(self, text: str, nth: int) -> None:
@@ -1373,7 +1546,9 @@ function build() {
       '<span class="who">' + x.who + '</span>' +
       '<span class="verb">' + esc(x.verb) + '</span>' +
       (x.model ? '<span class="mdl">' + esc(x.model) + '</span>' : '') +
-      (x.gap ? '<span class="gp">+' + fmtGap(x.gap) + '</span>' : '') +
+      (x.gap === null || x.gap === undefined ? ''
+        : x.gap < 0 ? '<span class="gp" title="the clock went backwards between these two turns">~0s</span>'
+        : fmtGap(x.gap) ? '<span class="gp">+' + fmtGap(x.gap) + '</span>' : '') +
       '<span class="seq">#' + x.seq + '</span></div>' +
       '<p class="sum">' + esc(x.sum) + '</p>' +
       '<details><summary>full</summary><pre>' + esc(x.full) + '</pre></details></article>');
