@@ -683,7 +683,22 @@ def test_a_cycling_flow_is_stopped_rather_than_spun_forever():
     cfg.decisions["next_module"] = "module"
     with pytest.raises(engine.EngineError) as exc:
         engine.walk(cfg, Recorder(), enabled=True)
-    assert "cycling without progress" in str(exc.value)
+    assert "10 steps" in str(exc.value), "the refusal must say what limit it hit"
+
+
+def test_the_stop_says_what_cycled_not_merely_that_something_did():
+    """This assertion used to be `"cycling without progress" in str(exc.value)` — a phrase, not a
+    claim. The message was true and carried nothing an operator could act on, and the real cycle it
+    was eventually needed for (CHG-20260823-50) was diagnosed by reading the engine instead."""
+    cfg = _cfg(max_steps=10)
+    cfg.decisions["next_module"] = "module"
+    with pytest.raises(engine.EngineError) as exc:
+        engine.walk(cfg, Recorder(), enabled=True)
+
+    said = str(exc.value)
+    assert "Most-visited" in said, said
+    assert any(node in said for node in ("engineer_build", "next_module")), (
+        f"the stop names no node from the loop that spun: {said}")
 
 
 # --------------------------------------------------------------------------------------

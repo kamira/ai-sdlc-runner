@@ -135,6 +135,20 @@ MUTATIONS: List[Mutation] = [
         "tests/test_run_provenance.py"),
 
     Mutation(
+        "frontier", "an engineer reporting nothing left is discarded again",
+        SRC / "engine.py",
+        '''    if remaining and last_word == "":''',
+        '''    if False:''',
+        "tests/test_rerun_idempotence.py"),
+
+    Mutation(
+        "frontier", "a missing module key is read as 'nothing left'",
+        SRC / "engine.py",
+        '''        if "module" not in ask.result:''',
+        '''        if False:''',
+        "tests/test_rerun_idempotence.py"),
+
+    Mutation(
         "cli", "refusal text goes to the terminal with its control characters intact",
         SRC / "cli.py",
         '''    return "".join(c if (c.isprintable() or c == " ") else''',
