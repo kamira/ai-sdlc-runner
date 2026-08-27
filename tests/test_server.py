@@ -866,9 +866,23 @@ def test_the_release_and_the_decision_are_one_critical_section():
     for node in ast.walk(tree):
         if not isinstance(node, ast.With):
             continue
+        # **Which** context manager, checked. The first version of this test asserted only that two
+        # substrings appeared inside some `with` — fable-seat mutated the gate to keep both strings
+        # in one block while clearing `_walking` on the wrong branch, and this passed. A test
+        # reading vocabulary, written to replace a test reading vocabulary.
+        holds_the_lock = any(ast.unparse(item.context_expr) == "self._lock"
+                             for item in node.items)
+        if not holds_the_lock:
+            continue
         body = ast.unparse(node)
-        if "self._walking = False" in body and "if not self._walk_again" in body:
-            together = True
+        if "self._walking = False" not in body or "self._walk_again" not in body:
+            continue
+        # ...and on the branch that decided to stop, not the other one.
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.If) and "self._walk_again" in ast.unparse(inner.test):
+                stopping = inner.body if isinstance(inner.test, ast.UnaryOp) else inner.orelse
+                if any("self._walking = False" in ast.unparse(s) for s in stopping):
+                    together = True
     assert together, (
-        "`_walking = False` is not in the same locked block as the `_walk_again` check, which is "
-        "the lost wakeup CHG-20260823-44 closed")
+        "`_walking = False` is not cleared under `self._lock` on the branch that found nothing "
+        "waiting — the lost wakeup CHG-20260823-44 closed")
