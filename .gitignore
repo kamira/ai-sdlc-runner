@@ -185,3 +185,7 @@ cython_debug/
 # came to be committed in CHG-20260823-26.
 .runner/
 .preview/
+
+# Build output from running the shipped examples (CHG-20260823-47: driving
+# examples/weather-spa through the console left this untracked in the worktree).
+examples/*/site/
