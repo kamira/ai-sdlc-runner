@@ -48,9 +48,10 @@ platform lifts, is **`NAME_MAX` — 255 bytes for a single component**. Measured
 300-char name: OSError errno=22
 ```
 
-**In which unit** is the part this module first got wrong. Windows counts UTF-16 code units; ext4
-and APFS count UTF-8 bytes. Counting bytes everywhere refused a 100-character CJK name — 300 bytes,
-100 units, and legal — with a message asserting no filesystem would take it. See `measure`.
+**In which unit**, and **against what limit**, are the two parts this module got wrong — see
+`measure` and `name_max`. Windows counts UTF-16 code units; ext4 counts UTF-8 bytes; macOS
+normalises to NFD before storing, so the bytes it counts are not the bytes you passed. The limit
+itself is asked of the filesystem where POSIX allows it, rather than assumed to be 255.
 
 So the honest split is:
 
@@ -67,6 +68,8 @@ from __future__ import annotations
 
 import io
 import os
+import sys
+import unicodedata
 from pathlib import Path
 from typing import List, Tuple
 
@@ -76,9 +79,10 @@ PREFIX = "\\\\?\\"
 #: The UNC form. `\\server\share\x` cannot simply take the prefix — it becomes `\\?\UNC\server\...`.
 UNC_PREFIX = "\\\\?\\UNC\\"
 
-#: The longest single path component any mainstream filesystem accepts. NTFS, ext4, APFS and HFS+
-#: all stop at 255, and **no prefix lifts it** — measured on this machine at 255 accepted, 300
-#: refused with `errno 22`.
+#: The fallback limit, used where the filesystem cannot be asked — Windows, which has no
+#: `pathconf`, and any POSIX path whose ancestors have all vanished. 255 is right for NTFS, ReFS,
+#: exFAT, ext4 and APFS; it is a **default, not a fact about every filesystem**, and `name_max()`
+#: prefers the answer the filesystem gives.
 NAME_MAX = 255
 
 
@@ -86,31 +90,65 @@ class PathTooLong(OSError):
     """A path this machine will not take, refused by name before anything is written."""
 
 
+def name_max(near: str | Path | None = None) -> int:
+    """The longest component this filesystem takes — **asked, where it can be asked**.
+
+    `NAME_MAX = 255` was a constant standing in for a queried constraint, which is this project's
+    own defect class written as a module-level assignment. POSIX can be asked directly:
+    `pathconf(dir, "PC_NAME_MAX")` answers for the filesystem actually mounted there, which is the
+    only thing that knows. A macOS machine can have APFS, HFS+, an SMB share and a FAT stick
+    mounted at once, and `os.name` distinguishes none of them.
+
+    Windows has no `pathconf`; 255 is right for NTFS, ReFS and exFAT, and the constant stands there
+    with that scope stated rather than implied.
+
+    `near` is a path that may not exist yet, so the nearest existing ancestor is asked — a name is
+    checked before its directory is created.
+    """
+    if os.name == "nt" or not hasattr(os, "pathconf"):
+        return NAME_MAX
+    probe = Path(os.fspath(near)) if near is not None else Path(".")
+    for candidate in [probe, *probe.parents]:
+        try:
+            found = os.pathconf(str(candidate), "PC_NAME_MAX")
+        except (OSError, ValueError, KeyError):
+            continue
+        if found and found > 0:
+            return int(found)
+    return NAME_MAX
+
+
 def measure(part: str) -> Tuple[int, str]:
     """How long this machine considers one name, **in the unit its filesystem actually counts**.
 
-    This was wrong, and wrong in the worst direction (CHG-20260823-38). The first version counted
-    UTF-8 bytes everywhere, so a 100-character CJK name — 300 bytes, and perfectly legal — was
-    refused with a message asserting that no filesystem here would take it. Measured on this
-    machine:
+    Wrong twice before, and in the direction that hurts non-Latin names both times.
 
-    ```
-    chars: 100 | utf-8 bytes: 300 | utf-16 units: 100
-    the filesystem ACCEPTED it -> True
-    paths.check REFUSED it
-    ```
+    **First**: UTF-8 bytes everywhere, so a 100-character CJK name — 300 bytes, 100 UTF-16 units,
+    and legal on NTFS — was refused with a message asserting no filesystem would take it.
 
-    A false refusal is worse than the failure it was written to prevent: the original defect was a
-    confusing error about a real limit, and this was a confident error about a limit that does not
-    exist. It fell hardest on exactly the names least likely to be tested — a Latin name reaches 255
-    bytes and 255 characters together, so nothing in the original test set could have caught it.
+    **Then**: UTF-16 units on `nt` and bytes everywhere else, which both review seats called out.
+    That still conflates the OS with the filesystem, and it gets macOS wrong in a way that
+    *under*-refuses:
 
-    - **Windows** counts UTF-16 code units. An astral character (an emoji) costs two, which is what
-      the API does too.
-    - **ext4 and APFS** count UTF-8 bytes.
+    - macOS **normalises toward NFD before storing**. `한` is 3 UTF-8 bytes composed and 6
+      decomposed, so a name measured as given can pass this check and still be refused by the
+      kernel with `ENAMETOOLONG` — the very failure this module exists to pre-empt.
+    - **HFS+ counts UTF-16 units**, not bytes at all, and the docstring listed it at "255" beside
+      ext4 as though the unit were shared.
+
+    So: NFD on Darwin before counting, because that is what will be stored; UTF-16 units on
+    Windows; UTF-8 bytes on Linux. The *limit* comes from `name_max()`, which asks the filesystem.
+
+    Still not claimed: that this is right for every filesystem a machine can mount. An HFS+ volume
+    on macOS counts UTF-16 units and is measured here in NFD bytes, which **over**-refuses — a name
+    that would fit is called too long. That is the safer direction of the two, it is stated rather
+    than hidden, and closing it needs the filesystem type, which nothing here has.
     """
     if os.name == "nt":
         return len(part.encode("utf-16-le")) // 2, "UTF-16 code units"
+    if sys.platform == "darwin":
+        # What the kernel will store, not what the caller typed.
+        return len(unicodedata.normalize("NFD", part).encode("utf-8")), "bytes (NFD)"
     return len(part.encode("utf-8")), "bytes"
 
 
@@ -121,14 +159,17 @@ def check(path: str | Path) -> None:
     the limit being far above anything here — so a refusal from this function is always about one
     name being too long, and it says which.
     """
+    limit = name_max(path)
     for part in Path(os.fspath(path)).parts:
         if part in ("/", "\\") or (len(part) == 3 and part[1:] == ":\\"):
             continue                                  # a root or a drive, not a name
+        if part.startswith(PREFIX):
+            continue                                  # the extended-length prefix, not a name
         size, unit = measure(part)
-        if size > NAME_MAX:
+        if size > limit:
             raise PathTooLong(
                 f"{part[:40]}… is {size} {unit} as a single path component, and this filesystem "
-                f"takes at most {NAME_MAX}. The extended-length prefix lifts the total path length "
+                f"takes at most {limit}. The extended-length prefix lifts the total path length "
                 f"and not this — shorten the name.")
 
 

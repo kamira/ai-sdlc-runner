@@ -241,7 +241,79 @@ def test_unlink_removes_a_deep_file(tmp_path):
 #: entry costs a sentence; that is the point.
 ALLOWED_DIRECT_WRITES = {
     # (module, function called) : why it does not go through paths.py
+    ("conversations.py", "os.replace"):
+        "the atomic rename that gives FileBackend.import_conversation its whole-or-nothing "
+        "guarantee; both of its arguments are already paths.real() strings, so routing the rename "
+        "itself through paths would prefix an already-prefixed path",
 }
+
+
+#: Fully-qualified calls that put bytes on disk. Matched on the whole dotted name, so there is no
+#: ambiguity about what they are.
+#:
+#: Both seats found the previous list short: it missed the **builtin `open`**, the single most
+#: ordinary way to write a file in Python, plus `os.replace`, `os.rename`, `Path.touch` and
+#: everything in `shutil`. None existed in `src/` — the hole was latent, not live — but a write
+#: audit blind to `open()` is not an audit.
+WRITE_CALLS = {
+    "io.open", "os.makedirs", "os.mkdir", "os.chmod", "os.unlink", "os.remove",
+    "os.replace", "os.rename", "os.rmdir", "os.truncate", "os.link", "os.symlink",
+}
+
+#: Any call into these modules.
+WRITE_MODULES = ("shutil.",)
+
+#: Method names that mean a file operation **whatever the receiver is**. Deliberately short.
+#:
+#: The first widening of this set also included `open`, `unlink`, `replace` and `rename`, and it
+#: matched `str.replace`, `dataclasses.replace` and `Conversation.open` — 30 false positives in
+#: `src/`, which is the same over-broad rule the allowlist was introduced to stop, arriving from
+#: the other direction. Telling `Path.replace` from `str.replace` needs type inference this does
+#: not have, so those spellings are caught only as `os.replace`, and the gap is stated below rather
+#: than papered over.
+WRITE_METHODS = {"write_text", "write_bytes", "mkdir", "touch"}
+
+#: `Path(...).open("w")` is caught as a special case: an `open` attribute whose receiver is a call
+#: to `Path`. Narrow on purpose — it is the realistic spelling, and it cannot match `conv.open()`.
+#:
+#: **Not caught, and said out loud**: `p.open("w")` where `p` was bound earlier, `f.write(...)` on
+#: an already-open handle, a write through a helper this file has never seen, or anything reached
+#: dynamically. The audit narrows the ways a bypass can be introduced silently; it does not close
+#: them, and a test that claimed otherwise would be the defect it exists to catch.
+
+
+def _writes_found_by_the_audit(module: Path):
+    """Every direct-write call in one module, as `(line, dotted name)`.
+
+    Extracted so the audit and the test guarding the audit run **the same code**. The previous
+    guard re-scanned a file against its own hardcoded tuple and never invoked the audit — so
+    gutting the audit's shape list left both tests green, which fable-seat demonstrated by doing
+    exactly that.
+    """
+    import ast
+
+    found = []
+    tree = ast.parse(module.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        called = ast.unparse(func)
+        if called.startswith("paths."):
+            continue
+
+        hit = called in WRITE_CALLS or called.startswith(WRITE_MODULES)
+        if isinstance(func, ast.Name) and func.id == "open":
+            hit = True                                   # the builtin
+        if isinstance(func, ast.Attribute):
+            if func.attr in WRITE_METHODS:
+                hit = True
+            elif func.attr == "open" and isinstance(func.value, ast.Call) \
+                    and ast.unparse(func.value.func).rsplit(".", 1)[-1] == "Path":
+                hit = True                               # Path(...).open(...)
+        if hit:
+            found.append((node.lineno, called))
+    return found
 
 
 def test_a_direct_write_is_either_routed_through_this_module_or_written_down():
@@ -259,26 +331,14 @@ def test_a_direct_write_is_either_routed_through_this_module_or_written_down():
 
     Read out of the syntax tree, not grepped, so a comment mentioning `write_text` cannot satisfy it.
     """
-    import ast
-
-    source_dir = Path(paths.__file__).parent
     offenders = []
-    for module in sorted(source_dir.glob("*.py")):
+    for module in sorted(Path(paths.__file__).parent.glob("*.py")):
         if module.name == "paths.py":
             continue
-        tree = ast.parse(module.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
+        for line, called in _writes_found_by_the_audit(module):
+            if (module.name, called) in ALLOWED_DIRECT_WRITES:
                 continue
-            called = ast.unparse(node.func)
-            if called.startswith("paths."):
-                continue
-            bare = called.rsplit(".", 1)[-1]
-            if bare in ("write_text", "write_bytes", "mkdir") or called in (
-                    "os.makedirs", "os.chmod", "os.unlink", "os.remove", "io.open"):
-                if (module.name, called) in ALLOWED_DIRECT_WRITES:
-                    continue
-                offenders.append(f"{module.name}:{node.lineno} {called}")
+            offenders.append(f"{module.name}:{line} {called}")
     assert not offenders, (
         "these writes neither go through paths.py nor appear in ALLOWED_DIRECT_WRITES with a "
         "reason: " + ", ".join(offenders))
@@ -291,19 +351,50 @@ def test_the_allowlist_gives_a_reason_for_every_entry():
             f"{key} is exempted without a usable reason: {why!r}")
 
 
-def test_the_audit_still_catches_a_bypass():
-    """The audit's own failure mode is finding nothing because it looks for the wrong shapes.
+@pytest.mark.parametrize("shape", [
+    "io.open(target, 'w')",
+    "os.makedirs(target)",
+    "os.chmod(target, 0o600)",
+    "os.unlink(target)",
+    "os.replace(a, b)",
+    "shutil.copyfile(a, b)",
+    "open(target, 'w')",
+    "Path(target).open('w')",
+    "Path(target).touch()",
+    "Path(target).write_text('x')",
+    "Path(target).write_bytes(b'x')",
+    "Path(target).mkdir()",
+])
+def test_the_audit_actually_catches_each_shape(tmp_path, shape):
+    """The guard, actually guarding.
 
-    So it is run against a module that definitely bypasses — this test file — and asserted to
-    notice. Without this, deleting a call shape from the list above would silently retire the check
-    while leaving it green.
+    The previous version re-scanned this file against its **own hardcoded tuple** and asserted those
+    calls existed. It never ran the audit. fable-seat gutted the audit's shape list down to
+    `("write_text",)` — deleting `io.open`, `os.makedirs`, `os.chmod`, `os.unlink`, `os.remove`,
+    `write_bytes` and `mkdir` — and **both tests passed**. The exact sabotage the docstring named
+    went through silently: a test reading vocabulary instead of the claim, inside the change that
+    relaxed the audit.
+
+    This feeds a module containing one write to the audit's own scanner and requires it to be
+    caught. Delete a shape from the list and the case for it fails.
     """
-    import ast
+    module = tmp_path / "offender.py"
+    module.write_text(
+        "import io, os, shutil\nfrom pathlib import Path\n"
+        f"def go(target, a, b):\n    {shape}\n", encoding="utf-8")
+    assert _writes_found_by_the_audit(module), f"the audit does not recognise {shape}"
 
-    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
-    found = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
-             and ast.unparse(n.func) in ("io.open", "os.unlink")]
-    assert found, "this file no longer contains a direct write for the audit to recognise"
+
+def test_the_audit_does_not_cry_wolf(tmp_path):
+    """The other half: a module that writes nothing must come back clean, or the audit is a rule
+    nobody can satisfy."""
+    module = tmp_path / "innocent.py"
+    module.write_text(
+        "from pathlib import Path\n"
+        "def go(p):\n"
+        "    text = Path(p).read_text()\n"
+        "    return text.upper()\n", encoding="utf-8")
+    assert not _writes_found_by_the_audit(module)
 
 
 def test_the_sqlite_database_name_is_checked_too(tmp_path):
@@ -323,3 +414,25 @@ def test_a_prefixed_relative_path_is_resolved_not_returned_unchanged():
     prefixed relative path is one the OS cannot use. `real()` returned it unchanged."""
     once = paths.real(paths.PREFIX + "relative/thing" if os.name == "nt" else "relative/thing")
     assert os.path.isabs(paths.plain(once))
+
+
+def test_the_limit_is_asked_of_the_filesystem_where_it_can_be_asked(tmp_path):
+    """`NAME_MAX = 255` was a constant standing in for a queried constraint — this project's own
+    defect class as a module-level assignment. POSIX can be asked; Windows cannot, and there the
+    constant stands with that scope stated."""
+    limit = paths.name_max(tmp_path)
+    assert limit >= 255
+    if os.name != "nt" and hasattr(os, "pathconf"):
+        assert limit == os.pathconf(str(tmp_path), "PC_NAME_MAX")
+
+
+def test_a_name_is_checked_before_its_directory_exists(tmp_path):
+    """`check` runs before `makedirs`, so the directory whose filesystem sets the limit is often
+    not there yet. The nearest existing ancestor is asked instead."""
+    paths.name_max(tmp_path / "not" / "made" / "yet" / "file.txt")
+
+
+def test_the_extended_prefix_is_not_measured_as_a_name(tmp_path):
+    r"""`\\?\` arrives as parts[0] on Windows. Harmless at real lengths, but it is not a name and
+    counting it as one is the sort of thing that becomes wrong later."""
+    paths.check(paths.real(tmp_path / "ordinary.txt"))

@@ -4,6 +4,7 @@
 JSONL backend, which is where all of it was written. This covers what changes when the same
 contract is served by SQLite, and the one guarantee that only the database can give.
 """
+import io
 import json
 import sqlite3
 import sys
@@ -169,7 +170,7 @@ def test_the_import_leaves_the_source_where_it_is(tmp_path):
 def test_importing_an_empty_directory_says_so_rather_than_failing(tmp_path):
     (tmp_path / "empty").mkdir()
     report = conv.import_file_store(tmp_path / "empty", _sqlite(tmp_path))
-    assert report == {"imported": [], "skipped": [], "turns": 0}
+    assert report == {"imported": [], "skipped": [], "refused": [], "turns": 0}
 
 
 # ── the store on disk ─────────────────────────────────────────────────────────────────────────
@@ -200,3 +201,161 @@ def test_a_store_from_a_newer_schema_is_refused_rather_than_guessed_at(tmp_path)
     with pytest.raises(store_mod.StoreError) as caught:
         conv.backend("sqlite", root=tmp_path / "store")
     assert "upgrade the runner" in str(caught.value)
+
+
+# ── what the panel found (CHG-20260823-42) ────────────────────────────────────────────────────
+
+def _dirty_legacy(tmp_path, damage="duplicate"):
+    """A legacy store in a state the file backend permits and reports."""
+    back = _file(tmp_path)
+    c = conv.Conversation(back, "P").open()
+    for n in range(4):
+        c.note(f"turn {n}")
+    c.close("finished")
+    path = next((tmp_path / "legacy").rglob("*.jsonl"))
+    with io.open(str(path), "a", encoding="utf-8", newline="\n") as fh:
+        if damage == "duplicate":
+            fh.write(json.dumps({"seq": 2, "kind": "note", "at": conv._now(),
+                                 "text": "a duplicate"}) + "\n")
+        else:
+            fh.write('{"seq": 9, "kind": "note", NOT JSON\n')
+    return c.id
+
+
+def test_a_conversation_with_a_duplicate_seq_is_refused_whole_and_left_on_disk(tmp_path):
+    """`docs/DATABASE.md` §6 required this in bold and the first implementation did none of it.
+
+    Measured before the fix: **3 of 7 turns imported**, the conversation left half-populated, and
+    the retry reporting the stump as "skipped, already here" — a permanent, silent truncation of
+    the operator's history, produced by the migration meant to preserve it. Both seats found it
+    independently.
+    """
+    cid = _dirty_legacy(tmp_path)
+    target = _sqlite(tmp_path)
+    report = conv.import_file_store(tmp_path / "legacy", target)
+
+    assert report["imported"] == [] and report["skipped"] == []
+    refused = report["refused"]
+    assert [r["conversation_id"] for r in refused] == [cid]
+    assert "duplicate seq" in refused[0]["why"], "the refusal must name what is wrong"
+    assert "left on disk" in refused[0]["why"]
+    assert target.conversations() == [], "nothing of a refused conversation may be written"
+
+
+def test_a_conversation_with_an_unreadable_line_is_refused_not_silently_shortened(tmp_path):
+    cid = _dirty_legacy(tmp_path, damage="partial")
+    target = _sqlite(tmp_path)
+    report = conv.import_file_store(tmp_path / "legacy", target)
+    assert [r["conversation_id"] for r in report["refused"]] == [cid]
+    assert "incomplete line" in report["refused"][0]["why"]
+    assert target.conversations() == []
+
+
+def test_one_bad_conversation_does_not_stop_the_others(tmp_path):
+    """It used to raise out of the loop, so every conversation after it in iteration order was
+    silently not imported either."""
+    _dirty_legacy(tmp_path)
+    good = conv.Conversation(_file(tmp_path), "Q").open()
+    good.note("fine")
+    good.close("finished")
+
+    report = conv.import_file_store(tmp_path / "legacy", _sqlite(tmp_path))
+    assert good.id in report["imported"]
+    assert len(report["refused"]) == 1
+
+
+def test_a_half_imported_conversation_is_reported_not_skipped(tmp_path):
+    """The shape a failed earlier run leaves. Skipping it is what made the truncation permanent."""
+    source, cid = _legacy_with(tmp_path, turns=5)
+    target = _sqlite(tmp_path)
+    document = source.read(conv.project_id("P"), cid)
+    header = {"conversation_id": cid, "project": document["project"],
+              "schema": document["schema"], "run": document.get("run") or {}}
+    target.import_conversation(header, document["turns"][:2])      # a stump
+
+    report = conv.import_file_store(tmp_path / "legacy", target)
+    assert report["skipped"] == [], "a short copy is not 'already here'"
+    why = report["refused"][0]["why"]
+    assert "2 of" in why and "did not finish" in why
+
+
+def test_an_import_that_fails_writes_nothing_at_all(tmp_path):
+    """Atomic per conversation: one transaction, so a turn violating the primary key rolls the
+    header back with it."""
+    target = _sqlite(tmp_path)
+    header = {"conversation_id": "c1", "project": {"id": "p", "name": "P"},
+              "schema": conv.SCHEMA, "run": {}}
+    turns = [{"seq": 0, "kind": "note", "at": conv._now(), "text": "a"},
+             {"seq": 0, "kind": "note", "at": conv._now(), "text": "collides"}]
+    with pytest.raises(conv.ConversationError) as caught:
+        target.import_conversation(header, turns)
+    assert "Nothing of it was written" in str(caught.value)
+    assert target.conversations() == []
+    assert target.turn_count("c1") == 0
+
+
+def test_the_computed_keys_of_a_read_do_not_become_stored_facts(tmp_path):
+    """`_assemble` adds `duplicate_seqs` and `incomplete_lines`. The first importer carried them
+    into the target header — dropped silently by SQLite, and written into a **file** target as a
+    permanent fake fact that `_assemble` would then re-emit for ever."""
+    _legacy_with(tmp_path, turns=2)
+    target = conv.backend("file", root=tmp_path / "copy")
+    conv.import_file_store(tmp_path / "legacy", target)
+
+    stored = next((tmp_path / "copy").rglob("*.jsonl")).read_text(encoding="utf-8")
+    first = json.loads(stored.splitlines()[0])["header"]
+    for computed in ("duplicate_seqs", "incomplete_lines", "turns"):
+        assert computed not in first, f"{computed} was written into the stored header"
+
+
+def test_every_sqlite_entry_point_takes_the_connection_lock():
+    """`store.Connection` carries `runner_lock` and `_locked`'s docstring says every entry point
+    takes it. Every entry point in `store.py` did; `SqliteBackend` took it nowhere — a lock unused
+    on the very object it protects.
+
+    fable-seat ran two writers against one shared connection and **two turns vanished with no
+    `write_errors` entry**: an append that returned success was rolled back by the other thread's
+    transaction exit, breaking `_guarded`'s promise that a failed write is never silent.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(conv.SqliteBackend)))
+    entry_points = [n for n in tree.body[0].body
+                    if isinstance(n, ast.FunctionDef)
+                    and not n.name.startswith("_")
+                    and n.name != "close"]
+    assert entry_points, "no entry points found; this test has stopped testing anything"
+    for func in entry_points:
+        locked = any("_locked" in ast.unparse(n) for n in ast.walk(func))
+        assert locked, f"SqliteBackend.{func.name} does not take the connection lock"
+
+
+def test_two_threads_cannot_be_handed_the_same_seq(tmp_path):
+    """`server._advance()` runs the walk outside its own lock and `attach()` gates only on version,
+    so a second walk can run over the same `Conversation`. Two threads then read `_seq` and both
+    get N."""
+    import threading
+
+    c = conv.Conversation(_sqlite(tmp_path), "P").open()
+    errors = []
+
+    def hammer():
+        try:
+            for n in range(40):
+                c.note(f"n{n}")
+        except Exception as exc:          # pragma: no cover - reaching this IS the finding
+            errors.append(exc)
+
+    threads = [threading.Thread(target=hammer) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors, f"a writer raised: {errors[:1]}"
+    assert c.write_errors == [], f"a write failed: {c.write_errors[:2]}"
+    seqs = [t["seq"] for t in c.document()["turns"]]
+    assert len(seqs) == len(set(seqs)), "two turns were handed the same seq"
+    assert seqs == sorted(seqs) and seqs == list(range(len(seqs)))

@@ -148,7 +148,9 @@ function build() {
       '<span class="who">' + x.who + '</span>' +
       '<span class="verb">' + esc(x.verb) + '</span>' +
       (x.model ? '<span class="mdl">' + esc(x.model) + '</span>' : '') +
-      (x.gap ? '<span class="gp">+' + fmtGap(x.gap) + '</span>' : '') +
+      (x.gap === null || x.gap === undefined ? ''
+        : x.gap < 0 ? '<span class="gp" title="the clock went backwards between these two turns">~0s</span>'
+        : fmtGap(x.gap) ? '<span class="gp">+' + fmtGap(x.gap) + '</span>' : '') +
       '<span class="seq">#' + x.seq + '</span></div>' +
       '<p class="sum">' + esc(x.sum) + '</p>' +
       '<details><summary>full</summary><pre>' + esc(x.full) + '</pre></details></article>');

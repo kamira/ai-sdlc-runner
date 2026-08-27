@@ -388,7 +388,7 @@ def _import(args: argparse.Namespace, back) -> int:
     except conv_mod.ConversationError as exc:
         print(f"error: {exc}")
         return 2
-    imported, skipped = report["imported"], report["skipped"]
+    imported, skipped, refused = report["imported"], report["skipped"], report["refused"]
     print(f"imported {len(imported)} conversation(s), {report['turns']} turns, "
           f"from {args.import_from}")
     for cid in imported:
@@ -396,11 +396,18 @@ def _import(args: argparse.Namespace, back) -> int:
     if skipped:
         # Skipped rather than merged: a turn whose `seq` matches and whose body differs has no
         # answer that is not a guess.
-        print(f"skipped {len(skipped)} already here:")
+        print(f"skipped {len(skipped)} already here, whole:")
         for cid in skipped:
             print(f"  = {cid}")
+    if refused:
+        # The bucket the first version did not have. A conversation the importer will not touch is
+        # the thing an operator most needs to be told about, and it used to arrive as a traceback
+        # after a partial write.
+        print(f"\nREFUSED {len(refused)}, left on disk:")
+        for entry in refused:
+            print(f"  ! {entry['conversation_id']}: {entry['why']}")
     print(f"\n{args.import_from} is untouched. Check the import, then remove it yourself.")
-    return 0
+    return 2 if refused else 0
 
 
 def cmd_export(args: argparse.Namespace) -> int:

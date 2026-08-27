@@ -116,7 +116,7 @@ CREATE TABLE turns (
   conversation_id TEXT NOT NULL REFERENCES conversations(conversation_id),
   seq             INTEGER NOT NULL,
   kind            TEXT NOT NULL,         -- one of the nine
-  at              TEXT NOT NULL,         -- ISO 8601 UTC, seconds
+  at              TEXT NOT NULL,         -- ISO 8601 UTC, milliseconds (CHG-20260823-40)
   body_json       TEXT NOT NULL,         -- ONLY the body
   PRIMARY KEY (conversation_id, seq)
 );
