@@ -548,6 +548,24 @@ def import_file_store(root: str | Path, into: Backend) -> Dict[str, object]:
     and a `junk.jsonl` with an unreadable header vanished from the import with a clean report and
     exit 0 — the precise failure this scan was added to prevent, produced by the scan.
 
+    ## The target is listed once
+
+    `_already_there` called `into.conversations()` for **every source conversation**. On a SQLite
+    target that is a SELECT over a growing table; on a **file** target it re-opens and re-parses
+    the first line of every file in the store, every time. Both seats named it. Measured, file
+    target:
+
+    ```
+    conversations   seconds   ms each   vs 2x smaller
+              100      3.86      38.6              -
+              200     11.43      57.1          2.96x
+              400     43.40     108.5          3.80x        (4.00x is quadratic)
+    ```
+
+    The target's ids are now read **once**, before the loop, and a conversation in the target is
+    read only when its id actually collides — which is the rare case, and unavoidable when it
+    happens, because deciding "already here" honestly means comparing the turns.
+
     ## "Already here" means the same conversation, not the same number of turns
 
     `_already_there` compared id and **count**. A target holding the same id and the same number of
@@ -565,6 +583,14 @@ def import_file_store(root: str | Path, into: Backend) -> Dict[str, object]:
         listed = source.conversations()
     except Exception as exc:                      # a store that cannot even be listed
         refuse("(the store)", f"could not be listed: {type(exc).__name__}: {exc}")
+        return report
+
+    # The target's ids, read once. See the docstring for what reading them per conversation cost.
+    try:
+        in_target = {str(row["conversation_id"]): str(row["project"]["id"])  # type: ignore[index]
+                     for row in into.conversations()}
+    except Exception as exc:
+        refuse("(the target)", f"could not be listed: {type(exc).__name__}: {exc}")
         return report
 
     # Through `paths`, never `glob` — see the docstring. A `.part` file is a staging file from an
@@ -602,7 +628,10 @@ def import_file_store(root: str | Path, into: Backend) -> Dict[str, object]:
                 refuse(cid, "; ".join(damage) + "; left on disk")
                 continue
 
-            already = _already_there(into, cid)
+            already = None
+            if cid in in_target:
+                # Only now, and only for this one conversation.
+                already = list(into.read(in_target[cid], cid).get("turns") or [])
             if already is not None:
                 if already == turns:
                     report["skipped"].append(cid)          # type: ignore[union-attr]
@@ -623,6 +652,7 @@ def import_file_store(root: str | Path, into: Backend) -> Dict[str, object]:
                 "run": dict(document.get("run") or {}),
             }
             into.import_conversation(header, turns)
+            in_target[cid] = str(header["project"].get("id", ""))   # type: ignore[union-attr]
         except Exception as exc:
             # EVERY failure lands here, by name. The previous version caught `ConversationError`
             # around one call and let five other exception types kill the migration.
@@ -643,20 +673,6 @@ def _walk_store(root: Path) -> List[str]:
     for entry in paths.listdir(root):
         names.extend(paths.listdir(root / entry))
     return names
-
-
-def _already_there(into: Backend, cid: str) -> Optional[List[Mapping[str, object]]]:
-    """The turns the target already holds for this id, or None if it holds no such conversation.
-
-    Returns the **turns**, not a count. Counting was a coarse check answering "already imported
-    safely" about content it had never looked at: a target with the same id and the same number of
-    unrelated turns was skipped as though the import had succeeded.
-    """
-    for row in into.conversations():
-        if str(row["conversation_id"]) == cid:
-            document = into.read(str(row["project"]["id"]), cid)   # type: ignore[index]
-            return list(document.get("turns") or [])
-    return None
 
 
 def backend(kind: str, root: Optional[str] = None) -> Backend:
