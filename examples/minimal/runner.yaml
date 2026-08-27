@@ -1,4 +1,7 @@
 # What each ask is dispatched to. One process per ask.
-agent_command: ["python3", "examples/minimal/agent.py"]
+# Relative to THIS FILE's directory (CHG-20260823-48), not to wherever you type the
+# command. Every shipped example writes it the same way now; before this, `minimal` wrote
+# its path relative to the repo root and the other two relative to themselves.
+agent_command: ["python3", "agent.py"]
 agent_timeout: 60
 agent_retries: 0    # retries are for a backend that FAILED TO ANSWER, never for an answer you dislike

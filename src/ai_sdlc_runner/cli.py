@@ -49,7 +49,9 @@ def load_config(path: str) -> dict:
     text = p.read_text(encoding="utf-8")
     try:
         import yaml
-        return yaml.safe_load(text) or {}
+        loaded = yaml.safe_load(text) or {}
+        loaded.setdefault("agent_cwd", str(p.resolve().parent))
+        return loaded
     except ImportError:
         config: Dict[str, object] = {}
         for line in text.splitlines():
@@ -67,6 +69,7 @@ def load_config(path: str) -> dict:
                 except json.JSONDecodeError:
                     pass
             config[key.strip()] = raw.strip('"').strip("'")
+        config.setdefault("agent_cwd", str(p.resolve().parent))
         return config
 
 
@@ -103,8 +106,12 @@ class _Process(engine.Session):
     ``{"verdict": "fail"}`` fails the node no matter what the exit code says.
     """
 
-    def __init__(self, argv: List[str], timeout: int, retries: int = 0):
+    def __init__(self, argv: List[str], timeout: int, retries: int = 0,
+                 cwd: Optional[str] = None):
         self.argv, self.timeout, self.retries = argv, timeout, retries
+        #: Where the command is run. Defaults, in `load_config`, to the directory holding the
+        #: runner.yaml that named it — see `session_factory` for why that and not the shell's.
+        self.cwd = cwd
         #: Every attempt that failed, so a run that took four tries does not read like one that
         #: took one. An unrecorded retry turns a flaky backend into a mystery.
         self.attempts: List[str] = []
@@ -129,7 +136,8 @@ class _Process(engine.Session):
             attempt += 1
             try:
                 proc = subprocess.run(self.argv, input=workorder.to_json(order),
-                                      capture_output=True, text=True, timeout=self.timeout)
+                                      capture_output=True, text=True, timeout=self.timeout,
+                                      cwd=self.cwd)
                 if proc.returncode != 0:
                     raise CliError(
                         f"{self.argv[0]!r} exited {proc.returncode} answering "
@@ -173,11 +181,35 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
     A model id the registry does not have is an **error**. Falling back to the default would mean a
     panel of three quietly answered three times by one backend, which is the shape of failure this
     whole change exists to make impossible.
+
+    ## Where the command runs (CHG-20260823-48)
+
+    `agent_command` is passed to `subprocess.run` as argv, so a relative path in it used to resolve
+    against **the operator's shell**. Nothing said so, and the three shipped examples disagreed
+    about which directory they meant — `examples/minimal` wrote its path relative to the repo root
+    and worked from there; `tide-spa` and `weather-spa` wrote theirs relative to themselves and
+    halted at the first ask unless you had already `cd`-ed in, which no README mentioned.
+
+    The command now runs in `agent_cwd`, which `load_config` defaults to **the directory holding the
+    runner.yaml that named it**. A config and the program it points at travel together; the shell
+    the operator happened to be standing in does not.
+
+    An existing config whose path was written relative to the operator's shell stops working —
+    loudly, at the first ask. The two meanings cannot both be honoured, and the one that lost is the
+    one nothing documented.
     """
     seat_models = seat_models or {}
     default = config.get("agent_command")
     timeout = int(config.get("agent_timeout", 600))
     retries = int(config.get("agent_retries", 0))
+    # Where the command runs (CHG-20260823-48). `load_config` defaults this to the directory the
+    # runner.yaml is in, so a relative path in `agent_command` means one thing no matter where the
+    # operator is standing when they type the command.
+    #
+    # Not "resolve the path inside `agent_command` relative to the config". That is an argv list,
+    # and deciding which element is a path means guessing — `agent.py` from a flag, a script from a
+    # bare program name. A heuristic there would be a name standing in for a constraint.
+    cwd = config.get("agent_cwd") or None
 
     def factory(seat: Optional[str] = None, model: Optional[str] = None):
         argv = None
@@ -206,7 +238,7 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
         if not argv:
             return _Stub()
         return _Process(list(argv) if isinstance(argv, list) else str(argv).split(),
-                        timeout, retries)
+                        timeout, retries, cwd=cwd)
 
     return factory
 

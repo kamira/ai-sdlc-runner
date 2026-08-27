@@ -227,6 +227,24 @@ pass too.
 runner --config runner.yaml run --plan plan.json --risk medium --ask-journal .runner/asks
 ```
 
+### Where the agent runs
+
+`agent_command` is run with its working directory set to **the directory holding the `runner.yaml`
+that named it** — `agent_cwd`, which defaults to exactly that and can be set explicitly. A relative
+path in `agent_command` therefore means one thing no matter where you are standing.
+
+It did not always. Before CHG-20260823-48 the command inherited **your shell's** directory, nothing
+said so, and the three shipped examples disagreed about which directory they meant — `minimal` wrote
+its path relative to the repository root, the two SPA examples relative to themselves. Two of the
+three could not be run from the root at all, and neither of their READMEs mentioned it. The one that
+could wrote its build output into the repository; a copy of that output was committed in PR #49 and
+sat there for thirty changes.
+
+**If you keep your own `runner.yaml`:** a relative `agent_command` path written for the directory you
+type commands in stops working, at the first ask, with `can't open file`. Either make it relative to
+the config file (recommended — they travel together) or set `agent_cwd` to the directory you meant.
+An absolute path is unaffected.
+
 `--config` is a **global** flag and must come before the subcommand. It is where `agent_command`
 lives — the program each ask is dispatched to. Without it every ask goes to a stub that answers
 nothing, and the run completes while having asked nobody.
@@ -458,8 +476,14 @@ screenshot with an `.html` extension.
 runner --config examples/minimal/runner.yaml run --plan examples/minimal/plan.json --risk low --confirm merge
 ```
 
+**Run that from anywhere.** `agent_command` in a `runner.yaml` is resolved against **the directory
+that file is in**, not against your shell — so an example works the same whether you type it from
+the repository root, from inside the example, or from somewhere else entirely. See
+[Where the agent runs](#where-the-agent-runs) if you keep your own `runner.yaml`.
+
 That **visits 20 of the 24 nodes** — the other four are failure paths a green run never takes —
-asks 17 questions, writes a real `greet.py`, and finishes. It is three
+asks 17 questions, writes a real `examples/minimal/greet.py` beside the agent that wrote it, and
+finishes. It is three
 files: [`plan.json`](examples/minimal/plan.json) (15 node specs and 15 operation blocks),
 [`runner.yaml`](examples/minimal/runner.yaml), and [`agent.py`](examples/minimal/agent.py) — which
 is also the only place **the answer contract** is written down:
@@ -651,7 +675,7 @@ first one winning — so two of them disagreeing inside one answer resolves sile
 ## Testing
 
 ```bash
-pytest -q          # 1295 tests
+pytest -q          # 1305 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

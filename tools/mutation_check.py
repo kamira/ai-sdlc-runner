@@ -2,6 +2,7 @@
 
     python3 tools/mutation_check.py
     python3 tools/mutation_check.py --only importer
+    python3 tools/mutation_check.py --only examples
 
 Exit 0 if every mutation was caught, 1 otherwise.
 
@@ -111,6 +112,20 @@ MUTATIONS: List[Mutation] = [
         '''            if name != f"{cid}.jsonl":''',
         '''            if False:''',
         "tests/test_conversations_sqlite.py"),
+
+    Mutation(
+        "examples", "the agent runs in the operator's shell directory again",
+        SRC / "cli.py",
+        '''                                      cwd=self.cwd)''',
+        '''                                      cwd=None)''',
+        "tests/test_examples_run_from_anywhere.py"),
+
+    Mutation(
+        "examples", "agent_cwd stops defaulting to the config file's directory",
+        SRC / "cli.py",
+        '''    cwd = config.get("agent_cwd") or None''',
+        '''    cwd = None''',
+        "tests/test_examples_run_from_anywhere.py"),
 
     Mutation(
         "cli", "refusal text goes to the terminal with its control characters intact",
