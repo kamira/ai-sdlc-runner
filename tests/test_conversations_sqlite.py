@@ -536,3 +536,75 @@ def test_the_store_is_never_listed_with_glob():
             raise AssertionError(
                 f"conversations.py:{node.lineno} lists the store with "
                 f"{ast.unparse(node.func)} — see FileBackend.conversations on why it must not")
+
+
+# ── the target is listed once (CHG-20260823-46) ───────────────────────────────────────────────
+
+class _Counting:
+    """A backend that records how often it is asked to list or read."""
+
+    def __init__(self, inner):
+        self.inner, self.listed, self.reads = inner, 0, []
+
+    def conversations(self, pid=None):
+        self.listed += 1
+        return self.inner.conversations(pid)
+
+    def read(self, pid, cid):
+        self.reads.append(cid)
+        return self.inner.read(pid, cid)
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
+def test_the_target_is_listed_once_however_many_conversations_are_imported(tmp_path):
+    """`_already_there` called `into.conversations()` for **every** source conversation.
+
+    Counted rather than timed, because a timing test on a shared machine is a coin flip. The cost
+    it stands for was measured with a file target:
+
+    ```
+    conversations   seconds   ms each        after
+              100      3.86      38.6         9.3
+              200     11.43      57.1         6.5
+              400     43.40     108.5         7.0     (3.80x per doubling -> 2.17x)
+    ```
+    """
+    back = _file(tmp_path)
+    for n in range(12):
+        c = conv.Conversation(back, f"P{n}").open()
+        c.note("x")
+        c.close("finished")
+
+    target = _Counting(_sqlite(tmp_path))
+    report = conv.import_file_store(tmp_path / "legacy", target)
+
+    assert len(report["imported"]) == 12
+    assert target.listed == 1, (
+        f"the target was listed {target.listed} times for 12 conversations; it grows with the "
+        f"source and the check is meant to be one call")
+
+
+def test_the_target_is_read_only_where_an_id_actually_collides(tmp_path):
+    """Comparing turns is what makes "already here" honest, and it is only needed on a collision.
+    Reading every target conversation regardless would put the cost back in a different place."""
+    back = _file(tmp_path)
+    ids = []
+    for n in range(6):
+        c = conv.Conversation(back, f"P{n}").open()
+        c.note("x")
+        c.close("finished")
+        ids.append(c.id)
+
+    target = _Counting(_sqlite(tmp_path))
+    conv.import_file_store(tmp_path / "legacy", target)
+    assert target.reads == [], "nothing collided, so nothing in the target needed reading"
+
+    # Now everything collides, and each one is read exactly once to compare.
+    target.reads.clear()
+    target.listed = 0
+    second = conv.import_file_store(tmp_path / "legacy", target)
+    assert len(second["skipped"]) == 6
+    assert sorted(target.reads) == sorted(ids)
+    assert target.listed == 1
