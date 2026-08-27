@@ -41,6 +41,7 @@ import io
 import json
 import os
 import re
+import sqlite3
 import sys
 import uuid
 from dataclasses import dataclass, field
@@ -75,7 +76,10 @@ KINDS = (OPENED, INSTRUCTION, ASK, ANSWER, UNANSWERED, DECISION, RELAXATION, NOT
 #: **by name**: "I asked for Mongo and got a directory" is this repository's oldest mistake wearing
 #: a config field, and it stays refused now that Mongo is gone rather than silently becoming a
 #: directory. `--store mongo` gets a refusal that says the backend was removed and when.
-BACKENDS = ("file",)
+BACKENDS = ("sqlite", "file")
+
+#: Where the conversation database lives inside `--store-root`.
+DB_NAME = "conversations.sqlite"
 
 #: Named so the refusal can tell "never existed" from "removed, and here is what replaced it". A
 #: config field that stops working deserves better than `unknown store 'mongo'`.
@@ -303,6 +307,153 @@ class FileBackend(Backend):
         return out
 
 
+class SqliteBackend(Backend):
+    """The conversation store, in the database (CHG-20260823-41).
+
+    Completes the second of the operator's three clauses — *「file 只作為 server 的 config 才處理」*
+    — which had been merged as design and left unimplemented for four rounds.
+
+    ## What the database gives that the directory could not
+
+    **A duplicate turn is refused at the moment of the write.** `PRIMARY KEY (conversation_id, seq)`
+    does it, and no file backend can: CHG-20260823-35 had to record that a duplicate `seq` was
+    "reported and refused nowhere" once Mongo and TinyDB were removed. It is a real constraint
+    again, enforced by something other than a convention.
+
+    **A turn cannot belong to no conversation.** The foreign key does that — but only because
+    `store.connect` sets `PRAGMA foreign_keys = ON`, which is per-connection and OFF by default.
+    Named here because a reader who assumes the declaration is enough would be wrong.
+
+    ## What it costs
+
+    A conversation is no longer readable with `cat`. That was a genuine property of the JSONL store
+    and it is gone; `runner export --format json` is the replacement, and it is not the same thing
+    at three in the morning. `FileBackend` stays for reading what already exists and for the
+    importer, which is how this is a move rather than a break.
+    """
+
+    def __init__(self, path: str | Path):
+        from . import store as store_mod
+
+        self.path = Path(path)
+        self._store = store_mod
+        self.db = store_mod.connect(self.path)
+
+    def close(self) -> None:
+        self.db.close()
+
+    # -- writing ----------------------------------------------------------------------------
+
+    def open_conversation(self, header: Mapping[str, object]) -> None:
+        project = dict(header["project"])            # type: ignore[arg-type]
+        cid = str(header["conversation_id"])
+        try:
+            with self.db:
+                self.db.execute(
+                    "INSERT INTO conversations "
+                    "(conversation_id, project_id, project_name, schema, run_json) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (cid, str(project["id"]), str(project["name"]),
+                     int(header.get("schema", SCHEMA)),
+                     json.dumps(header.get("run") or {}, ensure_ascii=False, sort_keys=True)))
+        except sqlite3.IntegrityError as exc:
+            raise ConversationError(
+                f"refused: conversation {cid} already exists; a conversation id is minted once and "
+                f"never reopened ({exc})") from exc
+
+    def append(self, header: Mapping[str, object], turn: Turn) -> None:
+        cid = str(header["conversation_id"])
+        row = turn.as_dict()
+        body = {k: v for k, v in row.items() if k not in Turn.ENVELOPE}
+        try:
+            with self.db:
+                self.db.execute(
+                    "INSERT INTO turns (conversation_id, seq, kind, at, body_json) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (cid, int(row["seq"]), str(row["kind"]), str(row["at"]),
+                     json.dumps(body, ensure_ascii=False, sort_keys=True)))
+        except sqlite3.IntegrityError as exc:
+            # Two different refusals wearing one exception type, so they are told apart by name.
+            if "FOREIGN KEY" in str(exc).upper():
+                raise ConversationError(
+                    f"refused: no conversation {cid} to append to") from exc
+            raise ConversationError(
+                f"refused: turn {row['seq']} already exists in conversation {cid}. The file store "
+                f"could only report a duplicate at read time; this one refuses the write.") from exc
+
+    # -- reading ----------------------------------------------------------------------------
+
+    def read(self, pid: str, cid: str) -> Dict[str, object]:
+        found = self.db.execute(
+            "SELECT project_id, project_name, schema, run_json FROM conversations "
+            "WHERE conversation_id = ?", (cid,)).fetchone()
+        if found is None or str(found[0]) != str(pid):
+            raise ConversationError(f"no conversation {cid} in project {pid}")
+        header = {
+            "conversation_id": cid,
+            "project": {"id": found[0], "name": found[1]},
+            "schema": found[2],
+            "run": json.loads(found[3] or "{}"),
+        }
+        turns = []
+        for seq, kind, at, body_json in self.db.execute(
+                "SELECT seq, kind, at, body_json FROM turns WHERE conversation_id = ? "
+                "ORDER BY seq", (cid,)):
+            row = {"seq": seq, "kind": kind, "at": at}
+            row.update(json.loads(body_json or "{}"))
+            turns.append(row)
+        # `partial` is always empty: a half-written line is a property of appending to a text file,
+        # and there is no such state here. Passed rather than dropped so the document keeps one
+        # shape across backends.
+        return _assemble(header, turns, [])
+
+    def conversations(self, pid: Optional[str] = None) -> List[Dict[str, object]]:
+        sql = ("SELECT conversation_id, project_id, project_name FROM conversations "
+               "{where}ORDER BY conversation_id")
+        if pid:
+            rows = self.db.execute(sql.format(where="WHERE project_id = ? "), (pid,))
+        else:
+            rows = self.db.execute(sql.format(where=""))
+        return [{"conversation_id": cid, "project": {"id": p, "name": n}}
+                for cid, p, n in rows]
+
+    def projects(self) -> List[Dict[str, object]]:
+        return [{"id": p, "name": n} for p, n in self.db.execute(
+            "SELECT DISTINCT project_id, project_name FROM conversations ORDER BY project_name")]
+
+
+def import_file_store(root: str | Path, into: Backend) -> Dict[str, object]:
+    """Copy a JSONL store into another backend, once, leaving the files where they are.
+
+    The same shape `models.json` got: an existing store is imported and **not deleted**, because a
+    migration that removes its own source has no way back if it was wrong.
+
+    A conversation already present in the target is skipped rather than merged. Merging would mean
+    deciding what to do about a turn whose `seq` matches but whose body differs, and there is no
+    answer to that which is not a guess.
+    """
+    source = FileBackend(root)
+    report: Dict[str, object] = {"imported": [], "skipped": [], "turns": 0}
+    existing = {str(row["conversation_id"]) for row in into.conversations()}
+
+    for listed in source.conversations():
+        cid = str(listed["conversation_id"])
+        pid = str(listed["project"]["id"])           # type: ignore[index]
+        if cid in existing:
+            report["skipped"].append(cid)            # type: ignore[union-attr]
+            continue
+        document = source.read(pid, cid)
+        header = {k: v for k, v in document.items() if k != "turns"}
+        into.open_conversation(header)
+        for row in document.get("turns") or []:
+            body = {k: v for k, v in row.items() if k not in Turn.ENVELOPE}
+            into.append(header, Turn(seq=int(row["seq"]), kind=str(row["kind"]),
+                                     at=str(row.get("at") or ""), body=body))
+            report["turns"] = int(report["turns"]) + 1
+        report["imported"].append(cid)               # type: ignore[union-attr]
+    return report
+
+
 def backend(kind: str, root: Optional[str] = None) -> Backend:
     """Open one. An unknown kind is refused by name rather than defaulted.
 
@@ -313,7 +464,10 @@ def backend(kind: str, root: Optional[str] = None) -> Backend:
         raise ConversationError(f"the {kind} store was {RETIRED[kind]}")
     if kind not in BACKENDS:
         raise ConversationError(f"unknown store {kind!r}; one of {', '.join(BACKENDS)}")
-    return FileBackend(root or ".runner/conversations")
+    where = Path(root or ".runner/conversations")
+    if kind == "file":
+        return FileBackend(where)
+    return SqliteBackend(where / DB_NAME)
 
 
 def _assemble(header: Mapping[str, object], turns: Sequence[Mapping[str, object]],

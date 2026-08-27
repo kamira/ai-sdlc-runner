@@ -111,14 +111,26 @@ def recording_page() -> str:
     store = HERE / "conversations"
     if not store.exists():
         raise SystemExit("no conversation fixture; run `python3 examples/demo/make_fixture.py`")
-    back = conv.backend("file", root=store)
-    listed = back.conversations()
-    if len(listed) != 1:
-        raise SystemExit(f"expected exactly one conversation in the fixture, found {len(listed)}")
-    entry = listed[0]
-    document = conv.Conversation(back, entry["project"]["name"],
-                                 conversation_id=entry["conversation_id"]).document()
-    return conv.export_conversation(document, "playback")
+
+    # The fixture stays JSONL and the page is rendered from **SQLite**, by importing it into a
+    # throwaway database first (CHG-20260823-41). Two reasons, and both are about review:
+    #
+    #   * a committed fixture has to be readable in a diff, and a `.sqlite` file is not;
+    #   * the import path is the migration every existing store has to take, so running it on every
+    #     build is the cheapest possible test of it.
+    #
+    # If the importer ever stops being lossless, this page changes and the byte-compare fails.
+    with tempfile.TemporaryDirectory(prefix="demo-db-") as tmp:
+        into = conv.backend("sqlite", root=Path(tmp))
+        report = conv.import_file_store(store, into)
+        if len(report["imported"]) != 1:
+            raise SystemExit(
+                f"expected exactly one conversation in the fixture, imported {report['imported']}")
+        entry = into.conversations()[0]
+        document = into.read(entry["project"]["id"], entry["conversation_id"])
+        page = conv.export_conversation(document, "playback")
+        into.close()
+    return page
 
 
 def index_page(demos) -> str:

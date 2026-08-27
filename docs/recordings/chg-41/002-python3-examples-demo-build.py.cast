@@ -1,0 +1,9 @@
+{"version": 2, "width": 100, "height": 30, "timestamp": 1787789606, "title": "the demo, rendered through the importer", "command": ["python3", "examples/demo/build.py"], "cwd": "C:\\Users\\haruharu\\Documents\\GitHub\\ai-sdlc-runner\\.claude\\worktrees\\ai-sdlc-handshake-a967df", "note": "", "duration": 2.6933, "exit_code": 0}
+[2.5575, "o", "  wrote tide.html (5,900 chars)"]
+[2.5575, "o", "\r\n"]
+[2.5604, "o", "  wrote weather.html (8,817 chars)"]
+[2.5604, "o", "\r\n"]
+[2.5625, "o", "  wrote recording.html (436,465 chars)"]
+[2.5625, "o", "\r\n"]
+[2.5625, "o", "  wrote index.html (3,496 chars)"]
+[2.5625, "o", "\r\n"]

@@ -360,8 +360,10 @@ def _read_store(args: argparse.Namespace):
 
 
 def cmd_conversations(args: argparse.Namespace) -> int:
-    """List what has been stored, by project."""
+    """List what has been stored, by project — or bring an older store across."""
     back = _read_store(args)
+    if getattr(args, "import_from", None):
+        return _import(args, back)
     pid = conv_mod.project_id(args.project) if args.project else None
     projects = {p["id"]: p.get("name", "?") for p in back.projects()}
     heads = back.conversations(pid)
@@ -372,6 +374,32 @@ def cmd_conversations(args: argparse.Namespace) -> int:
         proj = head.get("project") or {}
         name = proj.get("name") or projects.get(proj.get("id"), "?")
         print(f"{head.get('conversation_id')}  {name}")
+    return 0
+
+
+def _import(args: argparse.Namespace, back) -> int:
+    """Copy a JSONL store into this one, once, and leave the files where they are.
+
+    Nothing is deleted. A migration that removes its own source has no way back if it was wrong, and
+    this one is reversible for exactly as long as the directory is still there.
+    """
+    try:
+        report = conv_mod.import_file_store(args.import_from, back)
+    except conv_mod.ConversationError as exc:
+        print(f"error: {exc}")
+        return 2
+    imported, skipped = report["imported"], report["skipped"]
+    print(f"imported {len(imported)} conversation(s), {report['turns']} turns, "
+          f"from {args.import_from}")
+    for cid in imported:
+        print(f"  + {cid}")
+    if skipped:
+        # Skipped rather than merged: a turn whose `seq` matches and whose body differs has no
+        # answer that is not a guess.
+        print(f"skipped {len(skipped)} already here:")
+        for cid in skipped:
+            print(f"  = {cid}")
+    print(f"\n{args.import_from} is untouched. Check the import, then remove it yourself.")
     return 0
 
 
@@ -430,11 +458,14 @@ def _store_flags(parser: argparse.ArgumentParser) -> None:
     # Kept as a choice of one. `mongo` and `tinydb` are refused **by name**, saying they were
     # removed and when — `unknown store 'mongo'` reads as a typo to someone whose config worked
     # last week.
-    parser.add_argument("--store", choices=conv_mod.BACKENDS, default="file",
-                        help="which conversation store (only `file`; `mongo` and `tinydb` were "
-                             "removed in CHG-20260823-35 and are refused by name).")
+    parser.add_argument("--store", choices=conv_mod.BACKENDS, default="sqlite",
+                        help="which conversation store. `sqlite` is the store (CHG-20260823-41); "
+                             "`file` is the JSONL layout that came before it, kept so an existing "
+                             "one can be read and imported. `mongo` and `tinydb` were removed in "
+                             "CHG-20260823-35 and are refused by name.")
     parser.add_argument("--store-root", default=None, metavar="DIR",
-                        help="where the store lives (default .runner/conversations)")
+                        help="where the store lives (default .runner/conversations). For `sqlite` "
+                             f"the database is <DIR>/{conv_mod.DB_NAME}.")
 
 
 def _open_conversation(args: argparse.Namespace, journal_dir=None, run=None):
@@ -910,6 +941,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     pc = sub.add_parser("conversations", help="list stored conversations, by project")
     _store_flags(pc)
+    pc.add_argument("--import-from", default=None, metavar="DIR",
+                    help="a JSONL store written before CHG-20260823-41. Its conversations are "
+                         "copied into this one and the directory is left where it is — a "
+                         "conversation already here is skipped, never merged.")
     pc.set_defaults(func=cmd_conversations)
 
     pe = sub.add_parser("export", help="export one conversation as JSON, Markdown or CSV")

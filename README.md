@@ -264,8 +264,9 @@ runner export --project "Login page" --conversation <id> --format markdown -o ta
 
 | Flag | |
 |---|---|
-| `--store file` | the conversation store. One backend since CHG-20260823-35; `mongo` and `tinydb` are refused **by name**, saying they were removed |
-| `--store-root DIR` | where it lives (default `.runner/conversations`) |
+| `--store sqlite\|file` | the conversation store. **`sqlite` since CHG-20260823-41**; `file` is the JSONL layout that came before it, kept so an existing store can be read and imported. `mongo` and `tinydb` are refused **by name** |
+| `--store-root DIR` | where it lives (default `.runner/conversations`); for `sqlite` the database is `<DIR>/conversations.sqlite` |
+| `--import-from DIR` | on `conversations`. Copies a JSONL store into this one, once, and **leaves the directory where it is** |
 | `--format json\|markdown\|html\|playback\|csv` | on `export`. Required, because only `json` is lossless and a default would choose what you lose. `html` is a waterfall down the flow — one stop per node visit, the model's side and the operator's side marked apart; `playback` is the same walk as something you press play on. See [docs/RECORDING.md](docs/RECORDING.md) |
 
 A store write that fails **never fails the run**, and is never silent: a line on stderr the moment
@@ -285,8 +286,19 @@ injection, and where a relaxation is recorded. Their verdicts are committed whol
 [`docs/design/reviews/`](docs/design/reviews/) and the design that answers them is
 [`docs/design/conversation-store.md`](docs/design/conversation-store.md).
 
-**The Mongo and TinyDB backends were removed** in CHG-20260823-35, on the ruling
-*「只留 sqlite + file，移除 mongo 和 tinydb」*. Roughly 250 lines went with them, most of it URI
+**The conversation store is SQLite** (CHG-20260823-41), which completes the second clause of
+*「只留 sqlite + file，移除 mongo 和 tinydb / file 只作為 server 的 config 才處理」*. The JSONL
+layout remains readable so an existing store can be brought across:
+
+```bash
+runner conversations --import-from .runner/conversations
+```
+
+Nothing is deleted by that. A migration that removes its own source has no way back if it was wrong,
+so the directory is left where it is and a conversation already present is skipped rather than
+merged — a turn whose `seq` matches and whose body differs has no answer that is not a guess.
+
+**The Mongo and TinyDB backends were removed** in CHG-20260823-35, on the same ruling. Roughly 250 lines went with them, most of it URI
 hardening: `MongoClient` performs topology discovery, so a loopback *host* was never the check — a
 loopback seed that turns out to be a replica-set member is read from the server and every member it
 names gets connected to. That needed a single-host `mongodb://` URI, a host that **round-tripped**
@@ -299,11 +311,22 @@ longer changes anything is the "looks configured and does nothing" this reposito
 everywhere else. (Written without their leading dashes on purpose: a gate here asserts that every
 option this file names in flag form still exists, and it should not learn an exception for prose.)
 
-**One guarantee was genuinely weakened, and it is worth naming.** A duplicate `seq` used to be
-*refused* at write time by Mongo's unique index and TinyDB's check. Neither exists now: the `file`
-backend cannot refuse one without a read per append, so a duplicate is **detected at read time and
-prevented nowhere**. The design declares one writer per conversation, which is why this is
-acceptable — and it is the first line that has to change if a writer ever becomes concurrent.
+**The guarantee CHG-20260823-35 weakened is back.** A duplicate `seq` was *refused* at write
+time by Mongo's unique index and TinyDB's check; with only the JSONL backend it was **detected at
+read time and prevented nowhere**. `PRIMARY KEY (conversation_id, seq)` refuses it again, at the
+moment of the write, enforced by the database rather than by a convention:
+
+```
+UNIQUE constraint failed: turns.conversation_id, turns.seq
+```
+
+A turn belonging to no conversation is refused too — but only because the connection sets
+`PRAGMA foreign_keys = ON`, which is per-connection and **OFF by default**. The declaration alone
+would enforce nothing, so a test asserts the pragma rather than the schema.
+
+What is lost is that a conversation is no longer readable with `cat`. That was a real property of
+the JSONL store; `runner export --format json` is the replacement and it is not the same thing at
+three in the morning.
 
 The store holds every work order verbatim and is **exactly as sensitive as the ask journal already
 sitting beside it**, and no better protected: it is created `0700` best-effort, which does little on
@@ -628,7 +651,7 @@ first one winning — so two of them disagreeing inside one answer resolves sile
 ## Testing
 
 ```bash
-pytest -q          # 1226 tests
+pytest -q          # 1241 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

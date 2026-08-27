@@ -178,5 +178,10 @@ cython_debug/
 #  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
-.cursorindexingignore.runner/
+.cursorindexingignore
+# Runtime state: the operator token, the ask journal, the config database. `.runner/` was meant to
+# be here all along and was not — the newline between it and the line above went missing, so the
+# two entries ran together as one pattern that matched nothing. That is how `.runner/config.sqlite`
+# came to be committed in CHG-20260823-26.
+.runner/
 .preview/
