@@ -492,7 +492,7 @@ is also the only place **the answer contract** is written down:
 |---|---|
 | a decision node | `{"verdict": "<branch>"}` — one the node offers |
 | `pm_plan` | `{"modules": [...]}` when `next_module` is `"frontier"` |
-| `engineer_build` | `{"module": "<id>"}` |
+| `engineer_build` | `{"module": "<id>"}` — or `{"module": ""}` for **nothing left to build**, which ends the module loop. Omitting the key is not the same thing: it means the question was not answered, and the loop stays open |
 | a seat on a panel | `{"verdict": "pass"\|"fail", "why": "…"}` |
 | a seat at intake | `{"missing": [...], "problems": [...], "unsafe": [...]}` |
 | anything else | any JSON object |
@@ -675,7 +675,7 @@ first one winning — so two of them disagreeing inside one answer resolves sile
 ## Testing
 
 ```bash
-pytest -q          # 1309 tests
+pytest -q          # 1319 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

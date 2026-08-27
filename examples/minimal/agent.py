@@ -9,6 +9,10 @@ What each kind of node must answer is the part a README sentence cannot carry, s
   a decision node    {"verdict": "<branch>"}   one of the branches the node offers
   pm_plan            {"modules": [...]}        required when next_module is "frontier"
   engineer_build     {"module": "<id>"}        which module this build produced
+                     {"module": ""}            nothing left to build; ends the module loop.
+                                               Omitting the key entirely is NOT this -- it means
+                                               the question was not answered, and the loop stays
+                                               open (CHG-20260823-50)
   a seat on a panel  {"verdict": "pass"|"fail", "why": "..."}
   a seat at intake   {"missing": [...], "problems": [...], "unsafe": [...]}
   anything else      any JSON object

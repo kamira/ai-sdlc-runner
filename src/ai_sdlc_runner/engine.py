@@ -724,6 +724,20 @@ def _frontier(node: graph.Node, report: "RunReport") -> str:
     the answer should be — *"the frontier is the first module with no record"* — so this reads two
     recorded facts instead of a prediction: what the **PM most recently planned**, and what the
     **engineers have actually built**. Neither is invented, and both are in the report.
+
+    ## And a third recorded fact, which it used to throw away
+
+    An engineer that answers ``{"module": ""}`` is saying *there is nothing left to build*. That is
+    the answer to the question it was asked — the work order never names a module, so the engineer
+    is the only party that knows — and it is as much a part of the run's record as the other two.
+
+    The first version filtered it out, and a rerun of a finished project therefore looped until the
+    step guard stopped it. Reading the run and then discarding the inconvenient sentence is not
+    reading the run.
+
+    A **missing** ``module`` key is different and still means nothing: an agent that crashed or
+    replied with prose has not reported completion, and collapsing those two would turn every
+    malformed answer into "we are done".
     """
     planned: List[str] = []
     for ask in report.asks:
@@ -731,15 +745,46 @@ def _frontier(node: graph.Node, report: "RunReport") -> str:
             named = ask.result.get("modules")
             if isinstance(named, (list, tuple)):
                 planned = [str(m) for m in named]      # the latest plan wins; it is the current one
-    built = {str((ask.result or {}).get("module")) for ask in report.asks
-             if ask.node_id == "engineer_build" and isinstance(ask.result, Mapping)
-             and (ask.result or {}).get("module")}
+
+    built: set = set()
+    #: What the engineer said the last time it was asked. `None` means it has not been asked, or
+    #: answered without addressing the question at all — see below for why those are not the same as
+    #: answering "nothing".
+    last_word: Optional[str] = None
+    for ask in report.asks:
+        if ask.node_id != "engineer_build" or not isinstance(ask.result, Mapping):
+            continue
+        if "module" not in ask.result:
+            # No `module` key is not an answer to "which module did you build". An agent that
+            # crashed, timed out or replied with prose must not be read as reporting completion.
+            continue
+        name = str(ask.result.get("module") or "")
+        last_word = name
+        if name:
+            built.add(name)
+
     remaining = [m for m in planned if m not in built]
     if not planned:
         raise EngineError(
             f"node {node.id!r} is decided from the frontier, but no plan has named any modules. "
             f"`pm_plan` must answer with a `modules` list for the loop to know when it is done — "
             f"an empty frontier and an unstated one are not the same thing.")
+    if remaining and last_word == "":
+        # CHG-20260823-50. The engineer is the only party that knows what is left: the work order
+        # does not name a module, so the runner never tells it which one to build. When it answers
+        # `{"module": ""}` it is saying there is nothing left, and the previous version of this
+        # function discarded that with a trailing `and (ask.result or {}).get("module")` in the set
+        # comprehension. `remaining` then stayed non-empty for ever, `next_module` said `module`,
+        # the same question was asked again, and the same answer came back until the step guard
+        # tripped 200 asks later.
+        #
+        # Reproduced by running `examples/weather-spa` twice with its `site/` still on disk: 26 asks
+        # and `finished` the first time, 200 asks and "the flow is cycling" the second.
+        #
+        # This docstring argues that a fixed sequence is a prediction and the run's own record is
+        # the truth. The empty answer **is** part of that record. Dropping it was the same defect
+        # class the argument was written against.
+        return "none"
     return "module" if remaining else "none"
 
 
@@ -1557,7 +1602,42 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
         else:
             node_id = node.next
     else:
+        # "the flow is cycling without progress" told an operator only that something looped. The
+        # loop it was written for turned out to be `next_module` asking `engineer_build` the same
+        # question two hundred times and discarding the answer (CHG-20260823-50), and the message
+        # did not contain one word that would have led anyone there.
+        #
+        # Counted from `report.visited`, which the walk appends to on **every** step. The first
+        # draft of this used `taken`, on the strength of its name and a comment I wrote saying it
+        # "has been counting all along". It has not: `_choose` returns before touching it for a
+        # `frontier` decision and for a plain-string one, and is not called at all for a panel. The
+        # message came out as "Most-visited: nothing recorded", and the test written for it caught
+        # that — a fix for an uninformative message that was itself uninformative.
+        counts: Dict[str, int] = {}
+        for seen in report.visited:
+            counts[seen] = counts.get(seen, 0) + 1
+        worst = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+        if not worst:
+            raise EngineError(
+                f"walk exceeded {cfg.max_steps} steps without reaching an end, and visited nothing "
+                f"— which should be impossible; the walk records every step it takes.")
+        # Node, count, and its last answer, in that order and first. The rest is context.
+        #
+        # Ordering is not cosmetic here: `examples/weather-spa/scenarios.py:233` truncates a
+        # reported error to 150 characters, and the first draft of this message spent those on a
+        # three-node summary and a sentence of advice, so the one fact an operator needs — what the
+        # spinning node kept saying — fell off the end. Caught by the scenario suite.
+        repeated, times = worst[0]
+        answer = ""
+        for ask in reversed(report.asks):
+            if ask.node_id == repeated:
+                answer = f" last answered {json.dumps(ask.result, ensure_ascii=False)[:160]};"
+                break
+        also = ", ".join(f"{nid} ×{n}" for nid, n in worst[1:])
         raise EngineError(
-            f"walk exceeded {cfg.max_steps} steps — the flow is cycling without progress")
+            f"walk exceeded {cfg.max_steps} steps. Most-visited: {repeated} ×{times},{answer} "
+            f"a node repeating with the same answer means the branch it feeds is not reading "
+            f"something that answer contains."
+            + (f" Also spun: {also}." if also else ""))
 
     return _finish(report, confirmations, cfg.conversation)

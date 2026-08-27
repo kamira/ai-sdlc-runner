@@ -84,8 +84,17 @@ def test_an_agent_that_cycles_is_stopped_by_the_step_cap(work):
     """
     result = BY_LETTER["C"](work)
     assert result["state"] == "stopped"
-    assert "cycling without progress" in result["error"]
     assert "200 steps" in result["error"], "the refusal must say what limit it hit"
+    # CHG-20260823-50: this used to assert the phrase "cycling without progress", which is a
+    # sentence rather than a claim. What an operator needs from this refusal is which node spun and
+    # what it kept answering -- the message said neither, and the real cycle it was written for
+    # (`engineer_build` answering the same thing 200 times) was diagnosed by reading the engine.
+    assert "Most-visited" in result["error"], (
+        f"the refusal does not say what cycled: {result['error']}")
+    assert any(node in result["error"] for node in ("engineer_build", "next_module")), (
+        f"the refusal names no node from the loop that spun: {result['error']}")
+    assert "last answered" in result["error"], (
+        f"the refusal does not say what the repeating node kept answering: {result['error']}")
 
 
 # ── the crash that made all of this unreachable ───────────────────────────────────────────────
