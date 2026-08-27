@@ -241,6 +241,10 @@ def test_unlink_removes_a_deep_file(tmp_path):
 #: entry costs a sentence; that is the point.
 ALLOWED_DIRECT_WRITES = {
     # (module, function called) : why it does not go through paths.py
+    ("store.py", "sqlite3.connect"):
+        "the database open itself; sqlite takes a path string rather than a handle, so it is given "
+        "paths.real(file) and preceded by paths.check(file) two lines above — routed, just not "
+        "through a paths.* call the scanner can see",
     ("conversations.py", "os.replace"):
         "the atomic rename that gives FileBackend.import_conversation its whole-or-nothing "
         "guarantee; both of its arguments are already paths.real() strings, so routing the rename "
@@ -258,10 +262,14 @@ ALLOWED_DIRECT_WRITES = {
 WRITE_CALLS = {
     "io.open", "os.makedirs", "os.mkdir", "os.chmod", "os.unlink", "os.remove",
     "os.replace", "os.rename", "os.rmdir", "os.truncate", "os.link", "os.symlink",
+    # fable-seat: these are fully dotted, statically identifiable, ordinary Python — and they were
+    # missing while the honesty note below listed only *dynamic* gaps. A stated limit that omits
+    # the things it could have caught is not honest, it is just written down.
+    "os.open", "os.fdopen", "os.mkfifo", "os.makedev", "sqlite3.connect",
 }
 
-#: Any call into these modules.
-WRITE_MODULES = ("shutil.",)
+#: Any call into these modules counts. `tempfile` creates files; `shutil` moves them.
+WRITE_MODULES = ("shutil.", "tempfile.")
 
 #: Method names that mean a file operation **whatever the receiver is**. Deliberately short.
 #:

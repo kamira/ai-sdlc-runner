@@ -359,3 +359,180 @@ def test_two_threads_cannot_be_handed_the_same_seq(tmp_path):
     seqs = [t["seq"] for t in c.document()["turns"]]
     assert len(seqs) == len(set(seqs)), "two turns were handed the same seq"
     assert seqs == sorted(seqs) and seqs == list(range(len(seqs)))
+
+
+# ── the importer, third round (CHG-20260823-45) ───────────────────────────────────────────────
+#
+# CHG-42's preflight knew exactly the two dirty shapes that had burned CHG-41. Both seats then
+# broke it six more ways: five aborted the whole migration on the first bad file — four of them as
+# raw tracebacks — and one vanished with a clean report.
+#
+# So these are the hostile stores, not a clean one. Each is built with a GOOD conversation after
+# the bad one, because "one bad conversation does not stop the others" is the claim under test and
+# a store with one conversation cannot test it.
+
+def _store_with(tmp_path, damage):
+    """A legacy store: one good conversation, one damaged, one good after it."""
+    back = _file(tmp_path)
+    first = conv.Conversation(back, "A").open()
+    first.note("before")
+    first.close("finished")
+
+    bad = conv.Conversation(back, "B").open()
+    bad.note("hello")
+    bad_path = None
+    for candidate in (tmp_path / "legacy").rglob("*.jsonl"):
+        if candidate.stem == bad.id:
+            bad_path = candidate
+    damage(bad_path)
+
+    last = conv.Conversation(back, "C").open()
+    last.note("after")
+    last.close("finished")
+    return bad.id, last.id
+
+
+def _append(path, line):
+    with io.open(str(path), "a", encoding="utf-8", newline="\n") as fh:
+        fh.write(line + "\n")
+
+
+DIRT = {
+    "a bare JSON scalar on a line": lambda p: _append(p, "42"),
+    "a turn whose seq is not a number": lambda p: _append(
+        p, json.dumps({"seq": "x", "kind": "note", "at": "2026-01-01T00:00:00.000+00:00"})),
+    "a turn with no kind": lambda p: _append(
+        p, json.dumps({"seq": 9, "at": "2026-01-01T00:00:00.000+00:00", "text": "x"})),
+    "a header with no project": lambda p: p.write_text(
+        json.dumps({"header": {"conversation_id": p.stem, "schema": 1}}) + "\n", encoding="utf-8"),
+    "a filename that disagrees with the header": lambda p: p.rename(
+        p.with_name("not-the-id.jsonl")),
+    "a duplicate seq": lambda p: _append(
+        p, json.dumps({"seq": 1, "kind": "note", "at": "2026-01-01T00:00:00.000+00:00",
+                       "text": "twice"})),
+}
+
+
+@pytest.mark.parametrize("description", sorted(DIRT))
+def test_one_bad_conversation_does_not_stop_the_others(tmp_path, description):
+    """The claim CHG-42 made and could not keep.
+
+    Its loop's `try` wrapped only `into.import_conversation` and caught only `ConversationError`;
+    `source.read`, `_assemble`, the header lookups and every non-sqlite error inside the import
+    fell outside it. Each of these shapes killed the migration and everything after it.
+    """
+    _bad, last = _store_with(tmp_path, DIRT[description])
+    target = _sqlite(tmp_path)
+
+    report = conv.import_file_store(tmp_path / "legacy", target)
+
+    imported = report["imported"]
+    assert last in imported, (
+        f"{description!r} stopped the conversation after it from importing: {report}")
+    assert report["refused"], f"{description!r} was not refused by name: {report}"
+    for entry in report["refused"]:
+        assert entry["conversation_id"], "a refusal with no name is not a refusal"
+        assert entry["why"], "a refusal with no reason is not a refusal"
+
+
+def test_a_directory_named_like_a_conversation_does_not_stop_the_import(tmp_path):
+    """fable-seat's sixth: `PermissionError` out of `FileBackend.conversations`, before a single
+    conversation was read."""
+    back = _file(tmp_path)
+    good = conv.Conversation(back, "A").open()
+    good.note("fine")
+    good.close("finished")
+    (tmp_path / "legacy" / conv.project_id("A") / "fake.jsonl").mkdir()
+
+    report = conv.import_file_store(tmp_path / "legacy", _sqlite(tmp_path))
+    assert good.id in report["imported"] or report["refused"], (
+        "a directory named *.jsonl neither imported the good conversation nor was refused by name")
+
+
+def test_a_store_past_max_path_still_reports_what_it_could_not_read(tmp_path):
+    """The only **silent** one, and the worst.
+
+    `on_disk` used `Path(root).rglob("*.jsonl")`. Sixty lines above, `FileBackend.conversations`
+    carries a comment saying glob must not be used here for exactly this reason: it goes through
+    the OS with the plain path, so a store past MAX_PATH lists as **empty** rather than raising.
+
+    Measured at a 322-character root: `rglob` found 0 files, `paths.listdir` found 2, and a file
+    with an unreadable header vanished from the import with a clean report and exit 0 — the precise
+    failure this scan exists to prevent, produced by the scan.
+    """
+    from ai_sdlc_runner import paths
+
+    root = tmp_path
+    while len(str(root)) < 300:
+        root = root / "a-directory-with-an-ordinary-name"
+    paths.makedirs(root)
+    assert len(str(root)) > 260
+
+    back = conv.FileBackend(root)
+    good = conv.Conversation(back, "P").open()
+    good.note("fine")
+    good.close("finished")
+    paths.write_text(root / conv.project_id("P") / "junk.jsonl", "NOT JSON AT ALL\n")
+
+    report = conv.import_file_store(root, conv.backend("sqlite", root=tmp_path / "db"))
+    assert good.id in report["imported"]
+    assert [r["conversation_id"] for r in report["refused"]] == ["junk"], (
+        f"the unreadable file vanished from a deep store: {report}")
+
+
+def test_a_staging_file_left_by_a_dead_import_is_named(tmp_path):
+    """`.part` residue was never mentioned, while the record claimed "a failure writes nothing"."""
+    back = _file(tmp_path)
+    good = conv.Conversation(back, "P").open()
+    good.note("fine")
+    good.close("finished")
+    (tmp_path / "legacy" / conv.project_id("P") / "half-written.jsonl.part").write_text(
+        "{}\n", encoding="utf-8")
+
+    report = conv.import_file_store(tmp_path / "legacy", _sqlite(tmp_path))
+    assert good.id in report["imported"]
+    named = [r for r in report["refused"] if "staging" in r["why"]]
+    assert named, f"the .part residue was not reported: {report}"
+
+
+def test_the_same_id_holding_a_different_conversation_is_refused_not_skipped(tmp_path):
+    """codex-seat's finding. `_already_there` compared id and **count**, so a target holding the
+    same id and the same number of unrelated turns was reported as "skipped, already here" while
+    the source's content was never imported — a coarse check answering *safe* about content it had
+    never examined."""
+    source, cid = _legacy_with(tmp_path, turns=2)
+    target = _sqlite(tmp_path)
+    document = source.read(conv.project_id("P"), cid)
+    target.import_conversation(
+        {"conversation_id": cid, "project": document["project"],
+         "schema": document["schema"], "run": {}},
+        [dict(t, text=f"unrelated {i}") for i, t in enumerate(document["turns"])])
+
+    report = conv.import_file_store(tmp_path / "legacy", target)
+    assert report["skipped"] == [], "unrelated content of the same size was called 'already here'"
+    why = report["refused"][0]["why"]
+    assert "not these ones" in why and "will not choose" in why
+
+
+def test_a_genuine_re_import_is_still_skipped(tmp_path):
+    """The other direction: comparing content must not turn idempotence into a refusal."""
+    _legacy_with(tmp_path, turns=3)
+    target = _sqlite(tmp_path)
+    conv.import_file_store(tmp_path / "legacy", target)
+    second = conv.import_file_store(tmp_path / "legacy", target)
+    assert len(second["skipped"]) == 1 and second["refused"] == []
+
+
+def test_the_store_is_never_listed_with_glob():
+    """Read out of the syntax tree. `glob`/`rglob` go through the OS with the plain path, so on a
+    deep store they return nothing rather than raising — which is how the silent omission happened
+    in the function written to stop silent omissions."""
+    import ast
+
+    source = Path(conv.__file__).read_text(encoding="utf-8")
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Call) and ast.unparse(node.func).rsplit(".", 1)[-1] in (
+                "glob", "rglob", "iterdir"):
+            raise AssertionError(
+                f"conversations.py:{node.lineno} lists the store with "
+                f"{ast.unparse(node.func)} — see FileBackend.conversations on why it must not")

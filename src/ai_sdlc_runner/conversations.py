@@ -515,108 +515,147 @@ class SqliteBackend(Backend):
 
 
 def import_file_store(root: str | Path, into: Backend) -> Dict[str, object]:
-    """Copy a JSONL store into another backend — **whole conversations only** (CHG-20260823-42).
+    """Copy a JSONL store into another backend — **whole conversations only**.
 
-    `docs/DATABASE.md` §6 stated the policy in bold and the first version of this function honoured
-    none of it:
+    `docs/DATABASE.md` §6 requires a dirty conversation to be *refused whole, named, and left on
+    disk*, and the import to be *atomic per conversation*. Three attempts:
 
-    > a conversation carrying duplicate `seq` values is **refused whole, named, and left on disk**
-    > — never partially imported
-    >
-    > be **atomic per conversation** — a failure leaves no half-populated conversation
+    * **CHG-41** did neither: 3 of 7 turns imported, and the retry called the stump "already here".
+    * **CHG-42** made it atomic and added a preflight — for the two dirty shapes that had burned it.
+      Both seats then broke it six more ways. Five aborted the whole migration on the first bad
+      file; one vanished with a clean report.
+    * **This** stops trusting the input at all.
 
-    What it did instead, measured by both review seats independently: a conversation with a
-    duplicate `seq` imported **3 of 7 turns**, crashed, aborted every conversation after it, and —
-    worst — the retry reported the stump as `skipped, already here`. The truncation was permanent,
-    silent, and produced by the migration whose whole job is to preserve the history.
+    ## Every conversation is independent, whatever goes wrong
 
-    So, in order:
+    The loop's `try` used to wrap only `into.import_conversation` and catch only
+    `ConversationError`. Everything else — `source.read`, `_assemble`, the header lookups, and any
+    non-sqlite error inside the import — fell outside it, so a bare `42` on a line, a `"seq": "x"`,
+    a turn with no `kind`, a header with no `project`, a filename that disagrees with the id inside
+    it, or a **directory** named `*.jsonl` each killed the migration and everything after it in
+    iteration order. Four arrived as raw tracebacks.
 
-    1. **Read first, decide, then write.** `_assemble` already computes `duplicate_seqs` and
-       `incomplete_lines`; both were ignored. A conversation carrying either is refused by name and
-       left where it is.
-    2. **One transaction per conversation** — `Backend.import_conversation`. A failure writes
-       nothing at all, so a retry is a retry rather than a second helping of the same stump.
-    3. **A short conversation in the target is not "already here".** Skipping is by id *and* turn
-       count; a target copy shorter than its source is reported as damaged rather than passed over.
-    4. **One bad conversation does not stop the others.** Each is independent; the report says which
-       went and which did not.
+    Now each conversation is read, checked and written inside one `except Exception`, and anything
+    that goes wrong lands in `refused` **by name**. "One bad conversation does not stop the others"
+    is a claim this can keep.
 
-    Nothing is ever deleted from the source. A migration that removes its own source has no way back
-    if it was wrong.
+    ## Nothing is listed with `glob`
+
+    The unreadable-header scan used `Path(root).rglob("*.jsonl")`. Sixty lines above,
+    `FileBackend.conversations` carries a comment saying exactly why glob must not be used here:
+    it goes through the OS with the plain path, so a store past MAX_PATH lists as **empty** rather
+    than raising. Measured at a 322-character root: `rglob` found 0 files, `paths.listdir` found 2,
+    and a `junk.jsonl` with an unreadable header vanished from the import with a clean report and
+    exit 0 — the precise failure this scan was added to prevent, produced by the scan.
+
+    ## "Already here" means the same conversation, not the same number of turns
+
+    `_already_there` compared id and **count**. A target holding the same id and the same number of
+    completely unrelated turns was reported as "skipped, already here" while the source's content
+    was never imported — a coarse check answering *safe* about content it had never examined.
+    The turns are compared now.
     """
     source = FileBackend(root)
     report: Dict[str, object] = {"imported": [], "skipped": [], "refused": [], "turns": 0}
 
-    listed = source.conversations()
-    # A file whose header line is missing or unparseable is not listed by `FileBackend`, so it would
-    # have vanished from the import with no bucket in the report. Counted here, by name, because
-    # "there were files I could not read" is a different answer from "there was nothing".
-    on_disk = {p.stem for p in Path(root).rglob("*.jsonl")}
-    unreadable = sorted(on_disk - {str(row["conversation_id"]) for row in listed})
-    for cid in unreadable:
-        report["refused"].append(                                    # type: ignore[union-attr]
-            {"conversation_id": cid, "why": "no readable header line; left on disk"})
+    def refuse(cid: str, why: str) -> None:
+        report["refused"].append({"conversation_id": cid, "why": why})  # type: ignore[union-attr]
+
+    try:
+        listed = source.conversations()
+    except Exception as exc:                      # a store that cannot even be listed
+        refuse("(the store)", f"could not be listed: {type(exc).__name__}: {exc}")
+        return report
+
+    # Through `paths`, never `glob` — see the docstring. A `.part` file is a staging file from an
+    # import that died; it is named so an operator can see it, because leaving it unmentioned is
+    # how the last two versions of this function went wrong.
+    on_disk, residue = set(), []
+    for name in _walk_store(Path(root)):
+        if name.endswith(".jsonl"):
+            on_disk.add(name[: -len(".jsonl")])
+        elif name.endswith(".jsonl.part"):
+            residue.append(name)
+    for name in sorted(residue):
+        refuse(name, "a staging file left by an import that did not finish; it is not a "
+                     "conversation and was not read")
+    for cid in sorted(on_disk - {str(row["conversation_id"]) for row in listed}):
+        refuse(cid, "no readable header line, or a header naming a different conversation; "
+                    "left on disk")
 
     for row in listed:
         cid = str(row["conversation_id"])
-        pid = str(row["project"]["id"])                              # type: ignore[index]
-        document = source.read(pid, cid)
-        turns = list(document.get("turns") or [])
-
-        damage = []
-        if document.get("duplicate_seqs"):
-            damage.append(f"duplicate seq {document['duplicate_seqs']}")
-        if document.get("incomplete_lines"):
-            damage.append(f"incomplete line(s) at {document['incomplete_lines']}")
-        if damage:
-            report["refused"].append(                                # type: ignore[union-attr]
-                {"conversation_id": cid, "why": "; ".join(damage) + "; left on disk"})
-            continue
-
-        already = _already_there(into, cid)
-        if already is not None:
-            if already == len(turns):
-                report["skipped"].append(cid)                        # type: ignore[union-attr]
-            else:
-                # The shape a failed earlier run leaves. Reported rather than skipped, because
-                # skipping is what made the truncation permanent.
-                report["refused"].append({                           # type: ignore[union-attr]
-                    "conversation_id": cid,
-                    "why": f"already in the target with {already} of {len(turns)} turns — a "
-                           f"previous import did not finish. Remove it there and import again."})
-            continue
-
-        # Only the four fields a header actually holds. `_assemble` adds computed keys
-        # (`duplicate_seqs`, `incomplete_lines`) and the first version carried them straight into
-        # the target: dropped silently by SQLite, and written into a **file** target's header as a
-        # permanent fake fact that `_assemble` would then re-emit for ever.
-        header = {
-            "conversation_id": cid,
-            "project": dict(document.get("project") or {}),
-            "schema": document.get("schema", SCHEMA),
-            "run": dict(document.get("run") or {}),
-        }
         try:
+            pid = str(row["project"]["id"])       # type: ignore[index]
+            document = source.read(pid, cid)
+            turns = list(document.get("turns") or [])
+
+            damage = []
+            if document.get("duplicate_seqs"):
+                damage.append(f"duplicate seq {document['duplicate_seqs']}")
+            if document.get("incomplete_lines"):
+                damage.append(f"incomplete line(s) at {document['incomplete_lines']}")
+            missing = sorted({k for t in turns for k in ("seq", "kind") if k not in t})
+            if missing:
+                damage.append(f"turn(s) with no {', '.join(missing)}")
+            if damage:
+                refuse(cid, "; ".join(damage) + "; left on disk")
+                continue
+
+            already = _already_there(into, cid)
+            if already is not None:
+                if already == turns:
+                    report["skipped"].append(cid)          # type: ignore[union-attr]
+                elif len(already) != len(turns):
+                    refuse(cid, f"already in the target with {len(already)} of {len(turns)} "
+                                f"turns — a previous import did not finish. Remove it there and "
+                                f"import again.")
+                else:
+                    refuse(cid, f"already in the target with {len(turns)} turns that are not "
+                                f"these ones. Same id, different conversation — this runner will "
+                                f"not choose between them.")
+                continue
+
+            header = {
+                "conversation_id": cid,
+                "project": dict(document.get("project") or {}),
+                "schema": document.get("schema", SCHEMA),
+                "run": dict(document.get("run") or {}),
+            }
             into.import_conversation(header, turns)
-        except ConversationError as exc:
-            report["refused"].append(                                # type: ignore[union-attr]
-                {"conversation_id": cid, "why": str(exc)})
+        except Exception as exc:
+            # EVERY failure lands here, by name. The previous version caught `ConversationError`
+            # around one call and let five other exception types kill the migration.
+            refuse(cid, f"{type(exc).__name__}: {exc}")
             continue
-        report["imported"].append(cid)                               # type: ignore[union-attr]
+        report["imported"].append(cid)                     # type: ignore[union-attr]
         report["turns"] = int(report["turns"]) + len(turns)
     return report
 
 
-def _already_there(into: Backend, cid: str) -> Optional[int]:
-    """How many turns the target already holds for this id, or None if it holds none."""
+def _walk_store(root: Path) -> List[str]:
+    """Every filename under a store root, through `paths` rather than `glob`.
+
+    Two levels is the layout (`<root>/<project_id>/<conversation_id>.jsonl`), and walking it
+    explicitly rather than globbing is what makes it work past MAX_PATH.
+    """
+    names: List[str] = []
+    for entry in paths.listdir(root):
+        names.extend(paths.listdir(root / entry))
+    return names
+
+
+def _already_there(into: Backend, cid: str) -> Optional[List[Mapping[str, object]]]:
+    """The turns the target already holds for this id, or None if it holds no such conversation.
+
+    Returns the **turns**, not a count. Counting was a coarse check answering "already imported
+    safely" about content it had never looked at: a target with the same id and the same number of
+    unrelated turns was skipped as though the import had succeeded.
+    """
     for row in into.conversations():
         if str(row["conversation_id"]) == cid:
-            counter = getattr(into, "turn_count", None)
-            if counter is not None:
-                return counter(cid)
-            document = into.read(str(row["project"]["id"]), cid)     # type: ignore[index]
-            return len(document.get("turns") or [])
+            document = into.read(str(row["project"]["id"]), cid)   # type: ignore[index]
+            return list(document.get("turns") or [])
     return None
 
 

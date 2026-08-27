@@ -406,10 +406,15 @@ class Runner:
         minutes, and holding the lock across it would make the whole HTTP surface unresponsive.
         That is task 1's guarantee and it is right.
 
-        What it did not do was stop a **second** walk starting. `attach()` and `instruct()` mutate
-        the state under the lock, release it, and call this; an attachment posted while a walk was
-        in flight therefore began a second concurrent walk over the same `Conversation` object.
-        Both review seats found it. CHG-20260823-42 made the consequence survivable — the turn
+        What it did not do was stop a **second** walk starting. **`attach()`** mutates the state
+        under the lock, releases it, and calls this — so an attachment posted while a walk was in
+        flight began a second concurrent walk over the same `Conversation` object. Both review
+        seats found it.
+
+        `attach()` alone: `start()` and `instruct()` refuse unless the run is idle, finished,
+        stopped or suspended, and `approve`, `reject` and `rule` go through `_require_suspension`.
+        An earlier version of this docstring named `instruct()` too, which was already false when
+        it was written and is corrected here. CHG-20260823-42 made the consequence survivable — the turn
         writes serialise and a collision is refused rather than silently rolled back — but two walks
         over one run is still two walks over one run.
 
@@ -456,6 +461,17 @@ class Runner:
                     # Something arrived mid-walk. Go round again, with the state as it is now.
                     self._walk_again = False
         except BaseException:
+            # A walk that died with something `_walk_once` does not catch — a `KeyboardInterrupt`,
+            # or an error in the post-walk bookkeeping rather than in the walk itself.
+            #
+            # **This drops a pending wakeup, and that is a real cost rather than a clean-up.** A
+            # caller who arrived mid-walk was told `running` and had `_walk_again` set; clearing it
+            # means their action is walked by nobody until some unrelated later caller. The
+            # alternative — leaving it set with no walk behind it — strands it differently and
+            # makes the next unrelated caller walk twice. Neither is good; this one at least leaves
+            # the runner in a state whose flags describe reality.
+            #
+            # Their action is still committed in `self.state`, so nothing is lost, only deferred.
             with self._lock:
                 self._walking = False
                 self._walk_again = False
