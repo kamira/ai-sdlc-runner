@@ -440,12 +440,26 @@ class Runner:
                 snapshot = self._walk_once()
                 with self._lock:
                     if not self._walk_again:
+                        # `_walking` is cleared **here**, in the same critical section as the check
+                        # that found nothing waiting. Clearing it in a `finally` instead left a
+                        # window (CHG-20260823-44): between this `return` releasing the lock and
+                        # the `finally` re-acquiring it, another caller could take the lock, see
+                        # `_walking` still true, set `_walk_again` — and then have it cleared out
+                        # from under them by a walk that had already decided to stop. Their
+                        # attachment would wait for some unrelated future caller to walk it, and
+                        # that caller would then walk twice.
+                        #
+                        # A lost wakeup, in the gate written to stop an action being dropped. Found
+                        # by reading it before sending it to review rather than by review.
+                        self._walking = False
                         return snapshot
                     # Something arrived mid-walk. Go round again, with the state as it is now.
                     self._walk_again = False
-        finally:
+        except BaseException:
             with self._lock:
                 self._walking = False
+                self._walk_again = False
+            raise
 
     def _walk_once(self) -> Dict[str, object]:
         """One walk, exactly as before. Called only by `_advance`, only one at a time."""
