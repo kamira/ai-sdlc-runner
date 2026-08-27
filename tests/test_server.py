@@ -22,6 +22,7 @@ down and called enforcement" that an independent seat refused.
 """
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -631,3 +632,127 @@ def test_our_own_origins_are_still_accepted(live, origin):
     call, _, _ = live
     status, _ = call("GET", "/run", origin=origin)
     assert status == 200, f"{origin} was refused"
+
+
+# ── one walk at a time (CHG-20260823-43) ──────────────────────────────────────────────────────
+#
+# **Which entry point actually had the hole**, checked rather than assumed. Both seats said a second
+# walk could start; the first version of these tests drove it through `instruct()` and found that
+# `instruct` already refuses while a run is `running`:
+#
+#     this run is running. An instruction can be added when it is waiting or finished
+#
+# So does `start` (refuses unless idle/finished/stopped), and so do `approve`, `reject` and `rule`
+# (`_require_suspension`). **`attach()` is the one that gates only on version** — which is exactly
+# what fable-seat wrote, and what these tests therefore use.
+
+def _gated_runner(tmp_path, walks, gate):
+    """A runner whose walk blocks on `gate`, so a second caller is guaranteed to arrive mid-walk."""
+    from ai_sdlc_runner import attachments
+
+    def walk(cfg):
+        walks.append(tuple(cfg.instructions))
+        gate.wait(timeout=10)
+        report = engine.RunReport()
+        report.state = engine.FINISHED
+        return report
+
+    return server.Runner(
+        walk=walk,
+        make_config=lambda i, a, r, art=(), rej=(), hist=(): _make_config(i, a, r, art, rej, hist),
+        store=attachments.Store(tmp_path / "att"))
+
+
+def _start_a_blocked_walk(runner, walks):
+    thread = threading.Thread(target=lambda: runner.start("build it", 0), daemon=True)
+    thread.start()
+    deadline = time.time() + 10
+    while not walks and time.time() < deadline:
+        time.sleep(0.01)
+    assert walks, "the walk never started"
+    return thread
+
+
+def test_an_attachment_during_a_walk_does_not_start_a_second_walk(tmp_path):
+    """`attach()` mutates the state under `_lock`, releases it, and calls `_advance()`. With no
+    gate, both threads entered the walk — two walks over one run and one `Conversation`."""
+    walks, gate = [], threading.Event()
+    runner = _gated_runner(tmp_path, walks, gate)
+    thread = _start_a_blocked_walk(runner, walks)
+
+    runner.attach(runner.state.version, "spec.md", b"the spec")
+    assert len(walks) == 1, f"a second walk started: {walks}"
+
+    gate.set()
+    thread.join(timeout=10)
+    assert len(walks) == 2, "the attachment was never walked"
+
+
+def test_the_attachment_that_arrives_during_a_walk_is_not_dropped(tmp_path):
+    """Refusing the second caller would have been simpler and would have discarded the effect of
+    what the operator did: an attachment reaches **every** work order, and the walk in flight built
+    its config before that attachment existed. Recorded-and-never-acted-on is this project's own
+    worst failure shape, so the running walk goes round again instead."""
+    walks, gate = [], threading.Event()
+    runner = _gated_runner(tmp_path, walks, gate)
+    thread = _start_a_blocked_walk(runner, walks)
+
+    runner.attach(runner.state.version, "spec.md", b"the spec")
+    gate.set()
+    thread.join(timeout=10)
+
+    assert len(walks) == 2, f"expected exactly one further walk, got {len(walks)}"
+    assert runner.state.attachments, "the attachment is not in the state at all"
+
+
+def test_several_attachments_during_one_walk_coalesce_into_one_further_walk(tmp_path):
+    """Not one further walk each — that would be the same storm, serialised."""
+    walks, gate = [], threading.Event()
+    runner = _gated_runner(tmp_path, walks, gate)
+    thread = _start_a_blocked_walk(runner, walks)
+
+    for n in range(4):
+        runner.attach(runner.state.version, f"a{n}.md", f"body {n}".encode())
+    assert len(walks) == 1, f"{len(walks)} walks ran while one was in flight"
+
+    gate.set()
+    thread.join(timeout=10)
+    assert len(walks) == 2, f"four attachments produced {len(walks) - 1} further walks"
+
+
+def test_the_gate_reopens_when_a_walk_raises(tmp_path):
+    """A walk that throws must not leave the runner permanently refusing to walk again."""
+    def exploding(cfg):
+        raise RuntimeError("the backend died")
+
+    runner = server.Runner(
+        walk=exploding,
+        make_config=lambda i, a, r, art=(), rej=(), hist=(): _make_config(i, a, r, art, rej, hist))
+    runner.start("x", 0)
+    assert runner._walking is False, "a failed walk left the gate shut"
+    assert runner.state.state == engine.STOPPED
+
+
+def test_only_attach_reaches_advance_without_a_state_gate():
+    """The finding, pinned where it actually is.
+
+    If a future change adds another caller of `_advance` that does not gate on run state, this says
+    so — rather than the next reviewer having to rediscover which of six entry points was the one.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(server.Runner)))
+    ungated = []
+    for func in tree.body[0].body:
+        if not isinstance(func, ast.FunctionDef):
+            continue
+        body = ast.unparse(func)
+        if "self._advance()" not in body or func.name.startswith("_"):
+            continue
+        gated = "_require_suspension" in body or "self.state.state not in" in body
+        if not gated:
+            ungated.append(func.name)
+    assert ungated == ["attach"], (
+        f"the set of entry points reaching _advance without a state gate has changed: {ungated}")
