@@ -376,3 +376,125 @@ def test_a_clean_tree_says_nothing_about_uncommitted_edits(tmp_path):
     repo = _example_repo(tmp_path)
     done = _run_example(repo, tmp_path / "asks")
     assert "uncommitted:" not in ((done.stdout or "") + (done.stderr or ""))
+
+
+# ── the case no test drove, and it was broken on main ───────────────────────────────────────────
+
+def test_a_multi_module_run_whose_agent_reads_the_filesystem_still_advances(tmp_path):
+    """The regression step one shipped, and the shape of test that was missing.
+
+    `examples/weather-spa` decides which module to build by **looking at the filesystem** — the
+    first file under `site/` whose content does not match the brief — and `site/` is gitignored.
+
+    Under isolation each tree is cut from a commit, an ignored file is never in a commit, and the
+    artifacts were only carried at the **end** of the run. So every tree saw an empty `site/`, the
+    agent built `markup` again, nothing tracked changed, the tip never advanced, and the step guard
+    stopped the run after thirty-nine cycles.
+
+    Two causes, both fixed: artifacts are now carried **forward into each new tree**, and
+    `git status --ignored` collapses an ignored directory to one entry — the first fix checked
+    `is_file()` and therefore copied nothing at all for `site/`.
+
+    The reason this reached `main`: `test_example_weather_spa.py` drives the console and the server
+    and never the CLI, and every other example has one module. **No test ran a multi-module build
+    through the real command.** This one does.
+    """
+    root = Path(__file__).resolve().parents[1]
+    site = root / "examples" / "weather-spa" / "site"
+    if site.exists():
+        import shutil as _shutil
+        _shutil.rmtree(site)
+
+    done = subprocess.run(
+        [sys.executable, "-m", "ai_sdlc_runner.cli",
+         "--config", str(root / "examples/weather-spa/runner.yaml"),
+         "run", "--plan", str(root / "examples/weather-spa/plan.json"),
+         "--risk", "low", "--confirm", "merge",
+         "--ask-journal", str(tmp_path / "asks")],
+        cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env={**os.environ, "PYTHONPATH": str(root / "src"), "PYTHONUTF8": "1"}, timeout=1800)
+    out = (done.stdout or "") + (done.stderr or "")
+
+    assert "walk exceeded" not in out, (
+        "the module loop did not advance — a fresh tree shows the agent an empty output "
+        f"directory and it rebuilds the same module:\n{out[-900:]}")
+    assert "state:         finished" in out, out[-900:]
+
+    built = sorted(p.name for p in site.iterdir()) if site.exists() else []
+    assert built == ["app.js", "index.html", "styles.css", "weather.js"], (
+        f"the run finished with {built} instead of all four modules' output")
+
+
+def test_an_ignored_directory_is_carried_whole(tmp_path):
+    """The narrower half, without the forty-second example run.
+
+    `git status --porcelain --ignored` reports an ignored **directory** as a single entry with a
+    trailing slash, not as the files inside it. Checking `is_file()` on that entry copies nothing,
+    which is how the whole of `site/` was dropped.
+    """
+    root = _repo(tmp_path)
+    (root / ".gitignore").write_text("*.artifact\nout/\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=str(root), capture_output=True)
+    subprocess.run(["git", "commit", "-q", "-m", "ignore out"], cwd=str(root), capture_output=True)
+
+    trees = worktree.Trees(root)
+    one = trees.path_for(worktree.key_for(1))
+    (Path(one) / "out").mkdir()
+    (Path(one) / "out" / "made.txt").write_text("built\n", encoding="utf-8")
+
+    assert trees.artifacts(worktree.key_for(1)) == ["out/"], "git collapses the directory"
+
+    # forward into the next module's tree...
+    two = trees.path_for(worktree.key_for(2))
+    assert (Path(two) / "out" / "made.txt").is_file(), (
+        "the next module cannot see what the previous one built into an ignored directory")
+
+    # ...and out into the working tree at the end.
+    trees.carry()
+    assert (root / "out" / "made.txt").read_text(encoding="utf-8") == "built\n"
+
+
+def _registrations(root: Path):
+    common = subprocess.run(["git", "rev-parse", "--git-common-dir"], cwd=str(root),
+                            capture_output=True, text=True).stdout.strip()
+    where = (root / common) / "worktrees"
+    return sorted(p.name for p in where.iterdir()) if where.is_dir() else []
+
+
+def test_a_kept_tree_keeps_its_files_and_not_its_registration(tmp_path):
+    """The evidence is the **files**. The git registration is not, and it is what grows without
+    bound.
+
+    Every kept tree used to leave an entry in the repository's `worktrees/` directory, and every
+    later `git status` and `git worktree add` walks all of them. Measured rather than feared: after
+    a session of halting runs this repository held **156**, an ordinary `git status` took minutes,
+    and `git worktree list` did not return at all.
+
+    So a kept tree is unregistered and left on disk. An operator inspecting a halt reads the files;
+    losing `git diff` inside a temp directory is a far smaller cost than a repository nobody can
+    use.
+    """
+    root = _repo(tmp_path)
+    before = _registrations(root)
+
+    trees = worktree.Trees(root)
+    one = trees.path_for(worktree.key_for(1))
+    (Path(one) / "evidence.txt").write_text("what the halt left\n", encoding="utf-8")
+    trees.path_for(worktree.key_for(2))
+    assert len(_registrations(root)) == len(before) + 2, "the premise: they are registered"
+
+    kept = trees.close(keep=True)
+
+    assert _registrations(root) == before, "a kept tree must not leave git metadata behind"
+    assert all(Path(k).is_dir() for k in kept), "but the files are the evidence and must remain"
+    assert (Path(one) / "evidence.txt").read_text(encoding="utf-8") == "what the halt left\n"
+
+
+def test_removing_trees_normally_also_leaves_no_registration(tmp_path):
+    """The ordinary path, so the two ways a run can end agree about cleanliness."""
+    root = _repo(tmp_path)
+    before = _registrations(root)
+    trees = worktree.Trees(root)
+    trees.path_for(worktree.key_for(1))
+    trees.close(keep=False)
+    assert _registrations(root) == before
