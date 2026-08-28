@@ -65,6 +65,11 @@ from typing import Dict, List, NamedTuple
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src/ai_sdlc_runner"
 
+#: The checkers themselves (CHG-20260828-02). A guard is code that can be wrong: `ledger_check`
+#: walked changes and never acceptances, so an ACC naming no change read as a pass. Mutating the
+#: guards is the only way to know they still refuse.
+TOOLS = REPO / "tools"
+
 
 class Mutation(NamedTuple):
     group: str
@@ -229,8 +234,13 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "examples", "a --seat-model command is relocated into the config's directory again",
         SRC / "cli.py",
-        '''                        timeout, retries, cwd=config_cwd if from_config else None)''',
-        '''                        timeout, retries, cwd=config_cwd)''',
+        # Re-anchored (CHG-20260828-02): stale since CHG-20260827-23 added `risk` and `can_write`
+        # to this call, so this mutation had been reporting ANCHOR GONE to anyone who ran the group
+        # and nothing to anyone who did not.
+        '''                        timeout, retries, cwd=config_cwd if from_config else None,
+                        risk=risk, can_write=_may_write(seat, role),''',
+        '''                        timeout, retries, cwd=config_cwd,
+                        risk=risk, can_write=_may_write(seat, role),''',
         "tests/test_examples_run_from_anywhere.py"),
 
     Mutation(
@@ -472,8 +482,13 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "planning", 'the declared interfaces never reach the run',
         SRC / 'cli.py',
-        '        interfaces=plan.get("interfaces") or {},\n        autonomy=plan.get("autonomy"),',
-        '        interfaces={},\n        autonomy=plan.get("autonomy"),',
+        # Re-anchored (CHG-20260828-02): CHG-20260827-20 inserted `change_class=` between these two
+        # lines the same day this was written, and nothing said so. Pinned to `cmd_run` by the
+        # comment that follows only there.
+        '''        interfaces=plan.get("interfaces") or {},
+        # From the command line and nowhere else''',
+        '''        interfaces={},
+        # From the command line and nowhere else''',
         'tests/test_sub_planning.py'),
 
     Mutation(
@@ -559,6 +574,20 @@ MUTATIONS: List[Mutation] = [
         '    report.change_class = why',
         '    report.change_class = ""',
         'tests/test_change_classes.py'),
+
+    Mutation(
+        'guards', 'an acceptance for a change that does not exist is accepted again',
+        TOOLS / 'ledger_check.py',
+        '        if suffix not in known:',
+        '        if False:',
+        'tests/test_ledger_check.py'),
+
+    Mutation(
+        'guards', 'an acceptance filed against the wrong change stops being noticed',
+        TOOLS / 'ledger_check.py',
+        '        if stated and stated != f"CHG-{suffix}":',
+        '        if False:',
+        'tests/test_ledger_check.py'),
 
     Mutation(
         "cli", "refusal text goes to the terminal with its control characters intact",

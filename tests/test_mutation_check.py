@@ -120,6 +120,32 @@ def test_a_red_baseline_still_beats_both_checks(source, capsys):
 
 # ── the shipped mutations obey their own rule ───────────────────────────────────────────────────
 
+def test_no_shipped_mutation_has_a_stale_anchor():
+    """`ANCHOR GONE` is reported correctly — and only to whoever runs that group (CHG-20260828-02).
+
+    A stale anchor pins nothing, and the suite said nothing about it, so a guarantee could go
+    unpinned for as long as nobody ran `--only <that group>`. Two were stale when this was written:
+
+    * `examples/a --seat-model command…` — CHG-20260827-23 added `risk` and `can_write` to the
+      `_Process` call it anchored on;
+    * `planning/the declared interfaces never reach the run` — CHG-20260827-20 inserted
+      `change_class=` between its two lines, **the same day the mutation was written**.
+
+    Neither author did anything careless. That is the point, and it is the same argument as the
+    ambiguity check beside this one: anchors rot because other changes move, so the rot has to be
+    checked rather than remembered.
+    """
+    stale = []
+    for m in mutation_check.MUTATIONS:
+        if not m.path.is_file():
+            stale.append(f"{m.group}/{m.says}: {m.path.name} does not exist")
+        elif m.before not in m.path.read_text(encoding="utf-8"):
+            stale.append(f"{m.group}/{m.says}: not found in {m.path.name}")
+    assert not stale, (
+        "these mutations no longer match the code they name, so they pin nothing. Re-anchor each "
+        f"one, or delete it if the guarantee is gone: {stale}")
+
+
 def test_every_shipped_mutation_has_a_unique_anchor():
     """The check applied to the real list, so an ambiguous anchor cannot be committed and then
     discovered later by a run that reported `CAUGHT` about the wrong line."""

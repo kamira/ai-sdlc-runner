@@ -24,6 +24,15 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from ai_sdlc_runner import conversations, models  # noqa: E402
 
+#: Small numbers as the documents write them. Only as far as the counts here can plausibly go —
+#: past that the digit spelling is accepted and a page writing "twelve" would be told to say "12",
+#: which is a better outcome than a silently unchecked claim (CHG-20260828-02).
+_WORDS = ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
+
+
+def _count(n: int) -> str:
+    return _WORDS[n] if 0 <= n < len(_WORDS) else str(n)
+
 PAGE = (ROOT / "docs" / "DATABASE.md").read_text(encoding="utf-8")
 BLOCKS = re.findall(r"```sql\n(.*?)```", PAGE, re.S)
 
@@ -178,6 +187,16 @@ def test_the_page_says_which_tables_are_built_and_which_are_not():
     for table in sorted(designed - built):
         assert "created by no code" in flat or "not created by any" in flat, (
             f"{table} is designed and unbuilt; the page must say so")
-    assert f"{len(built)} of {len(designed)} tables are built" in flat or (
-        "three of five tables are built" in flat.lower()), (
-        f"the page must say how many of the {len(designed)} tables exist; {len(built)} do")
+    # The page writes its counts in words, so both spellings are accepted — but both are DERIVED
+    # (CHG-20260828-02). This read `... in flat or ("three of five tables are built" in flat)`,
+    # and the frozen half made the computed half optional: build a sixth table and the page could
+    # go on saying "three of five" while this passed.
+    #
+    # That is this repository's founding defect, quoted in `tools/mutation_check.py`'s own
+    # docstring: `assert good.id in report["imported"] or report["refused"]` — an `or` that lets
+    # the wrong branch satisfy the claim.
+    spellings = {f"{_count(len(built))} of {_count(len(designed))} tables are built",
+                 f"{len(built)} of {len(designed)} tables are built"}
+    assert any(s in flat.lower() for s in spellings), (
+        f"the page must say how many of the {len(designed)} tables exist; {len(built)} do. "
+        f"Accepted spellings: {sorted(spellings)}")

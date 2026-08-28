@@ -88,6 +88,17 @@ def _field_present(text: str, field: str) -> bool:
     return bool(re.search(rf"^\s*-?\s*{field}\s*[:：]", text, re.MULTILINE | re.IGNORECASE))
 
 
+def _target_chg(text: str) -> str:
+    """The change an acceptance says it is for, or `""` when it does not say.
+
+    Absence is not a problem here: older records predate the field, and inventing a requirement for
+    them would turn a traceability check into a formatting one. What is checked is **disagreement**
+    — a record that names a target and names the wrong one.
+    """
+    found = re.search(r"^[-*]\s*(?:\*\*)?Target CHG(?:\*\*)?\s*:\s*(CHG-[\d-]+)", text, re.M)
+    return found.group(1) if found else ""
+
+
 def check(repo: Path) -> List[str]:
     problems: List[str] = []
     changes = sorted((repo / "docs" / "changes").glob("CHG-*.md"))
@@ -135,6 +146,29 @@ def check(repo: Path) -> List[str]:
             problems.append(
                 f"{chg_id}: its status says the work is finished, but docs/acceptance/ has no "
                 f"matching ACC — a change reported complete with nothing saying it was checked")
+
+    # ── the other direction, which nothing walked (CHG-20260828-02) ─────────────────────────────
+    #
+    # Everything above starts at a CHG. An ACC naming a change that does not exist was therefore
+    # invisible: the ledger reported "passed" while an acceptance vouched for nothing. Traceability
+    # is the point of keeping both files, and it only holds if it holds both ways.
+    known = {p.stem.replace("CHG-", "") for p in changes}
+    for path in sorted((repo / "docs" / "acceptance").glob("ACC-*.md")):
+        acc_id = path.stem
+        suffix = acc_id.replace("ACC-", "")
+        if suffix not in known:
+            problems.append(
+                f"{acc_id}: names no change in docs/changes/ — CHG-{suffix} does not exist. Either "
+                f"the change was renamed and this record now vouches for nothing, or the id is a "
+                f"typo and the acceptance is filed against the wrong change")
+            continue
+        # A record filed under one id while claiming another target points two ways, and a reader
+        # following either one lands somewhere the other contradicts.
+        stated = _target_chg(path.read_text(encoding="utf-8"))
+        if stated and stated != f"CHG-{suffix}":
+            problems.append(
+                f"{acc_id}: is filed under CHG-{suffix} but its `Target CHG` says {stated}. One of "
+                f"the two is wrong and the pair no longer traces")
     return problems
 
 
