@@ -249,20 +249,19 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "risk", "gates read the proposed grade again, not the strictest candidate",
         SRC / "engine.py",
-        '''    candidates = [cfg.risk] + list(report.risk_proposed.values())
-    return policy.strictest([c for c in candidates if c])''',
-        '''    return cfg.risk''',
+        '''        candidates = [cfg.risk] + list(report.risk_proposed.values()) + list(
+            cfg.workstreams.values())
+        return policy.strictest([c for c in candidates if c])''',
+        '''        return cfg.risk''',
         "tests/test_risk_adjudicated.py"),
 
     Mutation(
         "risk", "a signed-off grade stops taking effect",
         SRC / "engine.py",
         '''    settled = report.risk_settled
-    if settled:
-        return settled''',
+    if not settled:''',
         '''    settled = report.risk_settled
-    if False:
-        return settled''',
+    if True:''',
         "tests/test_risk_adjudicated.py"),
 
     Mutation(
@@ -292,6 +291,61 @@ MUTATIONS: List[Mutation] = [
         '''        if node.mode == MODEL_PANEL and node.kind != DECISION and not node.grades_risk:''',
         '''        if False:''',
         "tests/test_risk_adjudicated.py"),
+
+    Mutation(
+        "risk", "a node in no workstream reads the loosest instead of the strictest",
+        SRC / "engine.py",
+        '''        return policy.strictest(list(cfg.workstreams.values()) + [settled])''',
+        '''        return min(list(cfg.workstreams.values()) + [settled], key=policy.RISKS.index)''',
+        "tests/test_workstream_risk.py"),
+
+    Mutation(
+        "risk", "a node stops reading its own workstream's grade",
+        SRC / "engine.py",
+        '''            grade = cfg.workstreams.get(named)
+            if grade:
+                return grade''',
+        '''            grade = cfg.workstreams.get(named)
+            if False:
+                return grade''',
+        "tests/test_workstream_risk.py"),
+
+    Mutation(
+        "risk", "the operator's override stops overriding",
+        SRC / "engine.py",
+        '''    if cfg.risk_override:
+        return cfg.risk_override''',
+        '''    if False:
+        return cfg.risk_override''',
+        "tests/test_workstream_risk.py"),
+
+    Mutation(
+        "risk", "a workstream graded with a word that is not a grade is accepted",
+        SRC / "plan.py",
+        '''        if grade not in policy.RISKS:''',
+        '''        if False:''',
+        "tests/test_workstream_risk.py"),
+
+    Mutation(
+        "risk", "a node may point at a workstream nobody declared",
+        SRC / "plan.py",
+        '''        if name not in workstreams:''',
+        '''        if False:''',
+        "tests/test_workstream_risk.py"),
+
+    Mutation(
+        "risk", "a declared workstream may have no name",
+        SRC / "plan.py",
+        '''        if not str(name).strip():''',
+        '''        if False:''',
+        "tests/test_workstream_risk.py"),
+
+    Mutation(
+        "risk", "the plan's workstreams stop reaching the run",
+        SRC / "cli.py",
+        '''        workstreams=plan.get("workstreams") or {},''',
+        '''        workstreams={},''',
+        "tests/test_workstream_risk.py"),
 
     Mutation(
         "cli", "refusal text goes to the terminal with its control characters intact",

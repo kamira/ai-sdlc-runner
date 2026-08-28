@@ -409,6 +409,16 @@ class RunConfig:
     #: (CHG-20260827-19). Empty means the policy table decides; a kind missing from both reaches the
     #: operator. Never consulted in a way that can raise — see `policy.routed_to`.
     halt_routing: Mapping[str, str] = field(default_factory=dict)
+    #: `{name: grade}` (CHG-20260827-18). Empty is the ordinary case and means one grade for the
+    #: whole run, exactly as before this change.
+    workstreams: Mapping[str, str] = field(default_factory=dict)
+    #: `{node id: workstream name}`. A node named here reads that workstream's grade; a node not
+    #: named here reads the strictest of them, never the loosest.
+    node_workstream: Mapping[str, str] = field(default_factory=dict)
+    #: What the operator passed as `--risk`, if they passed one. Distinct from `risk`, which is the
+    #: plan's proposal: an operator saying `high` is not a proposal to be weighed against a
+    #: workstream's `low`, and before this field the two were the same string and indistinguishable.
+    risk_override: Optional[str] = None
     #: What to do when this runner **could not verify** what a node does — it declares no
     #: operations, or it names targets nothing recognises. ``refuse`` is the
     #: default and the only safe one: a plan that simply omits `operations` used to be checked
@@ -501,7 +511,8 @@ class RunConfig:
         return str(self.journal.dir.resolve())
 
 
-def _grade_in_force(cfg: "RunConfig", report: "RunReport") -> str:
+def _grade_in_force(cfg: "RunConfig", report: "RunReport",
+                    node: Optional[graph.Node] = None) -> str:
     """The grade gates resolve at right now — which is not always the grade the plan proposed.
 
     ## The circularity this exists to break
@@ -521,12 +532,48 @@ def _grade_in_force(cfg: "RunConfig", report: "RunReport") -> str:
 
     Once the grade is settled the settled grade is used, including where it is *lower* than a
     candidate. Signing off is what makes it the answer.
+
+    ## Workstreams (CHG-20260827-18)
+
+    One instruction becomes several workstreams, and a schema change, a copy tweak and a payment
+    path are not the same risk. One scalar per run makes the copy tweak drag everything to `high`
+    **or** lets the schema change ride along at `low` — two failures in opposite directions, which
+    is the sign the scalar is the wrong shape rather than the wrong value.
+
+    So a node in a workstream reads that workstream's grade. A node in none — `pr`, `merge`,
+    `close_out`, and everything before the split — reads the **strictest** of them: a programme is
+    as risky as its riskiest part at the point where all of it merges, and "the loosest" would let
+    a `low` copy tweak set the height of the gate the whole change passes through.
+
+    `--risk` still overrides everything (`cfg.risk_override`), because an operator saying `high` is
+    not a proposal to be averaged with anything.
     """
+    if cfg.risk_override:
+        return cfg.risk_override
+
     settled = report.risk_settled
-    if settled:
-        return settled
-    candidates = [cfg.risk] + list(report.risk_proposed.values())
-    return policy.strictest([c for c in candidates if c])
+    if not settled:
+        # Unsettled: protect at the strictest of everything anyone has put forward, workstreams
+        # included. Until the grade is ratified there is no "this node's grade" to read.
+        candidates = [cfg.risk] + list(report.risk_proposed.values()) + list(
+            cfg.workstreams.values())
+        return policy.strictest([c for c in candidates if c])
+
+    if node is not None:
+        named = cfg.node_workstream.get(node.id)
+        if named:
+            grade = cfg.workstreams.get(named)
+            if grade:
+                return grade
+            # Declared assignment, undeclared workstream. `plan.check` refuses this at the door, so
+            # reaching here means a caller built a RunConfig directly. Strictest, not `settled` —
+            # the safe reading of a broken mapping is never the loosest one.
+            return policy.strictest([settled] + list(cfg.workstreams.values()) or [settled])
+
+    if cfg.workstreams:
+        # In no workstream: the change-level gates, and everything before the split.
+        return policy.strictest(list(cfg.workstreams.values()) + [settled])
+    return settled
 
 
 def resolve_verdict(node: graph.Node, risk: str, autonomy: Optional[str] = None) -> Dict[str, object]:
@@ -1382,7 +1429,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             report.halt_reason = tripped
             return _finish(report, confirmations, cfg.conversation)
 
-        verdict = resolve_verdict(node, _grade_in_force(cfg, report), cfg.autonomy)
+        verdict = resolve_verdict(node, _grade_in_force(cfg, report, node), cfg.autonomy)
         report.verdicts[node.id] = dict(verdict)
 
         def _gate(phase: str):
