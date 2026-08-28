@@ -262,6 +262,30 @@ def relax(graded: str, klass: Optional[str]) -> Tuple[str, str]:
     return AUTO, (f"; relaxed from {CONFIRM} by the {klass!r} class, which a person declared")
 
 
+def combined_class(names: Sequence[str]) -> str:
+    """What a change-level gate reads when a programme has several workstreams
+    (CHG-20260828-07).
+
+    `merge`, `pr` and `close_out` belong to no workstream, so they need one answer over all of
+    them. This is the analogue of `strictest` for risk, and it leans the same way:
+
+    * **any workstream without an in-force class → `normal`.** A part nobody pre-authorised means
+      the change as a whole is not pre-authorised. Reading the loosest would let a `standard` copy
+      tweak carry an unassessed schema change through the door they both pass.
+    * **any `emergency` → `emergency`.** Both relaxing classes turn `confirm` into `auto`
+      identically, so the gate is the same either way — but `emergency` carries the obligation to
+      review afterwards, and a programme containing one has that obligation. Reporting it as
+      `standard` would drop the half that is not about gates.
+    * otherwise `standard`.
+
+    Empty means nothing was declared, which is `normal` — the same answer as declaring nothing.
+    """
+    seen = [n if n in BY_CLASS else DEFAULT_CLASS for n in names]
+    if not seen or any(n == DEFAULT_CLASS for n in seen):
+        return DEFAULT_CLASS
+    return "emergency" if "emergency" in seen else "standard"
+
+
 def class_in_force(declared: Optional[Mapping[str, object]], today: str) -> Tuple[str, str]:
     """The class that actually applies now, and why — an unreviewed one expires to `normal`.
 

@@ -298,3 +298,124 @@ def test_a_deploy_under_a_standard_class_still_halts(tmp_path):
                                         "targets": ["kubectl apply -f prod/"]}]})
     assert "permanent halt" in out, out[-800:]
     assert "state:         stopped" in out
+
+
+# ── a programme's parts are not one type (CHG-20260828-07) ──────────────────────────────────────
+
+SPLIT = {"copy": "low", "schema": "high"}
+ASSIGNED = {"engineer_build": "copy", "lead_review": "schema"}
+
+
+def _split_cfg(**kw):
+    return engine.RunConfig(node_specs={}, decisions={}, today=TODAY,
+                            workstreams=SPLIT, node_workstream=ASSIGNED, **kw)
+
+
+def _signed(name):
+    return {"class": name, "authorised_by": "alex@example.com", "review_by": "2026-12-31"}
+
+
+def test_a_node_reads_its_own_workstreams_class():
+    """The reservation ACC-20260827-20 left open: *"this composes badly with workstreams"*.
+
+    CHG-20260827-18 made risk per-workstream because a schema change and a copy tweak are not the
+    same risk. They are not the same **type** either — one may be assessed and pre-authorised while
+    the other is not — and a class shipped as one scalar per run.
+    """
+    cfg = _split_cfg(class_by_workstream={"copy": _signed("standard")})
+    assert engine._class_in_force(cfg, graph.BY_ID["engineer_build"], TODAY)[0] == "standard"
+
+
+def test_a_workstream_nobody_classed_is_normal():
+    cfg = _split_cfg(class_by_workstream={"copy": _signed("standard")})
+    assert engine._class_in_force(cfg, graph.BY_ID["lead_review"], TODAY)[0] == "normal"
+
+
+def test_a_change_level_gate_relaxes_only_if_every_part_was_pre_authorised():
+    """`merge` belongs to no workstream, and this is the half that is easy to get backwards.
+
+    Reading the loosest would let a pre-authorised copy tweak carry an unassessed schema change
+    through the door they both pass — the same error `_grade_in_force` avoids by reading the
+    strictest rather than the loosest.
+    """
+    half = _split_cfg(class_by_workstream={"copy": _signed("standard")})
+    assert engine._class_in_force(half, graph.BY_ID["merge"], TODAY)[0] == "normal"
+
+    both = _split_cfg(class_by_workstream={"copy": _signed("standard"),
+                                           "schema": _signed("standard")})
+    assert engine._class_in_force(both, graph.BY_ID["merge"], TODAY)[0] == "standard"
+
+
+def test_an_expired_class_on_one_part_stops_the_whole_change_relaxing():
+    """Expiry composes the same way: a part whose assessment lapsed is a part nobody assessed."""
+    cfg = _split_cfg(class_by_workstream={
+        "copy": _signed("standard"),
+        "schema": dict(_signed("standard"), review_by="2026-08-01")})
+    assert engine._class_in_force(cfg, graph.BY_ID["merge"], TODAY)[0] == "normal"
+
+
+def test_an_emergency_anywhere_is_reported_as_emergency():
+    """Both relaxing classes turn `confirm` into `auto` identically, so the gate is the same — but
+    `emergency` carries the obligation to review afterwards, and reporting it as `standard` would
+    drop the half that is not about gates."""
+    cfg = _split_cfg(class_by_workstream={"copy": _signed("standard"),
+                                          "schema": _signed("emergency")})
+    assert engine._class_in_force(cfg, graph.BY_ID["merge"], TODAY)[0] == "emergency"
+
+
+@pytest.mark.parametrize("names,expected", [
+    ([], "normal"),
+    (["standard"], "standard"),
+    (["standard", "normal"], "normal"),
+    (["standard", "emergency"], "emergency"),
+    (["made-up", "standard"], "normal"),
+])
+def test_the_combined_rule_leans_the_safe_way(names, expected):
+    assert policy.combined_class(names) == expected
+
+
+def test_a_single_workstream_plan_still_uses_the_run_level_class():
+    """One workstream or none is one type, and that is every plan written before this."""
+    cfg = engine.RunConfig(node_specs={}, decisions={}, today=TODAY,
+                           workstreams={"only": "low"}, change_class=_signed("standard"))
+    assert engine._class_in_force(cfg, graph.BY_ID["merge"], TODAY)[0] == "standard"
+
+
+# ── the flag ────────────────────────────────────────────────────────────────────────────────────
+
+def test_a_bare_class_over_a_split_programme_is_refused():
+    """The safety of this whole change, in one refusal.
+
+    A single sentence cannot have assessed a schema change *and* a copy tweak, and applying it to
+    both would pre-authorise parts nobody looked at — silently, which is the one thing a change
+    class must not be.
+    """
+    with pytest.raises(SystemExit) as exc:
+        cli._change_classes(["standard:alex:2026-12-31"], SPLIT)
+    assert "nobody looked at" in str(exc.value)
+    assert "copy=" in str(exc.value), "the refusal must show how to say what was meant"
+
+
+def test_a_bare_class_is_fine_when_there_is_nothing_to_split():
+    run_level, per = cli._change_classes(["standard:alex:2026-12-31"], {"only": "low"})
+    assert run_level["class"] == "standard" and per == {}
+
+
+def test_a_class_for_a_workstream_the_plan_does_not_declare_is_refused():
+    with pytest.raises(SystemExit) as exc:
+        cli._change_classes(["nope=standard:alex:2026-12-31"], SPLIT)
+    assert "does not" in str(exc.value) and "declare" in str(exc.value)
+
+
+def test_two_run_level_classes_are_refused_rather_than_one_winning():
+    """Silently keeping the last would make which one applies depend on argument order."""
+    with pytest.raises(SystemExit):
+        cli._change_classes(["standard:a:2026-12-31", "standard:b:2026-12-31"], {"only": "low"})
+
+
+def test_each_workstream_can_be_classed_separately():
+    _, per = cli._change_classes(
+        ["copy=standard:alex:2026-12-31", "schema=emergency:sam:2026-12-31"], SPLIT)
+    assert per["copy"]["class"] == "standard"
+    assert per["schema"]["class"] == "emergency"
+    assert per["schema"]["authorised_by"] == "sam", "each names its own signer"
