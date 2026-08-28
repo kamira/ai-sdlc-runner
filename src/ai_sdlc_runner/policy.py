@@ -138,6 +138,148 @@ PERMANENT_HALT_KINDS: Dict[str, str] = {
     "publish":    "publishing public content",
 }
 
+@dataclass(frozen=True)
+class Recipient:
+    """A function that owns one of the permanent halts (CHG-20260827-19).
+
+    **Not a `Role`.** A role is dispatched a work order and carries the three capabilities that
+    describe what that order may do; a recipient is *told* something stopped and decides whether it
+    proceeds. Nothing here is ever handed a module, so `can_write` and the rest would be three
+    `False`s pretending to be a description — and `test_policy.py` refuses a role no node names,
+    correctly, which is how the first draft of this change was caught putting them in `ROLES`.
+    """
+
+    name: str
+    label: str
+    note: str = ""
+
+
+#: The functions the six permanent halts imply. In a small team these are all one person, which is
+#: exactly what the runner assumed until now; at the scale being targeted they are five different
+#: people, and a `deploy` halt that reaches whoever happened to start the run reaches the wrong desk.
+RECIPIENTS: Tuple[Recipient, ...] = (
+    Recipient("release", "發布負責人 / release owner",
+              note="production deploys and releases"),
+    Recipient("data", "資料負責人 / data owner",
+              note="the database: migrations and hard deletes, both irreversible against data "
+                   "somebody else answers for"),
+    Recipient("finance", "財務 / finance",
+              note="moving money — the one kind whose worst case is not technical"),
+    Recipient("security", "資安 / security",
+              note="secrets, credentials, access control"),
+    Recipient("comms", "對外溝通 / communications",
+              note="public content — the only kind whose damage lands outside the system"),
+)
+
+BY_RECIPIENT: Dict[str, Recipient] = {r.name: r for r in RECIPIENTS}
+
+#: What a halt reaches when nothing else claims it. Deliberately **not** in `RECIPIENTS`: the
+#: operator is the person running this, not a function inside the organisation, and keeping it out
+#: means editing the roster can never delete the fallback.
+DEFAULT_RECIPIENT = "operator"
+
+#: Who is told first when a permanent halt fires. Data, beside `GATES`, and read the same way.
+#:
+#: ## Routing narrows who is told FIRST. It never narrows who is told.
+#:
+#: A routing table is a new way for a halt to go missing, and that is the whole risk in this change.
+#: So: `routed_to` never raises, a kind absent from this table is not an error, and `recipients`
+#: puts the operator on every halt whether or not a specialist is named.
+#:
+#: `migration` and `delete` share `data` on purpose. Both are irreversible against data somebody
+#: else answers for, and separating them would imply the difference matters to who decides. It does
+#: not.
+HALT_ROUTING: Dict[str, str] = {
+    "deploy":    "release",
+    "migration": "data",
+    "delete":    "data",
+    "money":     "finance",
+    "access":    "security",
+    "publish":   "comms",
+}
+
+
+def recipient_label(name: str) -> str:
+    """A recipient as a person would read it: the roster's label if it is one of ours, else as given.
+
+    An organisation names its own functions — `sre-oncall`, `dba`, whatever the rota is called — and
+    a routing table that only accepted `RECIPIENTS` would be a table nobody could use. So an unknown
+    name is not an error here; it is simply printed as typed. `RECIPIENTS` supplies a label for the
+    five this runner ships an opinion about, and nothing more.
+    """
+    known = BY_RECIPIENT.get(name)
+    return known.label if known else name
+
+
+def routed_to(kind: str, routing: Optional[Mapping[str, str]] = None) -> Tuple[str, str]:
+    """Who is told first about a halt of this kind, and where that answer came from.
+
+    Returns ``(recipient, source)`` with `source` one of ``"project"``, ``"policy"`` or
+    ``"default"``, because *"who decided this"* is the question an operator asks second, straight
+    after *"who is it for"*.
+
+    A project's own table wins. `None`, an empty mapping, a mapping without this kind, and a blank
+    value all fall through to the same place — as does a kind nobody has ever heard of. **No path
+    here raises:** a routing table that can refuse is a routing table that can swallow a halt.
+    """
+    if routing:
+        named = str(routing.get(kind) or "").strip()
+        if named:
+            return named, "project"
+    if kind in HALT_ROUTING:
+        return HALT_ROUTING[kind], "policy"
+    return DEFAULT_RECIPIENT, "default"
+
+
+def check_routing(routing: Mapping[str, str]) -> None:
+    """Refuse a routing table that names a **kind** this runner does not have. Configuration time.
+
+    The asymmetry is deliberate and it is the whole design:
+
+    * A wrong **kind** is refused here, loudly, when somebody types it. `{"deploy ": "release"}` or
+      `{"deploys": "release"}` would otherwise sit in the store looking configured and route
+      nothing, for ever, silently — the operator believing the `deploy` halt goes to release when
+      it never will.
+    * A wrong **recipient** is not refused, here or anywhere. Organisations name their own
+      functions, and a table that only accepted this module's five would be one nobody could use.
+      A name nobody recognises still reaches somebody, because the operator is on every halt.
+
+    So: fail early on the half that can silently do nothing, and never fail on the half that cannot.
+    """
+    unknown = sorted(k for k in routing if k not in PERMANENT_HALT_KINDS)
+    if unknown:
+        raise PolicyError(
+            f"halt routing names kind(s) that do not exist: {unknown}. They must be from "
+            f"{sorted(PERMANENT_HALT_KINDS)} — a kind with a typo in it is configuration that "
+            f"looks set and routes nothing, and the halt it was meant for would go on reaching "
+            f"only the operator with nobody noticing why.")
+
+
+def recipients(kinds: object, routing: Optional[Mapping[str, str]] = None) -> Tuple[str, ...]:
+    """Everyone a halt must reach, owners in the order their kinds were crossed, operator last.
+
+    `routed_to` says who is told **first**; this says who is told, and the distance between those
+    two sentences is the entire safety property of this change.
+
+    Takes one kind or several. Several is the real case: `secrets/prod.env` is a credentials file
+    *and* sits in something called production, so it crosses `deploy` and `access` and both owners
+    are answerable for it.
+
+    **The operator is appended once, at the end**, rather than per kind. Building this at the call
+    site instead produced `['release', 'operator', 'security']` — a list documented first-named-first
+    with the operator sitting in the middle of it, misreporting who is told first. That is why the
+    ordering rule is here, next to the tests for it, and not inlined wherever a halt is raised.
+    """
+    wanted = (kinds,) if isinstance(kinds, str) else tuple(kinds or ())
+    told: List[str] = []
+    for kind in wanted:
+        owner, _ = routed_to(str(kind), routing)
+        if owner != DEFAULT_RECIPIENT and owner not in told:
+            told.append(owner)
+    told.append(DEFAULT_RECIPIENT)
+    return tuple(told)
+
+
 #: What a plan declares for work that crosses none of them. It is a **declaration**, not a default:
 #: see `classify`.
 ORDINARY = "ordinary"
@@ -479,12 +621,38 @@ def classify(operation: Mapping[str, object]) -> Optional[str]:
             f"operation {description!r} declares kind {kind!r}, which is not one of "
             f"{sorted(PERMANENT_HALT_KINDS) + [ORDINARY]}")
 
+    crossed_kinds = _crossed(kind, description, targets)
+    if not crossed_kinds:
+        return None
+    return " and ".join(PERMANENT_HALT_KINDS[k] for k in crossed_kinds)
+
+
+def _crossed(kind: object, description: str, targets: Sequence[str]) -> Tuple[str, ...]:
+    """The three layers, answering in **kind keys**. `classify` is this, formatted.
+
+    Split out for CHG-20260827-19, which needs to route a halt to whoever owns that kind — and a
+    description cannot be routed. The alternative was a second function repeating the ordering, and
+    two functions that must agree about what is a red line will eventually disagree about one.
+    """
     derived = derive(targets)
     if derived:
-        return " and ".join(PERMANENT_HALT_KINDS[k] for k in derived)
+        return derived
     if kind in PERMANENT_HALT_KINDS:
-        return PERMANENT_HALT_KINDS[kind]
-    return permanent_halt(description)
+        return (str(kind),)
+    spoken = _halt_word_kind(description)
+    return (spoken,) if spoken else ()
+
+
+def crossed(operation: Mapping[str, object]) -> Tuple[str, ...]:
+    """Every permanent-halt kind this operation crosses, as keys of `PERMANENT_HALT_KINDS`.
+
+    Same decision as `classify` and the same validation — this is the routable form of the answer.
+    Empty means the operation crosses nothing.
+    """
+    if classify(operation) is None:
+        return ()
+    return _crossed(operation.get("kind"), str(operation.get("description", "")),
+                    operation.get("targets") or ())
 
 
 def unverified(operation: Mapping[str, object],
@@ -529,10 +697,16 @@ def permanent_halt(text: str) -> Optional[str]:
     Never the guarantee on its own: see `classify`. Matching is deliberately generous, because in
     this direction a false stop costs one question and a miss costs the thing that cannot be undone.
     """
+    kind = _halt_word_kind(text)
+    return PERMANENT_HALT_KINDS[kind] if kind else None
+
+
+def _halt_word_kind(text: str) -> Optional[str]:
+    """The same backstop, answering in a kind key so it can be routed. See `_crossed`."""
     lowered = text.casefold()
     for kind, words in _HALT_WORDS.items():
         if any(word in lowered for word in words):
-            return PERMANENT_HALT_KINDS[kind]
+            return kind
     return None
 
 

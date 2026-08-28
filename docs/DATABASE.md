@@ -1,6 +1,7 @@
 # The database schema
 
-**Status: three of five tables are built.** `models`, `node_assignments` and `seat_assignments`
+**Status: 6 of 6 tables are built.** `models`, `node_assignments`, `seat_assignments`,
+`conversations`, `turns` and `halt_routing`
 are live in [`store.py`](../src/ai_sdlc_runner/store.py) — that is model configuration, both halves,
 after the ruling that it was meant to include the assignment. `conversations` and `turns` are
 **designed here and created by no code**: a table nothing reads or writes is a mechanism nobody
@@ -23,6 +24,7 @@ it, because a schema without its reasons gets "simplified" back into the defect 
 | the **model registry** — *which models exist* | `settings.json` — seats, high-risk bypass, vouched commands | server config, read before any store exists |
 | — | the ask journal (`.runner/asks/*.json`) | a **resume index**, mutable by design; see §5 |
 | the **model assignment** — `node_assignments`, `seat_assignments` | — | **since CHG-20260823-25**; see §0.1 |
+| **who a permanent halt reaches** — `halt_routing` | — | **since CHG-20260827-19**; see §0.2 |
 
 ### 0.1 · Model configuration is two halves, and both are persisted here
 
@@ -64,6 +66,36 @@ else. That is not a limitation to work around later — it is the one rule that 
 from being circular, and a seat checked that `runner.yaml` carries no store key today.
 
 ---
+
+## 0.2 · `halt_routing` — who a red line stops in front of
+
+```sql
+CREATE TABLE halt_routing (
+  kind       TEXT PRIMARY KEY,
+  recipient  TEXT NOT NULL
+)
+```
+
+Schema 3.
+
+`PERMANENT_HALT_KINDS` names six things nothing automates. Past the size where one person owns all
+six they are six different people's decisions, and until CHG-20260827-19 every one of them stopped
+in front of whoever happened to start the run.
+
+**`kind` is the primary key**, so a project has one recipient per kind and re-configuring replaces
+rather than accumulating. Two rows for `deploy` would be a routing table that cannot answer its own
+question.
+
+**`recipient` has no foreign key, and that is deliberate.** An organisation names its own functions
+— `sre-oncall`, `dba`, whoever the rota is — and constraining it to the five names
+`policy.RECIPIENTS` ships would make the table unusable by the organisations it exists for. The
+*kind* is validated instead, in `policy.check_routing`, at the moment somebody types it: a typo'd
+kind would otherwise sit here looking configured and route nothing for ever.
+
+**An empty table is the ordinary case** and means `policy.HALT_ROUTING` decides. A kind in neither
+reaches the operator. The rule the whole feature is judged on: *routing narrows who is told first,
+it never narrows who is told.*
+
 
 ## 1 · Connection setup
 

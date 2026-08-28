@@ -313,6 +313,11 @@ class RunReport:
     #: "at random" is only acceptable if the choice is afterwards visible: an unrecorded random
     #: dispatch is indistinguishable from a preference nobody declared.
     dispatches: List[str] = field(default_factory=list)
+    #: Every permanent halt this run hit, and who it was for (CHG-20260827-19). A list of
+    #: ``{"node_id", "kinds", "told", "description"}``. Recorded rather than only printed, because
+    #: "who was told" is a fact an audit asks about months later, and a message on somebody's
+    #: terminal is not a record.
+    halts: List[Dict[str, object]] = field(default_factory=list)
     #: What the seats said about the requirement: every problem, attributed, and every aspect
     #: any of them could not find. A union — see `intake.py` for why this one is not adjudicated.
     survey: Optional[Dict[str, object]] = None
@@ -389,6 +394,10 @@ class RunConfig:
     #: declared red line stops the run at every risk grade, whatever is confirmed and whatever mode
     #: is on — and an operation that declares nothing is refused rather than assumed safe.
     operations: Mapping[str, Sequence[Mapping[str, object]]] = field(default_factory=dict)
+    #: A project's own halt routing, `kind -> recipient`, overriding `policy.HALT_ROUTING`
+    #: (CHG-20260827-19). Empty means the policy table decides; a kind missing from both reaches the
+    #: operator. Never consulted in a way that can raise — see `policy.routed_to`.
+    halt_routing: Mapping[str, str] = field(default_factory=dict)
     #: What to do when this runner **could not verify** what a node does — it declares no
     #: operations, or it names targets nothing recognises. ``refuse`` is the
     #: default and the only safe one: a plan that simply omits `operations` used to be checked
@@ -982,9 +991,27 @@ def _permanent_halt(node: graph.Node, cfg: "RunConfig", report: "RunReport") -> 
         if halt is not None:
             what = operation.get("description", operation) if isinstance(operation, Mapping) \
                 else operation
+            # Who it is for (CHG-20260827-19). Six kinds are six different people's decisions once
+            # the team is past the size where they are all the same person, and until now every one
+            # of them stopped in front of whoever happened to start the run.
+            #
+            # `policy.recipients` always includes the operator, so this narrows who is told FIRST
+            # and never narrows who is told. An unrouted kind — including one this runner has never
+            # heard of — comes back as the operator alone rather than raising, because a routing
+            # table that can refuse is a routing table that can swallow a halt.
+            kinds = list(policy.crossed(operation)) if isinstance(operation, Mapping) else []
+            # Owners first in the order their kinds were crossed, then the operator, once, at the
+            # end. Appending `policy.recipients(...)` per kind put the operator wherever the first
+            # kind happened to leave it — `['release', 'operator', 'security']` for a target that is
+            # both a credentials file and a production path. The list is documented first-named
+            # first, so an operator in the middle of it misreports who is told first.
+            told = list(policy.recipients(kinds, cfg.halt_routing))
+            report.halts.append({"node_id": node.id, "kinds": kinds,
+                                 "told": list(told), "description": str(what)})
             return (
                 f"permanent halt at {node.id!r}: {what!r} is {halt}. No risk grade, confirmation "
-                f"or mode relaxes this — a person does it.")
+                f"or mode relaxes this — a person does it. This one is for {told[0]}"
+                + (f", and the operator" if told[0] != policy.DEFAULT_RECIPIENT else "") + ".")
     return None
 
 

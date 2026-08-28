@@ -1,6 +1,6 @@
 # The server's HTTP API
 
-The console's back end. **Seventeen routes** — eight `GET`, nine `POST` — every one crossing a process
+The console's back end. **Eighteen routes** — eight `GET`, ten `POST` — every one crossing a process
 boundary to a browser, and until now none of them written down. An independent seat called this the
 largest omission in [`SCHEMAS.md`](SCHEMAS.md); this is that entry.
 
@@ -162,6 +162,7 @@ If the version does not match the run's current one:
 | `POST /run/decide` | `{version, node_id, branch}` | the run is not suspended, or is suspended on a **gate** rather than a tie |
 | `POST /config/nodes` | `{version, node_id, models: [...]}` | no such node; a node whose **mode ignores** a model list; a model the registry does not have; `models` not a list |
 | `POST /config/seats` | `{version, seat, model_id}` | no such seat; a model the registry does not have |
+| `POST /config/halts` | `{version, kind, recipient?}` | a `kind` that is not one of the six permanent halts. A `recipient` is **never** refused — an organisation names its own functions, and an unrecognised one still reaches somebody because the operator is on every halt. A blank or missing `recipient` clears the route |
 | `POST /run/instruct` | `{version, instruction}` | the instruction is empty — *"an empty instruction says nothing"* |
 | `POST /attachments` | `{version, filename, data}` — `data` is **base64** | the base64 is invalid, or `attachments.py` refuses the type or size |
 | `POST /models` | `{version, model: {…8 fields…}}` | `_model_from` refuses an unknown field, or `validate` refuses the model |
