@@ -629,7 +629,8 @@ def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
     return workorder.render(node, spec, verdict, seat=seat)
 
 
-def _open(factory: SessionFactory, seat: Optional[str], model: Optional[str] = None):
+def _open(factory: SessionFactory, seat: Optional[str], model: Optional[str] = None,
+          role: str = ""):
     """Open a session, letting a factory route by seat or by model if it accepts one.
 
     Routing — which model answers — lives in the factory and never in the order, which is what makes
@@ -650,6 +651,11 @@ def _open(factory: SessionFactory, seat: Optional[str], model: Optional[str] = N
         kwargs["seat"] = seat
     if "model" in params:
         kwargs["model"] = model
+    if "role" in params:
+        # CHG-20260827-23. The factory decides what the process may touch, and `can_write` is a
+        # property of the ROLE. Passed the same way as seat and model — only if the factory asks
+        # for it — so a factory written before this change is unaffected.
+        kwargs["role"] = role
     return factory(**kwargs) if kwargs else factory()
 
 
@@ -693,7 +699,7 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
             conversation.unanswered(ask_id or "", f"{type(exc).__name__}: {exc}")
 
     try:
-        session = _open(factory, seat, model)
+        session = _open(factory, seat, model, role)
     except Exception as exc:
         _failed(exc)
         raise

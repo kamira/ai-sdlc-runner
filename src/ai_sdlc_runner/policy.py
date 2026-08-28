@@ -822,6 +822,68 @@ UNDECIDED = "undecided"
 OUTCOMES = (PASS, FAIL, UNDECIDED)
 
 
+#: What a dispatched process may touch, by risk grade (CHG-20260827-23).
+#:
+#: `policy.py`'s capability flags have always been **advisory**: `Role("qa", can_write=False)` carries
+#: the note *"deliberately cannot write, so it cannot fix while verifying"*, which is a real safety
+#: property, and nothing enforced it. The flags went into the work order and the process ran with the
+#: operator's full rights.
+#:
+#: ## Why the grade decides it
+#:
+#: The runner already computes a grade per change, and per workstream since CHG-20260827-18. A
+#: sandbox policy configured once per session — which is what comparable tools do — would be a second
+#: thing to keep in step with the first. Deriving it means there is one answer to "how dangerous is
+#: this" and everything reads it.
+#:
+#: ## This table is a claim, and it is the part most likely to be wrong
+#:
+#: It applies "expensive to undo" to a second axis, and the first axis took several rounds to grade
+#: well. Written as data so a review seat can argue with the table rather than with the code.
+#:
+#: The failure mode to fear is **not** too loose. `policy.py` already names it about the red lines:
+#: a check that stops everything is a check that gets switched off. `low` keeps the network because
+#: builds fetch things, and a sandbox that breaks every build is one nobody runs.
+SANDBOX: Dict[str, Dict[str, object]] = {
+    "low":    {"write": "workspace", "network": True},
+    "medium": {"write": "workspace", "network": False},
+    "high":   {"write": "none",      "network": False},
+}
+
+#: What `write` may say. `workspace` is the directory the command runs in; `none` is read-only
+#: everywhere. There is no "everywhere" — a sandbox that allows it is not one.
+WRITE_SCOPES = ("workspace", "none")
+
+
+def sandbox_for(risk: str, can_write: bool = True) -> Dict[str, object]:
+    """The policy for one dispatched process: the grade's, narrowed by the role's capability.
+
+    A role with `can_write=False` gets no write **whatever the grade allows**. That is the direction
+    the two combine in, and it is the only direction that keeps the flag's promise: QA is
+    `can_write=False` so it cannot quietly repair what it is verifying, and a `low` grade must not
+    hand it a pen.
+
+    Narrowing only. Nothing here can widen what the grade permits.
+    """
+    if risk not in SANDBOX:
+        raise PolicyError(
+            f"no sandbox policy for grade {risk!r}; the grades are {list(RISKS)}. Defaulting here "
+            f"would pick a blast radius nobody chose.")
+    policy_for_grade = dict(SANDBOX[risk])
+    if not can_write:
+        policy_for_grade["write"] = "none"
+    # A scope the wrappers do not implement would be read as "not workspace" and silently become
+    # read-only -- safe, and not what the table says. `SANDBOX` is edited by hand and is the part of
+    # this change most likely to be got wrong, so a typo in it is refused rather than absorbed.
+    if policy_for_grade["write"] not in WRITE_SCOPES:
+        raise PolicyError(
+            f"grade {risk!r} allows write scope {policy_for_grade['write']!r}, which is not one of "
+            f"{list(WRITE_SCOPES)}. `sandbox.py` implements those two and reads anything else as "
+            f"no write at all, so this would bound the process more tightly than the table claims "
+            f"and say nothing about it.")
+    return policy_for_grade
+
+
 def strictest(grades: Sequence[str]) -> str:
     """The strictest grade in a set. `RISKS` is ordered low → high, so this is a max over it.
 
