@@ -247,6 +247,53 @@ MUTATIONS: List[Mutation] = [
         "tests/test_conversations_sqlite.py"),
 
     Mutation(
+        "risk", "gates read the proposed grade again, not the strictest candidate",
+        SRC / "engine.py",
+        '''    candidates = [cfg.risk] + list(report.risk_proposed.values())
+    return policy.strictest([c for c in candidates if c])''',
+        '''    return cfg.risk''',
+        "tests/test_risk_adjudicated.py"),
+
+    Mutation(
+        "risk", "a signed-off grade stops taking effect",
+        SRC / "engine.py",
+        '''    settled = report.risk_settled
+    if settled:
+        return settled''',
+        '''    settled = report.risk_settled
+    if False:
+        return settled''',
+        "tests/test_risk_adjudicated.py"),
+
+    Mutation(
+        "risk", "one cautious voice can set the grade alone again",
+        SRC / "policy.py",
+        '''    if top * 2 > total:''',
+        '''    if True:''',
+        "tests/test_risk_adjudicated.py"),
+
+    Mutation(
+        "risk", "a voice that answered something other than a grade is accepted",
+        SRC / "policy.py",
+        '''    unknown = sorted({g for g in grades.values() if g not in RISKS})''',
+        '''    unknown = []''',
+        "tests/test_risk_adjudicated.py"),
+
+    Mutation(
+        "risk", "the grader stops having to be a panel",
+        SRC / "graph.py",
+        '''        if node.grades_risk and node.mode != MODEL_PANEL:''',
+        '''        if False:''',
+        "tests/test_risk_adjudicated.py"),
+
+    Mutation(
+        "risk", "a work-producing step may be a panel again",
+        SRC / "graph.py",
+        '''        if node.mode == MODEL_PANEL and node.kind != DECISION and not node.grades_risk:''',
+        '''        if False:''',
+        "tests/test_risk_adjudicated.py"),
+
+    Mutation(
         "cli", "refusal text goes to the terminal with its control characters intact",
         SRC / "cli.py",
         '''    return "".join(c if (c.isprintable() or c == " ") else''',

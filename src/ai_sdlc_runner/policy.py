@@ -822,6 +822,71 @@ UNDECIDED = "undecided"
 OUTCOMES = (PASS, FAIL, UNDECIDED)
 
 
+def strictest(grades: Sequence[str]) -> str:
+    """The strictest grade in a set. `RISKS` is ordered low → high, so this is a max over it.
+
+    Used while the grade is still being decided, never to decide it — see `adjudicate_grade` for
+    why those are different jobs.
+    """
+    known = [g for g in grades if g in RISKS]
+    if not known:
+        raise PolicyError(
+            f"no grade among {list(grades)!r} is one of {list(RISKS)}. There is no strictest of "
+            f"nothing, and defaulting here would pick a protection level nobody proposed.")
+    return max(known, key=RISKS.index)
+
+
+def adjudicate_grade(grades: Mapping[str, str]) -> Dict[str, object]:
+    """A panel's risk grades, turned into one grade or into nobody's decision.
+
+    ## Why this is not `adjudicate(voices="models")`
+
+    CHG-20260827-17 proposed reusing it. It cannot do this job: that function counts how many voices
+    said `pass` and returns pass / undecided / fail. It is **binary**, and a grade is one of three.
+    Asking it for "medium" would get a count of passes back.
+
+    ## Majority, and a tie is nobody's decision — not "the strictest wins"
+
+    "Any voice saying `high` makes it high" is the tempting rule and it is wrong here. `adjudicate`'s
+    own docstring says a model panel has **no veto**, because every voice answers the same question
+    and there is no per-voice subject for a veto to be about. Letting one voice set `high` alone is a
+    veto wearing another name.
+
+    So: a strict majority decides, and anything else is `undecided` and reaches a person. Three
+    voices splitting low / medium / high decide nothing, which is the honest answer — they disagree
+    about the thing every later gate is indexed by.
+
+    **Strictness has a job, and it is not this one.** While the grade is unsettled the runner
+    protects at `strictest(...)` of what was proposed — see `engine._grade_in_force`. That is about
+    how much protection applies to an open question; this is about what the answer is. Collapsing
+    the two would let one voice decide by being cautious.
+    """
+    if not grades:
+        raise PolicyError("no grades to adjudicate")
+    unknown = sorted({g for g in grades.values() if g not in RISKS})
+    if unknown:
+        raise PolicyError(
+            f"grade(s) {unknown} are not one of {list(RISKS)}. A voice that answered something else "
+            f"has not graded the change, and reading it as a grade would invent one.")
+
+    counts: Dict[str, int] = {}
+    for grade in grades.values():
+        counts[grade] = counts.get(grade, 0) + 1
+    top = max(counts.values())
+    winners = sorted((g for g, n in counts.items() if n == top), key=RISKS.index)
+    total = len(grades)
+
+    if top * 2 > total:
+        return {"outcome": PASS, "grade": winners[0],
+                "reason": f"{top}/{total} voices graded it {winners[0]}",
+                "proposed": dict(grades)}
+    return {"outcome": UNDECIDED, "grade": None,
+            "reason": (f"no majority: {', '.join(f'{g}×{counts[g]}' for g in winners)} out of "
+                       f"{total}. The grade indexes every later gate, so a panel that has not "
+                       f"agreed on it has not decided anything a person can be spared."),
+            "proposed": dict(grades)}
+
+
 def adjudicate(verdicts: Mapping[str, str], *, voices: str = "seats") -> Dict[str, object]:
     """Turn a panel's verdicts into one outcome: veto first, then majority, and a tie decides nothing.
 

@@ -104,6 +104,21 @@ class Node:
     answer_decides: bool = False
     #: How to read the models configured here — see ``MODES``. Declared, never inferred.
     mode: str = SINGLE
+    #: This node's answers are **risk grades**, not branch labels (CHG-20260827-17). Declared here
+    #: rather than matched on the node's id in the engine, for the reason this file exists: a node
+    #: id in a condition is a name standing in for a constraint, and the constraint is *what kind of
+    #: thing this node's voices are answering*.
+    #:
+    #: Until such a node's grade is signed off, every gate resolves at the **strictest** grade any
+    #: voice proposed — see `engine._grade_in_force`. The grade under review cannot set the height
+    #: of the gate reviewing it.
+    grades_risk: bool = False
+    #: Passing this node **settles** the grade a `grades_risk` node proposed (CHG-20260827-17).
+    #: Separate from `grades_risk` because proposing and ratifying are two acts by two roles: the
+    #: lead grades, the PM signs off. Until this node passes, gates resolve at the strictest
+    #: candidate — which is what stops the assessment lowering the gate standing over its own
+    #: review.
+    settles_risk: bool = False
     #: ``POOL`` only: the **role** that dispatches. A role and not a node id, because no node
     #: represents "the lead handing out work" — the dispatching is part of the build node itself.
     main: Optional[str] = None
@@ -147,15 +162,20 @@ NODES: Tuple[Node, ...] = (
          branches={"yes": "lead_assess", "no": "pm_plan"},
          note="PM is asked, and the answer decides; the gate then stops with that answer in hand"),
     Node("lead_assess", STEP, "the lead confirms feasibility and risk", role="lead",
-         gate="feasibility_confirmed", gate_when="after", next="pm_signoff", mode=SINGLE,
-         rejects_to="pm_plan",
+         gate="feasibility_confirmed", gate_when="after", next="pm_signoff", mode=MODEL_PANEL,
+         grades_risk=True, rejects_to="pm_plan",
          note="judged before anyone is dispatched, which is why the lead is asked first. The gate "
               "is consulted AFTER: the thing a person is being asked to confirm IS the lead's "
-              "assessment, and stopping in front of it hands them an empty page"),
+              "assessment, and stopping in front of it hands them an empty page. **A panel since "
+              "CHG-20260827-17**: this was the one input deciding which row of the gate table every "
+              "later node reads, and the only consequential decision in the flow no panel saw"),
     Node("pm_signoff", DECISION, "PM signs off on the lead's assessment", role="pm",
          gate="before_dispatch", gate_when="after", answer_decides=True, mode=MODEL_PANEL,
-         rejects_to="pm_plan",
-         branches={"yes": "next_module", "no": "pm_plan"}),
+         rejects_to="pm_plan", settles_risk=True,
+         branches={"yes": "next_module", "no": "pm_plan"},
+         note="the grade becomes the run's grade here, not where it was proposed. Before "
+              "CHG-20260827-17 this node's own gate was resolved from the grade it is reviewing — "
+              "the reviewer stood at a height the reviewed thing chose"),
     Node("next_module", LOOP, "take the next unbuilt module", mode=RUNNER,
          branches={"module": "engineer_build", "none": "lead_review"},
          note="the frontier is the first module with no record — the loop and the resume are one"),
@@ -285,11 +305,25 @@ def validate() -> None:
             raise GraphError(
                 f"node {node.id!r} is mode {node.mode!r} with role {node.role!r} — only the review "
                 f"seats are a {SEAT_PANEL!r} or a {SURVEY!r}, and they are always one of the two")
-        if node.mode == MODEL_PANEL and node.kind != DECISION:
+        if node.mode == MODEL_PANEL and node.kind != DECISION and not node.grades_risk:
             raise GraphError(
-                f"node {node.id!r} is a {MODEL_PANEL!r} but a {node.kind!r} — several models on one "
-                f"question are voices to adjudicate, and a node that reaches no verdict has nothing "
-                f"to adjudicate. Work-producing nodes with several models are not settled")
+                f"node {node.id!r} is a {MODEL_PANEL!r} but a {node.kind!r} that grades nothing — "
+                f"several models on one question are voices to adjudicate, and a node that reaches "
+                f"no verdict has nothing to adjudicate. A panel must reach something: a "
+                f"{DECISION!r} reaches a branch, and a node with `grades_risk` reaches a grade "
+                f"(CHG-20260827-17). Work-producing nodes with several models are still refused — "
+                f"that is what {POOL!r} is for, one model doing the work rather than several "
+                f"voting on it.")
+        if node.settles_risk and not any(n.grades_risk for n in NODES):
+            raise GraphError(
+                f"node {node.id!r} settles a risk grade and no node grades one. Ratifying a "
+                f"proposal nothing makes would settle whatever the plan happened to say, which is "
+                f"the single unadjudicated voice CHG-20260827-17 removed.")
+        if node.grades_risk and node.mode != MODEL_PANEL:
+            raise GraphError(
+                f"node {node.id!r} grades risk but is mode {node.mode!r}. The grade indexes every "
+                f"later gate, and one voice setting it alone is the circularity CHG-20260827-17 "
+                f"exists to remove — so a grading node is a panel or it is nothing.")
         if node.mode == POOL:
             if not node.main:
                 raise GraphError(f"pool node {node.id!r} names no main to dispatch from")

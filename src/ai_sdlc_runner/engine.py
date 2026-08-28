@@ -313,6 +313,17 @@ class RunReport:
     #: "at random" is only acceptable if the choice is afterwards visible: an unrecorded random
     #: dispatch is indistinguishable from a preference nobody declared.
     dispatches: List[str] = field(default_factory=list)
+    #: What each voice graded the change, by model (CHG-20260827-17). Kept even when they agree, so
+    #: "three voices said low" is distinguishable in the record from "one voice said low".
+    risk_proposed: Dict[str, str] = field(default_factory=dict)
+    #: The grade once a panel has agreed on it and it has been signed off. `None` while the question
+    #: is open, which is what `_grade_in_force` reads to decide whether to protect at the strictest
+    #: candidate instead.
+    risk_settled: Optional[str] = None
+    #: What the grading panel agreed, before anybody ratified it. Distinct from `risk_settled`
+    #: because "the lead's panel said medium" and "medium is this run's grade" are different facts,
+    #: and a report that collapsed them could not show a sign-off being refused.
+    risk_agreed: Optional[str] = None
     #: Every permanent halt this run hit, and who it was for (CHG-20260827-19). A list of
     #: ``{"node_id", "kinds", "told", "description"}``. Recorded rather than only printed, because
     #: "who was told" is a fact an audit asks about months later, and a message on somebody's
@@ -488,6 +499,34 @@ class RunConfig:
         if self.journal is None:
             return None
         return str(self.journal.dir.resolve())
+
+
+def _grade_in_force(cfg: "RunConfig", report: "RunReport") -> str:
+    """The grade gates resolve at right now — which is not always the grade the plan proposed.
+
+    ## The circularity this exists to break
+
+    Every gate used to resolve from one `cfg.risk`, including the gates standing over the assessment
+    that *sets* `cfg.risk`. `pm_signoff` is the panel reviewing the lead's grade, and `pm_signoff`'s
+    own gate was resolved from the grade under review: the reviewer stood at a height the reviewed
+    thing chose. A change graded `low` when it is really a migration got `before_dispatch: low →
+    auto`, and the gate that exists to put a person in front of exactly that never fired.
+
+    ## So, until the grade is signed off, protect at the strictest thing anybody proposed
+
+    That is `strictest(...)` over the plan's grade and every grade a voice offered. It is not a
+    decision about what the grade *is* — `policy.adjudicate_grade` decides that, by majority, and a
+    panel that has not agreed decides nothing. This is about how much protection an **open question**
+    gets, and the answer is: the most anyone present thought it needed.
+
+    Once the grade is settled the settled grade is used, including where it is *lower* than a
+    candidate. Signing off is what makes it the answer.
+    """
+    settled = report.risk_settled
+    if settled:
+        return settled
+    candidates = [cfg.risk] + list(report.risk_proposed.values())
+    return policy.strictest([c for c in candidates if c])
 
 
 def resolve_verdict(node: graph.Node, risk: str, autonomy: Optional[str] = None) -> Dict[str, object]:
@@ -1343,7 +1382,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             report.halt_reason = tripped
             return _finish(report, confirmations, cfg.conversation)
 
-        verdict = resolve_verdict(node, cfg.risk, cfg.autonomy)
+        verdict = resolve_verdict(node, _grade_in_force(cfg, report), cfg.autonomy)
         report.verdicts[node.id] = dict(verdict)
 
         def _gate(phase: str):
@@ -1456,7 +1495,13 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                         report.resumed.append(ask_id)
                     report.asks.append(Ask(node.id, node.role, None, result, model=model))
                     answers.append(result)
-                    verdicts[model] = str(result.get("verdict") or result.get("outcome") or "")
+                    # A grading panel answers with a grade, not a branch label (CHG-20260827-17).
+                    # Read from `risk` first and fall back to `verdict`, because an agent answering
+                    # `{"verdict": "medium"}` has said the same thing in the older shape and
+                    # refusing it would be refusing a well-formed answer over its key name.
+                    verdicts[model] = str(
+                        (result.get("risk") if node.grades_risk else None)
+                        or result.get("verdict") or result.get("outcome") or "")
                 if len(verdicts) != len(configured):
                     # The failure an independent seat named: three configured, fewer asked, and
                     # nothing saying so. Refused rather than adjudicated on a short panel.
@@ -1465,9 +1510,33 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                         f"{len(verdicts)} verdict(s). A panel short of a voice has not reached the "
                         f"majority it was opened for, and two models answering under one name is "
                         f"not a panel at all.")
-                outcome = policy.adjudicate(verdicts, voices="models")
-                report.adjudications.append(
-                    {"node_id": node.id, **outcome, "verdicts": dict(verdicts)})
+                if node.grades_risk:
+                    # `policy.adjudicate` counts passes and cannot answer "medium" — see
+                    # `adjudicate_grade`, which CHG-20260827-17 proposed reusing it for and which it
+                    # cannot do. Majority decides; anything else is nobody's decision and reaches a
+                    # person, because the grade indexes every gate after this one.
+                    outcome = policy.adjudicate_grade(verdicts)
+                    report.risk_proposed.update(verdicts)
+                    report.adjudications.append(
+                        {"node_id": node.id, **outcome, "verdicts": dict(verdicts)})
+                    if outcome["outcome"] == policy.UNDECIDED:
+                        # STOPPED, not SUSPENDED. A suspended run offers a button that continues
+                        # it; there is no button for "decide what grade this is" -- the operator
+                        # re-runs with an explicit --risk, which is the override this change
+                        # deliberately did not remove.
+                        report.state = STOPPED
+                        report.halted_at = node.id
+                        report.halt_reason = str(outcome["reason"])
+                        return _finish(report, confirmations, cfg.conversation)
+                    report.risk_agreed = str(outcome["grade"])
+                    # Not settled here. The grade this panel agreed becomes the run's grade only
+                    # once `pm_signoff` has passed on it — until then `_grade_in_force` protects at
+                    # the strictest candidate, so the assessment cannot lower the gate standing over
+                    # its own review.
+                else:
+                    outcome = policy.adjudicate(verdicts, voices="models")
+                    report.adjudications.append(
+                        {"node_id": node.id, **outcome, "verdicts": dict(verdicts)})
 
                 # Task 3. A tie may go back to the panel, and from round two every voice is told
                 # what ALL of them said last round -- for and against, attributed.
@@ -1510,6 +1579,16 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 # one of several voices would silently make a panel into whichever model happened to
                 # be asked first -- a vote held and then ignored.
                 panel_outcome = str(outcome["outcome"])
+                if node.settles_risk and outcome["outcome"] == policy.PASS:
+                    # Ratified. From here the run is graded at what the panel agreed, including
+                    # where that is *lower* than the strictest candidate `_grade_in_force` has been
+                    # protecting at — being signed off is what makes it the answer rather than one
+                    # of several proposals.
+                    #
+                    # Falls back to `cfg.risk` when no grading node ran, which is the resumed-run
+                    # and no-models case: settling on nothing would leave every later gate reading
+                    # `None`.
+                    report.risk_settled = report.risk_agreed or cfg.risk
 
             elif node.mode == graph.SURVEY:
                 # Every seat is asked, and EVERY answer is kept. This is the one place in the runner

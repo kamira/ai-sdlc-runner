@@ -54,7 +54,9 @@ The whole graph, so the console can draw it without embedding a copy.
   "modes": [ "runner", "single", "seat_panel", … ] }                    // all 7
 ```
 
-Twelve of `Node`'s fourteen fields. `answer_decides` and `note` are **not** sent.
+Twelve of `Node`'s sixteen fields. `answer_decides`, `note`, `grades_risk` and `settles_risk` are **not** sent.
+
+`grades_risk` and `settles_risk` (CHG-20260827-17) say which node's voices answer with a **risk grade** and which node's sign-off makes that grade the run's. They are withheld for the same reason as `answer_decides`: the console draws the flow and does not adjudicate it, and a field it cannot act on is a field it should not be handed.
 
 ### `GET /run`
 The run snapshot — [§3](#3--the-run-snapshot).
