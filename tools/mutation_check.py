@@ -407,6 +407,69 @@ MUTATIONS: List[Mutation] = [
         "tests/test_sandbox.py"),
 
     Mutation(
+        "planning", 'a programme with several workstreams is planned as one',
+        SRC / 'engine.py',
+        '    return "split" if len(cfg.workstreams or {}) > 1 else "single"',
+        '    return "single"',
+        'tests/test_sub_planning.py'),
+
+    Mutation(
+        "planning", 'the run gets to answer the scope question itself',
+        SRC / 'engine.py',
+        '    if node.id == "plan_scope":',
+        '    if node.id == "plan_scope" and value is None:',
+        'tests/test_sub_planning.py'),
+
+    Mutation(
+        "planning", 'interfaces are compared by signature instead of by name',
+        SRC / 'engine.py',
+        '            seen.setdefault(label, {})[workstream] = signature',
+        '            seen.setdefault(signature, {})[workstream] = signature',
+        'tests/test_sub_planning.py'),
+
+    Mutation(
+        "planning", 'a conflict is reported as agreement',
+        SRC / 'engine.py',
+        '    found = conflicts(cfg.interfaces)\n    if not found:\n        return "agree"',
+        '    found = conflicts(cfg.interfaces)\n    if True:\n        return "agree"',
+        'tests/test_sub_planning.py'),
+
+    Mutation(
+        "planning", 'an unresolvable conflict cycles instead of halting',
+        SRC / 'engine.py',
+        '    if all(note in report.dispatches for note in notes):',
+        '    if False:',
+        'tests/test_sub_planning.py'),
+
+    Mutation(
+        "planning", 'the plan may declare interfaces for a workstream nobody declared',
+        SRC / 'plan.py',
+        '        if name not in workstreams:\n            raise PlanError(\n                f"{where} declares interfaces for workstream {name!r}',
+        '        if False:\n            raise PlanError(\n                f"{where} declares interfaces for workstream {name!r}',
+        'tests/test_sub_planning.py'),
+
+    Mutation(
+        "planning", 'the declared interfaces never reach the run',
+        SRC / 'cli.py',
+        '        interfaces=plan.get("interfaces") or {},\n        autonomy=plan.get("autonomy"),',
+        '        interfaces={},\n        autonomy=plan.get("autonomy"),',
+        'tests/test_sub_planning.py'),
+
+    Mutation(
+        "planning", 'the dispatch tree is no longer bounded on a run',
+        SRC / 'engine.py',
+        '    policy.check_dispatch_depth(graph.dispatch_edges(), graph.roles_asked_directly())',
+        '    pass',
+        'tests/test_sub_planning.py'),
+
+    Mutation(
+        "planning", 'a halt reports itself as a normal finish again',
+        SRC / 'engine.py',
+        '            report.state = STOPPED if node.permanent else FINISHED',
+        '            report.state = FINISHED',
+        'tests/test_sub_planning.py'),
+
+    Mutation(
         "cli", "refusal text goes to the terminal with its control characters intact",
         SRC / "cli.py",
         '''    return "".join(c if (c.isprintable() or c == " ") else''',

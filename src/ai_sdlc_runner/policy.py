@@ -76,14 +76,19 @@ class Role:
 
 
 ROLES: Tuple[Role, ...] = (
-    Role("pm", "PM", can_spawn=False, can_write=True, can_execute=False,
-         note="turns the user's instruction into a plan and confirms it; writes the plan, not the code"),
+    Role("pm", "PM", can_spawn=True, can_write=True, can_execute=False,
+         note="turns the user's instruction into a plan and confirms it; writes the plan, not the "
+              "code. **Dispatches since CHG-20260827-22**: a programme with several workstreams is "
+              "planned at two levels, and the PM is who opens the second. Before that this flag was "
+              "`False` and the file said the tree stays two deep — see `MAX_DISPATCH_DEPTH` for the "
+              "bound that replaced it"),
     Role("lead", "主管 / lead agent", can_spawn=True, can_write=True, can_execute=True,
          note="confirms feasibility and risk, dispatches the engineers, reviews what they produce — "
               "the only role that dispatches"),
     Role("engineer", "工程師 / sub-agent", can_spawn=False, can_write=True, can_execute=True,
-         note="builds one small module and verifies its own work; cannot dispatch further, so the "
-              "tree stays two deep"),
+         note="builds one small module and verifies its own work; cannot dispatch further. That "
+              "used to make the tree two deep on its own; since CHG-20260827-22 the PM dispatches "
+              "too, so the bound is three and it is `MAX_DISPATCH_DEPTH` that holds it"),
     Role("qa", "QA", can_spawn=False, can_write=False, can_execute=True,
          note="tests and verifies the whole change for real; deliberately cannot write, so it "
               "cannot fix while verifying"),
@@ -92,7 +97,71 @@ ROLES: Tuple[Role, ...] = (
               "they exist"),
 )
 
+#: A role that plans one workstream (CHG-20260827-22). `can_spawn=False` is the bound: the PM
+#: opens this tier and this tier opens nothing, so the tree is three deep and not four.
+#:
+#: `can_write=True` because a plan is a written thing; `can_execute=False` because planning is not
+#: building, and a planner that could run commands would be an engineer with a different name.
+PLANNER = Role("planner", "分項規劃 / workstream planner", can_spawn=False, can_write=True,
+               can_execute=False,
+               note="plans one workstream. Dispatched by the PM and dispatches nothing itself, "
+                    "which is what bounds the tree at three")
+
+ROLES = ROLES + (PLANNER,)
+
 BY_ROLE: Dict[str, Role] = {r.name: r for r in ROLES}
+
+#: How deep the dispatch tree may go, counting the operator's run as depth 0.
+#:
+#: **Two**, and CHG-20260827-22 did not change it. The chains are `pm → planner` and
+#: `lead → engineer`; they are siblings, not nested, because `reconcile` returns to the runner's
+#: main line rather than letting a planner open the build. Adding a second spawner widened the tree,
+#: not its depth.
+#:
+#: The number is here, and `check_dispatch_depth` derives the real depth from the graph and refuses
+#: to exceed it, because the sentence this replaces — engineer's *"cannot dispatch further, so the
+#: tree stays two deep"* — was a property of the role table **by construction**. Once a second role
+#: could spawn, that sentence stayed true while its reason stopped being. A bound that nothing
+#: computes is the same defect one release later.
+MAX_DISPATCH_DEPTH = 2
+
+
+def dispatch_depth(edges: Mapping[str, Sequence[str]], direct: Sequence[str]) -> int:
+    """The longest chain of dispatches, counting a role the runner asks itself as depth 1.
+
+    `edges` is `{spawner: [roles it dispatches]}` and `direct` the roles the runner asks. Both come
+    from the graph; this function knows nothing about which nodes exist, so it cannot drift from
+    them the way a hand-written list can.
+    """
+    reachable = {role: list(edges.get(role, ())) for role in set(edges) | set(direct)}
+
+    def longest(role: str, seen: FrozenSet[str]) -> int:
+        if role in seen:  # a cycle is unbounded depth, and the caller must hear about it, not hang
+            raise PolicyError(
+                f"the dispatch tree loops: {role!r} is reachable from itself. A role that can "
+                f"reach its own dispatcher has no depth, and no bound can hold it.")
+        below = reachable.get(role, ())
+        return 1 + max((longest(r, seen | {role}) for r in below), default=0)
+
+    return max((longest(r, frozenset()) for r in direct), default=0)
+
+
+def check_dispatch_depth(edges: Mapping[str, Sequence[str]],
+                         direct: Sequence[str]) -> int:
+    """Refuse a flow that dispatches deeper than `MAX_DISPATCH_DEPTH`, naming the chain.
+
+    Called on every run rather than only in a test: a test says the shipped graph is within the
+    bound, and this says *this* run is — including one whose graph a caller has altered in memory.
+    """
+    depth = dispatch_depth(edges, direct)
+    if depth > MAX_DISPATCH_DEPTH:
+        chains = "; ".join(f"{k} dispatches {', '.join(v)}" for k, v in sorted(edges.items()))
+        raise PolicyError(
+            f"the dispatch tree is {depth} deep and the bound is {MAX_DISPATCH_DEPTH} "
+            f"({chains}). Each tier is one more layer between the operator and the work, and one "
+            f"more place a decision is made by something nobody asked for. Raise "
+            f"MAX_DISPATCH_DEPTH deliberately, or do not add the tier.")
+    return depth
 
 #: The gates, and what each risk grade does at them. The rule behind the grades: a gate stops when
 #: getting it wrong is expensive to undo.

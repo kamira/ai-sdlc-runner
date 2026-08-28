@@ -415,6 +415,9 @@ class RunConfig:
     #: `{node id: workstream name}`. A node named here reads that workstream's grade; a node not
     #: named here reads the strictest of them, never the loosest.
     node_workstream: Mapping[str, str] = field(default_factory=dict)
+    #: `{workstream: {name: signature}}` (CHG-20260827-22). Compared at `reconcile`, before anything
+    #: is dispatched. Empty means nothing to reconcile, which is the single-workstream case.
+    interfaces: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     #: What the operator passed as `--risk`, if they passed one. Distinct from `risk`, which is the
     #: plan's proposal: an operator saying `high` is not a proposal to be weighed against a
     #: workstream's `low`, and before this field the two were the same string and indistinguishable.
@@ -833,6 +836,68 @@ def _went_wrong(result: Mapping[str, object]) -> str:
     return ""
 
 
+def _scope(cfg: "RunConfig") -> str:
+    """`split` when the plan names more than one workstream, `single` otherwise.
+
+    Read from the plan the way `_frontier` reads the run: a programme with one workstream — which is
+    every plan written before CHG-20260827-22 — takes `single`, never enters the second tier, and
+    behaves exactly as it did. That is the compatibility path and it is a branch rather than a
+    special case inside the new nodes, so "did it go the old way" is answerable from `visited`.
+    """
+    return "split" if len(cfg.workstreams or {}) > 1 else "single"
+
+
+def conflicts(interfaces: Mapping[str, Mapping[str, str]]) -> List[str]:
+    """Interfaces two workstreams name identically and describe differently.
+
+    The comparison is by **name**, because that is what a caller writes. Two workstreams may both
+    declare `fetch_user`; if their signatures differ, one of them will be wrong at a boundary
+    nothing else checks — `lead_review` reviews the change, and nothing reviewed the plans against
+    each other.
+
+    Returns the disagreements, named, rather than a boolean: an operator sent back to `pm_plan`
+    needs to know which interface and which workstreams, or the second attempt is a guess.
+    """
+    seen: Dict[str, Dict[str, str]] = {}
+    for workstream, declared in (interfaces or {}).items():
+        for label, signature in (declared or {}).items():
+            seen.setdefault(label, {})[workstream] = signature
+
+    out: List[str] = []
+    for label, by_workstream in sorted(seen.items()):
+        distinct = sorted(set(by_workstream.values()))
+        if len(distinct) > 1:
+            who = ", ".join(f"{w} says {s!r}" for w, s in sorted(by_workstream.items()))
+            out.append(f"{label}: {who}")
+    return out
+
+
+def _reconciled(cfg: "RunConfig", report: "RunReport") -> str:
+    """`agree`, `conflict` once, then `unresolved`.
+
+    Nobody is asked. Two declarations naming one interface differently is a fact about the plans,
+    and a fact is not improved by voting on it — which is why this node has no role and why a
+    conflict goes back to `pm_plan` rather than to a panel.
+
+    **Bounded to one revision pass.** `pm_plan`'s answer cannot change `cfg.interfaces`; those come
+    from the plan. So a conflict that survives a trip through `pm_plan` is unchanged by definition,
+    and routing it back a second time cycles the flow until `max_steps` — where the operator is told
+    that something looped, which is the generic catch and not an answer. The second identical
+    conflict halts instead, naming the interface. Exactly the bound `re_review` puts on a fix pass.
+    """
+    found = conflicts(cfg.interfaces)
+    if not found:
+        return "agree"
+    notes = [f"reconcile: {d}" for d in found]
+    if all(note in report.dispatches for note in notes):
+        # Every one of these was recorded on the previous visit, so `pm_plan` changed nothing.
+        return "unresolved"
+    for note in notes:
+        if note not in report.dispatches:
+            report.dispatches.append(note)
+    return "conflict"
+
+
 def _frontier(node: graph.Node, report: "RunReport") -> str:
     """Is there another module to build? Answered from the run's own record.
 
@@ -965,6 +1030,12 @@ def _choose(cfg: RunConfig, node: graph.Node, taken: Dict[str, int],
     the run requires.
     """
     value = cfg.decisions.get(node.id)
+    if node.id == "plan_scope":
+        # Read from the plan, never supplied: a run that could declare its own scope could declare
+        # itself simple and skip the reconciliation that exists to catch it.
+        return _scope(cfg)
+    if node.id == "reconcile":
+        return _reconciled(cfg, report)
     if value == FRONTIER:
         return _frontier(node, report)
     if value is None or isinstance(value, str):
@@ -1309,6 +1380,9 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             cfg.conversation.instruction(str(text), nth)
 
     graph.validate()
+    # The dispatch tree is bounded here rather than trusted: `graph.validate` checks that the edges
+    # are well-formed, and this checks how far they reach. See `policy.MAX_DISPATCH_DEPTH`.
+    policy.check_dispatch_depth(graph.dispatch_edges(), graph.roles_asked_directly())
     factory = _as_factory(dispatch)
     opened: List[object] = []
     taken: Dict[str, int] = {}
@@ -1768,7 +1842,9 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             return _finish(stop, confirmations)
 
         if node.kind == graph.TERMINAL:
-            report.state = FINISHED
+            # A halt is not an ending. `done` finished; `halt_*` gave up, and nothing continues it,
+            # which is what STOPPED means. See `graph.Node.permanent`.
+            report.state = STOPPED if node.permanent else FINISHED
             report.halted_at = node.id
             report.halt_reason = node.note or node.label
             return _finish(report, confirmations, cfg.conversation)

@@ -67,6 +67,7 @@ FIELDS: Tuple[str, ...] = (
     "workstreams",   # {name: grade} — CHG-20260827-18; the run's own `risk` still applies to
                      # anything outside them, at the strictest of them
     "node_workstream",  # {node id: workstream name}
+    "interfaces",    # {workstream: {name: signature}} — CHG-20260827-22, reconciled before dispatch
 )
 
 #: The `ship` block's own closed set. `repo`, `chg_id`, `branch` and `message` are required by
@@ -82,7 +83,7 @@ SHIP_REQUIRED: Tuple[str, ...] = ("repo", "chg_id", "branch", "message")
 
 #: The keys whose value must be an object keyed by something.
 _MAPPINGS = ("node_specs", "operations", "decisions", "node_models", "seat_models", "ship",
-             "workstreams", "node_workstream")
+             "workstreams", "node_workstream", "interfaces")
 
 
 class PlanError(Exception):
@@ -171,6 +172,28 @@ def check(payload: Mapping[str, object], where: str = "the plan") -> Dict[str, o
                 f"A node in an undeclared workstream would fall back to the strictest grade — safe, "
                 f"and silently not what the plan meant. Declare it in `workstreams` or remove the "
                 f"assignment.")
+
+    # ── declared interfaces (CHG-20260827-22) ────────────────────────────────────────────────
+    #
+    # A workstream declaring an interface nobody declared is the same defect as a node in an
+    # undeclared workstream: safe-looking, and reconciled against nothing.
+    interfaces = payload.get("interfaces") or {}
+    for name, signatures in interfaces.items():
+        if name not in workstreams:
+            raise PlanError(
+                f"{where} declares interfaces for workstream {name!r}, which it does not declare. "
+                f"Nothing would reconcile them, and the run would proceed as though they agreed.")
+        if not isinstance(signatures, Mapping):
+            raise PlanError(
+                f"{where} gives workstream {name!r} interfaces as a "
+                f"{type(signatures).__name__}; it must be an object of `{{name: signature}}` — a "
+                f"list has no names to compare, and comparing is the whole point.")
+        for label, signature in signatures.items():
+            if not isinstance(signature, str) or not signature.strip():
+                raise PlanError(
+                    f"{where}: workstream {name!r} declares interface {label!r} as "
+                    f"{signature!r}. A signature is the string two workstreams have to agree on; "
+                    f"an empty one agrees with everything.")
 
     autonomy = payload.get("autonomy")
     if autonomy is not None and not isinstance(autonomy, str):

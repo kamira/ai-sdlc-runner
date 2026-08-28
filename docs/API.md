@@ -49,12 +49,15 @@ The whole graph, so the console can draw it without embedding a copy.
 ```jsonc
 { "nodes": [ { "id": …, "kind": …, "label": …, "role": …, "gate": …, "gate_when": …,
                "mode": …, "main": …, "follows": …, "rejects_to": …,
-               "branches": { "<label>": "<node id>" }, "next": … } ],   // all 24
+               "branches": { "<label>": "<node id>" }, "next": …,
+               "permanent": … } ],                                      // all 28
   "gates": { "<gate>": { "<risk>": "<verdict>" } },                     // all 10
   "modes": [ "runner", "single", "seat_panel", … ] }                    // all 7
 ```
 
-Twelve of `Node`'s sixteen fields. `answer_decides`, `note`, `grades_risk` and `settles_risk` are **not** sent.
+Thirteen of `Node`'s seventeen fields. `answer_decides`, `note`, `grades_risk` and `settles_risk` are **not** sent.
+
+`permanent` (CHG-20260827-22) **is** sent, and the distinction is the one this section keeps making. It says a terminal node is a *give-up* rather than an ending — `halt_second_fail` and `halt_unreconciled` against `done`. Drawing those three the same way is the confusion the field was added to end, and drawing is exactly what the console is for. A field it cannot act on is withheld; this is one it must act on.
 
 `grades_risk` and `settles_risk` (CHG-20260827-17) say which node's voices answer with a **risk grade** and which node's sign-off makes that grade the run's. They are withheld for the same reason as `answer_decides`: the console draws the flow and does not adjudicate it, and a field it cannot act on is a field it should not be handed.
 

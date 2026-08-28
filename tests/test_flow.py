@@ -138,7 +138,10 @@ def test_one_node_one_kind_of_work():
     assert graph.BY_ID["engineer_build"].next == "engineer_selfverify"
     assert graph.BY_ID["engineer_selfverify"].next == "lead_task_review"
     assert graph.BY_ID["pr"].next == "merge"
-    assert graph.BY_ID["pm_plan"].next == "pm_confirm"
+    # CHG-20260827-22 put `plan_scope` between them; a single-workstream plan branches straight
+    # back to `pm_confirm`, which is what keeps every earlier plan behaving as it did.
+    assert graph.BY_ID["pm_plan"].next == "plan_scope"
+    assert graph.BY_ID["plan_scope"].branches["single"] == "pm_confirm"
 
 
 def test_the_module_loop_has_a_back_edge():

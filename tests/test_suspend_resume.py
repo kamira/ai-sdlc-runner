@@ -28,7 +28,7 @@ from ai_sdlc_runner import engine, graph
 
 # Borrowed rather than copied: a second hand-written spec drifts from the first the moment the
 # work order gains a field, and then these tests pass for a reason unrelated to what they check.
-from test_flow import ANSWERS, DECISIONS, SPEC  # noqa: E402
+from test_flow import ANSWERS, DECISIONS, SPEC, THROUGH  # noqa: E402
 
 
 def _run(**cfg_kw):
@@ -83,10 +83,17 @@ def test_finished_and_suspended_are_not_the_same_shape():
 
     # Terminal nodes still set halted_at -- the old signal is unchanged, which is why the new one
     # was needed rather than being a rename.
-    terminal = graph.BY_ID["done"]
-    assert terminal.kind == graph.TERMINAL
-    source = inspect.getsource(engine.walk)
-    assert "report.state = FINISHED" in source
+    assert graph.BY_ID["done"].kind == graph.TERMINAL
+
+    # This used to read `assert "report.state = FINISHED" in inspect.getsource(engine.walk)`, and
+    # CHG-20260827-22 broke it without changing anything it was for: the line became
+    # `STOPPED if node.permanent else FINISHED`, and `done` still reports FINISHED. The assertion
+    # was matching **source text** for a claim about **behaviour** — this repository's own named
+    # failure, a test that reads vocabulary instead of the thing it stands for. Run it instead.
+    finished = _run(risk="low", confirmed=THROUGH)
+    assert finished.state == engine.FINISHED
+    assert finished.halted_at == "done"        # the old signal, unchanged
+    assert finished.suspended is None, "a run that ended offers nothing to decide"
 
 
 def test_a_permanent_halt_is_stopped_not_suspended():
