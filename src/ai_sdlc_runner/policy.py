@@ -192,6 +192,110 @@ GATES: Dict[str, Dict[str, str]] = {
     "merge":                 {"low": CONFIRM, "medium": HALT, "high": HALT},
 }
 
+@dataclass(frozen=True)
+class ChangeClass:
+    """One of the three ways a change can be governed (CHG-20260827-20).
+
+    The split is ITIL's, and it is the column this table never had: today every change is `normal`,
+    so `merge = confirm` at every grade means **every** change needs a person. At a mid-to-large
+    scale that is not a strict policy, it is a policy that gets bypassed — the failure this
+    repository already documented once about the red-line word list.
+    """
+
+    name: str
+    #: May instances of this class stop **less** often than the grade says? Only `standard` and
+    #: `emergency` may, and only ever `confirm` → `auto` — see `relax` for why never a halt.
+    relaxes: bool
+    #: Is the run reviewed **after** rather than before? True only for `emergency`, and it is what
+    #: makes emergency different from standard rather than just louder.
+    reviewed_after: bool
+    note: str
+
+
+#: The three classes, and the one that is not new: `normal` is what every change is today, so a
+#: runner with nothing declared behaves exactly as it did.
+CLASSES: Tuple[ChangeClass, ...] = (
+    ChangeClass("standard", relaxes=True, reviewed_after=False,
+                note="the TYPE was assessed once by a person and pre-authorised, so individual "
+                     "instances do not stop. What is recorded is a person's judgement about a "
+                     "type — made once, written down, and revocable — never a model's judgement "
+                     "about an instance"),
+    ChangeClass("normal", relaxes=False, reviewed_after=False,
+                note="full approval: what every change is today, and what every change stays "
+                     "unless somebody declares otherwise"),
+    ChangeClass("emergency", relaxes=True, reviewed_after=True,
+                note="proceeds, and is reviewed afterwards. Nothing may mark itself emergency — an "
+                     "answer that could would be a model granting itself an exemption"),
+)
+
+BY_CLASS: Dict[str, ChangeClass] = {c.name: c for c in CLASSES}
+
+#: The class in force when nobody has declared one. Named rather than written `"normal"` at each
+#: use, because "what happens when nothing is declared" is the property this whole change must not
+#: get wrong.
+DEFAULT_CLASS = "normal"
+
+
+def relax(graded: str, klass: Optional[str]) -> Tuple[str, str]:
+    """The verdict a class leaves in place, and why — `confirm` may become `auto`, a halt never.
+
+    **`confirm` → `auto`, and nothing else.** `confirm` means *a person is asked and may say yes*,
+    and pre-authorising a type is exactly saying yes in advance about every instance of it. `halt`
+    and `halt_independent` say something stronger: stop, and route this to somebody. A
+    pre-authorisation is a person's *approval*; it is not a person's *attention*, and dissolving a
+    halt would silently trade the second for the first.
+
+    So the strongest thing a class can do is skip a question somebody already answered. It can never
+    skip a stop that exists to put the change in front of someone who has not seen it.
+    """
+    if not klass or klass == DEFAULT_CLASS:
+        return graded, ""
+    named = BY_CLASS.get(klass)
+    if named is None:
+        raise PolicyError(
+            f"no change class {klass!r}; this runner defines {sorted(BY_CLASS)}")
+    if not named.relaxes or graded != CONFIRM:
+        if named.relaxes and graded in STOPPING:
+            return graded, (f"; the {klass!r} class does not relax {graded!r} — a class "
+                            f"pre-authorises, and a halt is not a question")
+        return graded, ""
+    return AUTO, (f"; relaxed from {CONFIRM} by the {klass!r} class, which a person declared")
+
+
+def class_in_force(declared: Optional[Mapping[str, object]], today: str) -> Tuple[str, str]:
+    """The class that actually applies now, and why — an unreviewed one expires to `normal`.
+
+    Task 4 of the record: *"A class carries a review date. An unreviewed class expires back to
+    `normal` rather than persisting on nobody's authority."* Expiry is the floor under the drift,
+    and the record says plainly it is not a fix for it: a class renewed without thought is a rubber
+    stamp with a calendar.
+
+    Dates are compared as ISO strings, which sorts correctly and needs no timezone argument about a
+    review deadline that is a day rather than an instant.
+    """
+    if not declared:
+        return DEFAULT_CLASS, "nothing was declared"
+    name = str(declared.get("class") or "")
+    if name not in BY_CLASS:
+        raise PolicyError(
+            f"no change class {name!r}; this runner defines {sorted(BY_CLASS)}")
+    who = str(declared.get("authorised_by") or "").strip()
+    if not who:
+        raise PolicyError(
+            "a change class must name who authorised it. A pre-authorisation nobody signed is a "
+            "relaxation on nobody's authority, which is the thing this class exists to avoid.")
+    review_by = str(declared.get("review_by") or "").strip()
+    if not review_by:
+        raise PolicyError(
+            "a change class must carry a review date. Without one it never expires, and a class "
+            "that never expires outlives the assessment it was granted for.")
+    if review_by < today:
+        return DEFAULT_CLASS, (
+            f"the {name!r} class was authorised by {who} and was due for review on {review_by}; "
+            f"today is {today}, so it has expired back to {DEFAULT_CLASS!r}")
+    return name, f"the {name!r} class, authorised by {who}, due for review on {review_by}"
+
+
 #: Never automated, at any risk grade, and no configuration relaxes them. These are the actions whose
 #: worst case is not "redo the work" but "the work cannot be undone".
 #:
@@ -825,7 +929,8 @@ def capabilities(name: str) -> Dict[str, bool]:
     return {"can_spawn": r.can_spawn, "can_write": r.can_write, "can_execute": r.can_execute}
 
 
-def verdict(gate: str, risk: str, autonomy: Optional[str] = None) -> Dict[str, object]:
+def verdict(gate: str, risk: str, autonomy: Optional[str] = None,
+            change_class: Optional[str] = None) -> Dict[str, object]:
     """What the policy says at this gate for this risk, tightened by ``autonomy`` if it is stricter.
 
     ``autonomy`` is the per-change override. It may **tighten only** — a change may declare itself
@@ -853,6 +958,21 @@ def verdict(gate: str, risk: str, autonomy: Optional[str] = None) -> Dict[str, o
             # refusal that may as well not have happened.
             result["source"] += (
                 f"; the change asked for {AUTO} here and was refused — tighten-only")
+    # LAST, and after `autonomy` on purpose (CHG-20260827-20). A change that declared itself more
+    # dangerous than its grade has said something about *this* instance; a class says something
+    # about the *type*. The instance's own word is the more specific of the two, so relaxing is
+    # applied to what is left standing rather than to the table — a `standard` class cannot undo a
+    # tightening the change asked for itself.
+    relaxed, why = relax(str(result["verdict"]), change_class)
+    if why:
+        result["source"] += why
+    # The verdict, and NOTHING else. The `autonomy` branch above says why in as many words — "the
+    # verdict's shape is fixed so a work order's closed schema can carry it" — and the first draft
+    # of this added `relaxed` and `change_class` keys anyway, in the function carrying that comment.
+    # `workorder.render` refused them. A caller that needs to know whether the class changed the
+    # outcome asks for the verdict without it and compares; that is also the better question,
+    # because "what would have happened otherwise" is what an audit note wants to say.
+    result["verdict"] = relaxed
     return result
 
 

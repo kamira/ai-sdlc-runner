@@ -470,6 +470,76 @@ MUTATIONS: List[Mutation] = [
         'tests/test_sub_planning.py'),
 
     Mutation(
+        "classes", 'a class dissolves a halt, not only a confirm',
+        SRC / 'policy.py',
+        '    if not named.relaxes or graded != CONFIRM:',
+        '    if not named.relaxes:',
+        'tests/test_change_classes.py'),
+
+    Mutation(
+        "classes", '`normal` starts relaxing gates',
+        SRC / 'policy.py',
+        '    ChangeClass("normal", relaxes=False, reviewed_after=False,',
+        '    ChangeClass("normal", relaxes=True, reviewed_after=False,',
+        'tests/test_change_classes.py'),
+
+    Mutation(
+        "classes", 'a class never expires',
+        SRC / 'policy.py',
+        '    if review_by < today:',
+        '    if False:',
+        'tests/test_change_classes.py'),
+
+    Mutation(
+        "classes", "a pre-authorisation needs nobody's signature",
+        SRC / 'policy.py',
+        '    if not who:',
+        '    if False:',
+        'tests/test_change_classes.py'),
+
+    Mutation(
+        "classes", 'a class may be declared with no review date',
+        SRC / 'policy.py',
+        '    if not review_by:',
+        '    if False:',
+        'tests/test_change_classes.py'),
+
+    Mutation(
+        "classes", 'the class stops reaching the gate',
+        SRC / 'engine.py',
+        '    return policy.verdict(node.gate, risk, autonomy, change_class)',
+        '    return policy.verdict(node.gate, risk, autonomy)',
+        'tests/test_change_classes.py'),
+
+    Mutation(
+        "classes", 'a plan may class itself again',
+        SRC / 'plan.py',
+        '    classing = sorted(set(unknown) & {"change_class", "class", "pre_authorised", "standard"})',
+        '    classing = []',
+        'tests/test_change_classes.py'),
+
+    Mutation(
+        "classes", 'the command line accepts a class with parts missing',
+        SRC / 'cli.py',
+        '    if len(parts) != 3 or not all(p.strip() for p in parts):',
+        '    if False:',
+        'tests/test_change_classes.py'),
+
+    Mutation(
+        "classes", 'an unknown class is guessed at instead of refused',
+        SRC / 'cli.py',
+        '    if name not in policy.BY_CLASS:',
+        '    if False:',
+        'tests/test_change_classes.py'),
+
+    Mutation(
+        "classes", 'the run stops recording which class let it through',
+        SRC / 'engine.py',
+        '    report.change_class = why',
+        '    report.change_class = ""',
+        'tests/test_change_classes.py'),
+
+    Mutation(
         "cli", "refusal text goes to the terminal with its control characters intact",
         SRC / "cli.py",
         '''    return "".join(c if (c.isprintable() or c == " ") else''',
