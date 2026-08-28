@@ -590,6 +590,20 @@ MUTATIONS: List[Mutation] = [
         'tests/test_ledger_check.py'),
 
     Mutation(
+        'voice', "a person's pre-authorisation is filed under the runner again",
+        SRC / 'conversations.py',
+        '    if kind == RELAXATION and turn.get("by"):',
+        '    if False:',
+        'tests/test_export_voice.py'),
+
+    Mutation(
+        'voice', 'the declaration stops recording who made it',
+        SRC / 'cli.py',
+        '            by=str(declared_class["authorised_by"]))',
+        '            by=None)',
+        'tests/test_export_voice.py'),
+
+    Mutation(
         "cli", "refusal text goes to the terminal with its control characters intact",
         SRC / "cli.py",
         '''    return "".join(c if (c.isprintable() or c == " ") else''',

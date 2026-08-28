@@ -775,7 +775,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     if declared_class and conversation is not None:
         conversation.relaxation(
             f"change class {declared_class['class']!r} declared by "
-            f"{declared_class['authorised_by']}, due for review on {declared_class['review_by']}")
+            f"{declared_class['authorised_by']}, due for review on {declared_class['review_by']}",
+            # Who, so the export says `operator` rather than `runner` (CHG-20260828-03). A person's
+            # pre-authorisation filed under the machine's voice is a misattribution in the one
+            # dimension this document exists to keep straight.
+            by=str(declared_class["authorised_by"]))
 
     cfg = engine.RunConfig(
         conversation=conversation,
