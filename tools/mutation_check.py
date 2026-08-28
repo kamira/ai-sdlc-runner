@@ -140,8 +140,14 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "provenance", "the plan a run walked is recorded as the operator's keystrokes again",
         SRC / "cli.py",
-        '''             "plan": _where(args.plan)})''',
-        '''             "plan": str(args.plan)})''',
+        # Pinned to `cmd_run` by the journal line above it: `cmd_serve` builds the same
+        # conversation and the bare line matched both (CHG-20260828-01).
+        '''        args, journal_dir=args.ask_journal,
+        run={"journal": str(Path(args.ask_journal).resolve()) if args.ask_journal else None,
+             "plan": _where(args.plan)})''',
+        '''        args, journal_dir=args.ask_journal,
+        run={"journal": str(Path(args.ask_journal).resolve()) if args.ask_journal else None,
+             "plan": str(args.plan)})''',
         "tests/test_run_provenance.py"),
 
     Mutation(
@@ -329,8 +335,15 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "risk", "a node may point at a workstream nobody declared",
         SRC / "plan.py",
-        '''        if name not in workstreams:''',
-        '''        if False:''',
+        # This anchor was unique when it was written. CHG-20260827-22 added a second
+        # `if name not in workstreams:` — the interfaces guard — and silently made it ambiguous;
+        # nothing reported that until CHG-20260828-01 added the check. Pinned by its own message.
+        '''        if name not in workstreams:
+            raise PlanError(
+                f"{where} puts node {node_id!r} in workstream {name!r}''',
+        '''        if False:
+            raise PlanError(
+                f"{where} puts node {node_id!r} in workstream {name!r}''',
         "tests/test_workstream_risk.py"),
 
     Mutation(
@@ -343,8 +356,16 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "risk", "the plan's workstreams stop reaching the run",
         SRC / "cli.py",
-        '''        workstreams=plan.get("workstreams") or {},''',
-        '''        workstreams={},''',
+        # Pinned to `cmd_run`: `cmd_serve` builds the same RunConfig, and mutating the console path
+        # would leave the tested path working while the run printed CAUGHT (CHG-20260828-01).
+        '''        workstreams=plan.get("workstreams") or {},
+        node_workstream=plan.get("node_workstream") or {},
+        interfaces=plan.get("interfaces") or {},
+        # From the command line and nowhere else''',
+        '''        workstreams={},
+        node_workstream=plan.get("node_workstream") or {},
+        interfaces=plan.get("interfaces") or {},
+        # From the command line and nowhere else''',
         "tests/test_workstream_risk.py"),
 
     Mutation(
@@ -604,10 +625,25 @@ def run(mutation: Mutation, baseline: Dict[str, bool]) -> bool:
               f"prove nothing.")
         return False
     original = io.open(mutation.path, encoding="utf-8").read()
-    if mutation.before not in original:
+    found = original.count(mutation.before)
+    if found == 0:
         print(f"  ANCHOR GONE  {mutation.says}")
         print(f"               {mutation.path.name} no longer contains the text this mutates. The "
               f"mutation is stale, which is not the same as caught.")
+        return False
+    if found > 1:
+        # `ANCHOR GONE`'s twin, and it was missing (CHG-20260828-01). The write below is
+        # `replace(..., 1)`, so an anchor appearing more than once reverts **whichever comes
+        # first** — which need not be the guarantee `says` names. The run then reports about a
+        # different line, and CAUGHT is the dangerous reading: it looks exactly like coverage.
+        #
+        # This is not hypothetical. Three shipped mutations were ambiguous when this check was
+        # added, and one of them became ambiguous *because a later change added a second copy of
+        # its anchor* — nothing said so at the time, and the group went on reporting clean.
+        print(f"  AMBIGUOUS    {mutation.says}")
+        print(f"               {mutation.path.name} contains this text {found} times, so the "
+              f"mutation would revert whichever comes first rather than the one it names. Narrow "
+              f"`before` with enough surrounding context to be unique.")
         return False
     io.open(mutation.path, "w", encoding="utf-8", newline="\n").write(
         original.replace(mutation.before, mutation.after, 1))
