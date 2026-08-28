@@ -39,6 +39,7 @@ from . import conversations as conversations_mod
 from . import paths
 from . import effects as effects_mod
 from . import graph, intake as intake_mod, policy, workorder
+from . import worktree
 
 SessionFactory = Callable[[], "Session"]
 Dispatcher = Callable[[Dict[str, object]], Mapping[str, object]]
@@ -194,6 +195,10 @@ class Ask:
 #: ``halted_at``, and so did every TERMINAL node including ``done`` — so "stopped for a decision"
 #: and "ran to the end" were the same shape, and an independent seat found that the one property
 #: task 1 rests on did not exist.
+#: The asking nodes of one module's build, derived once (CHG-20260827-21). They share a tree;
+#: everything else runs in the main one, because everything else reviews the whole change.
+_MODULE_CYCLE = frozenset(graph.module_cycle())
+
 FINISHED = "finished"    #: reached a terminal node; the flow ended where it was designed to
 SUSPENDED = "suspended"  #: stopped at a gate, and a decision can continue it
 STOPPED = "stopped"      #: stopped, and nothing continues it — a permanent halt, or an effect that failed
@@ -632,8 +637,24 @@ def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
     return workorder.render(node, spec, verdict, seat=seat)
 
 
+def _workspace(node: graph.Node, cycle: int) -> str:
+    """Which isolated tree this ask belongs in, or `""` for the shared one (CHG-20260827-21).
+
+    Membership comes from `graph.module_cycle()` — the nodes reachable from `engineer_build` before
+    `record_module` — rather than from a list here, so a node added to the loop later is inside the
+    isolation instead of quietly outside it.
+
+    The key is the **cycle number**, not the module name. The runner does not know the module: the
+    work order never names one and the engineer reports it in the answer (see `_frontier`). A tree
+    has to exist before the session opens, so the only identifier available at that moment is which
+    pass through the loop this is — and one pass builds one module, which is exactly the property
+    the isolation needs.
+    """
+    return worktree.key_for(cycle) if node.id in _MODULE_CYCLE else ""
+
+
 def _open(factory: SessionFactory, seat: Optional[str], model: Optional[str] = None,
-          role: str = ""):
+          role: str = "", workspace: str = ""):
     """Open a session, letting a factory route by seat or by model if it accepts one.
 
     Routing — which model answers — lives in the factory and never in the order, which is what makes
@@ -659,6 +680,11 @@ def _open(factory: SessionFactory, seat: Optional[str], model: Optional[str] = N
         # property of the ROLE. Passed the same way as seat and model — only if the factory asks
         # for it — so a factory written before this change is unaffected.
         kwargs["role"] = role
+    if "workspace" in params:
+        # CHG-20260827-21. Which isolated tree this ask belongs in, `""` for the shared one. The
+        # factory owns the trees because only it sees more than one ask, and this is the same
+        # ask-if-you-want-it contract: a factory written before this change never sees the field.
+        kwargs["workspace"] = workspace
     return factory(**kwargs) if kwargs else factory()
 
 
@@ -668,7 +694,7 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
          answered: Optional[Mapping[str, Mapping[str, object]]] = None,
          model: Optional[str] = None,
          asked_before: Optional[Mapping[str, Mapping[str, object]]] = None,
-         conversation=None, role: str = ""):
+         conversation=None, role: str = "", workspace: str = ""):
     """Open a session, ask once, close it — the close guaranteed even if the ask raises.
 
     ``seen`` holds the session **objects**, not their ``id()``: an id is not an identity once the
@@ -702,7 +728,7 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
             conversation.unanswered(ask_id or "", f"{type(exc).__name__}: {exc}")
 
     try:
-        session = _open(factory, seat, model, role)
+        session = _open(factory, seat, model, role, workspace)
     except Exception as exc:
         _failed(exc)
         raise
@@ -1493,11 +1519,17 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
         unspent_rejections.append(rejection)
 
     node_id: Optional[str] = "intake"
+    #: How many modules have started building (CHG-20260827-21). Counted on `engineer_build`
+    #: because that is where a module's work begins; `fix_pass` re-asks the engineer about the
+    #: **same** module and must land in the same tree, so it must not increment.
+    build_cycles = 0
     for _ in range(cfg.max_steps):
         if node_id is None:
             break
         node = graph.BY_ID[node_id]
         report.visited.append(node.id)
+        if node.id == "engineer_build":
+            build_cycles += 1
 
         tripped = _permanent_halt(node, cfg, report)
         if tripped is not None:
@@ -1617,7 +1649,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     result = _ask(factory, _order_for(node, cfg, verdict, carried=carried),
                                   opened, journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                                   answered=already, model=model, asked_before=asked_before,
-                                  conversation=cfg.conversation, role=node.role)
+                                  conversation=cfg.conversation, role=node.role,
+                                  workspace=_workspace(node, build_cycles))
                     if ask_id in already:
                         report.resumed.append(ask_id)
                     report.asks.append(Ask(node.id, node.role, None, result, model=model))
@@ -1689,7 +1722,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                                       opened, journal=cfg.journal, ask_id=ask_id,
                                       node_id=node.id, answered=already, model=model,
                                       asked_before=asked_before,
-                                      conversation=cfg.conversation, role=node.role)
+                                      conversation=cfg.conversation, role=node.role,
+                                  workspace=_workspace(node, build_cycles))
                         report.asks.append(Ask(node.id, node.role, None, result, model=model))
                         answers.append(result)
                         verdicts[model] = str(
@@ -1730,7 +1764,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                         factory, _order_for(node, cfg, verdict, seat), opened, seat=seat,
                         journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                         answered=already, asked_before=asked_before,
-                        conversation=cfg.conversation, role=node.role)
+                        conversation=cfg.conversation, role=node.role,
+                                  workspace=_workspace(node, build_cycles))
                     if ask_id in already:
                         report.resumed.append(ask_id)
                     report.asks.append(Ask(node.id, node.role, seat, result))
@@ -1758,7 +1793,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                             workorder.render(node, spec, verdict, seat=None),
                             opened, journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                             answered=already, asked_before=asked_before,
-                            conversation=cfg.conversation, role=node.role)
+                            conversation=cfg.conversation, role=node.role,
+                                  workspace=_workspace(node, build_cycles))
                         report.asks.append(Ask(node.id, node.role, None, answer))
                         report.options[aspect] = intake_mod.read_options(answer, aspect)
 
@@ -1791,7 +1827,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                         journal=cfg.journal, node_id=node.id, answered=already,
                         ask_id=f"{len(report.asks):03d}-{node.id}-{seat}",
                         asked_before=asked_before,
-                        conversation=cfg.conversation, role=node.role)
+                        conversation=cfg.conversation, role=node.role,
+                                  workspace=_workspace(node, build_cycles))
                     ask_key = f"{len(report.asks):03d}-{node.id}-{seat}"
                     if ask_key in already:
                         report.resumed.append(ask_key)
@@ -1823,7 +1860,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     factory, _order_for(node, cfg, verdict), opened, journal=cfg.journal,
                     ask_id=ask_id, node_id=node.id, answered=already, model=model,
                     asked_before=asked_before,
-                    conversation=cfg.conversation, role=node.role)
+                    conversation=cfg.conversation, role=node.role,
+                                  workspace=_workspace(node, build_cycles))
                 if ask_id in already:
                     report.resumed.append(ask_id)
                 report.asks.append(Ask(node.id, node.role, None, result, model=model))
