@@ -71,7 +71,7 @@ change can never get.
 A halt is a pause with a way back — `--confirm <gate>` continues past one, and the confirmation is
 recorded in the run report.
 
-Six actions are never automated at any grade and no confirmation or mode relaxes them: production
+Six actions are never automated at any grade and no confirmation, mode or change class relaxes them: production
 deploys, data migrations, hard deletes, moving money, changing secrets or permissions, publishing.
 
 Four layers decide, and each may only ever **add** a stop:

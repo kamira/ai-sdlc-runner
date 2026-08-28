@@ -768,6 +768,15 @@ def cmd_run(args: argparse.Namespace) -> int:
         args, journal_dir=args.ask_journal,
         run={"journal": str(Path(args.ask_journal).resolve()) if args.ask_journal else None,
              "plan": _where(args.plan)})
+    # A person's declaration, parsed before anything runs and recorded as a turn of its own
+    # (CHG-20260827-20 task 2). Recorded whether or not it ends up in force: an operator who
+    # declared an expired class and a run that never had one must not read the same afterwards.
+    declared_class = _change_class(getattr(args, "change_class", None))
+    if declared_class and conversation is not None:
+        conversation.relaxation(
+            f"change class {declared_class['class']!r} declared by "
+            f"{declared_class['authorised_by']}, due for review on {declared_class['review_by']}")
+
     cfg = engine.RunConfig(
         conversation=conversation,
         node_specs=plan.get("node_specs", {}),
@@ -781,6 +790,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         workstreams=plan.get("workstreams") or {},
         node_workstream=plan.get("node_workstream") or {},
         interfaces=plan.get("interfaces") or {},
+        # From the command line and nowhere else (CHG-20260827-20). `plan.check` refuses the key,
+        # so there is no path from a model's output to this value.
+        change_class=declared_class,
         autonomy=plan.get("autonomy"),
         review_seats=seats,
         halt_routing=halt_routes,
@@ -831,6 +843,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     # Which mechanism bounded this run, or why none (CHG-20260827-23 task 1). Printed always: an
     # operator who cannot see whether the work was bounded has to guess, and the guess is optimistic.
     print(f"sandbox:       {sandbox_mod.describe()}")
+    # Which class governed this run and on whose authority (CHG-20260827-20 tasks 3 and 4).
+    # Printed always, including "nothing was declared": a run that relaxed a gate and a run that
+    # never had one to relax must not read the same afterwards.
+    print(f"change class:  {report.change_class}")
+    for note in report.relaxations_by_class:
+        print(f"class relaxed: {note}")
     for relaxation in report.relaxations:
         print(f"relaxation:    {relaxation}")
     for line in report.on_trust:
@@ -894,6 +912,40 @@ def cmd_run(args: argparse.Namespace) -> int:
     for line in report.rulings:
         print(f"ruled:         {line}")
     return 0
+
+
+def _change_class(raw: Optional[str]):
+    """Parse `CLASS:WHO:REVIEW_BY`, refusing anything short of all three.
+
+    Three parts and no defaults, because each one is a guard from the record and a default would
+    quietly remove it:
+
+    * **who** — a pre-authorisation nobody signed is a relaxation on nobody's authority;
+    * **review_by** — a class that never expires outlives the assessment it was granted for;
+    * **class** — refused by name rather than guessed, like every other name in this runner.
+
+    `emergency` is accepted here and nowhere else, which is task 6 of the record: it is a person
+    saying "this proceeds and is reviewed after", and this is the one place a person types. No plan
+    key and no model answer reaches this value — `plan.check` refuses the key outright.
+
+    Guessing here is worse than in `--rule`: a mistyped ruling changes one branch, and a mistyped
+    class relaxes a gate for a whole run.
+    """
+    if not raw:
+        return None
+    parts = str(raw).split(":")
+    if len(parts) != 3 or not all(p.strip() for p in parts):
+        raise SystemExit(
+            f"--change-class expects CLASS:WHO:REVIEW_BY (for example "
+            f"standard:alex@example.com:2026-12-31); got {raw!r}. All three are required: a "
+            f"pre-authorisation nobody signed is a relaxation on nobody's authority, and one with "
+            f"no review date outlives the assessment it was granted for.")
+    name, who, review_by = (p.strip() for p in parts)
+    if name not in policy.BY_CLASS:
+        raise SystemExit(
+            f"--change-class: no class {name!r}; this runner defines "
+            f"{sorted(policy.BY_CLASS)}.")
+    return {"class": name, "authorised_by": who, "review_by": review_by}
 
 
 def _rulings(raw):
@@ -1163,6 +1215,12 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--confirm", action="append", default=None, metavar="GATE",
                     help="a gate you have already approved; repeatable. A halt is a pause with a "
                          "way back, and every confirmation is recorded in the run's report.")
+    pr.add_argument("--change-class", metavar="CLASS:WHO:REVIEW_BY",
+        help="declare the change class a PERSON assessed: standard, normal or emergency, with who "
+             "authorised it and when it must be reviewed. A standard class turns a `confirm` into "
+             "`auto` — it never dissolves a halt, and it never touches the six permanent halts. "
+             "Recorded as an operator turn. Past its review date it expires back to normal. "
+             "See CHG-20260827-20.")
     pr.add_argument("--sandbox", action="store_true",
         help="require an OS sandbox for every dispatched process. Without it the run is bounded "
              "where this machine can (Linux bwrap, macOS seatbelt) and RECORDED as unsandboxed "

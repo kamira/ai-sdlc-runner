@@ -313,6 +313,13 @@ class RunReport:
     #: "at random" is only acceptable if the choice is afterwards visible: an unrecorded random
     #: dispatch is indistinguishable from a preference nobody declared.
     dispatches: List[str] = field(default_factory=list)
+    #: Which change class governed this run and on whose authority (CHG-20260827-20 task 3).
+    #: Always set, including to "nothing was declared": a run that relaxed a gate and a run that
+    #: never had one to relax must not read the same afterwards.
+    change_class: str = ""
+    #: Gates this run passed **because** of the class, each named. A relaxation nobody can enumerate
+    #: afterwards is a relaxation nobody can audit.
+    relaxations_by_class: List[str] = field(default_factory=list)
     #: What each voice graded the change, by model (CHG-20260827-17). Kept even when they agree, so
     #: "three voices said low" is distinguishable in the record from "one voice said low".
     risk_proposed: Dict[str, str] = field(default_factory=dict)
@@ -415,6 +422,17 @@ class RunConfig:
     #: `{node id: workstream name}`. A node named here reads that workstream's grade; a node not
     #: named here reads the strictest of them, never the loosest.
     node_workstream: Mapping[str, str] = field(default_factory=dict)
+    #: The change class a **person** declared, as `{"class", "authorised_by", "review_by"}`
+    #: (CHG-20260827-20). It reaches here from the command line and from nowhere else: a plan is
+    #: written by the PM, and a plan that could name its own class would be a model granting itself
+    #: an exemption. `plan.load` refuses the key for that reason.
+    #:
+    #: `None` means `normal`, which is what every change was before this existed.
+    change_class: Optional[Mapping[str, object]] = None
+    #: The date the expiry is measured against, injectable so a test can be about the rule rather
+    #: than about the calendar. `None` means today.
+    today: Optional[str] = None
+
     #: `{workstream: {name: signature}}` (CHG-20260827-22). Compared at `reconcile`, before anything
     #: is dispatched. Empty means nothing to reconcile, which is the single-workstream case.
     interfaces: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
@@ -579,7 +597,8 @@ def _grade_in_force(cfg: "RunConfig", report: "RunReport",
     return settled
 
 
-def resolve_verdict(node: graph.Node, risk: str, autonomy: Optional[str] = None) -> Dict[str, object]:
+def resolve_verdict(node: graph.Node, risk: str, autonomy: Optional[str] = None,
+                    change_class: Optional[str] = None) -> Dict[str, object]:
     """What the policy says at this node, or a plain pass where the flow puts no gate.
 
     A node with no gate says so rather than borrowing one. An earlier version defaulted such nodes to
@@ -589,7 +608,7 @@ def resolve_verdict(node: graph.Node, risk: str, autonomy: Optional[str] = None)
     if not node.gate:
         return {"gate": None, "risk": risk, "verdict": policy.AUTO, "tightened": False,
                 "source": "the flow puts no gate on this node"}
-    return policy.verdict(node.gate, risk, autonomy)
+    return policy.verdict(node.gate, risk, autonomy, change_class)
 
 
 def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
@@ -1137,7 +1156,7 @@ def _spoken_halt(node: graph.Node, cfg: "RunConfig") -> Optional[str]:
         named = " and ".join(policy.PERMANENT_HALT_KINDS[k] for k in derived)
         return (
             f"permanent halt at {node.id!r}: the paths it names are {named} — {targets}. "
-            f"No risk grade, confirmation or mode relaxes this — a person does it.")
+            f"No risk grade, confirmation, mode or change class relaxes this — a person does it.")
 
     for field_name in sorted(spec):
         value = spec.get(field_name)
@@ -1239,8 +1258,8 @@ def _permanent_halt(node: graph.Node, cfg: "RunConfig", report: "RunReport") -> 
             report.halts.append({"node_id": node.id, "kinds": kinds,
                                  "told": list(told), "description": str(what)})
             return (
-                f"permanent halt at {node.id!r}: {what!r} is {halt}. No risk grade, confirmation "
-                f"or mode relaxes this — a person does it. This one is for {told[0]}"
+                f"permanent halt at {node.id!r}: {what!r} is {halt}. No risk grade, confirmation, "
+                f"mode or change class relaxes this — a person does it. This one is for {told[0]}"
                 + (f", and the operator" if told[0] != policy.DEFAULT_RECIPIENT else "") + ".")
     return None
 
@@ -1387,6 +1406,12 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
     opened: List[object] = []
     taken: Dict[str, int] = {}
     report = RunReport()
+    # The class in force, settled once and recorded (CHG-20260827-20 tasks 3 and 4). Once per run
+    # rather than per gate: a class that expired halfway through a walk would relax the first half
+    # and stop the second, which is a run nobody could explain afterwards.
+    from datetime import date as _date
+    klass, why = policy.class_in_force(cfg.change_class, cfg.today or _date.today().isoformat())
+    report.change_class = why
 
     seats = policy.resolve_seats(cfg.review_seats, cfg.high_risk_mode)
     if cfg.review_seats is not None and cfg.review_seats < policy.SEAT_FLOOR:
@@ -1509,7 +1534,19 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             report.halt_reason = tripped
             return _finish(report, confirmations, cfg.conversation)
 
-        verdict = resolve_verdict(node, _grade_in_force(cfg, report, node), cfg.autonomy)
+        verdict = resolve_verdict(node, _grade_in_force(cfg, report, node), cfg.autonomy, klass)
+        if klass != policy.DEFAULT_CLASS and verdict.get("gate"):
+            # What WOULD have happened without the class. Comparing beats a flag on the verdict:
+            # the verdict's shape is closed (see `policy.verdict`), and "it would have stopped at
+            # confirm" is the sentence an audit actually needs.
+            strict = resolve_verdict(node, _grade_in_force(cfg, report, node), cfg.autonomy)
+            if strict["verdict"] != verdict["verdict"]:
+                # Named, not counted. "Three gates were relaxed" is not auditable;
+                # "merge at low, which would have been confirm" is.
+                note = (f"{node.id}: {verdict['gate']} at risk {verdict['risk']} would have been "
+                        f"{strict['verdict']!r} and passed on the {klass!r} class")
+                if note not in report.relaxations_by_class:
+                    report.relaxations_by_class.append(note)
         report.verdicts[node.id] = dict(verdict)
 
         def _gate(phase: str):

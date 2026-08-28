@@ -102,6 +102,20 @@ def check(payload: Mapping[str, object], where: str = "the plan") -> Dict[str, o
         raise PlanError(f"{where} should be a JSON object with keys like {list(FIELDS[:3])}")
 
     unknown = sorted(set(payload) - set(FIELDS))
+    # A plan may not class itself (CHG-20260827-20 task 2), and the closed schema above already
+    # refuses the key. What it cannot do is explain, and "this runner does not read it" is actively
+    # misleading here: the runner reads a change class, just never from a plan. `autonomy` is the
+    # mirror image and IS a plan field — a change may declare itself more dangerous than its grade,
+    # because tightening costs nothing when it is wrong. A class RELAXES, and a plan is written by
+    # the PM, so a plan that could class itself would be a model granting itself an exemption.
+    classing = sorted(set(unknown) & {"change_class", "class", "pre_authorised", "standard"})
+    if classing:
+        raise PlanError(
+            f"{where} sets {classing}. A change class relaxes a gate, and only a person may declare "
+            f"one — pass it to `run`, where it is recorded as an operator turn carrying a name and "
+            f"a review date. A plan is written by the PM, and a plan that could class itself would "
+            f"be a model granting itself an exemption from the gate that exists to put a person in "
+            f"front of it. To make a change *stricter*, use `autonomy`, which may only tighten.")
     if unknown:
         raise PlanError(
             f"{where} sets {unknown}, which this runner does not read. Ignoring them would let a "
