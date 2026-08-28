@@ -1439,7 +1439,11 @@ def _finish(report: "RunReport", confirmations: Dict[str, int],
         # own docstring was written for.
         for relaxed in report.relaxations:
             conversation.relaxation(relaxed)
-        conversation.close(report.state)
+        # The governance facts of the run, into the durable record rather than only into stdout
+        # (CHG-20260828-09). `report.halt_reason` is where a permanent halt names the rule and the
+        # recipient, and it was reaching the terminal and nothing else.
+        conversation.close(report.state, at_node=report.halted_at, why=report.halt_reason,
+                           risk=report.risk_settled, change_class=report.change_class or None)
         for failure in conversation.write_errors:
             note = f"conversation store: {failure}"
             if note not in report.store_errors:
