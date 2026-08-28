@@ -33,7 +33,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import conversations as conversations_mod
 from . import paths
@@ -437,6 +437,11 @@ class RunConfig:
     #: The date the expiry is measured against, injectable so a test can be about the rule rather
     #: than about the calendar. `None` means today.
     today: Optional[str] = None
+    #: `{workstream: declaration}` (CHG-20260828-07). A programme's parts are not one type: a copy
+    #: tweak may be pre-authorised where the schema change beside it is not. Same shape as
+    #: `workstreams` for risk, and reaching here from the command line only — a plan cannot class
+    #: itself at any granularity.
+    class_by_workstream: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
 
     #: `{workstream: {name: signature}}` (CHG-20260827-22). Compared at `reconcile`, before anything
     #: is dispatched. Empty means nothing to reconcile, which is the single-workstream case.
@@ -600,6 +605,40 @@ def _grade_in_force(cfg: "RunConfig", report: "RunReport",
         # In no workstream: the change-level gates, and everything before the split.
         return policy.strictest(list(cfg.workstreams.values()) + [settled])
     return settled
+
+
+def _class_in_force(cfg: "RunConfig", node: Optional[graph.Node], today: str) -> Tuple[str, str]:
+    """The change class this node's gate reads, and why (CHG-20260828-07).
+
+    The analogue of `_grade_in_force`, and it exists for the same reason: CHG-20260827-18 made risk
+    per-workstream because a schema change and a copy tweak are not the same risk. They are not the
+    same *type* either — one may have been assessed and pre-authorised while the other has not —
+    and CHG-20260827-20 shipped a class as one scalar per run. `ACC-20260827-20` disclosed that as
+    a reservation: *"this composes badly with workstreams and is not addressed."*
+
+    A node **in** a workstream reads that workstream's class. A node in none — `pr`, `merge`,
+    `close_out`, everything before the split — reads `policy.combined_class`, which relaxes only if
+    every workstream is pre-authorised.
+
+    The run-level declaration still applies when there is nothing to split: one workstream or none
+    is one type, and that is every plan written before this.
+    """
+    per = dict(cfg.class_by_workstream or {})
+    if not per:
+        return policy.class_in_force(cfg.change_class, today)
+
+    mine = cfg.node_workstream.get(node.id) if node is not None else None
+    if mine is not None:
+        return policy.class_in_force(per.get(mine), today)
+
+    # Belongs to no workstream, so it needs one answer over all of them — including the ones with
+    # no declaration at all, which is why `workstreams` is the list walked rather than `per`.
+    resolved, why = [], []
+    for name in sorted(cfg.workstreams or per):
+        klass, reason = policy.class_in_force(per.get(name), today)
+        resolved.append(klass)
+        why.append(f"{name}: {reason}")
+    return policy.combined_class(resolved), "; ".join(why)
 
 
 def resolve_verdict(node: graph.Node, risk: str, autonomy: Optional[str] = None,
@@ -1436,7 +1475,11 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
     # rather than per gate: a class that expired halfway through a walk would relax the first half
     # and stop the second, which is a run nobody could explain afterwards.
     from datetime import date as _date
-    klass, why = policy.class_in_force(cfg.change_class, cfg.today or _date.today().isoformat())
+    today = cfg.today or _date.today().isoformat()
+    # Settled per node when the plan splits (CHG-20260828-07), because a node's class follows its
+    # workstream the way its grade does. `report.change_class` records the run-level reading, which
+    # is what a change-level gate sees and what an operator asks about first.
+    klass, why = _class_in_force(cfg, None, today)
     report.change_class = why
 
     seats = policy.resolve_seats(cfg.review_seats, cfg.high_risk_mode)
@@ -1566,8 +1609,9 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             report.halt_reason = tripped
             return _finish(report, confirmations, cfg.conversation)
 
-        verdict = resolve_verdict(node, _grade_in_force(cfg, report, node), cfg.autonomy, klass)
-        if klass != policy.DEFAULT_CLASS and verdict.get("gate"):
+        here, _ = _class_in_force(cfg, node, today)
+        verdict = resolve_verdict(node, _grade_in_force(cfg, report, node), cfg.autonomy, here)
+        if here != policy.DEFAULT_CLASS and verdict.get("gate"):
             # What WOULD have happened without the class. Comparing beats a flag on the verdict:
             # the verdict's shape is closed (see `policy.verdict`), and "it would have stopped at
             # confirm" is the sentence an audit actually needs.
@@ -1576,7 +1620,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 # Named, not counted. "Three gates were relaxed" is not auditable;
                 # "merge at low, which would have been confirm" is.
                 note = (f"{node.id}: {verdict['gate']} at risk {verdict['risk']} would have been "
-                        f"{strict['verdict']!r} and passed on the {klass!r} class")
+                        f"{strict['verdict']!r} and passed on the {here!r} class")
                 if note not in report.relaxations_by_class:
                     report.relaxations_by_class.append(note)
         report.verdicts[node.id] = dict(verdict)

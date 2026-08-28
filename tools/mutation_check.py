@@ -695,6 +695,41 @@ MUTATIONS: List[Mutation] = [
         'tests/test_ledger_check.py'),
 
     Mutation(
+        'classes', 'a change-level gate relaxes when only some parts were pre-authorised',
+        SRC / 'policy.py',
+        '    if not seen or any(n == DEFAULT_CLASS for n in seen):',
+        '    if not seen:',
+        'tests/test_change_classes.py'),
+
+    Mutation(
+        'classes', 'an emergency part is reported as a standard one',
+        SRC / 'policy.py',
+        '    return "emergency" if "emergency" in seen else "standard"',
+        '    return "standard"',
+        'tests/test_change_classes.py'),
+
+    Mutation(
+        'classes', "a node stops reading its own workstream's class",
+        SRC / 'engine.py',
+        '    if mine is not None:\n        return policy.class_in_force(per.get(mine), today)',
+        '    if False:\n        return policy.class_in_force(per.get(mine), today)',
+        'tests/test_change_classes.py'),
+
+    Mutation(
+        'classes', 'one sentence pre-authorises every part of a split programme again',
+        SRC / 'cli.py',
+        '    if run_level and len(workstreams or {}) > 1:',
+        '    if False:',
+        'tests/test_change_classes.py'),
+
+    Mutation(
+        'classes', 'a class may name a workstream the plan never declared',
+        SRC / 'cli.py',
+        '            if name not in (workstreams or {}):',
+        '            if False:',
+        'tests/test_change_classes.py'),
+
+    Mutation(
         "cli", "refusal text goes to the terminal with its control characters intact",
         SRC / "cli.py",
         '''    return "".join(c if (c.isprintable() or c == " ") else''',

@@ -868,7 +868,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     # A person's declaration, parsed before anything runs and recorded as a turn of its own
     # (CHG-20260827-20 task 2). Recorded whether or not it ends up in force: an operator who
     # declared an expired class and a run that never had one must not read the same afterwards.
-    declared_class = _change_class(getattr(args, "change_class", None))
+    declared_class, class_by_workstream = _change_classes(
+        getattr(args, "change_class", None), plan.get("workstreams") or {})
     if declared_class and conversation is not None:
         conversation.relaxation(
             f"change class {declared_class['class']!r} declared by "
@@ -894,6 +895,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         # From the command line and nowhere else (CHG-20260827-20). `plan.check` refuses the key,
         # so there is no path from a model's output to this value.
         change_class=declared_class,
+        class_by_workstream=class_by_workstream,
         autonomy=plan.get("autonomy"),
         review_seats=seats,
         halt_routing=halt_routes,
@@ -1039,6 +1041,42 @@ def cmd_run(args: argparse.Namespace) -> int:
     for line in report.rulings:
         print(f"ruled:         {line}")
     return 0
+
+
+def _change_classes(raw, workstreams):
+    """Parse every `--change-class`, and refuse a run-level one over a split programme.
+
+    `WORKSTREAM=CLASS:WHO:REVIEW_BY` classes one part; the bare form classes the run. Repeatable,
+    like `--seat-model` and `--rule`, because a programme's parts are not one type.
+
+    **A bare class is refused when the plan names several workstreams** (CHG-20260828-07). It would
+    otherwise pre-authorise parts the person may never have looked at, silently — which is the whole
+    thing a change class is supposed not to be. Refusing names them and asks which.
+    """
+    run_level, per = None, {}
+    for item in list(raw or ()):
+        name, sep, rest = str(item).partition("=")
+        if sep:
+            if name not in (workstreams or {}):
+                raise SystemExit(
+                    f"--change-class {item!r} names workstream {name!r}, which the plan does not "
+                    f"declare. It declares {sorted(workstreams or {})}.")
+            per[name] = _change_class(rest)
+        elif run_level is not None:
+            raise SystemExit(
+                "--change-class was given twice for the whole run. Say it once, or name a "
+                "workstream each time.")
+        else:
+            run_level = _change_class(item)
+
+    if run_level and len(workstreams or {}) > 1:
+        raise SystemExit(
+            f"--change-class was given for the whole run, and the plan names "
+            f"{len(workstreams)} workstreams: {sorted(workstreams)}. A class says a person "
+            f"assessed a TYPE, and one sentence cannot have assessed all of these — it would "
+            f"pre-authorise parts nobody looked at. Name the workstream: "
+            f"--change-class {sorted(workstreams)[0]}=standard:who:2026-12-31")
+    return run_level, per
 
 
 def _change_class(raw: Optional[str]):
@@ -1342,12 +1380,14 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--confirm", action="append", default=None, metavar="GATE",
                     help="a gate you have already approved; repeatable. A halt is a pause with a "
                          "way back, and every confirmation is recorded in the run's report.")
-    pr.add_argument("--change-class", metavar="CLASS:WHO:REVIEW_BY",
+    pr.add_argument("--change-class", action="append", default=None,
+                    metavar="[WORKSTREAM=]CLASS:WHO:REVIEW_BY",
         help="declare the change class a PERSON assessed: standard, normal or emergency, with who "
              "authorised it and when it must be reviewed. A standard class turns a `confirm` into "
              "`auto` — it never dissolves a halt, and it never touches the six permanent halts. "
              "Recorded as an operator turn. Past its review date it expires back to normal. "
-             "See CHG-20260827-20.")
+             "Repeatable with a workstream prefix; a bare one is refused when the plan names "
+             "several workstreams. See CHG-20260827-20 and CHG-20260828-07.")
     pr.add_argument("--worktree", action="store_true",
         help="require each module to build in its own git worktree. Without it a run isolates "
              "where it can and RECORDS where it could not; with it, a machine that cannot make a "
