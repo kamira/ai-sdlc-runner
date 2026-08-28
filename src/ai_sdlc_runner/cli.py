@@ -529,19 +529,63 @@ def effects_provider(plan: dict):
     return provider
 
 
-def _close_trees(trees, args, keep: bool) -> None:
-    """Take away what the run made, unless the operator asked to keep it or the run halted.
+def _close_trees(trees, args, keep: bool, report=None) -> None:
+    """Commit the last module, carry the artifacts out, land the commits, remove the trees.
 
-    `keep` is true on the halt path, because a halted run's tree **is** the evidence and removing
-    it takes away the one place an operator can look. `--keep-worktrees` forces it on every path.
-    Anything left behind is printed rather than swallowed: it is the operator's disk, and they
-    should hear about it now rather than find it later.
+    `keep` is true on the halt path, because a halted run's tree **is** the evidence and removing it
+    takes away the one place an operator can look. `--keep-worktrees` forces it on every path.
+
+    ## Which modules get committed
+
+    Every module but the last is committed by `path_for` when the next one asks for a tree — by then
+    the loop has moved past `record_module`, so it is finished by construction. The last one has
+    nothing after it to trigger that, so it is committed here **only if the run recorded it**:
+    `report.visited.count("record_module")` is the run's own count of modules that finished, and a
+    build that halted at `halt_second_fail` must not be committed as though it had passed.
+
+    Derived from the record rather than from "did the walk end cleanly", because those are different
+    questions and only the first one is about this module.
     """
     if trees is None:
         return
-    left = trees.close(keep=keep or bool(getattr(args, "keep_worktrees", False)))
-    for where in left:
+    keep = keep or bool(getattr(args, "keep_worktrees", False))
+
+    if not keep and report is not None:
+        recorded = list(getattr(report, "visited", ())).count("record_module")
+        live = getattr(trees, "_live", None)
+        if live and int(str(live).rsplit("-", 1)[-1] or 0) <= recorded:
+            trees.finish(live)
+
+    if not keep:
+        for rel in trees.carry():
+            print(f"artifact:      {rel}")
+        for failure in trees.not_carried:
+            print(f"artifact lost: {failure}")
+        landed = trees.land(_run_branch(args))
+        if landed:
+            print(f"committed:     {landed}")
+        for _key, sha, subject in trees.commits:
+            print(f"  {sha[:12]}  {subject}")
+
+    kept = trees.close(keep=keep)
+    # Summarised past a handful. A run that cycled produced thirty-nine trees and thirty-nine lines
+    # of path, which buries the halt message that explains why they exist.
+    for where in kept[:5]:
         print(f"worktree kept: {where}")
+    if len(kept) > 5:
+        print(f"worktree kept: … and {len(kept) - 5} more under {Path(kept[0]).parent}")
+
+
+def _run_branch(args) -> str:
+    """Where the run's commits go when they cannot be fast-forwarded.
+
+    Named from the plan rather than from a clock: two runs of the same plan should land on the same
+    branch, so a retry replaces its predecessor instead of littering. `-f` in `Trees.land` is what
+    makes that a replacement rather than a failure.
+    """
+    stem = Path(str(getattr(args, "plan", "") or "run")).stem or "run"
+    safe = "".join(c if (c.isalnum() or c in "-_.") else "-" for c in stem)
+    return f"ai-sdlc/{safe}"
 
 
 def _report_pending(journal) -> None:
@@ -890,6 +934,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         # ask, so the trees are made here and handed down.
         trees = worktree.Trees(config.get("agent_cwd"),
                                required=bool(getattr(args, "worktree", False)))
+        # A module tree is cut from a COMMIT, so uncommitted edits are invisible to the build
+        # (CHG-20260827-21). Inherent to isolation, and a surprise, so it is said before the run
+        # rather than discovered in its output.
+        dirty = trees.uncommitted()
+        if dirty:
+            shown = ", ".join(dirty[:4]) + (f" and {len(dirty) - 4} more" if len(dirty) > 4 else "")
+            print(f"uncommitted:   {shown} — a module builds from the last commit, so these are "
+                  f"not what it will see")
         factory = session_factory(config, seat_models, registry=config_registry,
                                   risk=cfg.risk,
                                   require_sandbox=bool(getattr(args, "sandbox", False)),
@@ -905,7 +957,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 10
 
     _report_pending(journal)
-    _close_trees(trees, args, keep=False)
+    _close_trees(trees, args, keep=False, report=report)
 
     # Which mechanism bounded this run, or why none (CHG-20260827-23 task 1). Printed always: an
     # operator who cannot see whether the work was bounded has to guess, and the guess is optimistic.

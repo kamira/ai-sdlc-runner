@@ -234,10 +234,11 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "examples", "a --seat-model command is relocated into the config's directory again",
         SRC / "cli.py",
-        # Re-anchored (CHG-20260828-02): stale since CHG-20260827-23 added `risk` and `can_write`
-        # to this call, so this mutation had been reporting ANCHOR GONE to anyone who ran the group
-        # and nothing to anyone who did not.
-        '''                        timeout, retries, cwd=config_cwd if from_config else None,
+        # Re-anchored twice now: by CHG-20260828-02 after CHG-20260827-23 added `risk`/`can_write`,
+        # and again here after CHG-20260827-21 moved the directory decision into `_cwd_for`. The
+        # second time the staleness check added by CHG-20260828-02 caught it the same day, which is
+        # the argument for that check rather than for remembering.
+        '''                        timeout, retries, cwd=_cwd_for(workspace, from_config),
                         risk=risk, can_write=_may_write(seat, role),''',
         '''                        timeout, retries, cwd=config_cwd,
                         risk=risk, can_write=_may_write(seat, role),''',
@@ -602,6 +603,55 @@ MUTATIONS: List[Mutation] = [
         '            by=str(declared_class["authorised_by"]))',
         '            by=None)',
         'tests/test_export_voice.py'),
+
+    Mutation(
+        'modules', 'each module builds from HEAD again, so N+1 cannot see N',
+        SRC / 'worktree.py',
+        '        done = self._run(["git", "worktree", "add", "--detach", str(where), self.tip],',
+        '        done = self._run(["git", "worktree", "add", "--detach", str(where), "HEAD"],',
+        'tests/test_worktree_isolation.py'),
+
+    Mutation(
+        'modules', 'the finished module is no longer committed when the next one starts',
+        SRC / 'worktree.py',
+        '        if self._live is not None and self._live != key:\n            self.finish(self._live)',
+        '        if False:\n            self.finish(self._live)',
+        'tests/test_worktree_isolation.py'),
+
+    Mutation(
+        'modules', 'an ignored build artifact is committed after all',
+        SRC / 'worktree.py',
+        '        staged = self._git(["add", "-A"], where)',
+        '        staged = self._git(["add", "-A", "--force"], where)',
+        'tests/test_worktree_isolation.py'),
+
+    Mutation(
+        'modules', "the build's artifacts stop reaching the working tree",
+        SRC / 'worktree.py',
+        '        for key, where in sorted(self._trees.items()):\n            for rel in self.artifacts(key):',
+        '        for key, where in []:\n            for rel in self.artifacts(key):',
+        'tests/test_worktree_isolation.py'),
+
+    Mutation(
+        'modules', "the operator's branch is moved even when that would discard their work",
+        SRC / 'worktree.py',
+        '        done = self._git(["merge", "--ff-only", self.tip], top)',
+        '        done = self._git(["merge", self.tip], top)',
+        'tests/test_worktree_isolation.py'),
+
+    Mutation(
+        'modules', 'a module that halted is committed as though it had passed',
+        SRC / 'cli.py',
+        '        if live and int(str(live).rsplit("-", 1)[-1] or 0) <= recorded:',
+        '        if live:',
+        'tests/test_worktree_isolation.py'),
+
+    Mutation(
+        'modules', 'the run stops saying that uncommitted edits will not be seen',
+        SRC / 'cli.py',
+        '        dirty = trees.uncommitted()',
+        '        dirty = []',
+        'tests/test_worktree_isolation.py'),
 
     Mutation(
         "cli", "refusal text goes to the terminal with its control characters intact",
