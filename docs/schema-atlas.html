@@ -192,7 +192,7 @@
   <div class="stats">
     <span><b>24</b> nodes</span><span><b>7</b> modes</span><span><b>10</b> gates</span>
     <span><b>6</b> never-automated kinds</span><span><b>4</b> seats, floor <b>3</b></span>
-    <span><b>9</b> turn kinds</span><span><b>17</b> HTTP routes</span><span><b>1084</b> tests</span>
+    <span><b>9</b> turn kinds</span><span><b>18</b> HTTP routes</span><span><b>1084</b> tests</span>
   </div>
 </header>
 
@@ -306,6 +306,18 @@
     </div>
 
     <div class="tbl">
+      <header><span class="name">halt_routing</span><span class="chip c-built">built</span></header>
+      <ul class="cols">
+        <li><span class="k">PK</span> kind <span class="ty">TEXT</span></li>
+        <li><span class="k">&nbsp;&nbsp;</span> recipient <span class="ty">TEXT</span></li>
+      </ul>
+      <p class="fk-note">Who a permanent halt stops in front of. No foreign key on
+        <code>recipient</code> on purpose: an organisation names its own functions, and a table
+        accepting only the five this runner ships would be unusable. The <em>kind</em> is validated
+        instead, when it is typed.</p>
+    </div>
+
+    <div class="tbl">
       <header><span class="name">seat_assignments</span><span class="chip c-built">built</span></header>
       <ul class="cols">
         <li><span class="k">PK</span> seat <span class="ty">TEXT</span></li>
@@ -392,7 +404,7 @@
         <tr><td class="num">14</td><td>SQLite DDL</td><td class="mono">DATABASE.md</td>
             <td><span class="chip c-built">3 built</span> <span class="chip c-prop">2 designed</span></td><td>yes</td><td><strong>user_version</strong></td></tr>
         <tr><td class="num">15</td><td>HTTP API</td><td class="mono">API.md</td>
-            <td><span class="chip c-open">17 routes</span> <span class="note">8 GET · 9 POST</span></td><td>—</td><td>no</td></tr>
+            <td><span class="chip c-open">18 routes</span> <span class="note">8 GET · 10 POST</span></td><td>—</td><td>no</td></tr>
         <tr><td class="num">16</td><td>Model management</td><td class="mono">MODELS.md</td>
             <td><span class="chip c-closed">14 refusals</span></td><td>SQLite</td><td>no</td></tr>
       </tbody>

@@ -671,10 +671,16 @@ def cmd_run(args: argparse.Namespace) -> int:
     resolved_assignments = dict(plan_assignments)
     assignment_source: Dict[str, str] = {}
     config_registry: Optional[models_mod.Registry] = None
+    #: Empty unless a store says otherwise, which is the ordinary case and means
+    #: `policy.HALT_ROUTING` decides. Never `None`: a routing lookup must not have to test for it.
+    halt_routes: Dict[str, str] = {}
     store_path = args.assignment_store or ".runner/config.sqlite"
     if str(store_path).lower() != "none":
         try:
             config_db = store_mod.connect(store_path)
+            # Who each permanent halt reaches, for this project (CHG-20260827-19). Read here rather
+            # than inside the engine, so the engine still takes its whole world through `RunConfig`.
+            halt_routes = store_mod.halt_routing(config_db)
             resolved_assignments, assignment_source = store_mod.resolve(
                 plan_assignments,
                 {"node_models": store_mod.node_models(config_db),
@@ -728,6 +734,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         risk=args.risk or plan.get("risk", "high"),
         autonomy=plan.get("autonomy"),
         review_seats=seats,
+        halt_routing=halt_routes,
         high_risk_mode=high_risk,
         operations=plan.get("operations", {}),
         confirmed=tuple(args.confirm or ()),
@@ -794,6 +801,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"visited:       {len(report.visited)} node(s)")
     print(f"asks:          {len(report.asks)}")
     print(f"stopped at:    {report.halted_at} — {report.halt_reason}")
+    for halt in getattr(report, "halts", ()):
+        # Printed with labels, and printed at all: before CHG-20260827-19 every one of the six
+        # permanent halts returned to whoever started the run, and the report never said whose
+        # decision it actually was.
+        who = ", ".join(policy.recipient_label(str(n)) for n in halt.get("told", ()))
+        kinds = ", ".join(str(k) for k in halt.get("kinds", ())) or "unclassified"
+        print(f"  for:         {who}   ({kinds}, at {halt.get('node_id')})")
 
     # Say which kind of stop this was. The report has been able to distinguish them since task 1;
     # printing the distinction is what makes it usable from here, and leaving it out would be a

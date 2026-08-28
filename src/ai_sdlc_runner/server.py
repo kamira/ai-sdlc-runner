@@ -606,6 +606,21 @@ def make_handler(runner: Runner, operator: Operator,
         return _config_edit(
             body, lambda: store_mod.set_seat_model(db, seat, str(model_id) if model_id else None))
 
+    def _route_halt(body):
+        """Who a permanent halt of one kind reaches first, for this project (CHG-20260827-19).
+
+        A blank or missing `recipient` clears the row, returning that kind to `policy.HALT_ROUTING`
+        and, failing that, to the operator. The **kind** is validated in the store and the recipient
+        is not: an organisation names its own functions, and a table accepting only this runner's
+        five would be unusable by the organisations it exists for.
+        """
+        kind = str(body.get("kind") or "")
+        recipient = body.get("recipient")
+        return _config_edit(
+            body,
+            lambda: store_mod.set_halt_recipient(
+                db, kind, str(recipient) if recipient else None))
+
     if db is not None:
         # Read the registry back out of the store, where the store has one.
         #
@@ -817,6 +832,8 @@ def make_handler(runner: Runner, operator: Operator,
                     out = _assign_node(body)
                 elif self.path == "/config/seats":
                     out = _assign_seat(body)
+                elif self.path == "/config/halts":
+                    out = _route_halt(body)
                 elif self.path == "/run/decide":
                     out = runner.rule(version, str(body.get("node_id") or ""),
                                       str(body.get("branch") or ""))

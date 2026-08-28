@@ -47,7 +47,7 @@ from . import graph, models as models_mod, paths, policy
 
 #: Bumped when the tables change. Read and compared at open — a version nobody consults is a number,
 #: not a mechanism, which is what an earlier draft of the design was pulled up for.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 #: The modes that do **something** with a list of models. The other four ignore it entirely, and
 #: assigning to them is refused rather than stored: a setting that looks configured and does nothing
@@ -205,6 +205,15 @@ def _migrate(db: sqlite3.Connection) -> None:
             for statement in _SCHEMA_2:
                 db.execute(statement)
             db.execute("PRAGMA user_version = 2")
+    if found < 3:
+        # Schema 3 adds halt routing (CHG-20260827-19). Same rules again, and the repetition is the
+        # point: verify the shape first, individual statements inside one transaction, and stamp the
+        # version inside that same transaction so a crash cannot bless a half-built store.
+        _verify_or_refuse(db)
+        with _locked(db), db:
+            for statement in _SCHEMA_3:
+                db.execute(statement)
+            db.execute("PRAGMA user_version = 3")
     db.commit()
 
 
@@ -271,7 +280,26 @@ _SCHEMA_2 = (
 
 #: What each table must hold. Compared column for column when a table already exists at an older
 #: version — a table's *name* says nothing about whether it is the table this runner wrote.
+#: Schema 3: who a permanent halt of each kind reaches first, for this project.
+#:
+#: `kind` is the primary key, so a project has one recipient per kind and re-configuring replaces
+#: rather than accumulating — two rows for `deploy` would be a routing table that cannot answer its
+#: own question.
+#:
+#: **No foreign key on `recipient`.** An organisation names its own functions — `sre-oncall`, `dba`,
+#: whoever the rota is — and constraining it to a roster this runner ships would make the table
+#: unusable by the organisations it exists for. The *kind* is checked instead, in
+#: `policy.check_routing`, because a typo there configures nothing while looking configured.
+_SCHEMA_3 = (
+    """CREATE TABLE IF NOT EXISTS halt_routing (
+         kind       TEXT PRIMARY KEY,
+         recipient  TEXT NOT NULL
+       )""",
+)
+
+
 _EXPECTED = {
+    "halt_routing": ("kind", "recipient"),
     "models": ("id", "vendor", "name", "transport", "command_json", "endpoint", "key_env", "note"),
     "node_assignments": ("node_id", "ordinal", "model_id"),
     "seat_assignments": ("seat", "model_id"),
@@ -429,6 +457,29 @@ def set_seat_model(db: sqlite3.Connection, seat: str, model_id: Optional[str]) -
             except sqlite3.IntegrityError:
                 raise StoreError(
                     f"no model {model_id!r} in this store; assign one the registry has") from None
+
+
+def set_halt_recipient(db: sqlite3.Connection, kind: str, recipient: Optional[str]) -> None:
+    """Route one permanent-halt kind to a recipient for this project, or clear it.
+
+    The kind is validated and the recipient is not — see `policy.check_routing` for why that
+    asymmetry is the design. A blank recipient clears the row, which returns that kind to
+    `policy.HALT_ROUTING` and, failing that, to the operator.
+    """
+    policy.check_routing({kind: "placeholder"})
+    named = str(recipient or "").strip()
+    with _locked(db), db:
+        db.execute("DELETE FROM halt_routing WHERE kind = ?", (kind,))
+        if named:
+            db.execute("INSERT INTO halt_routing (kind, recipient) VALUES (?, ?)", (kind, named))
+
+
+def halt_routing(db: sqlite3.Connection) -> Dict[str, str]:
+    """This project's routing, `kind -> recipient`. Empty is the ordinary case and means
+    `policy.HALT_ROUTING` decides."""
+    with _locked(db):
+        rows = db.execute("SELECT kind, recipient FROM halt_routing ORDER BY kind").fetchall()
+    return {kind: recipient for kind, recipient in rows}
 
 
 def node_models(db: sqlite3.Connection) -> Dict[str, List[str]]:

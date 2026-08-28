@@ -159,6 +159,53 @@ MUTATIONS: List[Mutation] = [
         "tests/test_rerun_idempotence.py"),
 
     Mutation(
+        "routing", "an unrouted halt stops reaching the operator",
+        SRC / "policy.py",
+        '''    told.append(DEFAULT_RECIPIENT)
+    return tuple(told)''',
+        '''    return tuple(told)''',
+        "tests/test_halt_routing.py"),
+
+    Mutation(
+        "routing", "a kind nobody has heard of raises instead of falling back",
+        SRC / "policy.py",
+        '''    return DEFAULT_RECIPIENT, "default"''',
+        '''    raise PolicyError(f"no route for {kind!r}")''',
+        "tests/test_halt_routing.py"),
+
+    Mutation(
+        "routing", "a kind with a typo in it is accepted at configuration time",
+        SRC / "policy.py",
+        '''    unknown = sorted(k for k in routing if k not in PERMANENT_HALT_KINDS)''',
+        '''    unknown = []''',
+        "tests/test_halt_routing.py"),
+
+    Mutation(
+        "routing", "a project's own routing stops overriding the policy table",
+        SRC / "policy.py",
+        '''    if routing:
+        named = str(routing.get(kind) or "").strip()''',
+        '''    if False:
+        named = str(routing.get(kind) or "").strip()''',
+        "tests/test_halt_routing.py"),
+
+    Mutation(
+        "routing", "the owners stop being listed in the order their kinds were crossed",
+        SRC / "policy.py",
+        '''        if owner != DEFAULT_RECIPIENT and owner not in told:
+            told.append(owner)''',
+        '''        if owner != DEFAULT_RECIPIENT and owner not in told:
+            told.insert(0, owner)''',
+        "tests/test_halt_routing.py"),
+
+    Mutation(
+        "routing", "a halt stops recording who it was for",
+        SRC / "engine.py",
+        '''            report.halts.append({"node_id": node.id, "kinds": kinds,''',
+        '''            [].append({"node_id": node.id, "kinds": kinds,''',
+        "tests/test_halt_routing.py"),
+
+    Mutation(
         "frontier", "an empty answer latches, foreclosing every later plan",
         SRC / "engine.py",
         '''            last_word = None
