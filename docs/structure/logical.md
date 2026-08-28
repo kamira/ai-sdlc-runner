@@ -10,8 +10,8 @@ lock a version against it, or derive artifacts from it. What is left is what the
 
 | Module | Responsibility | Depends on |
 |--------|----------------|------------|
-| `policy` | **The governance.** Five roles with capability flags; 10 gates × three risk grades; the six permanent halts and the words that recognise them; the review seats and the rule that adjudicates their verdicts. Every value has its reason written beside it | — |
-| `graph` | **The flow.** 24 nodes, one kind of work each, with the module loop, the bounded retry and the feedback edge back to PM. `validate()` asserts it against `policy` | `policy` |
+| `policy` | **The governance.** Six roles with capability flags; 10 gates × three risk grades; the six permanent halts and the words that recognise them; the review seats and the rule that adjudicates their verdicts. Every value has its reason written beside it | — |
+| `graph` | **The flow.** 28 nodes, one kind of work each, with the module loop, the bounded retry and the feedback edge back to PM. `validate()` asserts it against `policy` | `policy` |
 | `engine` | Walks the flow: consults the gate, opens one session per ask and closes it, journals the question before asking, adjudicates the seats, routes on the answers, runs each node's effects | `graph`, `policy`, `workorder`, `effects` |
 | `workorder` | Renders one node's order — the closed schema, capabilities from `policy`, and nothing about the harness | `policy` |
 | `effects` | Ordered effects, each admitted only if probeable. Resume at the first unmet postcondition; nothing already true is re-applied; everything applied is re-probed | — |

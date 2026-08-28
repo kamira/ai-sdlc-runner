@@ -90,8 +90,8 @@ def test_the_flow_route_section_names_the_node_fields_it_actually_sends():
 def test_the_page_states_the_real_number_of_node_fields_the_flow_route_withholds():
     body = SOURCE.split('elif path == "/flow"')[1].split("elif path ==")[0]
     sent = len(set(re.findall(r'"(\w+)":', body)) & set(graph.Node.__dataclass_fields__))
-    assert f"{sent} of `Node`'s" in PAGE or f"Twelve of `Node`'s" in PAGE
-    assert sent == 12, f"the /flow route now sends {sent} node fields; the page says twelve"
+    assert f"{sent} of `Node`'s" in PAGE or f"Thirteen of `Node`'s" in PAGE
+    assert sent == 13, f"the /flow route now sends {sent} node fields; the page says thirteen"
 
 
 def test_every_status_code_the_server_can_send_is_documented():

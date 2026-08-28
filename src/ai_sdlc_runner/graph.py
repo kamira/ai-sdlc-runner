@@ -104,6 +104,15 @@ class Node:
     answer_decides: bool = False
     #: How to read the models configured here — see ``MODES``. Declared, never inferred.
     mode: str = SINGLE
+    #: This terminal is a **give-up**, not an ending (CHG-20260827-22). `done` is where the flow was
+    #: designed to arrive; `halt_second_fail` and `halt_unreconciled` are where it stopped because
+    #: nothing it can do would help. Both used to report `state: finished`, which made "it worked"
+    #: and "it gave up" the same shape — the very distinction the state vocabulary exists to draw.
+    #:
+    #: Declared rather than matched on an id prefix: `halt_` is a naming convention, and a
+    #: convention is not a constraint. A terminal node added tomorrow and called `abandoned` would
+    #: report success, and nothing would say so.
+    permanent: bool = False
     #: This node's answers are **risk grades**, not branch labels (CHG-20260827-17). Declared here
     #: rather than matched on the node's id in the engine, for the reason this file exists: a node
     #: id in a condition is a name standing in for a constraint, and the constraint is *what kind of
@@ -153,7 +162,7 @@ NODES: Tuple[Node, ...] = (
               "stops a run here is the requirement being incomplete, not a risk grade — a gate "
               "that fires on a complete requirement would be asking a person to approve the "
               "absence of a problem, and one that never fires is decoration"),
-    Node("pm_plan", STEP, "PM turns the instruction into a plan", role="pm", next="pm_confirm",
+    Node("pm_plan", STEP, "PM turns the instruction into a plan", role="pm", next="plan_scope",
          mode=SINGLE,
          note="a plan is work, not a verdict: several models would mean several candidate plans "
               "and no rule for choosing between them"),
@@ -161,6 +170,31 @@ NODES: Tuple[Node, ...] = (
          gate_when="after", answer_decides=True, mode=MODEL_PANEL, rejects_to="pm_plan",
          branches={"yes": "lead_assess", "no": "pm_plan"},
          note="PM is asked, and the answer decides; the gate then stops with that answer in hand"),
+    Node("plan_scope", LOOP, "one workstream or several", mode=RUNNER,
+         branches={"split": "sub_plan", "single": "pm_confirm"},
+         note="decided from the plan's own `workstreams`, the way `next_module` is decided from the "
+              "run's record rather than from a list somebody wrote in advance. A programme with one "
+              "workstream takes `single` and never enters the second tier — which is what keeps "
+              "every plan written before CHG-20260827-22 behaving exactly as it did"),
+    Node("sub_plan", STEP, "each workstream is planned at its own scope", role="planner",
+         next="reconcile", mode=POOL, main="pm",
+         note="the second planning tier, and the reason the tree is three deep. Dispatched by the "
+              "PM; the planner dispatches nothing, which is the bound (`policy.MAX_DISPATCH_DEPTH`)"),
+    Node("reconcile", DECISION, "the sub-plans are reconciled against each other", mode=RUNNER,
+         branches={"agree": "pm_confirm", "conflict": "pm_plan",
+                   "unresolved": "halt_unreconciled"},
+         note="the node with no equivalent before this. `lead_review` reviews the CHANGE; nothing "
+              "reviewed the PLANS against each other, so two planners could pick incompatible "
+              "interfaces and the first thing to notice was a failing build several nodes later — "
+              "or nothing, and the inconsistency shipped. **Nobody is asked**: two declarations "
+              "naming the same interface differently is a fact about the plans, and a fact is not "
+              "improved by voting on it. That is also why this node has no role"),
+    Node("halt_unreconciled", TERMINAL, "the same interface conflict came back", mode=RUNNER,
+         permanent=True,
+         note="bounded: exactly one revision pass, the same bound `re_review` puts on a fix. "
+              "`conflict` routes to `pm_plan`, whose answer cannot change the declarations — they "
+              "come from the plan — so without this the run would cycle until `max_steps` and an "
+              "operator would be told only that something looped"),
     Node("lead_assess", STEP, "the lead confirms feasibility and risk", role="lead",
          gate="feasibility_confirmed", gate_when="after", next="pm_signoff", mode=MODEL_PANEL,
          grades_risk=True, rejects_to="pm_plan",
@@ -202,7 +236,7 @@ NODES: Tuple[Node, ...] = (
          mode=MODEL_PANEL,
          branches={"pass": "record_module", "fail": "halt_second_fail"},
          note="bounded: exactly one fix pass, never repeat-until-green"),
-    Node("halt_second_fail", TERMINAL, "a second failure halts", mode=RUNNER,
+    Node("halt_second_fail", TERMINAL, "a second failure halts", mode=RUNNER, permanent=True,
          note="two failures on one module is not something retrying fixes"),
     Node("lead_review", DECISION, "review seats cross-check the whole change", role="seat",
          gate="lead_review", gate_when="after", mode=SEAT_PANEL, rejects_to="review_failed",
@@ -244,6 +278,27 @@ def gates_used() -> List[str]:
 
 def roles_used() -> List[str]:
     return sorted({n.role for n in NODES if n.role})
+
+
+def dispatch_edges() -> Dict[str, List[str]]:
+    """`{dispatching role: [roles it dispatches]}`, read off the pool nodes.
+
+    A pool node is the only place one role opens work for another: `main` dispatches `role`. Derived
+    rather than listed, so a fourth tier added to `NODES` shows up here without anyone remembering
+    to update a second list — which is the failure this function exists to make impossible.
+    """
+    edges: Dict[str, List[str]] = {}
+    for n in NODES:
+        if n.mode == POOL and n.main and n.role:
+            edges.setdefault(n.main, [])
+            if n.role not in edges[n.main]:
+                edges[n.main].append(n.role)
+    return edges
+
+
+def roles_asked_directly() -> List[str]:
+    """Roles the runner asks itself, which are the roots of the dispatch tree at depth 1."""
+    return sorted({n.role for n in NODES if n.role and n.mode != POOL})
 
 
 def asking_nodes() -> List[str]:
@@ -374,3 +429,9 @@ def validate() -> None:
     unreachable = sorted(ids - reachable)
     if unreachable:
         raise GraphError(f"unreachable node(s): {unreachable}")
+    for n in NODES:
+        if n.permanent and n.kind != TERMINAL:
+            raise GraphError(
+                f"node {n.id!r} is marked permanent but is a {n.kind!r}. Only a terminal node ends "
+                f"a run, so only a terminal node can end it badly.")
+

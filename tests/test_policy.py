@@ -45,11 +45,48 @@ def test_nothing_is_defined_that_the_flow_never_uses():
 # the capability that carries weight
 # --------------------------------------------------------------------------------------
 
-def test_only_the_lead_dispatches():
-    """The requirement's shape: the lead dispatches engineers, and nobody else dispatches at all —
-    so the tree stays two deep and a reviewer cannot quietly become a builder."""
-    spawners = [r.name for r in policy.ROLES if r.can_spawn]
-    assert spawners == ["lead"]
+def test_the_dispatch_tree_is_two_deep():
+    """The property the old name-list stood for.
+
+    This assertion used to read `spawners == ["lead"]`, and it guarded the wrong thing: a **list of
+    names**, when what the requirement cares about is how many layers sit between the operator and
+    the work. CHG-20260827-22 let the PM dispatch a planner, which breaks the name list and leaves
+    the depth exactly where it was — `pm → planner` and `lead → engineer` are siblings, not nested.
+
+    Derived from the graph, so a fourth tier fails here whether or not anyone updates a list.
+    """
+    depth = policy.dispatch_depth(graph.dispatch_edges(), graph.roles_asked_directly())
+    assert depth == 2, f"the dispatch tree is {depth} deep: {graph.dispatch_edges()}"
+    assert depth <= policy.MAX_DISPATCH_DEPTH
+
+
+def test_a_deeper_tree_is_refused_and_says_which_chain():
+    """The bound is enforced, not merely stated — the whole reason the constant exists."""
+    deep = {"pm": ["planner"], "planner": ["lead"], "lead": ["engineer"]}
+    with pytest.raises(policy.PolicyError) as exc:
+        policy.check_dispatch_depth(deep, ["pm"])
+    assert "4 deep" in str(exc.value)
+    assert "planner dispatches lead" in str(exc.value)
+
+
+def test_a_dispatch_cycle_is_refused_rather_than_hung():
+    """A role reachable from itself has no depth; the caller hears that instead of waiting."""
+    with pytest.raises(policy.PolicyError) as exc:
+        policy.dispatch_depth({"lead": ["engineer"], "engineer": ["lead"]}, ["lead"])
+    assert "loops" in str(exc.value)
+
+
+def test_every_spawner_actually_dispatches_somebody_in_the_graph():
+    """`can_spawn=True` on a role no pool node names is a capability granted for nothing.
+
+    This is the guard the old name-list could not give: it checked *who* was allowed to dispatch,
+    never whether the permission corresponded to anything the flow does.
+    """
+    spawners = {r.name for r in policy.ROLES if r.can_spawn}
+    dispatching = set(graph.dispatch_edges())
+    assert spawners == dispatching, (
+        f"roles permitted to dispatch: {sorted(spawners)}; roles that actually dispatch in the "
+        f"graph: {sorted(dispatching)}. A permission nothing uses is not a permission.")
 
 
 def test_qa_and_the_seats_cannot_write_what_they_judge():

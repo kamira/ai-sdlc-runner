@@ -11,7 +11,7 @@ The flow and the governance are this repository's own, in two files anyone can r
 | File | What it holds |
 | --- | --- |
 | [`policy.py`](src/ai_sdlc_runner/policy.py) | the governance: roles and their capabilities, ten gates × three risk grades, the never-automated actions, the review seats and how their verdicts are adjudicated |
-| [`graph.py`](src/ai_sdlc_runner/graph.py) | the flow: 24 nodes, one kind of work each, with the module loop, the bounded retry, and the feedback edge back to PM |
+| [`graph.py`](src/ai_sdlc_runner/graph.py) | the flow: 28 nodes, one kind of work each, with the module loop, the bounded retry, and the feedback edge back to PM |
 
 Everything else serves those two: [`engine.py`](src/ai_sdlc_runner/engine.py) walks the flow and
 enforces the policy, [`workorder.py`](src/ai_sdlc_runner/workorder.py) renders the closed-schema
@@ -52,14 +52,23 @@ agent_retries: 0                  # retries are for a backend that FAILED TO ANS
 
 ## The flow
 
-24 nodes. Each does **one kind of work**, which is what decides where the boundaries fall: building,
+28 nodes. Each does **one kind of work**, which is what decides where the boundaries fall: building,
 verifying your own work, and having it reviewed are three kinds of work, so they are three nodes.
 
 ```
 intake  →  intake_review        the seats read the requirement — before anything is planned
              │
              ↓
-           pm_plan  →  pm_confirm ◆plan_confirmed
+           pm_plan  →  plan_scope ─┬─ single ──────────────→ pm_confirm
+                                      │                            (one workstream: unchanged)
+                                      └─ split → sub_plan          one planner per workstream
+                                                    └─→ reconcile  the declared interfaces are
+                                                          ├─ agree → pm_confirm    compared, and
+                                                          ├─ conflict → pm_plan    nobody votes
+                                                          └─ unresolved → halt_unreconciled  ■
+                                                             (one revision pass, then it halts)
+
+                       pm_confirm ◆plan_confirmed
                           ├─ yes → lead_assess ◆feasibility_confirmed
                           │           └─→ pm_signoff ◆before_dispatch
                           │                  ├─ yes → next_module
@@ -102,7 +111,7 @@ Three shapes carry most of the meaning and are explicit rather than flattened:
 - **the feedback loop** — user feedback returns to PM, so the flow closes rather than ends.
 
 ```bash
-runner flow      # print all 24 nodes, their roles, gates and branches
+runner flow      # print all 28 nodes, their roles, gates and branches
 ```
 
 ---
@@ -489,7 +498,8 @@ that file is in**, not against your shell — so an example works the same wheth
 the repository root, from inside the example, or from somewhere else entirely. See
 [Where the agent runs](#where-the-agent-runs) if you keep your own `runner.yaml`.
 
-That **visits 20 of the 24 nodes** — the other four are failure paths a green run never takes —
+That **visits 21 of the 28 nodes** — five are failure paths a green run never takes, and two
+(`sub_plan`, `reconcile`) are the second planning tier, which a single-workstream plan skips —
 asks 17 questions, writes a real `examples/minimal/greet.py` beside the agent that wrote it, and
 finishes. It is three
 files: [`plan.json`](examples/minimal/plan.json) (15 node specs and 15 operation blocks),
@@ -566,7 +576,7 @@ one-instruction, one-server demo had the same bug and looked fine.
 
 ```
 src/ai_sdlc_runner/
-  graph.py        the flow: 24 nodes, their modes, gates and branches
+  graph.py        the flow: 28 nodes, their modes, gates and branches
   policy.py       the governance: roles, gates × risk, permanent halts, seats, adjudication
   engine.py       walks the flow, enforces the policy, opens one session per ask
   workorder.py    the closed-schema order every ask receives
@@ -686,7 +696,7 @@ first one winning — so two of them disagreeing inside one answer resolves sile
 ## Testing
 
 ```bash
-pytest -q          # 1444 tests
+pytest -q          # 1471 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

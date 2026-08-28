@@ -710,7 +710,8 @@ def make_handler(runner: Runner, operator: Operator,
                     {"id": n.id, "kind": n.kind, "label": n.label, "role": n.role,
                      "gate": n.gate, "gate_when": n.gate_when, "mode": n.mode,
                      "main": n.main, "follows": n.follows, "rejects_to": n.rejects_to,
-                     "branches": dict(n.branches), "next": n.next}
+                     "branches": dict(n.branches), "next": n.next,
+                     "permanent": n.permanent}
                     for n in graph.NODES],
                     "gates": {g: dict(v) for g, v in policy.GATES.items()},
                     "modes": list(graph.MODES)})
