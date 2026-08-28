@@ -31,6 +31,7 @@ question is how a rerun quietly stops being a rerun.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -931,6 +932,29 @@ def _scope(cfg: "RunConfig") -> str:
     return "split" if len(cfg.workstreams or {}) > 1 else "single"
 
 
+def _same_signature(signature: str) -> str:
+    """A signature with formatting removed, for comparison only (CHG-20260828-11).
+
+    `ACC-20260827-22` disclosed the gap: *"`(id) -> User` and `(id)->User` are a conflict… it is a
+    false stop"*. It also said normalising would mean parsing a type language this runner does not
+    have — which is true of **semantic** normalising (`List[int]` against `list[int]`) and not of
+    whitespace.
+
+    The rule, which needs no type language: **whitespace touching punctuation is formatting;
+    whitespace between two word characters is not.**
+
+    * `(id) -> User` == `(id)->User` — the case that stopped runs
+    * `Dict[str, int]` == `Dict[str,int]`
+    * `int x` **!=** `intx` — a space between words carries meaning in every notation this could
+      plausibly hold, which is why stripping all whitespace is the wrong rule and was tried first
+    * `(a) -> b` **!=** `(a) -> c` — a real disagreement is still a conflict
+
+    Comparison only. The reported strings stay exactly as each workstream wrote them, because when
+    two planners genuinely disagree the operator needs to see what each of them said.
+    """
+    return re.sub(r"\s*([^\w\s])\s*", r"", signature.strip())
+
+
 def conflicts(interfaces: Mapping[str, Mapping[str, str]]) -> List[str]:
     """Interfaces two workstreams name identically and describe differently.
 
@@ -949,7 +973,7 @@ def conflicts(interfaces: Mapping[str, Mapping[str, str]]) -> List[str]:
 
     out: List[str] = []
     for label, by_workstream in sorted(seen.items()):
-        distinct = sorted(set(by_workstream.values()))
+        distinct = sorted({_same_signature(s) for s in by_workstream.values()})
         if len(distinct) > 1:
             who = ", ".join(f"{w} says {s!r}" for w, s in sorted(by_workstream.items()))
             out.append(f"{label}: {who}")
