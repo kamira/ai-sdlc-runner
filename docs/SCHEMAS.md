@@ -47,6 +47,8 @@ gate_when: str              # "before" | "after"
 next: Optional[str]         # the single successor
 branches: Dict[str, str]    # branch label -> node id
 answer_decides: bool        # the answer picks the branch
+grades_risk: bool           # this node's voices answer with a risk grade, not a branch
+settles_risk: bool          # passing this node makes the proposed grade the run's grade
 mode: str                   # one of MODES — DECLARED, never inferred from the name
 main: Optional[str]         # a ROLE, for pool dispatch
 follows: Optional[str]      # a NODE ID, for FOLLOWS mode
