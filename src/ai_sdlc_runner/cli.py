@@ -732,6 +732,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         node_specs=plan.get("node_specs", {}),
         decisions=plan.get("decisions", {}),
         risk=args.risk or plan.get("risk", "high"),
+        # Separately from `risk` (CHG-20260827-18). `risk` is the plan's proposal and a workstream
+        # may read lower than it; `risk_override` is a person saying what this run is, and that is
+        # not something to weigh against a workstream's `low`. Before this the two were the same
+        # string and nothing could tell them apart.
+        risk_override=args.risk or None,
+        workstreams=plan.get("workstreams") or {},
+        node_workstream=plan.get("node_workstream") or {},
         autonomy=plan.get("autonomy"),
         review_seats=seats,
         halt_routing=halt_routes,
@@ -912,6 +919,13 @@ def cmd_serve(args: argparse.Namespace) -> int:
             node_specs=plan.get("node_specs", {}),
             decisions=plan.get("decisions", {}),
             risk=args.risk or plan.get("risk", "high"),
+        # Separately from `risk` (CHG-20260827-18). `risk` is the plan's proposal and a workstream
+        # may read lower than it; `risk_override` is a person saying what this run is, and that is
+        # not something to weigh against a workstream's `low`. Before this the two were the same
+        # string and nothing could tell them apart.
+        risk_override=args.risk or None,
+        workstreams=plan.get("workstreams") or {},
+        node_workstream=plan.get("node_workstream") or {},
             autonomy=plan.get("autonomy"),
             review_seats=saved.review_seats,
             high_risk_mode=saved.high_risk_mode,

@@ -64,6 +64,9 @@ FIELDS: Tuple[str, ...] = (
     "node_models",   # {node id: [model id]}
     "seat_models",   # {seat: model id or argv}
     "ship",          # the side effects — see SHIP_FIELDS
+    "workstreams",   # {name: grade} — CHG-20260827-18; the run's own `risk` still applies to
+                     # anything outside them, at the strictest of them
+    "node_workstream",  # {node id: workstream name}
 )
 
 #: The `ship` block's own closed set. `repo`, `chg_id`, `branch` and `message` are required by
@@ -78,7 +81,8 @@ SHIP_FIELDS: Tuple[str, ...] = (
 SHIP_REQUIRED: Tuple[str, ...] = ("repo", "chg_id", "branch", "message")
 
 #: The keys whose value must be an object keyed by something.
-_MAPPINGS = ("node_specs", "operations", "decisions", "node_models", "seat_models", "ship")
+_MAPPINGS = ("node_specs", "operations", "decisions", "node_models", "seat_models", "ship",
+             "workstreams", "node_workstream")
 
 
 class PlanError(Exception):
@@ -142,6 +146,31 @@ def check(payload: Mapping[str, object], where: str = "the plan") -> Dict[str, o
             f"{where} grades this change {risk!r}; the grades are {list(policy.RISKS)}. Accepted "
             f"here, it reached the first gate as a crash or a halt about something the plan could "
             f"have been refused for at the door.")
+
+    # ── workstreams (CHG-20260827-18) ────────────────────────────────────────────────────────
+    #
+    # Validated here for the reason `risk` is: a grade this runner does not recognise, accepted at
+    # the door, reaches the first gate as a crash or as a halt about something the plan could have
+    # been refused for.
+    workstreams = payload.get("workstreams") or {}
+    for name, grade in workstreams.items():
+        if not str(name).strip():
+            raise PlanError(
+                f"{where} declares a workstream with no name. A workstream is what a node points "
+                f"at, and a node pointing at an empty name points at nothing while looking "
+                f"configured.")
+        if grade not in policy.RISKS:
+            raise PlanError(
+                f"{where} grades workstream {name!r} as {grade!r}; the grades are "
+                f"{list(policy.RISKS)}.")
+
+    for node_id, name in (payload.get("node_workstream") or {}).items():
+        if name not in workstreams:
+            raise PlanError(
+                f"{where} puts node {node_id!r} in workstream {name!r}, which it does not declare. "
+                f"A node in an undeclared workstream would fall back to the strictest grade — safe, "
+                f"and silently not what the plan meant. Declare it in `workstreams` or remove the "
+                f"assignment.")
 
     autonomy = payload.get("autonomy")
     if autonomy is not None and not isinstance(autonomy, str):
