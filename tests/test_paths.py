@@ -245,6 +245,23 @@ ALLOWED_DIRECT_WRITES = {
         "the database open itself; sqlite takes a path string rather than a handle, so it is given "
         "paths.real(file) and preceded by paths.check(file) two lines above — routed, just not "
         "through a paths.* call the scanner can see",
+    ("worktree.py", "shutil.which"):
+        "not a write at all — it asks whether `git` is on PATH. Caught by the deliberately broad "
+        "`shutil.*` rule the seats asked for, and kept broad: a rule that enumerated only the "
+        "writing half of shutil would be the kind of list that goes stale, which is worse than one "
+        "false positive with a reason beside it",
+    ("worktree.py", "tempfile.mkdtemp"):
+        "the directory the module worktrees are made under, in the system temp root. No flow can "
+        "make that path deep — the segments are a fixed prefix and `module-NNN` — and it is created "
+        "before any repository path is joined to it",
+    ("worktree.py", "shutil.copy2"):
+        "carrying a build artifact into the working tree. Both arguments are already paths.real() "
+        "strings and `paths.makedirs` made the parent, so routing the copy itself would prefix an "
+        "already-prefixed path — the same reasoning as sqlite3.connect above. copy2 rather than a "
+        "paths write because a build artifact's timestamp is what a build tool reads next",
+    ("worktree.py", "shutil.rmtree"):
+        "removing a worktree this object created, and only after `git worktree remove` has refused "
+        "it. The path came from tempfile.mkdtemp above, not from anything a plan named",
     ("conversations.py", "os.replace"):
         "the atomic rename that gives FileBackend.import_conversation its whole-or-nothing "
         "guarantee; both of its arguments are already paths.real() strings, so routing the rename "
