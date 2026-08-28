@@ -1015,17 +1015,24 @@ class Conversation:
     def decision(self, what: str, where: str, why: str = "", who: str = "operator") -> None:
         self.turn(DECISION, decision=what, at_node=where, why=why, who=who)
 
-    def relaxation(self, text: str) -> None:
+    def relaxation(self, text: str, by: Optional[str] = None) -> None:
         """Recorded **in the document**, not only in the run report.
 
         `export` runs outside any walk, so there is no `RunReport` at the moment a relaxation like
         `--store-remote allow` is actually used. A mechanism whose name outlives its availability
         records nothing, which fable-seat found in the first design.
+
+        ``by`` names the **person** who relaxed something, and changes who the export says spoke
+        (CHG-20260828-03). Two different acts share this kind: `--store-remote allow` is the runner
+        recording its own configuration, and a change class is a person pre-authorising a type. The
+        first is the runner's voice; the second is not, and an export that files a person's
+        pre-authorisation under `runner` misattributes it in the one dimension the document exists
+        to record.
         """
         if ("relaxation", text) in self._said:
             return
         self._said.add(("relaxation", text))
-        self.turn(RELAXATION, text=text)
+        self.turn(RELAXATION, text=text, **({"by": by} if by else {}))
 
     def note(self, text: str) -> None:
         self.turn(NOTE, text=text)
@@ -1206,9 +1213,27 @@ _VOICES = {
     DECISION: ("operator", "decided"),
     OPENED: ("runner", "opened"),
     CLOSED: ("runner", "closed"),
-    RELAXATION: ("runner", "relaxed"),
+    RELAXATION: ("runner", "relaxed"),   # unless the turn names who — see `_voice_of`
     NOTE: ("runner", "noted"),
 }
+
+
+def _voice_of(turn: Mapping[str, object]) -> Tuple[str, str]:
+    """Who spoke and what they did — from the turn, not from its kind alone (CHG-20260828-03).
+
+    `RELAXATION` carries two different acts. `--store-remote allow` is the runner recording its own
+    configuration; a change class is a **person** pre-authorising a type of change. Reading only the
+    kind filed both under `runner`, so an export attributed an operator's judgement to the machine —
+    in a document whose whole purpose is keeping those apart.
+
+    A turn naming `by` was done by that person. Everything else keeps the voice its kind implies, so
+    no existing turn changes meaning.
+    """
+    kind = str(turn.get("kind"))
+    who, verb = _VOICES.get(kind, ("runner", kind))
+    if kind == RELAXATION and turn.get("by"):
+        return "operator", verb
+    return who, verb
 
 
 def _escape(value: object) -> str:
@@ -1345,7 +1370,7 @@ def _playback(document: Mapping[str, object]) -> str:
                 clock += MIN_BEAT       # no readable timestamp: a beat, not an invented duration
             if now is not None:
                 previous = now
-            who, verb = _VOICES.get(str(turn.get("kind")), ("runner", str(turn.get("kind"))))
+            who, verb = _voice_of(turn)
             body = {k: v for k, v in turn.items() if k not in ("seq", "kind", "at", "node_id")}
             play.append({
                 "t": round(clock, 3),
@@ -1451,7 +1476,7 @@ def _html(document: Mapping[str, object]) -> str:
 
         cards = []
         for turn in stop["turns"]:
-            who, verb = _VOICES.get(str(turn.get("kind")), ("runner", str(turn.get("kind"))))
+            who, verb = _voice_of(turn)
             body = {k: v for k, v in turn.items() if k not in ("seq", "kind", "at", "node_id")}
             model = turn.get("model") or turn.get("backend")
             byline = f'<span class="model">{_escape(model)}</span>' if model else ""
