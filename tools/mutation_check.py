@@ -751,6 +751,20 @@ MUTATIONS: List[Mutation] = [
         'tests/test_closing_record.py'),
 
     Mutation(
+        'planning', 'a formatting difference stops a run again',
+        SRC / 'engine.py',
+        '        distinct = sorted({_same_signature(s) for s in by_workstream.values()})',
+        '        distinct = sorted(set(by_workstream.values()))',
+        'tests/test_sub_planning.py'),
+
+    Mutation(
+        'planning', 'all whitespace is stripped, so two different declarations read as one',
+        SRC / 'engine.py',
+        '    return re.sub(r"\\s*([^\\w\\s])\\s*", r"\x01", signature.strip())',
+        '    return re.sub(r"\\s+", "", signature)',
+        'tests/test_sub_planning.py'),
+
+    Mutation(
         "cli", "refusal text goes to the terminal with its control characters intact",
         SRC / "cli.py",
         '''    return "".join(c if (c.isprintable() or c == " ") else''',

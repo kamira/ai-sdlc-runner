@@ -348,3 +348,45 @@ def test_the_bound_is_enforced_on_a_run_not_only_available_as_a_function(monkeyp
         engine.walk(_cfg(), lambda order: {"ok": True}, enabled=True)
     assert "deep" in str(exc.value)
     assert "planner dispatches lead" in str(exc.value)
+
+
+# ── a formatting difference is not a disagreement (CHG-20260828-11) ─────────────────────────────
+
+@pytest.mark.parametrize("one,two,why", [
+    ("(id) -> User", "(id)->User", "the case ACC-20260827-22 named"),
+    ("(id) -> User", "( id )->User", "spaces inside the brackets too"),
+    ("Dict[str, int]", "Dict[str,int]", "after a comma"),
+    ("  (id)->User  ", "(id)->User", "leading and trailing"),
+])
+def test_two_planners_spacing_a_signature_differently_agree(one, two, why):
+    """`ACC-20260827-22` #2: *"a formatting difference stops a run… it is a false stop."*
+
+    The reservation also said normalising would mean parsing a type language this runner does not
+    have. That is true of **semantic** normalising and not of whitespace, and the two were conflated.
+    """
+    assert engine.conflicts({"a": {"f": one}, "b": {"f": two}}) == [], why
+
+
+def test_a_space_between_two_words_is_still_a_difference():
+    """Why stripping all whitespace is the wrong rule, and it was the first one tried.
+
+    `int x` and `intx` are not the same declaration in any notation, so the rule is narrower:
+    whitespace **touching punctuation** is formatting; whitespace between two word characters is not.
+    """
+    assert engine.conflicts({"a": {"f": "int x"}, "b": {"f": "intx"}}) != []
+
+
+def test_a_real_disagreement_is_still_a_conflict():
+    """The property that must survive: `(a) -> b` against `(a) -> c` differ in a word, not a space."""
+    found = engine.conflicts({"a": {"f": "(a) -> b"}, "b": {"f": "(a) -> c"}})
+    assert len(found) == 1 and "b" in found[0] and "c" in found[0]
+
+
+def test_the_reported_strings_are_what_each_planner_wrote():
+    """Normalisation is for comparison only.
+
+    When two planners genuinely disagree the operator has to see what each of them said — a halt
+    quoting a normalised form would send them looking for text that is in neither plan.
+    """
+    found = engine.conflicts({"api": {"f": "int x"}, "web": {"f": "intx"}})
+    assert "'int x'" in found[0] and "'intx'" in found[0]
