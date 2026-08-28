@@ -1037,14 +1037,37 @@ class Conversation:
     def note(self, text: str) -> None:
         self.turn(NOTE, text=text)
 
-    def close(self, state: str) -> None:
+    def close(self, state: str, at_node: Optional[str] = None, why: Optional[str] = None,
+              risk: Optional[str] = None, change_class: Optional[str] = None) -> None:
         """Recorded on **every** walk, including the suspended ones `serve` produces per approval.
 
         Not deduplicated, and that is the difference from an instruction: a walk ending suspended
         and later ending finished are two things that happened, while one instruction reaching five
         walks is one thing that happened five times over.
+
+        ## Why it ended, not only that it did (CHG-20260828-09)
+
+        This recorded one word. A run that hit a permanent halt — a `deploy`, the reddest line this
+        runner has — produced a conversation reading `opened, ask, answer, closed: stopped`, and
+        **nothing about the halt, the rule it broke, or who it is for**. All of that was in the run
+        report, which is stdout and gone when the terminal is.
+
+        The conversation is the durable artefact. A governance record that keeps every question and
+        loses the reason the run stopped has kept the least important half.
+
+        `at_node`, `why`, `risk` and `change_class` are optional so a caller that has nothing to say
+        adds nothing — a suspended walk that stopped at a gate already says so through the gate's
+        own turns.
+
+        **`at_node`, not `at`.** The first draft used `at`, which is the turn's own timestamp:
+        `Turn.as_dict` refused it — *"a body that can rewrite its envelope makes seq, kind and at
+        unreliable for every reader"* — and the closing turn vanished from the record entirely. The
+        guard was added by a seat reading that line, it fired loudly rather than silently, and
+        `DECISION` had already settled the name with `at_node`.
         """
-        self.turn(CLOSED, state=state)
+        extra = {k: v for k, v in (("at_node", at_node), ("why", why), ("risk", risk),
+                                   ("change_class", change_class)) if v}
+        self.turn(CLOSED, state=state, **extra)
 
     def document(self) -> Dict[str, object]:
         doc = self.store.read(self.project["id"], self.id)
@@ -1275,7 +1298,12 @@ def _summary(turn: Mapping[str, object]) -> str:
     if kind == INSTRUCTION:
         return str(turn.get("text") or "")[:90]
     if kind == CLOSED:
-        return str(turn.get("state") or "")
+        # The state alone was the whole summary, so a run that stopped at a red line scanned
+        # identically to one that stopped at a gate (CHG-20260828-09).
+        state = str(turn.get("state") or "")
+        where = f" at {turn['at_node']}" if turn.get("at_node") else ""
+        why = f" — {turn['why']}" if turn.get("why") else ""
+        return f"{state}{where}{why}"[:160]
     if kind == OPENED:
         # It had no `text` and no `why`, so it fell through to an empty string and rendered as a
         # card with a blank line — the first thing anybody opening the log sees.

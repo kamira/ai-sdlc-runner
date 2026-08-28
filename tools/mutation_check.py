@@ -730,6 +730,27 @@ MUTATIONS: List[Mutation] = [
         'tests/test_change_classes.py'),
 
     Mutation(
+        'record', 'a run records that it stopped and not why',
+        SRC / 'engine.py',
+        '        conversation.close(report.state, at_node=report.halted_at, why=report.halt_reason,\n                           risk=report.risk_settled, change_class=report.change_class or None)',
+        '        conversation.close(report.state)',
+        'tests/test_closing_record.py'),
+
+    Mutation(
+        'record', 'the closing summary goes back to the bare state word',
+        SRC / 'conversations.py',
+        '        where = f" at {turn[\'at_node\']}" if turn.get("at_node") else ""',
+        '        where = ""',
+        'tests/test_closing_record.py'),
+
+    Mutation(
+        'record', "a body may rewrite the turn's own envelope again",
+        SRC / 'conversations.py',
+        '        collided = [k for k in self.ENVELOPE if k in self.body]',
+        '        collided = []',
+        'tests/test_closing_record.py'),
+
+    Mutation(
         "cli", "refusal text goes to the terminal with its control characters intact",
         SRC / "cli.py",
         '''    return "".join(c if (c.isprintable() or c == " ") else''',
