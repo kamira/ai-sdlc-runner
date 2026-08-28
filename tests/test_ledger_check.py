@@ -130,3 +130,42 @@ def test_a_status_that_reads_both_ways_is_refused(tmp_path):
 def test_the_two_lists_do_not_overlap():
     """A word on both lists would make every status using it ambiguous, forever."""
     assert not set(ledger_check.DONE) & set(ledger_check.IN_PROGRESS)
+
+
+# ── the other direction, which nothing walked (CHG-20260828-02) ─────────────────────────────────
+
+def test_an_acceptance_for_a_change_that_does_not_exist_is_refused(tmp_path):
+    """Every check above starts at a CHG, so an ACC naming no change was invisible.
+
+    The ledger reported `passed` while an acceptance vouched for nothing. Traceability is the whole
+    reason both files are kept, and it only holds if it holds both ways.
+    """
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\nProposed.\n")
+    (repo / "docs" / "acceptance" / "ACC-19990101-01.md").write_text(
+        "# ACC-19990101-01\n\n- Target CHG: CHG-19990101-01\n", encoding="utf-8")
+    problems = ledger_check.check(repo)
+    assert any("ACC-19990101-01" in p and "no change" in p for p in problems), problems
+
+
+def test_an_acceptance_filed_against_the_wrong_change_is_refused(tmp_path):
+    """A record filed under one id while claiming another points two ways, and a reader following
+    either lands somewhere the other contradicts."""
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\nAccepted.\n",
+                 acc="# ACC-20260901-01\n\n- Target CHG: CHG-20260714-09\n")
+    problems = ledger_check.check(repo)
+    assert any("Target CHG" in p for p in problems), problems
+
+
+def test_an_acceptance_that_names_no_target_is_not_a_problem(tmp_path):
+    """Absence is not disagreement. Older records predate the field, and requiring it would turn a
+    traceability check into a formatting one — which is how a useful check gets switched off."""
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\nAccepted.\n",
+                 acc="# ACC-20260901-01\n\nNo target line at all.\n")
+    assert ledger_check.check(repo) == []
+
+
+def test_a_matching_pair_is_still_accepted(tmp_path):
+    """The check must not fire on the normal case — it would refuse every real acceptance."""
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\nAccepted.\n",
+                 acc="# ACC-20260901-01\n\n- Target CHG: CHG-20260901-01\n")
+    assert ledger_check.check(repo) == []

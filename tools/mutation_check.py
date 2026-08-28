@@ -65,6 +65,11 @@ from typing import Dict, List, NamedTuple
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src/ai_sdlc_runner"
 
+#: The checkers themselves (CHG-20260828-02). A guard is code that can be wrong: `ledger_check`
+#: walked changes and never acceptances, so an ACC naming no change read as a pass. Mutating the
+#: guards is the only way to know they still refuse.
+TOOLS = REPO / "tools"
+
 
 class Mutation(NamedTuple):
     group: str
@@ -559,6 +564,20 @@ MUTATIONS: List[Mutation] = [
         '    report.change_class = why',
         '    report.change_class = ""',
         'tests/test_change_classes.py'),
+
+    Mutation(
+        'guards', 'an acceptance for a change that does not exist is accepted again',
+        TOOLS / 'ledger_check.py',
+        '        if suffix not in known:',
+        '        if False:',
+        'tests/test_ledger_check.py'),
+
+    Mutation(
+        'guards', 'an acceptance filed against the wrong change stops being noticed',
+        TOOLS / 'ledger_check.py',
+        '        if stated and stated != f"CHG-{suffix}":',
+        '        if False:',
+        'tests/test_ledger_check.py'),
 
     Mutation(
         "cli", "refusal text goes to the terminal with its control characters intact",

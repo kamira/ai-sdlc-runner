@@ -128,11 +128,6 @@ def _used_inside_its_own_module(root: Path, home: str, name: str) -> bool:
     return False
 
 
-#: Names common enough that an unrelated call elsewhere would mask an orphan of the same name.
-#: `subprocess.run` masking a local `run` is not hypothetical — a verifier planted exactly that and
-#: the check passed it.
-COLLIDING = ("run", "load", "save", "check", "read", "write", "close", "open", "record", "render",
-             "select", "verdict", "entries", "answers", "pending", "classify", "derive")
 
 
 def test_nothing_public_in_src_is_unreachable_from_src():
@@ -145,23 +140,64 @@ def test_nothing_public_in_src_is_unreachable_from_src():
         f"docs/knowledge/knowledge.md KN-8.")
 
 
-def test_a_symbol_with_a_common_name_needs_a_qualified_use(tmp_path):
+def _unconfirmed(root: Path, skip=PUBLIC_API):
+    """`{name: home}` for every public symbol with no use that **resolves to it**.
+
+    Shared by the check over `src/` and by the fixture below, so a change to the rule cannot pass
+    one while the other goes on describing it. The first draft had the fixture reimplement this
+    inline, which would have let the rule be reverted with the fixture still green — the shape this
+    whole file exists to catch.
+    """
+    qualified = _qualified_uses(root)
+    return {name: home for name, home in _public_symbols(root).items()
+            if name not in skip
+            and (home[:-3], name) not in qualified
+            and not _used_inside_its_own_module(root, home, name)}
+
+
+def test_every_symbol_needs_a_use_that_resolves_to_it(tmp_path):
     """The name-level pass alone lets `subprocess.run` vouch for an orphan called `run`.
 
-    For names likely to collide, the use must be **module-qualified** — `policy.classify`, or an
-    explicit `from .policy import classify` — or inside the symbol's own module. A bare call to the
-    same word somewhere unrelated proves nothing.
+    A use must be **module-qualified** — `policy.classify`, or an explicit
+    `from .policy import classify` — or inside the symbol's own module. A bare call to the same word
+    somewhere unrelated proves nothing.
+
+    ## This applied to a list of eighteen names, and the list was the defect (CHG-20260828-02)
+
+    `COLLIDING` held names "common enough that an unrelated call elsewhere would mask an orphan of
+    the same name" — **a name list standing in for a property**, which is this repository's
+    most-recorded defect class, sitting inside the checker written to catch it. Anything not on the
+    list got the coarse pass: `f.close()` anywhere in `src/` vouched for an unused `close`.
+    Reproduced with a two-file fixture before the list was removed, not argued from reading.
+
+    Deleting it costs nothing measurable. The strict rule applied to **every** public symbol in
+    `src/` reports **zero** unconfirmed today, so the list was not buying tolerance for anything —
+    it was only deciding which orphans could hide.
     """
-    qualified = _qualified_uses(SRC)
-    unconfirmed = [
-        f"{home}:{name}" for name, home in _public_symbols(SRC).items()
-        if name in COLLIDING and name not in PUBLIC_API
-        and (home[:-3], name) not in qualified
-        and not _used_inside_its_own_module(SRC, home, name)
-    ]
+    unconfirmed = [f"{home}:{name}" for name, home in sorted(_unconfirmed(SRC).items())]
     assert not unconfirmed, (
-        f"common-named and never qualified: {unconfirmed}. Something calls a word that looks like "
-        f"these, but nothing calls *these*.")
+        f"defined and never used by a name that resolves to them: {unconfirmed}. Something may "
+        f"call a word that looks like these, but nothing calls *these*.")
+
+
+def test_a_colliding_name_can_no_longer_hide_an_orphan(tmp_path):
+    """The false negative that `COLLIDING` left open for every name it did not list.
+
+    `alpha.close` is never called. `beta` calls `io.open(...).close()`, which puts the *word* into
+    the used set. Under the coarse pass that was enough; under the strict rule it is not.
+    """
+    (tmp_path / "alpha.py").write_text("def close():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "beta.py").write_text(
+        "import io\n\ndef go(p):\n    f = io.open(p)\n    f.close()\n", encoding="utf-8")
+
+    assert "close" in _used_names(tmp_path), "the coarse pass is fooled, which is the premise"
+    assert "close" in _unconfirmed(tmp_path, skip=())
+
+    # And it clears once something really calls it, so the rule is not simply "report everything" —
+    # a checker that flags every symbol is as useless as one that flags none, and louder about it.
+    (tmp_path / "gamma.py").write_text(
+        "import alpha\n\ndef fine():\n    return alpha.close()\n", encoding="utf-8")
+    assert "close" not in _unconfirmed(tmp_path, skip=())
 
 
 def test_the_qualified_pass_is_not_fooled_by_a_stdlib_namesake(tmp_path):
