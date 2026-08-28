@@ -224,8 +224,82 @@ class Trees:
                     f"{detail}")
             return None
         self._trees[key] = str(where)
+        # The commit carries the source; the artifacts have to be carried by hand, because they are
+        # deliberately not in it. Without this a fresh tree is committed source and nothing else,
+        # and an agent that decides its work by **looking at the filesystem** sees an empty output
+        # directory every time.
+        #
+        # `examples/weather-spa` is exactly that agent — it builds the first module whose file does
+        # not match, and writes into `site/`, which `.gitignore` excludes. Under isolation it built
+        # `markup` thirty-nine times and the step guard stopped the run. Found by running it; no
+        # test drove a multi-module run through the CLI, which is now `test_worktree_isolation`'s
+        # job too.
+        self._carry_forward_into(str(where))
         self._live = key
         return self._trees[key]
+
+    def _unregister(self, trees: Sequence[str]) -> None:
+        """Drop git's record of these worktrees while leaving the directories on disk.
+
+        `git worktree remove` deletes the directory, which is the opposite of what a kept tree is
+        for. `git worktree prune` only forgets directories that are already gone. Neither does this,
+        so the registration — one directory under the repository's `worktrees/` — is removed
+        directly, which is exactly what prune does once the tree has vanished.
+
+        A failure here is not worth stopping a run for: the tree still exists, the operator can
+        still read it, and the cost is one stale entry rather than lost work.
+        """
+        top = self.top()
+        if top is None:
+            return
+        done = self._git(["rev-parse", "--git-common-dir"], top)
+        if done.returncode != 0:
+            return
+        common = Path(top) / (done.stdout or "").strip()
+        for where in trees:
+            registration = common / "worktrees" / Path(where).name
+            if registration.is_dir():
+                shutil.rmtree(registration, ignore_errors=True)
+
+    def _copy_artifact(self, source: Path, target: Path, why: str) -> bool:
+        """Copy one artifact entry, which may be a **file or a whole directory**.
+
+        `git status --ignored` collapses an ignored directory to a single entry with a trailing
+        slash — `examples/weather-spa/site/`, not the files inside it. The first version of this
+        checked `is_file()` and silently copied nothing for exactly that case, which is the entire
+        output of the example that found it.
+
+        One helper for both the carry-forward and the final carry, so the two cannot disagree about
+        what an artifact is.
+        """
+        try:
+            if source.is_dir():
+                paths.makedirs(target)
+                shutil.copytree(paths.real(source), paths.real(target), dirs_exist_ok=True)
+            elif source.is_file():
+                paths.makedirs(target.parent)
+                shutil.copy2(paths.real(source), paths.real(target))
+            else:
+                return False
+        except OSError as exc:
+            self.not_carried.append(f"{why}: {exc.__class__.__name__}: {exc}")
+            return False
+        return True
+
+    def _carry_forward_into(self, tree: str) -> None:
+        """Copy every earlier module's artifacts into a newly made tree, oldest first.
+
+        Oldest first so a later module's version wins, which is the same rule `carry` uses at the
+        end and the same one a later commit follows. A tree should look like the working tree would
+        have looked at that point: committed source, plus everything built so far.
+        """
+        for key in sorted(self._trees):
+            source_tree = self._trees[key]
+            if source_tree == tree:
+                continue
+            for rel in self.artifacts(key):
+                self._copy_artifact(Path(source_tree) / rel, Path(tree) / rel,
+                                    f"{rel} into {Path(tree).name}")
 
     # ---------------------------------------------------------------- committing
 
@@ -340,22 +414,10 @@ class Trees:
         carried: List[str] = []
         for key, where in sorted(self._trees.items()):
             for rel in self.artifacts(key):
-                source = Path(where) / rel
-                if not source.is_file():
-                    continue            # a directory entry; its files are listed separately
-                target = Path(top) / rel
-                try:
-                    # Through `paths` (CHG-20260827-21): these land in the operator's repository at
-                    # paths git chose, which on Windows can be deeper than the plain API accepts.
-                    paths.makedirs(target.parent)
-                    shutil.copy2(paths.real(source), paths.real(target))
-                except OSError as exc:
-                    # Recorded, not swallowed. An artifact that failed to arrive is work the
-                    # operator does not have, and a `continue` here would make it indistinguishable
-                    # from a build that produced nothing.
-                    self.not_carried.append(f"{rel}: {exc.__class__.__name__}: {exc}")
-                    continue
-                if rel not in carried:
+                # A comment here used to read "a directory entry; its files are listed separately".
+                # They are not: `git status --ignored` collapses an ignored directory to one entry,
+                # and skipping it dropped the whole output of `examples/weather-spa`.
+                if self._copy_artifact(Path(where) / rel, Path(top) / rel, rel)                         and rel not in carried:
                     carried.append(rel)
         return carried
 
@@ -395,6 +457,16 @@ class Trees:
         evidence. Nothing is removed that this object did not create.
         """
         if keep:
+            # The **files** are the evidence; the git registration is not, and it is what grows
+            # without bound. Each kept tree leaves an entry in the repository's `worktrees/`
+            # directory, and every later `git status` and `git worktree add` walks all of them.
+            #
+            # Measured, not feared: after a session of halting runs this repository had **156**
+            # of them, an ordinary `git status` took minutes, and `git worktree list` did not
+            # return. So a kept tree is unregistered and left on disk as plain files — an operator
+            # inspecting a halt reads the files, and losing `git diff` inside a temp directory is a
+            # far smaller cost than a repository nobody can use.
+            self._unregister(sorted(self._trees.values()))
             self.left_behind = sorted(self._trees.values())
             self._trees = {}
             return list(self.left_behind)

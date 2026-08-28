@@ -259,6 +259,10 @@ ALLOWED_DIRECT_WRITES = {
         "strings and `paths.makedirs` made the parent, so routing the copy itself would prefix an "
         "already-prefixed path — the same reasoning as sqlite3.connect above. copy2 rather than a "
         "paths write because a build artifact's timestamp is what a build tool reads next",
+    ("worktree.py", "shutil.copytree"):
+        "carrying an ignored DIRECTORY — `git status --ignored` collapses one to a single entry, so "
+        "this is how the whole of a build's output moves. Source and target are both paths.real() "
+        "strings and `paths.makedirs` made the target, the same reasoning as shutil.copy2 above",
     ("worktree.py", "shutil.rmtree"):
         "removing a worktree this object created, and only after `git worktree remove` has refused "
         "it. The path came from tempfile.mkdtemp above, not from anything a plan named",

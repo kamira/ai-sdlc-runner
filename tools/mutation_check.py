@@ -654,6 +654,20 @@ MUTATIONS: List[Mutation] = [
         'tests/test_worktree_isolation.py'),
 
     Mutation(
+        'modules', 'a new tree starts empty, so a filesystem-reading agent rebuilds the same module',
+        SRC / 'worktree.py',
+        '        self._carry_forward_into(str(where))',
+        '        pass',
+        'tests/test_worktree_isolation.py'),
+
+    Mutation(
+        'modules', "an ignored directory is skipped, dropping the whole of a build's output",
+        SRC / 'worktree.py',
+        '            if source.is_dir():',
+        '            if False:',
+        'tests/test_worktree_isolation.py'),
+
+    Mutation(
         "cli", "refusal text goes to the terminal with its control characters intact",
         SRC / "cli.py",
         '''    return "".join(c if (c.isprintable() or c == " ") else''',
