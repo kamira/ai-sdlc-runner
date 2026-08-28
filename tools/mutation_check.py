@@ -668,6 +668,33 @@ MUTATIONS: List[Mutation] = [
         'tests/test_worktree_isolation.py'),
 
     Mutation(
+        'guards', 'two changes may wear one number again',
+        TOOLS / 'ledger_check.py',
+        '        if mine and landed and mine != landed:',
+        '        if False:',
+        'tests/test_ledger_check.py'),
+
+    Mutation(
+        'guards', 'editing a record starts counting as a collision',
+        TOOLS / 'ledger_check.py',
+        '        mine = _title(path.read_text(encoding="utf-8"))',
+        '        mine = path.read_text(encoding="utf-8")',
+        'tests/test_ledger_check.py'),
+
+    Mutation(
+        'guards', 'an unresolvable ref passes quietly instead of saying nothing was checked',
+        TOOLS / 'ledger_check.py',
+        # Removes the message outright. The first draft mutated only the FIRST line of the
+        # two-line string, and `was NOT checked` lives on the second — so the mutated code still
+        # printed what the test asserts, and the run reported NOT CAUGHT for a mutation that had
+        # not broken anything. A mutation that does not make the guarantee false proves nothing
+        # either way.
+        '''        print("ledger check: no main to compare against, so a change taking an id another change "
+              "already has was NOT checked. Fetch the default branch to get that check.")''',
+        '''        pass''',
+        'tests/test_ledger_check.py'),
+
+    Mutation(
         "cli", "refusal text goes to the terminal with its control characters intact",
         SRC / "cli.py",
         '''    return "".join(c if (c.isprintable() or c == " ") else''',

@@ -24,9 +24,10 @@ Exit 0 when the ledger is consistent, 1 when it is not, with the reason on stdou
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 #: Required of every change. `Status` is not here: it is a *section*, read below, because reading it
 #: as a field is what let prose about status change a document's status.
@@ -172,9 +173,84 @@ def check(repo: Path) -> List[str]:
     return problems
 
 
+def _title(text: str) -> str:
+    """A change's headline, which is its identity — `# CHG-20260828-04 — worktree isolation…`.
+
+    The id alone cannot tell two changes apart when two branches claim it; the title can, because
+    two people writing two different changes do not write the same sentence.
+    """
+    for line in text.splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    return ""
+
+
+def _at(repo: Path, ref: str, rel: str) -> Optional[str]:
+    """A file's content at a git ref, or `None` if the ref or the file is not there."""
+    try:
+        done = subprocess.run(["git", "show", f"{ref}:{rel}"], cwd=str(repo),
+                              capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):    # pragma: no cover - no git on the machine
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def check_ids_are_not_claimed_twice(repo: Path, ref: str = "origin/main") -> List[str]:
+    """Refuse a change that takes an id another change already has (CHG-20260828-06).
+
+    A number is claimed by writing `docs/changes/CHG-….md`, and nothing reserves one. Two sessions
+    working at once pick from the same free list, and `check` above cannot see it: two files with
+    one name cannot coexist in a tree, so a collision surfaces only as a merge conflict — after both
+    branches have gone green separately, each looking correct.
+
+    That happened: CHG-20260828-04 was claimed at 12:23 by an unmerged branch and again at 13:00 by
+    a change that merged. Two records, one number, both passing every check.
+
+    **Editing a record is not claiming one**, and the title is what tells them apart: an edit keeps
+    the headline, a collision has a different one. So this compares titles rather than content, and
+    a change that merely gains a section is untouched.
+
+    Returns `[]` when `ref` cannot be resolved, and says so through `checked` below rather than
+    passing silently — a check that quietly does nothing is worse than one scoped out loud.
+    """
+    problems: List[str] = []
+    for path in sorted((repo / "docs" / "changes").glob("CHG-*.md")):
+        rel = f"docs/changes/{path.name}"
+        theirs = _at(repo, ref, rel)
+        if theirs is None:
+            continue                       # new here, or the ref has no such file: nothing to clash
+        mine = _title(path.read_text(encoding="utf-8"))
+        landed = _title(theirs)
+        if mine and landed and mine != landed:
+            problems.append(
+                f"{path.stem}: this branch calls it {mine!r} and {ref} calls it {landed!r}. Two "
+                f"changes are wearing one number — pick the next free id, checking unmerged "
+                f"branches too, because nothing reserves one")
+    return problems
+
+
+def _ref_exists(repo: Path, ref: str) -> bool:
+    try:
+        done = subprocess.run(["git", "rev-parse", "--verify", "--quiet", ref], cwd=str(repo),
+                              capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):    # pragma: no cover
+        return False
+    return done.returncode == 0
+
+
 def main(argv: List[str]) -> int:
     repo = Path(argv[argv.index("--repo") + 1]) if "--repo" in argv else Path(".")
     problems = check(repo)
+
+    # The collision check needs something to compare against. Tried in order, and reported when
+    # none of them resolve: on a shallow checkout there is nothing to compare and saying so is the
+    # whole point.
+    against = next((r for r in ("origin/main", "main", "origin/HEAD") if _ref_exists(repo, r)), "")
+    if against:
+        problems += check_ids_are_not_claimed_twice(repo, against)
+    else:
+        print("ledger check: no main to compare against, so a change taking an id another change "
+              "already has was NOT checked. Fetch the default branch to get that check.")
     if problems:
         print("ledger check failed:")
         for problem in problems:
