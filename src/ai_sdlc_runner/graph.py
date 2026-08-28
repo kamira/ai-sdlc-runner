@@ -280,6 +280,28 @@ def roles_used() -> List[str]:
     return sorted({n.role for n in NODES if n.role})
 
 
+def module_cycle(start: str = "engineer_build", end: str = "record_module") -> List[str]:
+    """The asking nodes one module passes through, from `start` up to but not including `end`.
+
+    Derived by walking the edges rather than listed, for the reason this file exists: a list of
+    node ids is a **name list**, and a node added to the loop later would silently fall outside it.
+    What callers actually want is the property — "this node is part of building one module" — and
+    only a traversal answers that as the graph changes.
+
+    `record_module` bounds it because that is where a module stops being the one in hand.
+    """
+    seen, out, frontier = {start}, [], [start]
+    while frontier:
+        current = BY_ID[frontier.pop()]
+        if current.role:
+            out.append(current.id)
+        for target in list(current.branches.values()) + ([current.next] if current.next else []):
+            if target not in seen and target != end:
+                seen.add(target)
+                frontier.append(target)
+    return sorted(out)
+
+
 def dispatch_edges() -> Dict[str, List[str]]:
     """`{dispatching role: [roles it dispatches]}`, read off the pool nodes.
 

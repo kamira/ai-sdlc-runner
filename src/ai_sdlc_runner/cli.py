@@ -28,6 +28,7 @@ from typing import Dict, List, Optional
 
 from . import attachments as attach_mod
 from . import sandbox as sandbox_mod
+from . import worktree
 from . import conversations as conv_mod
 from . import paths
 from . import plan as plan_mod
@@ -248,7 +249,8 @@ class _Process(engine.Session):
 
 def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = None,
                     registry: Optional["models_mod.Registry"] = None,
-                    risk: str = "high", require_sandbox: bool = False):
+                    risk: str = "high", require_sandbox: bool = False,
+                    trees: Optional["worktree.Trees"] = None):
     """Build the factory the engine opens a session from, routing by seat or by model.
 
     Three ways to name a backend, and they are tried most-specific first: the **model** a node's mode
@@ -324,7 +326,42 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
             return bool(policy.BY_ROLE["seat"].can_write)
         return True
 
-    def factory(seat: Optional[str] = None, model: Optional[str] = None, role: str = ""):
+    #: Asks that ran in an isolated tree, and asks that could not (CHG-20260827-21). Counted
+    #: rather than assumed, because "isolation was switched on" and "this ask was isolated" are
+    #: different claims and only the second is worth reporting.
+    isolated: Dict[str, int] = {"in_tree": 0, "shared": 0}
+
+    def _cwd_for(workspace: str, from_config: bool) -> Optional[str]:
+        """Where this ask runs: its module's tree when there is one, else the usual directory.
+
+        The tree only replaces a directory this runner already owns — the one `agent_cwd` names,
+        which is the argv that came out of the runner.yaml (CHG-20260823-48 established exactly
+        that ownership). A seat command or a registry command was named in the operator's shell and
+        keeps the shell's directory; isolating it would change how its own relative path resolves,
+        which is a different change from the one this record proposes.
+        """
+        usual = config_cwd if from_config else None
+        if not workspace or trees is None or not from_config:
+            if workspace:
+                isolated["shared"] += 1
+            return usual
+        tree = trees.path_for(workspace)
+        if tree is None:
+            isolated["shared"] += 1
+            return usual
+        top = trees.top()
+        where = worktree.within(tree, top, usual) if top else None
+        if where is None:
+            # `agent_cwd` is outside the repository, so the tree has no corresponding place. Run
+            # where the operator said and count it, rather than inventing a directory.
+            isolated["shared"] += 1
+            return usual
+        paths.makedirs(where)
+        isolated["in_tree"] += 1
+        return where
+
+    def factory(seat: Optional[str] = None, model: Optional[str] = None, role: str = "",
+                workspace: str = ""):
         argv = None
         # A seat may name a registry model, exactly as a node does. Resolved first, because a plain
         # string that happens to be a model id meaning "run this program called claude" would be a
@@ -358,10 +395,11 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
         if not argv:
             return _Stub()
         return _Process(list(argv) if isinstance(argv, list) else str(argv).split(),
-                        timeout, retries, cwd=config_cwd if from_config else None,
+                        timeout, retries, cwd=_cwd_for(workspace, from_config),
                         risk=risk, can_write=_may_write(seat, role),
                         require_sandbox=require_sandbox)
 
+    factory.isolated = isolated      # read by `cmd_run` for the report line
     return factory
 
 
@@ -489,6 +527,21 @@ def effects_provider(plan: dict):
         return ()
 
     return provider
+
+
+def _close_trees(trees, args, keep: bool) -> None:
+    """Take away what the run made, unless the operator asked to keep it or the run halted.
+
+    `keep` is true on the halt path, because a halted run's tree **is** the evidence and removing
+    it takes away the one place an operator can look. `--keep-worktrees` forces it on every path.
+    Anything left behind is printed rather than swallowed: it is the operator's disk, and they
+    should hear about it now rather than find it later.
+    """
+    if trees is None:
+        return
+    left = trees.close(keep=keep or bool(getattr(args, "keep_worktrees", False)))
+    for where in left:
+        print(f"worktree kept: {where}")
 
 
 def _report_pending(journal) -> None:
@@ -824,6 +877,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"error: no seat {seat!r}; this runner defines {sorted(policy.BY_SEAT)}")
             return 2
         seat_models[seat] = command.split()
+    trees = None            # bound before the try: the except path closes it
     try:
         # **With the registry.** Without it `session_factory` cannot turn a stored model id into
         # a command — `registry is not None` guards that whole branch — so `run` selected a model
@@ -831,18 +885,27 @@ def cmd_run(args: argparse.Namespace) -> int:
         #
         # The same class as round 1's critical finding, one command over: configuration that looks
         # connected and does not govern execution. Found by a seat reading the call, not the store.
-        report = engine.walk(
-            cfg,
-            session_factory(config, seat_models, registry=config_registry,
-                            risk=cfg.risk, require_sandbox=bool(getattr(args, "sandbox", False))),
-            enabled=True)
+        # One `Trees` for the whole run (CHG-20260827-21). The five nodes of one module's build
+        # must land in the **same** tree, and only something outside the factory sees more than one
+        # ask, so the trees are made here and handed down.
+        trees = worktree.Trees(config.get("agent_cwd"),
+                               required=bool(getattr(args, "worktree", False)))
+        factory = session_factory(config, seat_models, registry=config_registry,
+                                  risk=cfg.risk,
+                                  require_sandbox=bool(getattr(args, "sandbox", False)),
+                                  trees=trees)
+        report = engine.walk(cfg, factory, enabled=True)
     except (engine.EngineError, policy.PolicyError, CliError,
-            sandbox_mod.SandboxError) as exc:
+            sandbox_mod.SandboxError, worktree.WorktreeError) as exc:
         print(f"halted: {exc}")
         _report_pending(journal)
+        # A halted run KEEPS its trees: the tree is where the evidence is, and
+        # removing it takes away the one place an operator can look.
+        _close_trees(trees, args, keep=True)
         return 10
 
     _report_pending(journal)
+    _close_trees(trees, args, keep=False)
 
     # Which mechanism bounded this run, or why none (CHG-20260827-23 task 1). Printed always: an
     # operator who cannot see whether the work was bounded has to guess, and the guess is optimistic.
@@ -853,6 +916,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"change class:  {report.change_class}")
     for note in report.relaxations_by_class:
         print(f"class relaxed: {note}")
+    # What actually happened, not what was switched on (CHG-20260827-21). A count of asks that ran
+    # in a module tree is a fact; "isolation enabled" is a setting, and the two came apart in
+    # testing more than once.
+    counted = getattr(factory, "isolated", None) or {}
+    if counted.get("in_tree") or counted.get("shared"):
+        print(f"worktree:      {counted.get('in_tree', 0)} module ask(s) isolated, "
+              f"{counted.get('shared', 0)} in the shared tree "
+              f"— {worktree.describe(config.get('agent_cwd'))}")
     for relaxation in report.relaxations:
         print(f"relaxation:    {relaxation}")
     for line in report.on_trust:
@@ -1225,6 +1296,13 @@ def build_parser() -> argparse.ArgumentParser:
              "`auto` — it never dissolves a halt, and it never touches the six permanent halts. "
              "Recorded as an operator turn. Past its review date it expires back to normal. "
              "See CHG-20260827-20.")
+    pr.add_argument("--worktree", action="store_true",
+        help="require each module to build in its own git worktree. Without it a run isolates "
+             "where it can and RECORDS where it could not; with it, a machine that cannot make a "
+             "tree refuses to run instead. See CHG-20260827-21.")
+    pr.add_argument("--keep-worktrees", action="store_true",
+        help="leave the module worktrees on disk after the run. A halted run keeps them anyway — "
+             "the tree is the evidence — so this is for inspecting a run that finished.")
     pr.add_argument("--sandbox", action="store_true",
         help="require an OS sandbox for every dispatched process. Without it the run is bounded "
              "where this machine can (Linux bwrap, macOS seatbelt) and RECORDED as unsandboxed "
