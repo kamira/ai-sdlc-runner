@@ -666,11 +666,33 @@ def import_file_store(root: str | Path, into: Backend) -> Dict[str, object]:
             refuse(str(where), f"{record['why']}; left on disk")
 
     try:
-        in_target = {str(row["conversation_id"]): str(row["project"]["id"])  # type: ignore[index]
-                     for row in into.conversations()}
+        rows = list(into.conversations())
     except Exception as exc:
+        # The target cannot be listed at all — a locked database, a missing directory. Nothing can
+        # be imported into something that cannot be read, so this one does stop the run.
         refuse("(the target)", f"could not be listed: {type(exc).__name__}: {exc}")
         return report
+
+    # One malformed row must not take the other four hundred with it. Before CHG-20260823-51 this
+    # was a dict comprehension, so a single conversation in the target whose header lacked
+    # `project` raised `KeyError` out of the whole expression, the blanket `except` above caught it,
+    # and the import returned **zero imported** with the offending conversation unnamed.
+    #
+    # That is defect 4 of CHG-20260823-47 — "one stray file, zero imports, file unnamed" — mirrored
+    # onto the target side, inside the change whose Risk section says "a stray file no longer aborts
+    # the store". A review seat found it; the other seat saw the same mechanism and judged it
+    # acceptable. The record was wrong either way, and this is the reading that costs nothing.
+    in_target: Dict[str, str] = {}
+    for row in rows:
+        try:
+            in_target[str(row["conversation_id"])] = str(row["project"]["id"])  # type: ignore[index]
+        except Exception as exc:
+            named = ""
+            if isinstance(row, Mapping):
+                named = str(row.get("conversation_id") or "")
+            refuse(f"(in the target) {named or 'a conversation with no id'}",
+                   f"this runner could not read it well enough to compare against: "
+                   f"{type(exc).__name__}: {exc}. Everything else was still imported.")
 
     for record in files:
         if not record["cid"]:

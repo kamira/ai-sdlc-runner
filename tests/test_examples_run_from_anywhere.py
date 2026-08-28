@@ -142,3 +142,58 @@ def test_a_shipped_example_writes_only_inside_itself(example, tmp_path):
 def _env():
     import os
     return dict(os.environ)
+
+
+# ── whose command `agent_cwd` applies to (CHG-20260823-51) ───────────────────────────────────────
+
+
+def _config(tmp_path, extra=""):
+    p = tmp_path / "runner.yaml"
+    p.write_text('agent_command: ["python3", "agent.py"]\nagent_timeout: 60\n' + extra,
+                 encoding="utf-8")
+    return p
+
+
+def test_a_seat_command_keeps_the_operators_directory(tmp_path):
+    """`--seat-model` argv is typed in the operator's shell, so it belongs to the shell.
+
+    CHG-20260823-48 applied `agent_cwd` to **every** `_Process`. A review seat demonstrated the
+    consequence: with a same-named file beside the config, `--seat-model conformance="python3
+    agent.py"` ran *that* file instead of the operator's; it answered `pass` where theirs answered
+    `fail`; the run printed `lead_review → pass` and `finished`. **A review seat was substituted and
+    nothing said so.** Every shipped example keeps an `agent.py` beside its `runner.yaml`, so the
+    collision is ordinary.
+
+    By CHG-20260823-49's own doctrine — a CLI path is relative to the shell you typed it in — this
+    was the exact mirror of the defect CHG-48 fixed.
+    """
+    from ai_sdlc_runner import cli
+
+    config = cli.load_config(str(_config(tmp_path)))
+    factory = cli.session_factory(config, seat_models={"conformance": ["python3", "agent.py"]})
+
+    assert factory().cwd == str(tmp_path.resolve()), (
+        "the command the config named must run beside the config")
+    assert factory(seat="conformance").cwd is None, (
+        "a --seat-model command was typed in the operator's shell and must run there")
+
+
+def test_an_explicit_relative_agent_cwd_is_anchored_to_the_config(tmp_path):
+    """`load_config` only `setdefault`-ed, so an explicit `agent_cwd: sub` survived as the bare
+    string `"sub"` and `subprocess.run` resolved it against the operator's shell — the
+    config-sourced-path-resolved-against-the-shell defect, inside the key introduced to remove it.
+
+    README said both "can be set explicitly" and that a relative `agent_command` path "means one
+    thing no matter where you are standing". Both could not be true at once.
+    """
+    from ai_sdlc_runner import cli
+
+    config = cli.load_config(str(_config(tmp_path, "agent_cwd: sub\n")))
+    where = Path(config["agent_cwd"])
+    assert where.is_absolute(), f"agent_cwd survived as a relative string: {config['agent_cwd']!r}"
+    assert where == (tmp_path / "sub").resolve(), where
+
+    absolute = tmp_path / "elsewhere"
+    kept = cli.load_config(str(_config(tmp_path, f"agent_cwd: {absolute.as_posix()}\n")))
+    assert Path(kept["agent_cwd"]) == absolute, (
+        "an absolute agent_cwd was written on purpose and must be left alone")

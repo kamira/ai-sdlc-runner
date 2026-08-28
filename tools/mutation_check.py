@@ -33,7 +33,17 @@ was known, by the same person who fixed it. It proves the tests for the classes 
 fail; it proposes no new class.
 
 That limitation is the honest reading of the table it produces, and it is worth stating twice
-because the number "7/7 caught" invites the other reading.
+because a clean table invites the other reading.
+
+**It is not a check on which scenarios got tested.** CHG-20260823-50's `frontier` group was 2/2
+caught, its table read clean, and the defect shipped anyway — because the test pinning the claim
+asserted over an ask history the shipped graph cannot produce. No mutation of the *code* can expose
+a test whose *scenario* is unreachable. A review seat put it exactly: this answers "can the tests I
+wrote fail?", never "did I write the test for the case that matters?"
+
+**And a red is only meaningful against a green.** Until CHG-20260823-51 any non-zero exit counted as
+caught, including a collection error or an unrelated pre-existing failure. Each file is now run
+unmutated first.
 
 ## Adding a mutation
 
@@ -50,7 +60,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, NamedTuple
+from typing import Dict, List, NamedTuple
 
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src/ai_sdlc_runner"
@@ -123,8 +133,8 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "examples", "agent_cwd stops defaulting to the config file's directory",
         SRC / "cli.py",
-        '''    cwd = config.get("agent_cwd") or None''',
-        '''    cwd = None''',
+        '''    config_cwd = config.get("agent_cwd") or None''',
+        '''    config_cwd = None''',
         "tests/test_examples_run_from_anywhere.py"),
 
     Mutation(
@@ -196,6 +206,47 @@ MUTATIONS: List[Mutation] = [
         "tests/test_halt_routing.py"),
 
     Mutation(
+        "frontier", "an empty answer latches, foreclosing every later plan",
+        SRC / "engine.py",
+        '''            last_word = None
+            continue''',
+        '''            continue''',
+        "tests/test_frontier_latch.py"),
+
+    Mutation(
+        "frontier", "an engineer reporting a failure is read as 'nothing left' again",
+        SRC / "engine.py",
+        '''        if not name and _went_wrong(ask.result):''',
+        '''        if False:''',
+        "tests/test_frontier_latch.py"),
+
+    Mutation(
+        "examples", "a --seat-model command is relocated into the config's directory again",
+        SRC / "cli.py",
+        '''                        timeout, retries, cwd=config_cwd if from_config else None)''',
+        '''                        timeout, retries, cwd=config_cwd)''',
+        "tests/test_examples_run_from_anywhere.py"),
+
+    Mutation(
+        "examples", "an explicit relative agent_cwd is left for the shell to resolve",
+        SRC / "cli.py",
+        '''    elif not Path(str(given)).is_absolute():
+        config["agent_cwd"] = str((here / str(given)).resolve())''',
+        '''    elif False:
+        config["agent_cwd"] = str((here / str(given)).resolve())''',
+        "tests/test_examples_run_from_anywhere.py"),
+
+    Mutation(
+        "importer", "one unreadable conversation in the target aborts the whole import again",
+        SRC / "conversations.py",
+        '''        except Exception as exc:
+            named = ""''',
+        '''        except Exception as exc:
+            raise
+            named = ""''',
+        "tests/test_conversations_sqlite.py"),
+
+    Mutation(
         "cli", "refusal text goes to the terminal with its control characters intact",
         SRC / "cli.py",
         '''    return "".join(c if (c.isprintable() or c == " ") else''',
@@ -227,9 +278,38 @@ MUTATIONS: List[Mutation] = [
 ]
 
 
-def run(mutation: Mutation) -> bool:
+def _pytest(tests: str):
+    """One narrow pytest run. Shared so the baseline and the mutated run are the same command."""
+    return subprocess.run(
+        [sys.executable, "-m", "pytest", tests, "-q", "-p", "no:randomly", "--no-header",
+         "-x", "--tb=no"],
+        cwd=REPO, capture_output=True, text=True,
+        env={**os.environ, "PYTHONPATH": "src", "PYTHONUTF8": "1"})
+
+
+def run(mutation: Mutation, baseline: Dict[str, bool]) -> bool:
     """Apply, run, restore. The restore is in a `finally` because leaving a mutated tree behind is
-    a worse outcome than any result this function can report."""
+    a worse outcome than any result this function can report.
+
+    ## Green first, or the red proves nothing
+
+    `caught = returncode != 0` cannot on its own tell *"the pinning test failed for the pinned
+    reason"* from a collection error, an import failure, or an unrelated red that was already
+    there. Both review seats named this independently on CHG-20260823-47..50. A mutation that
+    merely made a module unimportable would have been "caught" by every test file in the list.
+
+    So each file is run **unmutated** once first, and a mutation whose file is not already green is
+    reported as `NO BASELINE` rather than as caught. A red suite no longer turns into twelve
+    confident ticks.
+
+    This still does not prove a failure happened for the *right* reason — only that there was a
+    green state for the mutation to break. That limit is real and is in the module docstring.
+    """
+    if not baseline.get(mutation.tests, False):
+        print(f"  NO BASELINE  {mutation.says}")
+        print(f"               {mutation.tests} does not pass unmutated, so a failure here would "
+              f"prove nothing.")
+        return False
     original = io.open(mutation.path, encoding="utf-8").read()
     if mutation.before not in original:
         print(f"  ANCHOR GONE  {mutation.says}")
@@ -239,11 +319,7 @@ def run(mutation: Mutation) -> bool:
     io.open(mutation.path, "w", encoding="utf-8", newline="\n").write(
         original.replace(mutation.before, mutation.after, 1))
     try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "pytest", mutation.tests, "-q", "-p", "no:randomly",
-             "--no-header", "-x", "--tb=no"],
-            cwd=REPO, capture_output=True, text=True,
-            env={**os.environ, "PYTHONPATH": "src", "PYTHONUTF8": "1"})
+        proc = _pytest(mutation.tests)
     finally:
         io.open(mutation.path, "w", encoding="utf-8", newline="\n").write(original)
 
@@ -266,7 +342,14 @@ def main() -> int:
         raise SystemExit(f"no mutations in group {args.only!r}; have {groups}")
 
     print(f"{len(chosen)} mutation(s)\n")
-    missed = [m for m in chosen if not run(m)]
+    # Every file the chosen mutations touch, unmutated, once.
+    baseline: Dict[str, bool] = {}
+    for tests in sorted({m.tests for m in chosen}):
+        green = _pytest(tests).returncode == 0
+        baseline[tests] = green
+        print(f"  {'baseline ok  ' if green else 'BASELINE RED '}{tests}")
+    print()
+    missed = [m for m in chosen if not run(m, baseline)]
     print()
     if missed:
         print(f"{len(missed)} of {len(chosen)} NOT caught — a test names a guarantee it does not "
