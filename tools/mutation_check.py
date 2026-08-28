@@ -348,6 +348,65 @@ MUTATIONS: List[Mutation] = [
         "tests/test_workstream_risk.py"),
 
     Mutation(
+        "sandbox", "a role that may not write gets a pen again",
+        SRC / "policy.py",
+        '''    if not can_write:
+        policy_for_grade["write"] = "none"''',
+        '''    if False:
+        policy_for_grade["write"] = "none"''',
+        "tests/test_sandbox.py"),
+
+    Mutation(
+        "sandbox", "a high grade binds the workspace writable",
+        SRC / "sandbox.py",
+        '''    if wanted["write"] == "workspace":
+        out += ["--bind", root, root]''',
+        '''    if True:
+        out += ["--bind", root, root]''',
+        "tests/test_sandbox.py"),
+
+    Mutation(
+        "sandbox", "the network is never denied",
+        SRC / "sandbox.py",
+        '''    if not wanted["network"]:
+        out += ["--unshare-net"]''',
+        '''    if False:
+        out += ["--unshare-net"]''',
+        "tests/test_sandbox.py"),
+
+    Mutation(
+        "sandbox", "an unenforceable sandbox is reported as enforced",
+        SRC / "sandbox.py",
+        '''        return list(argv), {**wanted, "mechanism": None, "enforced": False}''',
+        '''        return list(argv), {**wanted, "mechanism": None, "enforced": True}''',
+        "tests/test_sandbox.py"),
+
+    Mutation(
+        "sandbox", "asking for a sandbox the machine cannot give proceeds anyway",
+        SRC / "sandbox.py",
+        '''        if required:
+            raise SandboxError(''',
+        '''        if False:
+            raise SandboxError(''',
+        "tests/test_sandbox.py"),
+
+    Mutation(
+        "sandbox", "the platform stops deciding which mechanism is used",
+        SRC / "sandbox.py",
+        '''        if not running.startswith(needs_platform):
+            continue''',
+        '''        if False:
+            continue''',
+        "tests/test_sandbox.py"),
+
+    Mutation(
+        "sandbox", "the dispatched process stops being told the role's capability",
+        SRC / "cli.py",
+        '''        named = policy.BY_ROLE.get(role or "")''',
+        '''        named = None''',
+        "tests/test_sandbox.py"),
+
+    Mutation(
         "cli", "refusal text goes to the terminal with its control characters intact",
         SRC / "cli.py",
         '''    return "".join(c if (c.isprintable() or c == " ") else''',

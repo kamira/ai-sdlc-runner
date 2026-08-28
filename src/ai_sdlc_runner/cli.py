@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from . import attachments as attach_mod
+from . import sandbox as sandbox_mod
 from . import conversations as conv_mod
 from . import paths
 from . import plan as plan_mod
@@ -167,11 +168,23 @@ class _Process(engine.Session):
     """
 
     def __init__(self, argv: List[str], timeout: int, retries: int = 0,
-                 cwd: Optional[str] = None):
+                 cwd: Optional[str] = None, risk: str = "high", can_write: bool = True,
+                 require_sandbox: bool = False):
         self.argv, self.timeout, self.retries = argv, timeout, retries
         #: Where the command is run. Defaults, in `load_config`, to the directory holding the
         #: runner.yaml that named it — see `session_factory` for why that and not the shell's.
         self.cwd = cwd
+        #: What this process may touch (CHG-20260827-23). Derived from the grade in force and
+        #: narrowed by the role's `can_write` — a `qa` node gets no pen whatever the grade allows,
+        #: which is the flag's promise finally being kept rather than stated.
+        self.risk, self.can_write = risk, can_write
+        #: `--sandbox`: turn "recorded as unsandboxed" into a refusal. Default off, because
+        #: refusing whenever no mechanism exists makes the runner unusable on Windows — see
+        #: `sandbox.wrap`.
+        self.require_sandbox = require_sandbox
+        #: How this process was actually bounded, filled in on the first ask. `None` until then,
+        #: because the answer depends on the machine and is worth recording rather than assumed.
+        self.sandbox: Optional[Dict[str, object]] = None
         #: Every attempt that failed, so a run that took four tries does not read like one that
         #: took one. An unrecorded retry turns a flaky backend into a mystery.
         self.attempts: List[str] = []
@@ -195,7 +208,11 @@ class _Process(engine.Session):
         while True:
             attempt += 1
             try:
-                proc = subprocess.run(self.argv, input=workorder.to_json(order),
+                argv, bounded = sandbox_mod.wrap(
+                    self.argv, risk=self.risk, can_write=self.can_write,
+                    workspace=self.cwd, required=self.require_sandbox)
+                self.sandbox = bounded
+                proc = subprocess.run(argv, input=workorder.to_json(order),
                                       capture_output=True, text=True, timeout=self.timeout,
                                       cwd=self.cwd)
                 if proc.returncode != 0:
@@ -230,7 +247,8 @@ class _Process(engine.Session):
 
 
 def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = None,
-                    registry: Optional["models_mod.Registry"] = None):
+                    registry: Optional["models_mod.Registry"] = None,
+                    risk: str = "high", require_sandbox: bool = False):
     """Build the factory the engine opens a session from, routing by seat or by model.
 
     Three ways to name a backend, and they are tried most-specific first: the **model** a node's mode
@@ -285,7 +303,28 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
     # `--models` or the assignment database, not by this file, and CHG-48 did not claim to move them.
     config_cwd = config.get("agent_cwd") or None
 
-    def factory(seat: Optional[str] = None, model: Optional[str] = None):
+
+    def _may_write(seat: Optional[str], role: str = "") -> bool:
+        """Whether whoever is answering may write, from `policy.ROLES`.
+
+        The role is the real answer and it is what `can_write` is a property of. The first version
+        of this took only the seat, so `Role("qa", can_write=False)` — the note this whole change
+        exists to keep — was still not enforced for a `qa` node: the policy layer refused the pen
+        correctly and nothing ever asked it about qa. Found while writing an acceptance rather than
+        by a test, which is the worse way round.
+
+        A seat is a review seat whatever else it is called, so it falls back to the `seat` role.
+        An unknown role keeps the grade's default rather than being guessed at — narrowing on a
+        name this policy does not define would be inventing a capability.
+        """
+        named = policy.BY_ROLE.get(role or "")
+        if named is not None:
+            return bool(named.can_write)
+        if seat and seat in policy.BY_SEAT:
+            return bool(policy.BY_ROLE["seat"].can_write)
+        return True
+
+    def factory(seat: Optional[str] = None, model: Optional[str] = None, role: str = ""):
         argv = None
         # A seat may name a registry model, exactly as a node does. Resolved first, because a plain
         # string that happens to be a model id meaning "run this program called claude" would be a
@@ -319,7 +358,9 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
         if not argv:
             return _Stub()
         return _Process(list(argv) if isinstance(argv, list) else str(argv).split(),
-                        timeout, retries, cwd=config_cwd if from_config else None)
+                        timeout, retries, cwd=config_cwd if from_config else None,
+                        risk=risk, can_write=_may_write(seat, role),
+                        require_sandbox=require_sandbox)
 
     return factory
 
@@ -774,14 +815,21 @@ def cmd_run(args: argparse.Namespace) -> int:
         # The same class as round 1's critical finding, one command over: configuration that looks
         # connected and does not govern execution. Found by a seat reading the call, not the store.
         report = engine.walk(
-            cfg, session_factory(config, seat_models, registry=config_registry), enabled=True)
-    except (engine.EngineError, policy.PolicyError, CliError) as exc:
+            cfg,
+            session_factory(config, seat_models, registry=config_registry,
+                            risk=cfg.risk, require_sandbox=bool(getattr(args, "sandbox", False))),
+            enabled=True)
+    except (engine.EngineError, policy.PolicyError, CliError,
+            sandbox_mod.SandboxError) as exc:
         print(f"halted: {exc}")
         _report_pending(journal)
         return 10
 
     _report_pending(journal)
 
+    # Which mechanism bounded this run, or why none (CHG-20260827-23 task 1). Printed always: an
+    # operator who cannot see whether the work was bounded has to guess, and the guess is optimistic.
+    print(f"sandbox:       {sandbox_mod.describe()}")
     for relaxation in report.relaxations:
         print(f"relaxation:    {relaxation}")
     for line in report.on_trust:
@@ -1000,6 +1048,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
         """A fresh factory per walk, so a seat reassigned in the console takes effect on the next
         run rather than on the next restart. Capturing one at startup froze seat routing."""
         return session_factory(config, dict(current_assignments().get("seat_models") or {}),
+                               risk=args.risk or plan.get("risk", "high"),
+                               require_sandbox=bool(getattr(args, "sandbox", False)),
                                registry=store_mod.load_registry(db) or registry)
     operator = server.Operator.mint(Path(args.token_dir))
     runner = server.Runner(walk=lambda cfg: engine.walk(cfg, build_factory(), enabled=True),
@@ -1063,6 +1113,11 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("--token-dir", default=".runner",
                     help="where the operator token is written (default .runner)")
     pv.add_argument("--risk", choices=policy.RISKS, help="override the plan's risk grade")
+    pv.add_argument("--sandbox", action="store_true",
+        help="require an OS sandbox for every dispatched process. Without it the run is bounded "
+             "where this machine can (Linux bwrap, macOS seatbelt) and RECORDED as unsandboxed "
+             "where it cannot; with it, a machine that cannot enforce the policy refuses to "
+             "dispatch instead. See CHG-20260827-23.")
     pv.add_argument("--undeclared", choices=("refuse", "allow"), default="refuse",
                     help="what to do with a working node that declares no operations")
     pv.add_argument("--ask-journal", metavar="DIR",
@@ -1106,6 +1161,11 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--confirm", action="append", default=None, metavar="GATE",
                     help="a gate you have already approved; repeatable. A halt is a pause with a "
                          "way back, and every confirmation is recorded in the run's report.")
+    pr.add_argument("--sandbox", action="store_true",
+        help="require an OS sandbox for every dispatched process. Without it the run is bounded "
+             "where this machine can (Linux bwrap, macOS seatbelt) and RECORDED as unsandboxed "
+             "where it cannot; with it, a machine that cannot enforce the policy refuses to "
+             "dispatch instead. See CHG-20260827-23.")
     pr.add_argument("--undeclared", choices=("refuse", "allow"), default="refuse",
                     help="what to do when this runner could not verify what a node does — it "
                          "declares no operations, or names targets nothing recognises. `refuse` "
