@@ -189,7 +189,7 @@ def _at(repo: Path, ref: str, rel: str) -> Optional[str]:
     """A file's content at a git ref, or `None` if the ref or the file is not there."""
     try:
         done = subprocess.run(["git", "show", f"{ref}:{rel}"], cwd=str(repo),
-                              capture_output=True, text=True, timeout=60)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     except (OSError, subprocess.SubprocessError):    # pragma: no cover - no git on the machine
         return None
     return done.stdout if done.returncode == 0 else None
@@ -234,7 +234,7 @@ def check_ids_are_not_claimed_twice(repo: Path, ref: str = "origin/main") -> Lis
 def _ref_exists(repo: Path, ref: str) -> bool:
     try:
         done = subprocess.run(["git", "rev-parse", "--verify", "--quiet", ref], cwd=str(repo),
-                              capture_output=True, text=True, timeout=60)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     except (OSError, subprocess.SubprocessError):    # pragma: no cover
         return False
     return done.returncode == 0

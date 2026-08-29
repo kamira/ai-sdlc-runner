@@ -213,9 +213,16 @@ class _Process(engine.Session):
                     self.argv, risk=self.risk, can_write=self.can_write,
                     workspace=self.cwd, required=self.require_sandbox)
                 self.sandbox = bounded
+                # The work order goes out as UTF-8 and the reply is read back as UTF-8, so the
+                # agent is told to use it (CHG-20260828-16). Without this the parent names a codec
+                # and the child picks its own: on a machine whose locale is cp950 a Python agent
+                # read the order's em-dashes as two characters where one was sent, and answered a
+                # question subtly different from the one asked. `errors="replace"` above keeps a
+                # child that ignores this from killing the read; it does not make the read right.
                 proc = subprocess.run(argv, input=workorder.to_json(order),
-                                      capture_output=True, text=True, timeout=self.timeout,
-                                      cwd=self.cwd)
+                                      capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=self.timeout,
+                                      cwd=self.cwd,
+                                      env={**os.environ, "PYTHONIOENCODING": "utf-8"})
                 if proc.returncode != 0:
                     raise CliError(
                         f"{self.argv[0]!r} exited {proc.returncode} answering "

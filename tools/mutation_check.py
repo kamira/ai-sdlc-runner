@@ -131,8 +131,8 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "examples", "the agent runs in the operator's shell directory again",
         SRC / "cli.py",
-        '''                                      cwd=self.cwd)''',
-        '''                                      cwd=None)''',
+        '''                                      cwd=self.cwd,''',
+        '''                                      cwd=None,''',
         "tests/test_examples_run_from_anywhere.py"),
 
     Mutation(
@@ -590,6 +590,56 @@ MUTATIONS: List[Mutation] = [
         '        if False:',
         'tests/test_ledger_check.py'),
 
+    # ── CHG-20260828-16: the codec is named, not inherited from whoever ran the process ────────
+    #
+    # These revert one call site each. A revert that only removed the keyword from `ledger_check`
+    # would prove the guard test reads that one file; reverting in `cli` as well proves it reads
+    # the tree rather than a remembered list of paths.
+
+    Mutation(
+        'codecs', "the id-collision guard decodes git with the caller's locale again",
+        TOOLS / 'ledger_check.py',
+        '''        done = subprocess.run(["git", "show", f"{ref}:{rel}"], cwd=str(repo),
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)''',
+        '''        done = subprocess.run(["git", "show", f"{ref}:{rel}"], cwd=str(repo),
+                              capture_output=True, text=True, timeout=60)''',
+        'tests/test_subprocess_codecs.py'),
+
+    Mutation(
+        'codecs', "an agent's reply is decoded with the caller's locale again",
+        SRC / 'cli.py',
+        '                                      capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=self.timeout,',
+        '                                      capture_output=True, text=True, timeout=self.timeout,',
+        'tests/test_subprocess_codecs.py'),
+
+    Mutation(
+        'codecs', 'the agent picks its own codec for the order it is sent',
+        SRC / 'cli.py',
+        '                                      env={**os.environ, "PYTHONIOENCODING": "utf-8"})',
+        '                                      env=None)',
+        'tests/test_cli.py'),
+
+    Mutation(
+        'codecs', 'a stray byte can kill the reader thread again, silently',
+        SRC / 'worktree.py',
+        '        return self._run(["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)',
+        '        return self._run(["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", timeout=timeout)',
+        'tests/test_subprocess_codecs.py'),
+
+    Mutation(
+        'codecs', 'the recorder reads UTF-8 without asking the child to write it',
+        TOOLS / 'session_record.py',
+        '    env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")',
+        '    env = dict(os.environ, PYTHONUNBUFFERED="1")',
+        'tests/test_recording.py'),
+
+    Mutation(
+        'codecs', 'the rule matches a keyword spelled `text` rather than a process launch',
+        REPO / 'tests' / 'test_subprocess_codecs.py',
+        '        if keywords & TEXT_SWITCHES and keywords & PROCESS_KEYWORDS:',
+        '        if keywords & TEXT_SWITCHES:',
+        'tests/test_subprocess_codecs.py'),
+
     Mutation(
         'voice', "a person's pre-authorisation is filed under the runner again",
         SRC / 'conversations.py',
@@ -829,8 +879,15 @@ def _pytest(tests: str):
     return subprocess.run(
         [sys.executable, "-m", "pytest", tests, "-q", "-p", "no:randomly", "--no-header",
          "-x", "--tb=no"],
-        cwd=REPO, capture_output=True, text=True,
-        env={**os.environ, "PYTHONPATH": "src", "PYTHONUTF8": "1"})
+        cwd=REPO, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        # `PYTHONIOENCODING`, not `PYTHONUTF8` (CHG-20260828-16). Both make pytest write UTF-8 down
+        # the pipe, which is all this needed — CHG-20260823-47 reached for the bigger switch and it
+        # worked. But `PYTHONUTF8=1` also makes `locale.getpreferredencoding()` return UTF-8 *inside
+        # the suite*, and that is what `subprocess`'s text mode reads. So every mutation ran in a
+        # locale no ordinary run of this suite has, and a guarantee about decoding could not be
+        # pinned here: reverting the fix left the tests green. `PYTHONIOENCODING` fixes the pipe and
+        # leaves the locale alone, which is the part that had to stay real.
+        env={**os.environ, "PYTHONPATH": "src", "PYTHONIOENCODING": "utf-8"})
 
 
 def run(mutation: Mutation, baseline: Dict[str, bool]) -> bool:

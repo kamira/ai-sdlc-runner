@@ -48,7 +48,7 @@ def _run(argv: Sequence[str], cwd: Optional[str | Path] = None,
          timeout: int = DEFAULT_TIMEOUT) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(list(argv), cwd=str(cwd) if cwd else None, capture_output=True,
-                              text=True, timeout=timeout)
+                              text=True, encoding="utf-8", errors="replace", timeout=timeout)
     except FileNotFoundError as exc:
         raise ProbeError(f"{argv[0]!r} is not available: {exc}") from None
     except subprocess.TimeoutExpired as exc:

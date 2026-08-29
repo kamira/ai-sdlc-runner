@@ -69,10 +69,19 @@ def test_a_child_that_would_block_buffer_still_streams(tmp_path):
     assert len(events) >= 2, "the child's output was buffered into a single event"
 
 
-def test_a_multibyte_character_split_across_two_reads_survives(tmp_path):
+def test_a_multibyte_character_split_across_two_reads_survives(tmp_path, monkeypatch):
     """Chunks are read at a fixed size, so a boundary lands mid-character on any real output with
     CJK or an em-dash in it. Decoding each chunk independently corrupts exactly one glyph per
-    boundary — rare enough to survive a smoke test and wrong in every long recording."""
+    boundary — rare enough to survive a smoke test and wrong in every long recording.
+
+    The two environment variables are cleared because otherwise this test asserts something about
+    whoever ran it (CHG-20260828-16). `record()` inherits the environment, and both switches make a
+    Python child write UTF-8 — so a run started with either one set proves the recorder works when
+    it was already going to work anyway. `tools/mutation_check.py` set one of them for every
+    mutation it ran, which is exactly how this stayed unpinned.
+    """
+    monkeypatch.delenv("PYTHONUTF8", raising=False)
+    monkeypatch.delenv("PYTHONIOENCODING", raising=False)
     size = session_record.CHUNK * 3 + 7          # guarantees boundaries inside the run of text
     _, path = session_record.record(_child(
         f"print('節' * {size // 3})"), tmp_path)

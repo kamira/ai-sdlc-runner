@@ -89,7 +89,14 @@ def record(argv, cast_dir: Path, title=None, note=None, cwd=None):
     # as **one event at the end**: every timing this file exists to capture, gone. Forcing
     # unbuffered brings the recording back to what a person watching the terminal would have seen.
     # It does change the child's behaviour; that is the trade, and it is the right way round.
-    env = dict(os.environ, PYTHONUNBUFFERED="1")
+    #
+    # `PYTHONIOENCODING` for the same reason one level over. The decoder below reads UTF-8, and
+    # until now nothing made that true: a Python child on Windows writes its stdout in the machine's
+    # ANSI codepage, so on a cp950 or cp932 box every non-ASCII character arrived as `�` —
+    # decoded without error, wrong in every glyph, and indistinguishable from the chunk-boundary
+    # corruption this file's own test exists to catch. Asking for UTF-8 is what makes reading UTF-8
+    # correct rather than assumed.
+    env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
 
     events = []
     proc = subprocess.Popen(
