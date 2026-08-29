@@ -73,11 +73,19 @@ def live(tmp_path):
     thread.start()
     port = httpd.server_address[1]
 
-    def call(method, path, body=None, token=None, host=None, origin=None):
+    def call(method, path, body=None, token=None, host=None, origin=None, raw=None,
+             omit_token=False):
+        # `raw` sends bytes exactly as given, for the cases about what the server does with a body
+        # it cannot parse. `omit_token` sends NO header at all, which is different from sending an
+        # empty one: `_guard` reads `presented is None` to decide whether the query-string fallback
+        # applies, so a test that sends `token=""` cannot reach that branch. Both optional, so
+        # every existing caller behaves as it did.
         req = urllib.request.Request(
             f"http://127.0.0.1:{port}{path}", method=method,
-            data=json.dumps(body).encode("utf-8") if body is not None else None)
-        req.add_header("X-Operator-Token", operator.token if token is None else token)
+            data=raw if raw is not None
+            else (json.dumps(body).encode("utf-8") if body is not None else None))
+        if not omit_token:
+            req.add_header("X-Operator-Token", operator.token if token is None else token)
         req.add_header("Host", host or f"127.0.0.1:{port}")
         if origin:
             req.add_header("Origin", origin)
@@ -974,3 +982,66 @@ def test_the_models_panel_is_drawn_and_can_say_a_model_is_dispatched_nowhere():
         "the models panel no longer asks the server which node uses which model")
     assert "nothing dispatches to it" in page, (
         "the models panel lost the sentence it exists to be able to say")
+
+
+# --- the three the mutation group found unpinned (CHG-20260830-01) ----------------------------
+
+
+def test_the_token_is_compared_in_constant_time(tmp_path):
+    """`==` on a secret leaks its prefix by timing, and no behavioural test can see that.
+
+    So the mechanism is named rather than the symptom: `accepts` must go through
+    `secrets.compare_digest`. Replacing it with `==` left all 56 server tests green, while the
+    comment beside it says *"a comparison that leaks its prefix is free to avoid and awkward to
+    explain afterwards"* — a reason with nothing holding it.
+    """
+    operator = server.Operator.mint(tmp_path)
+    seen = []
+    real = server.secrets.compare_digest
+
+    def spy(presented, known):
+        seen.append((presented, known))
+        return real(presented, known)
+
+    server.secrets.compare_digest = spy
+    try:
+        assert operator.accepts(operator.token) is True
+        assert operator.accepts("not-the-token") is False
+    finally:
+        server.secrets.compare_digest = real
+
+    assert seen, "the token was compared without secrets.compare_digest"
+    assert all(known == operator.token for _, known in seen)
+
+
+def test_an_absent_token_is_refused_before_anything_is_compared(tmp_path):
+    """`bool(presented) and …` short-circuits, so `None` never reaches the comparison at all."""
+    operator = server.Operator.mint(tmp_path)
+    assert operator.accepts(None) is False
+    assert operator.accepts("") is False
+
+
+def test_only_the_event_stream_takes_the_token_from_the_query_string(live):
+    """EventSource cannot set headers, so the stream accepts `?token=`. Nothing else may.
+
+    A query parameter reaches access logs, which is why the fallback is one read-only route rather
+    than a general one. Widening it to every route left all 56 tests green.
+    """
+    call, _, operator = live
+    # No header at all, not an empty one: `_guard` only consults the query string when the header
+    # is absent, so `token=""` never reaches the branch this test is about. The first version of
+    # this test sent an empty header, passed, and left the mutation NOT CAUGHT.
+    status, body = call("GET", f"/run?token={operator.token}", omit_token=True)
+    assert status == 401, "an ordinary route accepted the token from the query string"
+    assert "operator token" in body["error"]
+
+
+def test_a_body_that_is_not_json_is_refused_in_words(live):
+    """Not a traceback. `_body` catches `ValueError`; narrowing it to `TypeError` left every test
+    green while a malformed body became a 500 — the shape `cmd_serve` catching only `StoreError`
+    had, one layer out."""
+    call, _, _ = live
+    status, payload = call("POST", "/run/instruction", raw=b"{not json at all")
+
+    assert status != 500, "a malformed body reached the operator as a server error"
+    assert "not JSON" in payload["error"]
