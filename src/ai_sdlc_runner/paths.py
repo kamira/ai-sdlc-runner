@@ -205,6 +205,10 @@ def plain(path: str | Path) -> str:
     r"""The path without the prefix — for messages, and for anything shown to a person.
 
     A traceback carrying `\\\\?\\C:\\…` sends the reader looking for a network share.
+
+    **A whole path, not a sentence containing one.** The prefix is stripped only from the start,
+    which is right for a path and wrong for an error message that quotes one mid-way — see
+    `plain_in`, and CHG-20260828-24 for what happened when this one was used for that.
     """
     text = os.fspath(path)
     if text.startswith(UNC_PREFIX):
@@ -212,6 +216,25 @@ def plain(path: str | Path) -> str:
     if text.startswith(PREFIX):
         return text[len(PREFIX):]
     return text
+
+
+def plain_in(text: str) -> str:
+    r"""The same stripping, wherever the prefix appears — for a sentence that quotes a path.
+
+    `plain` only strips a **leading** prefix, because that is what a path has. An OS error does not
+    hand back a path; it hands back a sentence with one inside it —
+    `unable to open database file \\\\?\\C:\\…` — and running that through `plain` returns it
+    unchanged.
+
+    Two call sites were doing exactly that (`store.connect` and `conversations`), each with a
+    comment explaining that the prefix must not reach the reader, and neither delivered it. The
+    guard was a no-op wearing the name of the thing it did not do, which is this repository's most
+    recorded defect shape (CHG-20260828-24).
+
+    UNC first, because `\\\\?\\UNC\\server\\share` starts with `\\\\?\\` too and stripping the
+    shorter one leaves `UNC\\server\\share`, which is not a path anybody can use.
+    """
+    return text.replace(UNC_PREFIX, "\\\\").replace(PREFIX, "")
 
 
 # ── the operations, each taking the long form ─────────────────────────────────────────────────

@@ -136,7 +136,7 @@ def connect(path: str | Path) -> sqlite3.Connection:
         # prefix, and an error reading `\?\C:\…` sends whoever is debugging it looking for a
         # network share that does not exist.
         raise StoreError(
-            f"{file} could not be opened as a store: {paths.plain(str(exc))}. If it is a real "
+            f"{file} could not be opened as a store: {paths.plain_in(str(exc))}. If it is a real "
             f"database, this runner cannot read it; if it is not, move it aside — nothing here "
             f"will overwrite it.")
     db.execute("PRAGMA foreign_keys = ON")         # per connection, OFF by default
