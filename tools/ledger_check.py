@@ -174,7 +174,7 @@ def check(repo: Path) -> List[str]:
 
 
 def _title(text: str) -> str:
-    """A change's headline, which is its identity — `# CHG-20260828-04 — worktree isolation…`.
+    """A change's headline, which is its identity — `# CHG-20260828-14 — worktree isolation…`.
 
     The id alone cannot tell two changes apart when two branches claim it; the title can, because
     two people writing two different changes do not write the same sentence.
@@ -204,7 +204,9 @@ def check_ids_are_not_claimed_twice(repo: Path, ref: str = "origin/main") -> Lis
     branches have gone green separately, each looking correct.
 
     That happened: CHG-20260828-04 was claimed at 12:23 by an unmerged branch and again at 13:00 by
-    a change that merged. Two records, one number, both passing every check.
+    a change that merged. Two records, one number, both passing every check. The second was later
+    renumbered to CHG-20260828-14, by hand, which is the resolution this check exists to make
+    unnecessary.
 
     **Editing a record is not claiming one**, and the title is what tells them apart: an edit keeps
     the headline, a collision has a different one. So this compares titles rather than content, and

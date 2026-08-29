@@ -204,7 +204,8 @@ def test_a_second_change_taking_a_taken_id_is_refused(tmp_path):
     it surfaces only as a merge conflict — after both branches have gone green separately.
 
     CHG-20260828-04 was claimed at 12:23 by an unmerged branch and again at 13:00 by a change that
-    merged. Two records, one number, both passing every check that existed.
+    merged. Two records, one number, both passing every check that existed. The second was
+    renumbered by hand afterwards; this check is what makes that unnecessary next time.
     """
     root = _git_repo(tmp_path, "CHG-20260901-01 — the first change")
     (root / "docs" / "changes" / "CHG-20260901-01.md").write_text(
