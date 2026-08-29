@@ -648,6 +648,65 @@ MUTATIONS: List[Mutation] = [
         '        if keywords & TEXT_SWITCHES:',
         'tests/test_subprocess_codecs.py'),
 
+    # ── CHG-20260830-03: the sequence that carries a change out ────────────────────────────────
+    #
+    # `ship.py` is the only module whose effects reach outside this machine, and the only one whose
+    # steps are irreversible in the ordinary case. Measured with the harness against the file that
+    # drives the sequence end to end.
+
+    Mutation(
+        'ship', 'a git command that failed is treated as having worked',
+        SRC / 'ship.py',
+        '    if proc.returncode != 0:\n        raise ShipError(f"git',
+        '    if False:\n        raise ShipError(f"git',
+        'tests/test_ship_refuses.py'),
+
+    Mutation(
+        'ship', 'the intent is recorded after the effects it describes, not before',
+        SRC / 'ship.py',
+        '''    return [
+        effects.Effect(
+            name="record-intent",''',
+        '''    return [
+        effects.Effect(
+            name="zzz-record-intent",''',
+        'tests/test_kill_resume.py'),
+
+    Mutation(
+        'ship', 'a commit over a dirty tree counts as done, so a resume pushes half of it',
+        SRC / 'ship.py',
+        '            probe=lambda: (probes.commit_exists_for(repo, chg_id)\n                           and probes.working_tree_clean(repo)),',
+        '            probe=lambda: probes.commit_exists_for(repo, chg_id),',
+        'tests/test_ship_refuses.py'),
+
+    Mutation(
+        'ship', 'the PR step stops asking whether a PR is already open',
+        SRC / 'ship.py',
+        '            probe=lambda: probes.pr_open_for(repo, branch, gh_list),',
+        '            probe=lambda: False,',
+        'tests/test_kill_resume.py'),
+
+    Mutation(
+        'ship', 'the push step stops asking whether the branch is already on the remote',
+        SRC / 'ship.py',
+        '            probe=lambda: probes.branch_on_remote(repo, branch, remote),',
+        '            probe=lambda: False,',
+        'tests/test_kill_resume.py'),
+
+    Mutation(
+        'ship', 'the runner invents the content of a governance record nobody supplied',
+        SRC / 'ship.py',
+        '''            apply=tick or _refuse("tick", f"task {task!r} of {chg_id}"),''',
+        '''            apply=tick or (lambda: None),''',
+        'tests/test_ship_refuses.py'),
+
+    Mutation(
+        'ship', 'a failed PR creation is reported as success',
+        SRC / 'ship.py',
+        '''        raise ShipError(f"could not open a PR for {branch}: {proc.stderr.strip()}")''',
+        '''        pass''',
+        'tests/test_ship_refuses.py'),
+
     # ── CHG-20260830-02: where a model is, and what it must not carry ──────────────────────────
     #
     # `reach` decides whether a work order leaves this network, and `validate` decides whether a key
