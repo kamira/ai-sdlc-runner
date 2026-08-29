@@ -648,6 +648,54 @@ MUTATIONS: List[Mutation] = [
         '        if keywords & TEXT_SWITCHES:',
         'tests/test_subprocess_codecs.py'),
 
+    # ── CHG-20260828-22: the whole-change loop is bounded ──────────────────────────────────────
+
+    Mutation(
+        'bounds', 'a rejected change goes round for ever again, until the step cap',
+        SRC / 'engine.py',
+        '''    if node.id == "change_retry":''',
+        '''    if False:''',
+        'tests/test_change_bound.py'),
+
+    Mutation(
+        'bounds', 'the panel and acceptance get a budget each, so neither is ever spent',
+        SRC / 'engine.py',
+        '''_WHOLE_CHANGE_REJECTED = ("review_failed", "acceptance_failed")''',
+        '''_WHOLE_CHANGE_REJECTED = ("review_failed",)''',
+        'tests/test_change_bound.py'),
+
+    Mutation(
+        'bounds', 'the bound fires on the first rejection instead of the second',
+        SRC / 'engine.py',
+        '''    return "again" if rejections > 1 else "first"''',
+        '''    return "again" if rejections > 0 else "first"''',
+        'tests/test_change_bound.py'),
+
+    Mutation(
+        'bounds', 'a seat panel counts once per seat again, so three seats halt a first rejection',
+        SRC / 'engine.py',
+        '''    rejections = sum(1 for node_id in report.visited if node_id in _WHOLE_CHANGE_REJECTED)''',
+        '''    rejections = sum(1 for ask in report.asks if ask.node_id in ("lead_review", "qa_accept")
+                     and isinstance(ask.result, Mapping)
+                     and str(ask.result.get("verdict") or "") == "fail")''',
+        'tests/test_change_bound.py'),
+
+    Mutation(
+        'bounds', 'acceptance stops routing through the bound, leaving its loop unbounded',
+        SRC / 'graph.py',
+        '''    Node("acceptance_failed", STEP, "back into the module loop", next="change_retry", mode=RUNNER),''',
+        '''    Node("acceptance_failed", STEP, "back into the module loop", next="next_module", mode=RUNNER),''',
+        'tests/test_change_bound.py'),
+
+    Mutation(
+        'bounds', 'the halt is not permanent, so a class or a confirmation could pass it',
+        SRC / 'graph.py',
+        '''    Node("halt_change_rejected", TERMINAL, "the whole change was rejected twice", mode=RUNNER,
+         permanent=True,''',
+        '''    Node("halt_change_rejected", TERMINAL, "the whole change was rejected twice", mode=RUNNER,
+         permanent=False,''',
+        'tests/test_change_bound.py'),
+
     # ── CHG-20260828-21: an emergency run is chased ────────────────────────────────────────────
     #
     # The failure that matters here is a FALSE CLOSE — a run marked reviewed by something that is

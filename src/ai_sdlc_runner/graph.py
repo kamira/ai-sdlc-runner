@@ -254,15 +254,33 @@ NODES: Tuple[Node, ...] = (
          branches={"pass": "qa_verify", "fail": "review_failed"},
          note="one or many seats, each in its own session. The branch comes from adjudicating their "
               "verdicts — veto, then majority, and a tie does not pass"),
-    Node("review_failed", STEP, "the panel did not pass it", next="next_module", mode=RUNNER,
-         note="back into the module loop; the panel's reasons travel with the run"),
+    Node("review_failed", STEP, "the panel did not pass it", next="change_retry", mode=RUNNER,
+         note="back into the module loop; the panel's reasons travel with the run. Through "
+              "`change_retry` since CHG-20260828-22, which is what counts the trip"),
     Node("qa_verify", STEP, "QA tests and verifies the whole change", role="qa", gate="qa_verify",
          gate_when="after", next="qa_accept", mode=SINGLE, rejects_to="next_module",
          note="run for real; a module's own tests are not this"),
     Node("qa_accept", DECISION, "acceptance", role="qa", gate="acceptance", gate_when="after",
          answer_decides=True, mode=MODEL_PANEL, rejects_to="acceptance_failed",
          branches={"pass": "pr", "fail": "acceptance_failed"}),
-    Node("acceptance_failed", STEP, "back into the module loop", next="next_module", mode=RUNNER),
+    Node("acceptance_failed", STEP, "back into the module loop", next="change_retry", mode=RUNNER),
+
+    Node("change_retry", DECISION, "has the whole change been rejected before", mode=RUNNER,
+         branches={"first": "next_module", "again": "halt_change_rejected"},
+         note="the bound the whole-change loop did not have (CHG-20260828-22). `lead_review` and "
+              "`qa_accept` both sent a rejected change back to `next_module` and nothing counted "
+              "the trips, so a run that kept failing died on `walk exceeded 200 steps` — which "
+              "tells an operator the runner gave up rather than that their change was rejected "
+              "twice. "
+              "ONE BUDGET FOR BOTH, because they are one fact: the assembled change was rejected. "
+              "A bound per loop would let a change rejected once by the panel and once at "
+              "acceptance spend neither, which is the run that most needs a person. "
+              "Nobody is asked — it counts what is already in the run's record, the way "
+              "`module_built` reads what the engineer said it built"),
+    Node("halt_change_rejected", TERMINAL, "the whole change was rejected twice", mode=RUNNER,
+         permanent=True,
+         note="the same argument `halt_second_fail` makes one loop in: two rejections of the "
+              "finished change is not something another lap fixes"),
     Node("pr", STEP, "open the pull request", role="lead", gate="pr", next="merge", mode=SINGLE),
     Node("merge", STEP, "merge", role="lead", gate="merge", next="close_out", mode=SINGLE,
          note="a one-way door — its gate is consulted BEFORE, because the stop has to come before "

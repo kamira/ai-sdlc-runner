@@ -1034,6 +1034,45 @@ def _module_built(report: "RunReport") -> str:
     return "no"
 
 
+#: The two nodes a rejected whole change passes through on its way back round. Visiting one of them
+#: **is** the rejection — they are reached only from a `fail` branch — which is why the bound counts
+#: these and not the asks (CHG-20260828-22).
+_WHOLE_CHANGE_REJECTED = ("review_failed", "acceptance_failed")
+
+
+def _change_retry(report: "RunReport") -> str:
+    """`first` while the change has been rejected once, `again` on the second (CHG-20260828-22).
+
+    Counted from the run's own record, the way `_module_built` reads what the engineer said it
+    built. Nobody is asked: how many times something already happened is a fact, not a judgement,
+    and a run that could answer this could keep itself in a loop the bound exists to end.
+
+    ## One budget for two loops
+
+    `lead_review` and `qa_accept` both send a rejected change back to `next_module`, and both cycles
+    were unbounded — the README named the first and not the second. They are counted together
+    because they are one fact: **the assembled change was rejected**. Two separate budgets would let
+    a change rejected once by the panel and once at acceptance spend neither, which is precisely the
+    run that most needs a person.
+
+    ## Rejections, not asks
+
+    The first version counted `lead_review` asks answering `fail`, and `lead_review` is a **seat
+    panel**: three seats, three asks, one rejection. It counted one panel failure as three and would
+    have halted on the *first* rejection — a bound of one wearing the label of two. Its own test
+    caught it.
+
+    So the count is of the two nodes a rejected change routes **through**. Those are reached only
+    from a `fail` branch, once per rejection, whatever the panel's shape — the thing itself rather
+    than a signal that happens to accompany it.
+
+    `change_retry` runs after the `_failed` node it follows, so the rejection in progress is already
+    in the count: one is the first, two is the second.
+    """
+    rejections = sum(1 for node_id in report.visited if node_id in _WHOLE_CHANGE_REJECTED)
+    return "again" if rejections > 1 else "first"
+
+
 def _frontier(node: graph.Node, report: "RunReport") -> str:
     """Is there another module to build? Answered from the run's own record.
 
@@ -1176,6 +1215,10 @@ def _choose(cfg: RunConfig, node: graph.Node, taken: Dict[str, int],
         # Read, never supplied. A run that could answer this could record a module it never built,
         # which is the whole thing the node exists to stop.
         return _module_built(report)
+    if node.id == "change_retry":
+        # Same reason, one loop out: a run that could answer this could keep itself going round
+        # after the second rejection, which is the bound the node exists to be.
+        return _change_retry(report)
     if value == FRONTIER:
         return _frontier(node, report)
     if value is None or isinstance(value, str):
