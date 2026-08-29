@@ -11,7 +11,7 @@ The flow and the governance are this repository's own, in two files anyone can r
 | File | What it holds |
 | --- | --- |
 | [`policy.py`](src/ai_sdlc_runner/policy.py) | the governance: roles and their capabilities, ten gates × three risk grades, the never-automated actions, the review seats and how their verdicts are adjudicated |
-| [`graph.py`](src/ai_sdlc_runner/graph.py) | the flow: 29 nodes, one kind of work each, with the module loop, the bounded retry, and the feedback edge back to PM |
+| [`graph.py`](src/ai_sdlc_runner/graph.py) | the flow: 31 nodes, one kind of work each, with the module loop, the bounded retry, and the feedback edge back to PM |
 
 Everything else serves those two: [`engine.py`](src/ai_sdlc_runner/engine.py) walks the flow and
 enforces the policy, [`workorder.py`](src/ai_sdlc_runner/workorder.py) renders the closed-schema
@@ -52,7 +52,7 @@ agent_retries: 0                  # retries are for a backend that FAILED TO ANS
 
 ## The flow
 
-29 nodes. Each does **one kind of work**, which is what decides where the boundaries fall: building,
+31 nodes. Each does **one kind of work**, which is what decides where the boundaries fall: building,
 verifying your own work, and having it reviewed are three kinds of work, so they are three nodes.
 
 ```
@@ -88,32 +88,35 @@ next_module ─┬─ module → engineer_build            one engineer, one sma
              │                                       (bounded: exactly one fix pass)
              │
              └─ none → lead_review ◆lead_review     the seats cross-check the whole change
-                          ├─ fail → review_failed ──────→ next_module
+                          ├─ fail → review_failed ─────→ change_retry
                           └─ pass → qa_verify ◆qa_verify        run it for real
                                       └─→ qa_accept ◆acceptance
-                                             ├─ fail → acceptance_failed ─→ next_module
+                                             ├─ fail → acceptance_failed → change_retry
                                              └─ pass → pr ◆pr
                                                         └─→ merge ◆merge   the one-way door
                                                               └─→ close_out → feedback
                                                                                ├─ more → pm_plan
                                                                                └─ done → done ■
+
+change_retry ─┬─ first → next_module           one budget for both, because they are one fact:
+              └─ again → halt_change_rejected  ■   the assembled change was rejected
 ```
 
-`◆` marks a gate; `■` marks a terminal. The three failure paths — `halt_second_fail`,
-`review_failed`, `acceptance_failed` — are drawn because they are the ones an operator most needs to
-see, and because leaving them out is exactly the defect a review seat found in this project's own
-mock-up.
+`◆` marks a gate; `■` marks a terminal. The failure paths — `halt_second_fail`, `review_failed`,
+`acceptance_failed` and the `halt_change_rejected` they are now bounded by — are drawn because they
+are the ones an operator most needs to see, and because leaving them out is exactly the defect a
+review seat found in this project's own mock-up.
 
 Three shapes carry most of the meaning and are explicit rather than flattened:
 
 - **the per-module loop** — one engineer per small module, and the loop *is* the resume mechanism: an
   already-recorded module is simply not the frontier;
-- **the bounded retry** — one fix pass, one re-review, and a second failure halts. Not
-  repeat-until-green;
+- **the bounded retry, at both scales** — one fix pass and one re-review per module, and one trip
+  back for the assembled change; a second failure halts either way. Not repeat-until-green;
 - **the feedback loop** — user feedback returns to PM, so the flow closes rather than ends.
 
 ```bash
-runner flow      # print all 29 nodes, their roles, gates and branches
+runner flow      # print all 31 nodes, their roles, gates and branches
 ```
 
 ---
@@ -521,7 +524,7 @@ that file is in**, not against your shell — so an example works the same wheth
 the repository root, from inside the example, or from somewhere else entirely. See
 [Where the agent runs](#where-the-agent-runs) if you keep your own `runner.yaml`.
 
-That **visits 22 of the 29 nodes** — five are failure paths a green run never takes, and two
+That **visits 22 of the 31 nodes** — five are failure paths a green run never takes, and two
 (`sub_plan`, `reconcile`) are the second planning tier, which a single-workstream plan skips —
 asks 17 questions, writes a real `examples/minimal/greet.py` beside the agent that wrote it, and
 finishes. It is three
@@ -599,7 +602,7 @@ one-instruction, one-server demo had the same bug and looked fine.
 
 ```
 src/ai_sdlc_runner/
-  graph.py        the flow: 29 nodes, their modes, gates and branches
+  graph.py        the flow: 31 nodes, their modes, gates and branches
   policy.py       the governance: roles, gates × risk, permanent halts, seats, adjudication
   engine.py       walks the flow, enforces the policy, opens one session per ask
   workorder.py    the closed-schema order every ask receives
@@ -688,10 +691,12 @@ always stops for a person — but `STOPPING` treats it identically to `halt`, th
 operator identity, and nothing records or compares who confirmed against who built. The name is an
 intent. Closing it needs a second identity, which nothing in the design has yet.
 
-**A seat panel that keeps failing has no bound.** `lead_review` → `review_failed` → `next_module` →
-`lead_review` cycles until `max_steps`. The **module** review is explicitly bounded — one fix pass,
-one re-review, then halt — and the seat panel is not. It changes the flow's topology, so it needs its
-own record.
+~~**A seat panel that keeps failing has no bound.**~~ **Closed by CHG-20260828-22.** Both
+whole-change rejection paths route through `change_retry`, and a second one reaches
+`halt_change_rejected` instead of cycling to `max_steps`. Fixing it found the gap was **two**: this
+entry named `lead_review`, and `qa_accept` → `acceptance_failed` → `next_module` was the same loop,
+unnamed. They share one budget, because a change rejected once by the panel and once at acceptance
+would otherwise spend neither.
 
 **Review-before-merge is a practice, not a mechanism.** CI enforces the ledger, not the review. It
 has been followed since CHG-20260823-17, and it has been broken before that — the changes that broke
@@ -719,7 +724,7 @@ first one winning — so two of them disagreeing inside one answer resolves sile
 ## Testing
 
 ```bash
-pytest -q          # 1676 tests
+pytest -q          # 1696 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is
