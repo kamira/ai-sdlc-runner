@@ -21,7 +21,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from ai_sdlc_runner import engine, graph, models, server, store  # noqa: E402
+from ai_sdlc_runner import engine, graph, models, paths, server, store  # noqa: E402
 
 MODEL = {"id": "opus", "vendor": "anthropic", "name": "claude-opus-5",
          "transport": "cli", "command": ["claude", "-p"]}
@@ -118,6 +118,57 @@ def test_a_file_that_is_not_a_database_is_refused_by_name(tmp_path):
     junk.write_text("not a database at all", encoding="utf-8")
     with pytest.raises(store.StoreError, match="could not be opened as a store"):
         store.connect(junk)
+
+
+def test_the_refusal_shows_the_path_a_person_would_type(tmp_path, monkeypatch):
+    r"""The message runs `str(exc)` through `paths.plain`, and nothing checked that it does.
+
+    The path handed to the OS carries the extended-length prefix, so a message quoting the driver's
+    text raw can say `\\?\C:\…` — which sends whoever is debugging it looking for a network share
+    that does not exist. `store.connect` has a comment saying exactly this, and the guarantee had no
+    test: replacing `paths.plain(str(exc))` with `str(exc)` left the whole suite green.
+
+    **The obvious test does not work, and that is the point of this one.** Opening a junk file
+    raises `file is not a database` — a message with no path in it at all — so an assertion that the
+    prefix is absent passes whether or not `paths.plain` is applied. The first version of this test
+    did exactly that, in the change whose subject is tests that pass either way.
+
+    So the driver is made to produce the message the guard exists for (CHG-20260828-24).
+    """
+    import sqlite3
+
+    long_form = paths.PREFIX + str(tmp_path / "config.sqlite")
+
+    def refuse(*args, **kw):
+        raise sqlite3.DatabaseError(f"unable to open database file {long_form}")
+
+    monkeypatch.setattr(store.sqlite3, "connect", refuse)
+    with pytest.raises(store.StoreError) as caught:
+        store.connect(tmp_path / "config.sqlite")
+
+    said = str(caught.value)
+    assert paths.PREFIX not in said, f"the extended-length prefix reached the operator: {said}"
+    assert "unable to open database file" in said, "the driver's reason must survive the stripping"
+
+
+def test_plain_in_strips_the_prefix_wherever_it_sits():
+    r"""The helper the refusal above depends on, and the reason it had to be a new one.
+
+    `plain` strips a **leading** prefix, which is right for a path and wrong for a sentence quoting
+    one. Both call sites that quote an OS error were using `plain`, both carried a comment saying
+    the prefix must not reach the reader, and neither delivered it (CHG-20260828-24).
+    """
+    inside = paths.PREFIX + r"C:\x"
+    assert paths.plain_in(f"unable to open {inside} now") == r"unable to open C:\x now"
+    assert paths.plain_in(inside) == r"C:\x"
+    assert paths.plain_in("nothing to strip") == "nothing to strip"
+
+
+def test_plain_in_puts_a_unc_path_back_the_way_a_person_types_it():
+    r"""`\\?\UNC\srv\share` starts with `\\?\` too, so the order of the two replacements is the
+    guarantee: strip the shorter one first and the reader is left with `UNC\srv\share`, which is
+    not a path anybody can use."""
+    assert paths.plain_in("at " + paths.UNC_PREFIX + r"srv\share end") == r"at \\srv\share end"
 
 
 def test_a_store_from_the_future_is_refused_rather_than_guessed_at(tmp_path):

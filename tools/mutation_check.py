@@ -648,6 +648,102 @@ MUTATIONS: List[Mutation] = [
         '        if keywords & TEXT_SWITCHES:',
         'tests/test_subprocess_codecs.py'),
 
+    # ── CHG-20260828-24: the model store ───────────────────────────────────────────────────────
+    #
+    # Measured before writing: TEN OF TEN were already pinned. No hole was found, and these entries
+    # exist so a future edit to those tests cannot quietly weaken them — which is the whole of what
+    # a mutation record is for once the tests are already there.
+
+    Mutation(
+        'store', 'a file that is not a database comes back as a raw traceback',
+        SRC / 'store.py',
+        '''    except sqlite3.DatabaseError as exc:
+        # A file that is not a database''',
+        '''    except NotImplementedError as exc:
+        # A file that is not a database''',
+        'tests/test_store.py'),
+
+    Mutation(
+        'store', 'the extended-length prefix reaches the operator in the message',
+        SRC / 'store.py',
+        'f"{file} could not be opened as a store: {paths.plain_in(str(exc))}. If it is a real "',
+        'f"{file} could not be opened as a store: {exc}. If it is a real "',
+        'tests/test_store.py'),
+
+    Mutation(
+        # The defect this group found. `plain` strips a LEADING prefix; an OS error quotes a path
+        # mid-sentence, so the guard was a no-op wearing the name of the thing it did not do.
+        'store', 'the prefix is stripped only from the start again, so a message keeps it',
+        SRC / 'paths.py',
+        r'    return text.replace(UNC_PREFIX, "\\\\").replace(PREFIX, "")',
+        '    return plain(text)',
+        'tests/test_store.py'),
+
+    Mutation(
+        'store', 'a UNC path is left as UNC\server\share, which is not a path anybody can use',
+        SRC / 'paths.py',
+        r'    return text.replace(UNC_PREFIX, "\\\\").replace(PREFIX, "")',
+        r'    return text.replace(PREFIX, "").replace(UNC_PREFIX, "\\\\")',
+        'tests/test_store.py'),
+
+    Mutation(
+        'store', 'a store from a newer schema is opened and written anyway',
+        SRC / 'store.py',
+        '    if found > SCHEMA_VERSION:',
+        '    if False:',
+        'tests/test_store.py'),
+
+    Mutation(
+        'store', 'a table already there with the wrong columns is blessed as current',
+        SRC / 'store.py',
+        '        if found != columns:',
+        '        if False:',
+        'tests/test_store.py'),
+
+    Mutation(
+        'store', 'foreign keys stay off, so a delete can orphan an assignment',
+        SRC / 'store.py',
+        'db.execute("PRAGMA foreign_keys = ON")',
+        'db.execute("PRAGMA foreign_keys = OFF")',
+        'tests/test_store.py'),
+
+    Mutation(
+        'store', 'a node that is not in this flow can be assigned models',
+        SRC / 'store.py',
+        '''    if node is None:
+        raise StoreError(f"no node {node_id!r} in this flow")''',
+        '''    if False:
+        raise StoreError(f"no node {node_id!r} in this flow")''',
+        'tests/test_store.py'),
+
+    Mutation(
+        'store', 'a node whose mode does nothing with models is configured anyway',
+        SRC / 'store.py',
+        '    if node.mode not in MODES_THAT_USE_MODELS:',
+        '    if False:',
+        'tests/test_store.py'),
+
+    Mutation(
+        'store', 'an unknown seat is assigned a model',
+        SRC / 'store.py',
+        '    if seat not in known:',
+        '    if False:',
+        'tests/test_store.py'),
+
+    Mutation(
+        'store', "the standing store setting overrides this change's plan",
+        SRC / 'store.py',
+        '        combined = {**from_store, **from_plan}          # plan last, so the plan wins',
+        '        combined = {**from_plan, **from_store}          # plan last, so the plan wins',
+        'tests/test_store.py'),
+
+    Mutation(
+        'store', 'nobody can tell which source put an assignment there',
+        SRC / 'store.py',
+        '            source[f"{half}.{key}"] = FROM_PLAN if key in from_plan else FROM_STORE',
+        '            source[f"{half}.{key}"] = FROM_STORE',
+        'tests/test_store.py'),
+
     # ── CHG-20260828-23: the closed-schema renderer, pinned deliberately ───────────────────────
     #
     # `workorder.py` had no mutation and no test file of its own. Measured before writing either:

@@ -1105,7 +1105,7 @@ class Conversation:
         except Exception as exc:  # noqa: BLE001 - archival never propagates into a run
             # Stripped of the extended-length prefix — an operator reading `\?\C:\…` on stderr
             # goes looking for a network share instead of at their own store root.
-            note = f"{what}: {paths.plain(str(exc))}"
+            note = f"{what}: {paths.plain_in(str(exc))}"
             self.write_errors.append(note)
             print(f"conversation store failed: {note}", file=sys.stderr)
 
