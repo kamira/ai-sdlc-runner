@@ -648,6 +648,74 @@ MUTATIONS: List[Mutation] = [
         '        if keywords & TEXT_SWITCHES:',
         'tests/test_subprocess_codecs.py'),
 
+    # ── CHG-20260828-23: the closed-schema renderer, pinned deliberately ───────────────────────
+    #
+    # `workorder.py` had no mutation and no test file of its own. Measured before writing either:
+    # seven of these nine were already caught by tests written about other things. The last two
+    # were not — and the source marks one of them `# pragma: no cover`, which is the code admitting
+    # nothing exercised it.
+
+    Mutation(
+        'workorder', 'a harness-specific field rides in through the caller',
+        SRC / 'workorder.py',
+        '    if extra:', '    if False:',
+        'tests/test_workorder.py'),
+
+    Mutation(
+        'workorder', 'a partial node spec is filled in rather than refused',
+        SRC / 'workorder.py',
+        '    if missing:', '    if False:',
+        'tests/test_workorder.py'),
+
+    Mutation(
+        'workorder', 'whitespace stops counting as blank',
+        SRC / 'workorder.py',
+        '        return not value.strip()', '        return not value',
+        'tests/test_workorder.py'),
+
+    Mutation(
+        'workorder', 'a list holding only blanks passes as content',
+        SRC / 'workorder.py',
+        '        return not value or all(_blank(item) for item in value)',
+        '        return not value',
+        'tests/test_workorder.py'),
+
+    Mutation(
+        'workorder', 'a blank field is accepted again, as long as the key exists',
+        SRC / 'workorder.py',
+        '''    if problem:
+        raise WorkOrderError(problem)''',
+        '''    if False:
+        raise WorkOrderError(problem)''',
+        'tests/test_workorder.py'),
+
+    Mutation(
+        'workorder', 'an unknown seat is accepted',
+        SRC / 'workorder.py',
+        '        if chair is None:', '        if False:',
+        'tests/test_workorder.py'),
+
+    Mutation(
+        'workorder', 'the permanent halts are emptied out of the order',
+        SRC / 'workorder.py',
+        '        "permanent_halts": list(policy.PERMANENT_HALTS),',
+        '        "permanent_halts": [],',
+        'tests/test_workorder.py'),
+
+    # The two nothing pinned.
+    Mutation(
+        'workorder', 'the rendered order stops being checked against the closed schema',
+        SRC / 'workorder.py',
+        '    if tuple(sorted(order)) != tuple(sorted(WORK_ORDER_FIELDS)):',
+        '    if False:',
+        'tests/test_workorder.py'),
+
+    Mutation(
+        'workorder', 'the order reaches the agent in whatever key order it happened to have',
+        SRC / 'workorder.py',
+        'sort_keys=True', 'sort_keys=False',
+        'tests/test_workorder.py'),
+
     # ── CHG-20260828-22: the whole-change loop is bounded ──────────────────────────────────────
 
     Mutation(
