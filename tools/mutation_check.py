@@ -640,6 +640,36 @@ MUTATIONS: List[Mutation] = [
         '        if keywords & TEXT_SWITCHES:',
         'tests/test_subprocess_codecs.py'),
 
+    # ── CHG-20260828-17: the two records are read, not just counted ────────────────────────────
+
+    Mutation(
+        'closure', 'a change goes on waiting for a decision its acceptance already made',
+        TOOLS / 'ledger_check.py',
+        '        if waiting:',
+        '        if False:',
+        'tests/test_ledger_check.py'),
+
+    Mutation(
+        'closure', 'a change accepted and later superseded is called a contradiction',
+        TOOLS / 'ledger_check.py',
+        '    "proposed", "draft", "under review", "in progress", "wip", "pending",',
+        '    "proposed", "draft", "under review", "in progress", "wip", "pending", "superseded",',
+        'tests/test_ledger_check.py'),
+
+    Mutation(
+        'closure', 'a verdict nobody wrote down is treated as a pass',
+        TOOLS / 'ledger_check.py',
+        '        if not passed and not refused:',
+        '        if False:',
+        'tests/test_ledger_check.py'),
+
+    Mutation(
+        'closure', 'a verdict that reads both ways is settled by whichever list is checked first',
+        TOOLS / 'ledger_check.py',
+        '        if passed and refused:',
+        '        if False:',
+        'tests/test_ledger_check.py'),
+
     Mutation(
         'voice', "a person's pre-authorisation is filed under the runner again",
         SRC / 'conversations.py',

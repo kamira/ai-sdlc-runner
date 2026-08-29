@@ -258,3 +258,112 @@ def test_a_ref_that_does_not_resolve_checks_nothing_rather_than_passing_quietly(
     said = capsys.readouterr().out
     assert "was NOT checked" in said, said
     assert "Fetch the default branch" in said, "it must say how to get the check back"
+
+
+# ── a passing acceptance is a decision the change cannot still be waiting for (CHG-20260828-16) ──
+#
+# Both directions above check that a record *exists*. Neither read what either record said, so five
+# changes carried a passing acceptance while their own status still read "under review" or
+# "proposed" — and this lint reported the ledger passed, while the handshake gate reading the same
+# two files named those same five as unclosed.
+
+PASSED = "- Target CHG: CHG-20260901-01\n- Conclusion: **Pass.** 9 cases.\n"
+
+
+def test_a_change_under_review_whose_acceptance_passed_is_reported(tmp_path):
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\n**Under review.**\n", acc=PASSED)
+    problems = ledger_check.check(repo)
+    assert any("already made" in p for p in problems), problems
+
+
+def test_a_proposed_change_whose_acceptance_passed_is_reported(tmp_path):
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\n**Proposed.**\n", acc=PASSED)
+    assert any("already made" in p for p in ledger_check.check(repo))
+
+
+def test_the_message_names_the_change_the_status_and_the_record(tmp_path):
+    """A reader has to be able to act on it without opening both files to work out which two."""
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\n**Under review.**\n", acc=PASSED)
+    said = next(p for p in ledger_check.check(repo) if "already made" in p)
+    assert "CHG-20260901-01" in said
+    assert "ACC-20260901-01" in said
+    assert "under review" in said
+
+
+def test_closing_the_change_settles_it(tmp_path):
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\n**Accepted** — see ACC-20260901-01.\n",
+                 acc=PASSED)
+    assert ledger_check.check(repo) == []
+
+
+def test_a_change_superseded_after_it_was_accepted_is_not_a_contradiction(tmp_path):
+    """The distinction the check turns on, and the reason it is not simply "ACC exists → done".
+
+    A change can pass acceptance and *later* be superseded, halted or withdrawn. An acceptance
+    sitting behind one of those is history. Only the statuses that say the decision has not been
+    made yet can contradict a record of it having been made.
+    """
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\n**Superseded** in part by CHG-20260901-02.\n",
+                 acc=PASSED)
+    assert ledger_check.check(repo) == []
+
+
+def test_a_halted_change_that_had_passed_is_not_a_contradiction(tmp_path):
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\n**Halted.**\n", acc=PASSED)
+    assert ledger_check.check(repo) == []
+
+
+def test_an_acceptance_that_did_not_pass_leaves_the_change_open(tmp_path):
+    """`ACC-20260823-50` is exactly this: both seats returned `not sound`, so it was withdrawn."""
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\n**Under review.**\n",
+                 acc="- Target CHG: CHG-20260901-01\n- Conclusion: **Withdrawn.** Both seats "
+                     "returned `not sound`.\n")
+    assert ledger_check.check(repo) == []
+
+
+def test_the_sentence_after_the_verdict_does_not_argue_with_it(tmp_path):
+    """`ACC-20260827-23` reads `Pass, on a reduced scope that the operator approved`.
+
+    Reading the whole line would let the explanation change the verdict, which is the failure
+    `_status_word` exists to prevent, one document over.
+    """
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\n**Under review.**\n",
+                 acc="- Target CHG: CHG-20260901-01\n- Conclusion: **Pass, on a reduced scope "
+                     "that the operator approved and that is not the original one.**\n")
+    assert any("already made" in p for p in ledger_check.check(repo))
+
+
+def test_prose_about_passing_is_not_a_verdict(tmp_path):
+    """The verdict is a field, and a record that merely *discusses* passing has not stated one.
+
+    Absence is not itself a problem — older records predate the field, and requiring it here would
+    turn a traceability check into a formatting one, which is the argument `_target_chg` already
+    makes. What must not happen is prose deciding a verdict.
+    """
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\n**Under review.**\n",
+                 acc="# ACC\n\nEvery check passed and the suite is green.\n")
+    assert ledger_check.check(repo) == []
+
+
+def test_an_unrecognised_verdict_is_a_problem_rather_than_a_pass(tmp_path):
+    """The same closed-vocabulary argument as `DONE`/`IN_PROGRESS`, one document over."""
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\n**Under review.**\n",
+                 acc="- Target CHG: CHG-20260901-01\n- Conclusion: **Inconclusive.**\n")
+    problems = ledger_check.check(repo)
+    assert any("not a recognised verdict" in p for p in problems), problems
+    assert any("ACC_PASS or to ACC_NOT_PASS" in p for p in problems), "it must say how to fix it"
+
+
+def test_a_verdict_that_reads_both_ways_is_refused(tmp_path):
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\n**Under review.**\n",
+                 acc="- Target CHG: CHG-20260901-01\n- Conclusion: **Pass / withdrawn.**\n")
+    assert any("reads as both" in p for p in ledger_check.check(repo))
+
+
+def test_this_repos_own_changes_are_all_closed_or_openly_open():
+    """The five this change found are closed in the same commit that added the check.
+
+    Left for a later pass, the lint would have shipped red, and a lint that ships red is a lint
+    people learn to skip.
+    """
+    assert not [p for p in ledger_check.check(REPO) if "already made" in p]

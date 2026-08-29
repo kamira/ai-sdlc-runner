@@ -53,6 +53,27 @@ IN_PROGRESS = (
 )
 
 
+#: An acceptance's verdict, read from its `Conclusion` field the same way a change's status is read
+#: from its `## Status` section — as a field, with the sentence after it cut off. The vocabulary is
+#: closed for the same reason the two above are: a word nobody wrote down is a question, not a pass.
+ACC_PASS = ("pass", "passes", "passed", "通過")
+ACC_NOT_PASS = (
+    "fail", "failed", "not sound", "rejected", "withdrawn", "superseded", "abandoned",
+    "未通過", "退回", "已作廢",
+)
+
+#: The statuses that say a change is still waiting for the decision an acceptance records.
+#:
+#: Not every unfinished status belongs here, and the difference is the whole point. A change can be
+#: accepted and *later* superseded, halted, paused or withdrawn — an acceptance sitting behind those
+#: is history, not a contradiction. These say the decision has **not been made yet**, and an
+#: acceptance is that decision, so the two cannot both be true.
+AWAITING_DECISION = (
+    "proposed", "draft", "under review", "in progress", "wip", "pending",
+    "草稿", "進行中", "待審",
+)
+
+
 def _status_line(text: str) -> str:
     """The `## Status` section's first non-empty line, and nothing else.
 
@@ -85,6 +106,17 @@ def _status_word(line: str) -> str:
     return head.strip().strip("*_` ").lower()
 
 
+def _verdict(text: str) -> str:
+    """An acceptance's conclusion, cut back to the verdict itself.
+
+    Same discipline as `_status_word`, one document over: the head of the field decides, and the
+    sentence explaining it does not. `Pass, on a reduced scope the operator approved` is a pass;
+    reading the whole line would let the explanation argue with the verdict.
+    """
+    found = re.search(r"^[-*]\s*(?:\*\*)?Conclusion(?:\*\*)?\s*[:：]\s*(.*)$", text, re.M)
+    return _status_word(found.group(1)) if found else ""
+
+
 def _field_present(text: str, field: str) -> bool:
     return bool(re.search(rf"^\s*-?\s*{field}\s*[:：]", text, re.MULTILINE | re.IGNORECASE))
 
@@ -108,8 +140,10 @@ def check(repo: Path) -> List[str]:
 
     accepted = {p.stem.replace("ACC-", "") for p in (repo / "docs" / "acceptance").glob("ACC-*.md")}
 
+    texts = {path.stem: path.read_text(encoding="utf-8") for path in changes}
+
     for path in changes:
-        text = path.read_text(encoding="utf-8")
+        text = texts[path.stem]
         chg_id = path.stem
 
         required = list(REQUIRED_FIELDS)
@@ -165,11 +199,55 @@ def check(repo: Path) -> List[str]:
             continue
         # A record filed under one id while claiming another target points two ways, and a reader
         # following either one lands somewhere the other contradicts.
-        stated = _target_chg(path.read_text(encoding="utf-8"))
+        acc_text = path.read_text(encoding="utf-8")
+        stated = _target_chg(acc_text)
         if stated and stated != f"CHG-{suffix}":
             problems.append(
                 f"{acc_id}: is filed under CHG-{suffix} but its `Target CHG` says {stated}. One of "
                 f"the two is wrong and the pair no longer traces")
+            continue
+
+        # ── the two files trace to each other; nothing read what they SAID (CHG-20260828-16) ────
+        #
+        # Both directions above check that a record *exists*. Five changes carried an acceptance
+        # whose conclusion was **Pass** while their own status still read "under review" or
+        # "proposed", and this lint reported the ledger passed the whole time — while the handshake
+        # gate, reading the same two files, named those same five as unclosed and told every new
+        # session to close them first. Two readers, opposite answers, and the one wired into CI was
+        # the one saying fine.
+        #
+        # An acceptance is the decision. A change cannot still be waiting for a decision that has
+        # already been recorded against it.
+        # Absence is not a problem, for the reason `_target_chg` gives: older records predate the
+        # field, and inventing a requirement for them turns a traceability check into a formatting
+        # one. What is checked is **disagreement** — a record that states a verdict its change
+        # contradicts.
+        verdict = _verdict(acc_text)
+        if not verdict:
+            continue
+        passed = [w for w in ACC_PASS if w in verdict]
+        refused = [w for w in ACC_NOT_PASS if w in verdict]
+        if not passed and not refused:
+            problems.append(
+                f"{acc_id}: conclusion {verdict!r} is not a recognised verdict. Add the word to "
+                f"ACC_PASS or to ACC_NOT_PASS in tools/ledger_check.py — an unrecognised verdict "
+                f"is not a pass")
+            continue
+        if passed and refused:
+            problems.append(
+                f"{acc_id}: conclusion {verdict!r} reads as both a pass ({passed}) and a refusal "
+                f"({refused}); the next reader cannot act on it")
+            continue
+        if not passed:
+            continue
+
+        waiting = [w for w in AWAITING_DECISION if w in _status_word(_status_line(texts[f"CHG-{suffix}"]))]
+        if waiting:
+            problems.append(
+                f"CHG-{suffix}: its acceptance concluded {verdict!r}, but its own status still says "
+                f"{waiting[0]!r} — the change is recorded as waiting for a decision that "
+                f"{acc_id} already made. Close the change, or say in its status why the acceptance "
+                f"did not close it")
     return problems
 
 
