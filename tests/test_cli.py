@@ -297,6 +297,32 @@ def test_the_order_reaches_the_backend_deterministically_serialised(tmp_path):
     assert session.ask(order)["raw_len"] == len(workorder.to_json(order))
 
 
+def test_the_agent_reads_the_order_in_the_codec_it_was_written_in(tmp_path, monkeypatch):
+    """The order goes out as UTF-8, so the agent has to be told to read UTF-8 (CHG-20260828-16).
+
+    Left to itself a Python child decodes stdin with the machine's locale. On cp950 the CJK in this
+    order's `role_label` came back as six characters where three were sent — no error anywhere, and
+    an agent answering a question subtly different from the one asked.
+
+    The environment is cleared first because inheriting it would make this assert something about
+    whoever ran the test rather than about the dispatcher.
+    """
+    monkeypatch.delenv("PYTHONUTF8", raising=False)
+    monkeypatch.delenv("PYTHONIOENCODING", raising=False)
+    script = tmp_path / "agent.py"
+    script.write_text(
+        "import json, sys\n"
+        "raw = sys.stdin.read()\n"
+        "print(json.dumps({'verdict': 'pass', 'wide': sum(1 for c in raw if ord(c) > 127)}))\n",
+        encoding="utf-8")
+    session = cli._Process([sys.executable, str(script)], timeout=60)
+    order = workorder.render(graph.BY_ID["engineer_build"], SPEC,
+                             policy.verdict("self_verify", "low"))
+    sent = sum(1 for c in workorder.to_json(order) if ord(c) > 127)
+    assert sent, "the order stopped carrying any non-ASCII, so this test proves nothing"
+    assert session.ask(order)["wide"] == sent
+
+
 def test_an_engine_error_is_reported_rather_than_raised(tmp_path, capsys):
     """A plan whose branches do not cover the flow is the operator's mistake, and they get told."""
     plan = _plan_file(tmp_path, decisions={})

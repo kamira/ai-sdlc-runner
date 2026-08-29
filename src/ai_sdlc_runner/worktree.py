@@ -109,7 +109,7 @@ def available(root: str | Path | None = None, run=subprocess.run) -> Optional[st
     try:
         done = run(["git", "rev-parse", "--show-toplevel"],
                    cwd=str(root) if root else None,
-                   capture_output=True, text=True, timeout=30)
+                   capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     except (OSError, subprocess.SubprocessError):       # pragma: no cover - exotic environments
         return None
     if done.returncode != 0:
@@ -171,7 +171,7 @@ class Trees:
         return available(self.root, run=self._run)
 
     def _git(self, args: Sequence[str], cwd: str, timeout: int = 300):
-        return self._run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        return self._run(["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
 
     def _head(self, top: str) -> Optional[str]:
         done = self._git(["rev-parse", "HEAD"], top)
@@ -215,7 +215,7 @@ class Trees:
             self._base = Path(tempfile.mkdtemp(prefix="ai-sdlc-worktrees-"))
         where = self._base / key
         done = self._run(["git", "worktree", "add", "--detach", str(where), self.tip],
-                         cwd=top, capture_output=True, text=True, timeout=300)
+                         cwd=top, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
         if done.returncode != 0:
             detail = ((done.stderr or "") + (done.stdout or "")).strip()[:400]
             if self.required:
@@ -476,7 +476,7 @@ class Trees:
             removed = False
             if top is not None:
                 done = self._run(["git", "worktree", "remove", "--force", where],
-                                 cwd=top, capture_output=True, text=True, timeout=300)
+                                 cwd=top, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
                 removed = done.returncode == 0
             if not removed:
                 # `git worktree remove` refuses a tree git has lost track of; the directory is still

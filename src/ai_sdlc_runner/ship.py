@@ -28,7 +28,7 @@ class ShipError(Exception):
 
 
 def _git(repo: str | Path, *args: str) -> None:
-    proc = subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True)
+    proc = subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace")
     if proc.returncode != 0:
         raise ShipError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
 
@@ -132,6 +132,6 @@ def _refuse(name: str, what: str):
 
 def _create_pr(repo: Path, branch: str, title: str, argv: Sequence[str]) -> None:
     proc = subprocess.run([*argv, "--head", branch, "--title", title],
-                          cwd=str(repo), capture_output=True, text=True)
+                          cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace")
     if proc.returncode != 0:
         raise ShipError(f"could not open a PR for {branch}: {proc.stderr.strip()}")
