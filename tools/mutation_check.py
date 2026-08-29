@@ -648,6 +648,86 @@ MUTATIONS: List[Mutation] = [
         '        if keywords & TEXT_SWITCHES:',
         'tests/test_subprocess_codecs.py'),
 
+    # ── CHG-20260830-04: the probes underneath the sequence ────────────────────────────────────
+    #
+    # CHG-20260830-03 reserved this: every effect in `ship` delegates its probe here, so a probe
+    # that answers wrongly defeats all of that from underneath. The failure mode is not "it breaks"
+    # — it is "it answers", when it could not find out.
+
+    Mutation(
+        'probes', 'an unreachable remote is reported as "not pushed"',
+        SRC / 'probes.py',
+        '''    proc = _run(["git", "ls-remote", "--heads", remote, branch], cwd=repo)
+    if proc.returncode != 0:''',
+        '''    proc = _run(["git", "ls-remote", "--heads", remote, branch], cwd=repo)
+    if False:''',
+        'tests/test_probes.py'),
+
+    Mutation(
+        'probes', 'the push probe reads a local ref, which is stale in both directions',
+        SRC / 'probes.py',
+        '''    proc = _run(["git", "ls-remote", "--heads", remote, branch], cwd=repo)''',
+        '''    proc = _run(["git", "rev-parse", "--verify", f"refs/remotes/{remote}/{branch}"], cwd=repo)''',
+        'tests/test_probes.py'),
+
+    Mutation(
+        'probes', 'an unreachable forge is reported as an absent PR',
+        SRC / 'probes.py',
+        '''    proc = _run([*argv, "--head", branch], cwd=repo)
+    if proc.returncode != 0:''',
+        '''    proc = _run([*argv, "--head", branch], cwd=repo)
+    if False:''',
+        'tests/test_probes.py'),
+
+    Mutation(
+        'probes', 'a CHG id is treated as a regular expression when searching commits',
+        SRC / 'probes.py',
+        '''    argv = ["git", "log", "--fixed-strings", f"--grep={needle}", "--format=%H"]''',
+        '''    argv = ["git", "log", f"--grep={needle}", "--format=%H"]''',
+        'tests/test_probes.py'),
+
+    Mutation(
+        'probes', 'a failed git log answers "no commit" instead of refusing',
+        SRC / 'probes.py',
+        '''        raise ProbeError(f"git log failed in {repo}: {proc.stderr.strip()}")''',
+        '''        return False''',
+        'tests/test_probes.py'),
+
+    Mutation(
+        'probes', 'a failed git status answers "clean" instead of refusing',
+        SRC / 'probes.py',
+        '''        raise ProbeError(f"git status failed in {repo}: {proc.stderr.strip()}")''',
+        '''        return True''',
+        'tests/test_probes.py'),
+
+    Mutation(
+        'probes', 'a missing binary answers instead of saying it is not there',
+        SRC / 'probes.py',
+        '''        raise ProbeError(f"{argv[0]!r} is not available: {exc}") from None''',
+        '''        return subprocess.CompletedProcess(argv, 0, "", "")''',
+        'tests/test_probes.py'),
+
+    Mutation(
+        'probes', 'a probe that timed out answers instead of saying so',
+        SRC / 'probes.py',
+        '''        raise ProbeError(f"{' '.join(argv)} timed out after {timeout}s: {exc}") from None''',
+        '''        return subprocess.CompletedProcess(argv, 0, "", "")''',
+        'tests/test_probes.py'),
+
+    Mutation(
+        'probes', 'a half-written CHG with no Branch reads as intent recorded',
+        SRC / 'probes.py',
+        '''    return bool(re.search(r"^\\s*-?\\s*Branch\\s*[:：]", text, re.MULTILINE))''',
+        '''    return True''',
+        'tests/test_probes.py'),
+
+    Mutation(
+        'probes', 'an unticked task reads as ticked',
+        SRC / 'probes.py',
+        '''        if task in line and re.search(r"\\[\\s*[xX]\\s*\\]|\\*\\*\\[\\s*[xX]\\s*\\]\\*\\*", line):''',
+        '''        if task in line:''',
+        'tests/test_probes.py'),
+
     # ── CHG-20260830-03: the sequence that carries a change out ────────────────────────────────
     #
     # `ship.py` is the only module whose effects reach outside this machine, and the only one whose

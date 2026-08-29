@@ -179,3 +179,74 @@ def test_probes_never_read_a_record_written_for_their_own_benefit():
     code = source.split('"""', 2)[2]
     for receipt_ish in ("state.json", "receipt", ".runner-state", "last_step"):
         assert receipt_ish not in code
+
+
+# --------------------------------------------------------------------------------------
+# the four the mutation group found unpinned (CHG-20260830-04)
+#
+# The three refusals that WERE pinned — an unreachable remote, an unreachable forge, a missing
+# forge command — are the three with a comment beside them saying "unreachable is not absent".
+# `git log`, `git status` and the timeout make the same guarantee, nobody wrote the sentence, and
+# nothing held them. The comment earned the test; the guarantee did not.
+# --------------------------------------------------------------------------------------
+
+def test_a_chg_id_is_matched_literally_and_not_as_a_pattern(repo):
+    """`--fixed-strings`, and nothing pinned it.
+
+    A CHG id has no regex metacharacters, so dropping the flag looks harmless — until the same
+    probe is asked about a task name or a branch. `commit_exists_for` takes a `needle`, not a
+    `chg_id`, and the one caller today happens to pass an id.
+    """
+    (Path(repo) / "f.txt").write_text("x\n", encoding="utf-8")
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-q", "-m", "feat: the token axb appears here", cwd=repo)
+
+    # `.` is the discriminating character. Git's default grep is a basic regular expression, in
+    # which `?` is a literal but `.` matches anything — so `a.b` finds `axb` as a pattern and finds
+    # nothing as a string, which is the whole difference `--fixed-strings` makes.
+    assert probes.commit_exists_for(repo, "axb") is True, "the literal string is there"
+    assert probes.commit_exists_for(repo, "a.b") is False, (
+        "the needle was read as a pattern: `a.b` matched a message containing `axb`")
+
+
+def test_a_git_log_that_fails_is_unanswerable_not_a_missing_commit(repo):
+    """The same rule the remote and the forge already state, in a probe that never said it.
+
+    Answering `False` means "no commit for this change" — so `ship`'s commit effect runs again, over
+    a tree whose state nobody could read.
+    """
+    with pytest.raises(probes.ProbeError) as caught:
+        probes.commit_exists_for(repo, "CHG-20260830-04", branch="no-such-branch-at-all")
+    assert "git log failed" in str(caught.value)
+
+
+def test_a_git_status_that_fails_is_unanswerable_not_a_clean_tree(tmp_path):
+    """The worst of the four, because `True` is the answer that lets the sequence continue.
+
+    `ship`'s commit probe reads `commit_exists_for and working_tree_clean`. A `working_tree_clean`
+    that answers `True` when git could not be asked defeats CHG-20260830-03's guarantee from
+    underneath — the resume treats a half-committed tree as finished and pushes it.
+    """
+    not_a_repo = tmp_path / "plain"
+    not_a_repo.mkdir()
+    with pytest.raises(probes.ProbeError) as caught:
+        probes.working_tree_clean(not_a_repo)
+    assert "git status failed" in str(caught.value)
+
+
+def test_a_probe_that_times_out_says_so_rather_than_answering(repo, py_stub):
+    """A timeout is the one failure where the world is least knowable, so it must not be guessed.
+
+    Driven through `pr_open_for`, whose command is a parameter — the only probe whose subprocess a
+    test can make slow without making the suite slow.
+    """
+    slow = py_stub("import time; time.sleep(30)")
+    with pytest.raises(probes.ProbeError) as caught:
+        probes._run([*slow, "--head", "feature"], cwd=repo, timeout=1)
+    assert "timed out after 1s" in str(caught.value)
+
+
+def test_a_probe_that_returns_in_time_is_not_reported_as_timed_out(repo, py_stub):
+    """The opposite direction: a timeout that fires always would pass the test above."""
+    quick = py_stub("pass")
+    assert probes._run([*quick], cwd=repo, timeout=30).returncode == 0
