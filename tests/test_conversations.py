@@ -297,8 +297,14 @@ def test_every_turn_kind_the_module_declares_can_actually_be_written(tmp_path):
 
     Driven rather than grepped: a text scan for each constant would pass on the declaration itself,
     which is the thing being doubted.
+
+    `REVIEW` is written by `record_review` rather than by a `Conversation` method, deliberately —
+    it is an operator act on a run that has already closed, and putting it on the conversation
+    object would put it where a walk could reach it (CHG-20260828-21). It is still driven here,
+    because a kind written by *nothing* is exactly what this test exists to refuse.
     """
-    c = conv.Conversation(_store(tmp_path), "P").open()      # opened
+    store = _store(tmp_path)
+    c = conv.Conversation(store, "P").open()                 # opened
     c.instruction("do the thing", 1)
     c.ask("000-x", "pm_plan", "pm", None, "m", {"brief": "b"})
     c.answer("000-x", {"modules": []}, "m")
@@ -306,8 +312,12 @@ def test_every_turn_kind_the_module_declares_can_actually_be_written(tmp_path):
     c.decision("approval", "merge", "fine")
     c.relaxation("--store-remote allow")
     c.note("a store write failed")
-    c.close("finished")
-    assert {t["kind"] for t in c.document()["turns"]} == set(conv.KINDS)
+    c.close("finished",
+            change_class="the 'emergency' class, authorised by ops-lead, due for review 2026-12-01")
+    conv.record_review(store, c.id, by="ana")
+
+    written = {t["kind"] for t in store.read(conv.project_id("P"), c.id)["turns"]}
+    assert written == set(conv.KINDS)
 
 
 def test_the_engine_records_the_decisions_the_report_records(tmp_path):

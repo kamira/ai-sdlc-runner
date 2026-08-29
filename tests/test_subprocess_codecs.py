@@ -286,20 +286,21 @@ def test_no_path_open_has_appeared_since(tmp_path):
     So the claim is checked rather than asserted: `.open(` on anything but `io` or `paths` must be
     a method, and today the only one is `Conversation.open`. If a `Path.open()` is added, this goes
     red and whoever added it has to decide whether to widen the rule or route through `paths`.
+
+    **By receiver, not by line.** The first version pinned `file:line` pairs, and CHG-20260828-21
+    inserted a hundred lines into `conversations.py` — so a change that added no `.open(` at all
+    failed a test about which `.open(` calls exist. A guard that fires on an edit it does not
+    describe is one people learn to re-baseline without reading.
     """
     import re
-    calls = []
+    receivers = set()
     for path in _sources():
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            for found in re.finditer(r"\b(\w+)\.open\(", line):
-                if found.group(1) not in ("io", "paths"):
-                    calls.append(f"{path.relative_to(REPO).as_posix()}:{number} {found.group(0)}")
-    assert calls == [
-        "src/ai_sdlc_runner/conversations.py:916 conv.open(",
-        "src/ai_sdlc_runner/conversations.py:919 conv.open(",
-    ], (
-        "the set of `.open(` calls the AST survey cannot classify has changed. If one of these is a "
-        f"Path, it opens a file with the caller's locale and needs an encoding: {calls}")
+        for found in re.finditer(r"\b(\w+)\.open\(", path.read_text(encoding="utf-8")):
+            if found.group(1) not in ("io", "paths"):
+                receivers.add(f"{path.relative_to(REPO).as_posix()}: {found.group(1)}.open(")
+    assert receivers == {"src/ai_sdlc_runner/conversations.py: conv.open("}, (
+        "the set of `.open(` calls the AST survey cannot classify has changed. If the new one is a "
+        f"Path, it opens a file with the caller's locale and needs an encoding: {sorted(receivers)}")
 
 
 def test_the_file_survey_finds_the_calls_it_claims_to_find():

@@ -227,7 +227,8 @@ body fields per kind.
 | `decision` | `decision` (`approval`/`rejection`/`ruling`), `at_node`, `why`, `who` |
 | `relaxation` | `text` |
 | `note` | `text` |
-| `closed` | `state` (`finished`/`suspended`/`stopped`) |
+| `closed` | `state` (`finished`/`suspended`/`stopped`), `at_node`, `why`, `risk`, `change_class` |
+| `review` | `by`, `note` — an operator saying they looked at an `emergency` run afterwards |
 
 `model` is what was **asked for**; `backend` is what **answered**. They come apart on a seat panel,
 which routes by seat name and passes no model at all.
@@ -265,7 +266,7 @@ form of the id. Without that, every ask/answer pair splits in two: 53 stops for 
 wearing a waterfall's markup.
 
 Three voices, from `kind`: `runner` (`ask`, `opened`, `closed`, `relaxation`, `note`), `model`
-(`answer`, `unanswered`), `operator` (`instruction`, `decision`). Model-written text is escaped on
+(`answer`, `unanswered`), `operator` (`instruction`, `decision`, `review`). Model-written text is escaped on
 the way in — the same reason CSV cells are defused against formulas.
 
 ## 10 · Model registry — **closed**, entry *and* envelope

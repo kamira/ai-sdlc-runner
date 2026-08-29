@@ -617,6 +617,63 @@ def _read_store(args: argparse.Namespace):
         raise SystemExit(2)
 
 
+def cmd_emergencies(args: argparse.Namespace) -> int:
+    """The emergency review queue, and the one way to close an entry (CHG-20260828-21).
+
+    Listing is derived from the runs themselves, so this cannot drift from what actually happened.
+    Recording a review is an **operator** act: it is here, on the command line, and nowhere a work
+    order or a dispatched agent can reach — the same rule that made declaring `emergency` operator-
+    only, applied to signing it off.
+    """
+    back = _read_store(args)
+    if getattr(args, "reviewed", None):
+        try:
+            done = conv_mod.record_review(back, args.reviewed, args.by or "", args.note or "")
+        except conv_mod.ConversationError as exc:
+            print(f"error: {exc}")
+            return 2
+        print(f"{done['conversation_id']}  reviewed by {done['reviewed_by']}")
+        return 0
+
+    pid = conv_mod.project_id(args.project) if args.project else None
+    runs = conv_mod.emergency_runs(back, pid) if args.all else conv_mod.outstanding(back, pid)
+    if not runs:
+        print("no emergency runs are waiting for review" if not args.all
+              else "no run has proceeded under the 'emergency' class")
+        return 0
+    for run in runs:
+        mark = f"reviewed by {run['reviewed_by']}" if run["reviewed_by"] else "OUTSTANDING"
+        print(f"{run['conversation_id']}  {run['project']}  {run['at']}  {mark}")
+        print(f"    {run['change_class']}")
+    return 0
+
+
+def _chase_emergencies(args: argparse.Namespace) -> None:
+    """Say what is outstanding when a run finishes.
+
+    A queue nobody is shown is the original defect one step further in: `CHG-20260827-20` recorded
+    emergency runs and nothing ever mentioned them again. The next run is the moment somebody is
+    reliably present, so it is the moment to say it.
+
+    Never fatal. This is a reminder about a previous run, and a store that cannot be read is not a
+    reason to fail the one that just succeeded.
+    """
+    try:
+        back = conv_mod.backend(args.store, root=args.store_root)
+        waiting = conv_mod.outstanding(back)
+    except Exception:                                # pragma: no cover - a store that will not open
+        return
+    if not waiting:
+        return
+    print(f"\n{len(waiting)} emergency run(s) still waiting for review — a gate was relaxed on the "
+          f"promise somebody would look:")
+    for run in waiting[:5]:
+        print(f"  {run['conversation_id']}  {run['project']}  {run['at']}")
+    if len(waiting) > 5:
+        print(f"  … and {len(waiting) - 5} more")
+    print("  runner emergencies --reviewed ID --by NAME")
+
+
 def cmd_conversations(args: argparse.Namespace) -> int:
     """List what has been stored, by project — or bring an older store across."""
     back = _read_store(args)
@@ -1047,6 +1104,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"dispatched:    {line}")
     for line in report.rulings:
         print(f"ruled:         {line}")
+    _chase_emergencies(args)
     return 0
 
 
@@ -1434,6 +1492,23 @@ def build_parser() -> argparse.ArgumentParser:
                          "copied into this one and the directory is left where it is — a "
                          "conversation already here is skipped, never merged.")
     pc.set_defaults(func=cmd_conversations)
+
+    pq = sub.add_parser("emergencies",
+                        help="emergency runs waiting for the review their class promised")
+    _store_flags(pq)
+    pq.add_argument("--all", action="store_true",
+                    help="include the ones already reviewed, and say who reviewed them")
+    pq.add_argument("--reviewed", default=None, metavar="ID",
+                    help="record that this run has been reviewed. Needs --by. This is the only way "
+                         "to close an entry, and it is on the command line for the same reason "
+                         "declaring `emergency` is: nothing may sign off on its own exemption.")
+    pq.add_argument("--by", default=None, metavar="NAME",
+                    help="who reviewed it. Required with --reviewed, and refused if empty — a "
+                         "review on nobody's authority closes an obligation that existed to put a "
+                         "person's name against a gate that was skipped.")
+    pq.add_argument("--note", default=None, metavar="TEXT",
+                    help="what they found, if anything")
+    pq.set_defaults(func=cmd_emergencies)
 
     pe = sub.add_parser("export", help="export one conversation as JSON, Markdown or CSV")
     _store_flags(pe)
