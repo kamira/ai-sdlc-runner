@@ -648,6 +648,36 @@ MUTATIONS: List[Mutation] = [
         '        if keywords & TEXT_SWITCHES:',
         'tests/test_subprocess_codecs.py'),
 
+    # ── CHG-20260828-20: a record's evidence has to be findable ────────────────────────────────
+
+    Mutation(
+        'closure', 'a record can name a test that does not exist again',
+        TOOLS / 'ledger_check.py',
+        '        ghosts = [name for name in named if name not in known]',
+        '        ghosts = []',
+        'tests/test_ledger_check.py'),
+
+    Mutation(
+        'closure', 'the evidence check is written but never run by the ledger',
+        TOOLS / 'ledger_check.py',
+        '    problems.extend(check_named_tests_exist(repo))',
+        '    pass',
+        'tests/test_ledger_check.py'),
+
+    Mutation(
+        'closure', 'naming a test module stops counting, so every file reference is a ghost',
+        TOOLS / 'ledger_check.py',
+        '        names.add(path.stem)',
+        '        pass',
+        'tests/test_ledger_check.py'),
+
+    Mutation(
+        'closure', 'the rule reaches back over history it cannot change',
+        TOOLS / 'ledger_check.py',
+        '        if stamp < TESTS_MUST_EXIST_FROM:',
+        '        if False:',
+        'tests/test_ledger_check.py'),
+
     # ── CHG-20260828-19: the file half of the same question ───────────────────────────
 
     Mutation(

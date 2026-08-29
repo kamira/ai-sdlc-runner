@@ -367,3 +367,84 @@ def test_this_repos_own_changes_are_all_closed_or_openly_open():
     people learn to skip.
     """
     assert not [p for p in ledger_check.check(REPO) if "already made" in p]
+
+
+# ── a record naming a test that does not exist is vouching for nothing (CHG-20260828-20) ───────
+#
+# The point of writing `pinned by ``test_foo``` is that a later reader can go and look. When
+# `test_foo` has been renamed or deleted the sentence still reads like evidence and is not — and
+# 97 such references had accumulated here, most to an architecture (`executors.py`, `dashboard.py`,
+# `workspace.py`) that no longer exists. Nothing noticed, because nothing looked.
+
+
+def _ledger(tmp_path, record_name, body, tests=("def test_a_real_one(): pass\n",)):
+    (tmp_path / "docs" / "changes").mkdir(parents=True)
+    (tmp_path / "docs" / "acceptance").mkdir(parents=True)
+    (tmp_path / "tests").mkdir()
+    for n, source in enumerate(tests):
+        (tmp_path / "tests" / f"test_subject{n or ''}.py").write_text(source, encoding="utf-8")
+    folder = "changes" if record_name.startswith("CHG") else "acceptance"
+    (tmp_path / "docs" / folder / f"{record_name}.md").write_text(body, encoding="utf-8")
+    return tmp_path
+
+
+def test_a_recent_record_naming_a_test_that_does_not_exist_is_reported(tmp_path):
+    repo = _ledger(tmp_path, "ACC-20260901-01", "Pinned by `test_a_ghost`.\n")
+    problems = ledger_check.check_named_tests_exist(repo)
+    assert any("test_a_ghost" in p for p in problems), problems
+
+
+def test_the_message_says_what_to_do_about_it(tmp_path):
+    repo = _ledger(tmp_path, "ACC-20260901-01", "Pinned by `test_a_ghost`.\n")
+    said = ledger_check.check_named_tests_exist(repo)[0]
+    assert "ACC-20260901-01" in said
+    assert "fix the name" in said and "since removed" in said
+
+
+def test_a_test_that_exists_is_not_reported(tmp_path):
+    repo = _ledger(tmp_path, "ACC-20260901-01", "Pinned by `test_a_real_one`.\n")
+    assert ledger_check.check_named_tests_exist(repo) == []
+
+
+def test_naming_the_module_counts_as_naming_a_test(tmp_path):
+    """Both spellings are in use: `test_flow` names a file, `test_a_halt_is_final` names a case.
+
+    A rule that knew only functions would report every file reference as a ghost, which is how a
+    lint teaches people to stop reading it.
+    """
+    repo = _ledger(tmp_path, "ACC-20260901-01", "See `test_subject`.\n")
+    assert ledger_check.check_named_tests_exist(repo) == []
+
+
+def test_a_record_older_than_the_cutoff_is_left_alone(tmp_path):
+    """Prospective, for the reason `BRANCH_REQUIRED_FROM` gives.
+
+    The 97 existing references are history. Rewriting them would be inventing a past rather than
+    fixing one, and a lint that fails on history it cannot change teaches people to ignore it.
+    """
+    repo = _ledger(tmp_path, "ACC-20260617-03", "Pinned by `test_a_ghost`.\n")
+    assert ledger_check.check_named_tests_exist(repo) == []
+
+
+def test_prose_mentioning_a_test_is_not_a_pointer(tmp_path):
+    """Only backticked names. These records discuss tests constantly, in sentences."""
+    repo = _ledger(tmp_path, "ACC-20260901-01",
+                   "We considered writing test_a_ghost and decided against it.\n")
+    assert ledger_check.check_named_tests_exist(repo) == []
+
+
+def test_changes_are_checked_as_well_as_acceptances(tmp_path):
+    repo = _ledger(tmp_path, "CHG-20260901-01", "Done-when: `test_a_ghost` passes.\n")
+    assert any("test_a_ghost" in p for p in ledger_check.check_named_tests_exist(repo))
+
+
+def test_the_check_runs_as_part_of_the_ledger(tmp_path):
+    """It has to be wired in, not merely written. This repository has shipped an unwired guard."""
+    repo = _ledger(tmp_path, "CHG-20260901-01",
+                   HEADER + "\n## Status\n\nProposed.\n\nPinned by `test_a_ghost`.\n")
+    assert any("test_a_ghost" in p for p in ledger_check.check(repo))
+
+
+def test_this_repositorys_own_recent_records_name_only_tests_that_exist():
+    """Zero today, which is why the cutoff is where it is: the rule ships green."""
+    assert ledger_check.check_named_tests_exist(REPO) == []

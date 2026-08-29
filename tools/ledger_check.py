@@ -38,6 +38,17 @@ REQUIRED_FIELDS = ("Project", "Date", "Risk")
 #: same way the rules it replaces were.
 BRANCH_REQUIRED_FROM = "CHG-20260703-01"
 
+#: Records from this id onward may not name a test that does not exist (CHG-20260828-20).
+#:
+#: A record's job is to let a later reader check the claim. `pinned by ``test_foo``` is worth
+#: exactly as much as `test_foo` being findable, and 97 references in this ledger are not — mostly
+#: to an architecture (`executors.py`, `dashboard.py`, `workspace.py`) that no longer exists.
+#:
+#: Prospective for the reason above: those 97 are history, and rewriting them would be inventing a
+#: past rather than fixing one. Zero records from this id onward break the rule today, so it ships
+#: green and catches the next typo instead of the last ninety-seven.
+TESTS_MUST_EXIST_FROM = "20260828"
+
 #: Statuses that mean the work is finished. Anything here needs a matching ACC.
 DONE = (
     "built", "implemented", "accepted", "complete", "completed", "done", "merged", "shipped",
@@ -248,6 +259,58 @@ def check(repo: Path) -> List[str]:
                 f"{waiting[0]!r} — the change is recorded as waiting for a decision that "
                 f"{acc_id} already made. Close the change, or say in its status why the acceptance "
                 f"did not close it")
+
+    problems.extend(check_named_tests_exist(repo))
+    return problems
+
+
+def _tests_that_exist(repo: Path) -> set:
+    """Every name a record may legitimately cite: a test function, or a test module.
+
+    Both spellings are in use and both are useful — `test_flow` names a file, `test_a_halt_is_final`
+    names one case in it. A rule that knew only functions would report every file reference as a
+    ghost, which is how a lint teaches people to stop reading it.
+    """
+    directory = repo / "tests"
+    if not directory.is_dir():
+        return set()
+    names = set()
+    for path in sorted(directory.glob("*.py")):
+        names.add(path.stem)
+        names.update(re.findall(r"^def (test_\w+)", path.read_text(encoding="utf-8"), re.MULTILINE))
+    return names
+
+
+def check_named_tests_exist(repo: Path) -> List[str]:
+    """A record naming a test that does not exist is vouching for nothing (CHG-20260828-20).
+
+    The whole point of writing `pinned by ``test_foo``` in an acceptance is that a later reader can
+    go and look. When `test_foo` has been renamed or deleted, the sentence still reads like
+    evidence and is not, and nothing in this repository noticed — 97 such references had
+    accumulated, most of them to an architecture that no longer exists.
+
+    Prospective, for the reason `BRANCH_REQUIRED_FROM` gives: the 97 are history, and rewriting them
+    would be inventing a past rather than fixing one.
+    """
+    known = _tests_that_exist(repo)
+    if not known:                                   # pragma: no cover - a repo with no tests
+        return []
+    problems = []
+    records = sorted(list((repo / "docs" / "changes").glob("CHG-*.md"))
+                     + list((repo / "docs" / "acceptance").glob("ACC-*.md")))
+    for path in records:
+        stamp = path.stem.split("-")[1] if "-" in path.stem else ""
+        if stamp < TESTS_MUST_EXIST_FROM:
+            continue
+        # Backticked only. Prose that merely mentions a test in passing is not a pointer, and this
+        # repository's records discuss tests constantly.
+        named = sorted(set(re.findall(r"`(test_\w+)`", path.read_text(encoding="utf-8"))))
+        ghosts = [name for name in named if name not in known]
+        if ghosts:
+            problems.append(
+                f"{path.stem}: names {len(ghosts)} test(s) that do not exist — {', '.join(ghosts)}. "
+                f"A record pointing at evidence a reader cannot find is not evidence; fix the name, "
+                f"or say in the record that the test was since removed and why")
     return problems
 
 
