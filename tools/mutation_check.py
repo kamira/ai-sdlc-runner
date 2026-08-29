@@ -648,6 +648,95 @@ MUTATIONS: List[Mutation] = [
         '        if keywords & TEXT_SWITCHES:',
         'tests/test_subprocess_codecs.py'),
 
+    # ── CHG-20260830-02: where a model is, and what it must not carry ──────────────────────────
+    #
+    # `reach` decides whether a work order leaves this network, and `validate` decides whether a key
+    # can end up in a file. Measured with the harness, pointed at the existing tests.
+
+    Mutation(
+        'reach', 'reach becomes something the operator declares rather than something computed',
+        SRC / 'models.py',
+        '    if transport == CLI:\n        return LOCAL',
+        '    if transport == CLI:\n        return EXTERNAL',
+        'tests/test_models.py'),
+
+    Mutation(
+        'reach', 'a name nobody can resolve is called internal, the generous way to be wrong',
+        SRC / 'models.py',
+        '        if "." not in host or host.endswith((".local", ".internal", ".lan", ".home.arpa")):\n            return INTERNAL',
+        '        return INTERNAL',
+        'tests/test_models.py'),
+
+    Mutation(
+        'reach', 'a private address is called external, so an internal model looks like a leak',
+        SRC / 'models.py',
+        '    if address.is_private or address.is_link_local:\n        return INTERNAL',
+        '    if False:\n        return INTERNAL',
+        'tests/test_models.py'),
+
+    Mutation(
+        'reach', 'loopback stops being local',
+        SRC / 'models.py',
+        '    if address.is_loopback:\n        return LOCAL',
+        '    if False:\n        return LOCAL',
+        'tests/test_models.py'),
+
+    Mutation(
+        'reach', 'an api model with no endpoint gets a reach guessed for it',
+        SRC / 'models.py',
+        '''        raise ModelError("an api model needs an endpoint before its reach can be known")''',
+        '''        return EXTERNAL''',
+        'tests/test_models.py'),
+
+    Mutation(
+        'reach', 'a secret in the query string is accepted into the registry',
+        SRC / 'models.py',
+        '    leaked = _secret_in_query(model.endpoint)\n    if leaked:',
+        '    leaked = _secret_in_query(model.endpoint)\n    if False:',
+        'tests/test_models.py'),
+
+    Mutation(
+        'reach', 'the secret scan reads the value instead of the key, so ?api_key= passes',
+        SRC / 'models.py',
+        '        name = pair.split("=", 1)[0].strip().lower()',
+        '        name = pair.split("=", 1)[-1].strip().lower()',
+        'tests/test_models.py'),
+
+    Mutation(
+        'reach', 'key_env takes the key itself, so it reaches a file and a git history',
+        SRC / 'models.py',
+        '    if model.key_env and not _ENV_NAME.match(model.key_env):',
+        '    if False:',
+        'tests/test_models.py'),
+
+    Mutation(
+        'reach', 'a public endpoint with no key named is registered anyway',
+        SRC / 'models.py',
+        '    if model.reach == EXTERNAL and not model.key_env:',
+        '    if False:',
+        'tests/test_models.py'),
+
+    Mutation(
+        'reach', 'an endpoint scheme this runner does not speak is accepted',
+        SRC / 'models.py',
+        '''    if scheme not in ("http", "https"):''',
+        '''    if False:''',
+        'tests/test_models.py'),
+
+    Mutation(
+        'reach', 'an api model may carry a command it cannot use',
+        SRC / 'models.py',
+        '''        raise ModelError(f"api model {model.id!r} carries a command it cannot use")''',
+        '''        pass''',
+        'tests/test_models.py'),
+
+    Mutation(
+        'reach', 'two models may share one id',
+        SRC / 'models.py',
+        '''                raise ModelError(f"two models are called {model.id!r}")''',
+        '''                pass''',
+        'tests/test_models.py'),
+
     # ── CHG-20260830-01: the console's network boundary ────────────────────────────────────────
     #
     # `_guard` is the only thing between a local HTTP server holding an operator token and whatever

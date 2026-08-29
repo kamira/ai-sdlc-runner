@@ -292,3 +292,43 @@ def test_a_registry_whose_envelope_is_correct_still_loads(tmp_path):
     written = tmp_path / "models.json"
     written.write_text(json.dumps({"models": []}), encoding="utf-8")
     assert models_mod.load(str(written)) is not None
+
+
+# --- the one the mutation group found unpinned (CHG-20260830-02) ------------------------------
+
+
+@pytest.mark.parametrize("endpoint", ["https://", "not a url", "file:///x", "://nohost"])
+def test_an_endpoint_with_no_host_is_refused_rather_than_given_a_reach(endpoint):
+    """`reach_of` refuses when it cannot find a host, and nothing pinned that.
+
+    Replacing the refusal with `return EXTERNAL` left every test green — and `external` is the
+    *safe-looking* wrong answer here, because it is the grade that makes `validate` demand a key
+    and then wave the entry through. An endpoint of `https://` with a `key_env` set would have been
+    registered as a real public model that resolves to nothing.
+
+    Guessing any answer is wrong when the question is where data goes: this is the same argument
+    the unresolvable-name branch already makes, at the one input where there is nothing to guess
+    from at all.
+    """
+    with pytest.raises(models.ModelError, match="before its reach can be known"):
+        models.reach_of(models.API, endpoint)
+
+
+def test_a_hostless_endpoint_does_not_survive_validate():
+    """End to end, because `reach` is a property: the refusal has to reach the caller that matters.
+
+    `validate` reads `model.reach`, so a guard that only fired inside `reach_of` while `validate`
+    swallowed it would be a refusal nobody meets.
+    """
+    hostless = _api(endpoint="https://")
+    with pytest.raises(models.ModelError, match="before its reach can be known"):
+        models.validate(hostless)
+
+
+def test_a_cli_model_needs_no_endpoint_to_have_a_reach():
+    """The other direction: the refusal is about `api`, and must not spread to `cli`.
+
+    A command runs here, so its reach is known without an endpoint — and a rule that demanded one
+    would refuse every local model in the project's own examples.
+    """
+    assert models.reach_of(models.CLI, "") == models.LOCAL
