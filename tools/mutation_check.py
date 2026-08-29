@@ -56,11 +56,13 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, NamedTuple
+from typing import Dict, List, NamedTuple, Optional
 
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src/ai_sdlc_runner"
@@ -69,6 +71,12 @@ SRC = REPO / "src/ai_sdlc_runner"
 #: walked changes and never acceptances, so an ACC naming no change read as a pass. Mutating the
 #: guards is the only way to know they still refuse.
 TOOLS = REPO / "tools"
+
+#: The harness's own safety net lives next door, in `mutation_recovery.py`. Not tidiness: a
+#: mutation's `before` string sits in THIS file, so any anchor into it appears twice and the
+#: uniqueness guard correctly refuses it. A file cannot pin guarantees about itself by exact
+#: text, and the recovery is the part that most needed pinning (CHG-20260828-18).
+from mutation_recovery import IN_FLIGHT, apply, recover, restore, restore_on_signal  # noqa: E402
 
 
 class Mutation(NamedTuple):
@@ -640,6 +648,43 @@ MUTATIONS: List[Mutation] = [
         '        if keywords & TEXT_SWITCHES:',
         'tests/test_subprocess_codecs.py'),
 
+    # ── CHG-20260828-18: a killed run does not leave the tree mutated ──────────────────
+    #
+    # Every one of these anchors into `mutation_recovery.py` rather than into this file. A
+    # mutation's `before` string lives HERE, so an anchor into this file appears twice and the
+    # uniqueness guard refuses it — which is why the recovery is next door.
+
+    Mutation(
+        'stranded', 'a file a killed run left mutated stays mutated',
+        TOOLS / 'mutation_recovery.py',
+        '    if not IN_FLIGHT.exists():',
+        '    if True:',
+        'tests/test_mutation_recovery.py'),
+
+    Mutation(
+        'stranded', 'the mutation is applied before it is recorded, so the window reopens',
+        TOOLS / 'mutation_recovery.py',
+        """    begin(path, original, mutated)
+    write(path, mutated)""",
+        """    write(path, mutated)
+    begin(path, original, mutated)""",
+        'tests/test_mutation_recovery.py'),
+
+    Mutation(
+        'stranded', 'recovery overwrites a file somebody has edited since the run died',
+        TOOLS / 'mutation_recovery.py',
+        '    if now == mutated:',
+        '    if now != original:',
+        'tests/test_mutation_recovery.py'),
+
+    Mutation(
+        'stranded', 'the in-flight record outlives the run that wrote it',
+        TOOLS / 'mutation_recovery.py',
+        """    write(path, original)
+    end()""",
+        """    write(path, original)""",
+        'tests/test_mutation_recovery.py'),
+
     # ── CHG-20260828-17: the two records are read, not just counted ────────────────────────────
 
     Mutation(
@@ -964,12 +1009,12 @@ def run(mutation: Mutation, baseline: Dict[str, bool]) -> bool:
               f"mutation would revert whichever comes first rather than the one it names. Narrow "
               f"`before` with enough surrounding context to be unique.")
         return False
-    io.open(mutation.path, "w", encoding="utf-8", newline="\n").write(
-        original.replace(mutation.before, mutation.after, 1))
+    mutated = original.replace(mutation.before, mutation.after, 1)
+    apply(mutation.path, original, mutated)
     try:
         proc = _pytest(mutation.tests)
     finally:
-        io.open(mutation.path, "w", encoding="utf-8", newline="\n").write(original)
+        restore(mutation.path, original)
 
     caught = proc.returncode != 0
     summary = next((ln for ln in reversed(proc.stdout.splitlines())
@@ -983,6 +1028,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--only", help="run one group only (e.g. `importer`)")
     args = parser.parse_args()
+
+    # Before anything else. A tree left mutated by a previous run would make every baseline below
+    # a measurement of the wrong code.
+    restore_on_signal()
+    recover()
 
     chosen = [m for m in MUTATIONS if not args.only or m.group == args.only]
     if not chosen:

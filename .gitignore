@@ -197,3 +197,6 @@ examples/*/greet.py
 # running the pre-48 command cannot commit it again; the behaviour itself is caught by
 # tests/test_examples_run_from_anywhere.py.
 /greet.py
+
+# The mutation harness's in-flight record (CHG-20260828-18)
+tools/.mutation-in-flight.json

@@ -28,6 +28,7 @@ TOOLS = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS))
 
 import mutation_check  # noqa: E402
+import mutation_recovery  # noqa: E402
 
 
 def _mutation(path: Path, before: str, after: str = "REPLACED", tests: str = "tests/fake.py"):
