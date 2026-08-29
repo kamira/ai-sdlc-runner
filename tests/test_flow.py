@@ -56,6 +56,13 @@ def _answer(order, answers=None):
     """The answer a model would give to this order — a branch where the node needs one."""
     if order.get("seat"):
         return {"verdict": SEAT_PASS}
+    if order["node_id"] == "engineer_build":
+        # A builder says what it built (CHG-20260828-15). It did not before, and nothing noticed
+        # because nothing read it: `DECISIONS` drives `next_module` in these tests, so the frontier
+        # never asked. `module_built` does ask, and a default dispatcher that models a build
+        # reporting *nothing* would send every ordinary lap down the empty path — which is the
+        # opposite of what these tests mean by "everything passes".
+        return {"module": "alpha"}
     branch = (answers or ANSWERS).get(order["node_id"])
     return {"verdict": branch} if branch else {"ok": True}
 

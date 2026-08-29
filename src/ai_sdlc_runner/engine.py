@@ -1006,6 +1006,34 @@ def _reconciled(cfg: "RunConfig", report: "RunReport") -> str:
     return "conflict"
 
 
+def _module_built(report: "RunReport") -> str:
+    """`yes` when this lap built something, `no` when the engineer said there was nothing
+    (CHG-20260828-15).
+
+    Read from the run's own record, the way `_frontier` is: the most recent `engineer_build` answer
+    is what the engineer said it built, and an empty `module` is the engineer saying there is
+    nothing left. Nobody is asked, because what the engineer said is a **fact in the record** and
+    reading a fact is not a judgement — the same reason `reconcile` has no role.
+
+    ## What this guards
+
+    `record_module`'s effects are *"tick, commit, update the worklog"*. Before this the flow walked
+    on to it even when the engineer had just answered `{"module": ""}`, so a worklog entry would
+    claim a module that was never built. `examples/weather-spa` declares those operations, so it
+    was live rather than latent — `ACC-20260823-51` reservation 2 named it, and CHG-20260828-12
+    reproduced it.
+
+    A **missing** `module` key is not an empty one, and it is `no` here for the reason `_frontier`
+    gives: an agent that crashed or answered with prose has not reported building anything, and
+    treating silence as a build is how an unbuilt module gets recorded.
+    """
+    for ask in reversed(report.asks):
+        if ask.node_id != "engineer_build" or not isinstance(ask.result, Mapping):
+            continue
+        return "yes" if str(ask.result.get("module") or "") else "no"
+    return "no"
+
+
 def _frontier(node: graph.Node, report: "RunReport") -> str:
     """Is there another module to build? Answered from the run's own record.
 
@@ -1144,6 +1172,10 @@ def _choose(cfg: RunConfig, node: graph.Node, taken: Dict[str, int],
         return _scope(cfg)
     if node.id == "reconcile":
         return _reconciled(cfg, report)
+    if node.id == "module_built":
+        # Read, never supplied. A run that could answer this could record a module it never built,
+        # which is the whole thing the node exists to stop.
+        return _module_built(report)
     if value == FRONTIER:
         return _frontier(node, report)
     if value is None or isinstance(value, str):
@@ -2082,13 +2114,23 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
         # reported error to 150 characters, and the first draft of this message spent those on a
         # three-node summary and a sentence of advice, so the one fact an operator needs — what the
         # spinning node kept saying — fell off the end. Caught by the scenario suite.
-        repeated, times = worst[0]
+        # The most-visited node that **answered something** (CHG-20260828-15). A runner node has no
+        # answer, so naming it costs the operator the one fact this message exists to carry: what
+        # the spinning node kept saying. `module_built` put `next_module` — a runner node — at the
+        # top of a cycling run by one visit, and the message lost its `last answered` entirely.
+        #
+        # The overall top is still reported, under "Also spun", so nothing is hidden; what changes
+        # is which node gets the sentence that leads somewhere.
+        asked = {ask.node_id for ask in report.asks}
+        ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        speaking = next((pair for pair in ranked if pair[0] in asked), None)
+        repeated, times = speaking or worst[0]
         answer = ""
         for ask in reversed(report.asks):
             if ask.node_id == repeated:
                 answer = f" last answered {json.dumps(ask.result, ensure_ascii=False)[:160]};"
                 break
-        also = ", ".join(f"{nid} ×{n}" for nid, n in worst[1:])
+        also = ", ".join(f"{nid} ×{n}" for nid, n in ranked[:4] if nid != repeated)
         raise EngineError(
             f"walk exceeded {cfg.max_steps} steps. Most-visited: {repeated} ×{times},{answer} "
             f"a node repeating with the same answer means the branch it feeds is not reading "

@@ -487,6 +487,10 @@ def test_effects_run_at_their_node_and_are_reported(tmp_path):
     def dispatch(order):
         if order.get("seat"):
             return {"verdict": "pass"}
+        if order["node_id"] == "engineer_build":
+            # A builder says what it built (CHG-20260828-15) — `record_module` is reached only
+            # through `module_built`, and this test is about the node running.
+            return {"module": "alpha"}
         branch = ANSWERS.get(order["node_id"])
         return {"verdict": branch} if branch else {"ok": True}
 
@@ -513,8 +517,12 @@ def test_an_effect_that_does_not_establish_its_postcondition_halts_the_run():
         risk="low", confirmed=("merge",), effects=provider, undeclared="allow",
         operations={"record_module": [{"description": "tick the box", "kind": "ordinary"}]})
 
+    # A builder says what it built (CHG-20260828-15). `record_module` is reached only through
+    # `module_built`, so a stub reporting nothing takes the empty path — and this test is about
+    # what happens when the node's effect runs and fails.
     report = engine.walk(cfg, lambda order: (
         {"verdict": "pass"} if order.get("seat")
+        else {"module": "alpha"} if order["node_id"] == "engineer_build"
         else ({"verdict": ANSWERS[order["node_id"]]} if order["node_id"] in ANSWERS
               else {"ok": True})), enabled=True)
     assert report.halted_at == "record_module"

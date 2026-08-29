@@ -765,6 +765,34 @@ MUTATIONS: List[Mutation] = [
         'tests/test_sub_planning.py'),
 
     Mutation(
+        'modules', 'a module is recorded on the lap the engineer said there was nothing',
+        SRC / 'graph.py',
+        '         branches={"yes": "record_module", "no": "next_module"},',
+        '         branches={"yes": "record_module", "no": "record_module"},',
+        'tests/test_module_built.py'),
+
+    Mutation(
+        'modules', 'silence is read as a build',
+        SRC / 'engine.py',
+        '        return "yes" if str(ask.result.get("module") or "") else "no"',
+        '        return "yes"',
+        'tests/test_module_built.py'),
+
+    Mutation(
+        'modules', 'the guard can be answered instead of read',
+        SRC / 'engine.py',
+        '    if node.id == "module_built":',
+        '    if node.id == "module_built" and value is None:',
+        'tests/test_module_built.py'),
+
+    Mutation(
+        'modules', 'the module cycle escapes the loop and puts review nodes in a worktree',
+        SRC / 'graph.py',
+        'def module_cycle(start: str = "engineer_build", end: str = "next_module") -> List[str]:',
+        'def module_cycle(start: str = "engineer_build", end: str = "record_module") -> List[str]:',
+        'tests/test_module_built.py'),
+
+    Mutation(
         "cli", "refusal text goes to the terminal with its control characters intact",
         SRC / "cli.py",
         '''    return "".join(c if (c.isprintable() or c == " ") else''',

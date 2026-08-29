@@ -14,7 +14,7 @@ pack, or vendored contract. The flow and the governance are its own, in two file
 
 - **`policy.py`** — six roles with capability flags, 10 gates × three risk grades, six
   never-automated actions, four review seats and the rule that adjudicates them.
-- **`graph.py`** — 28 nodes, one kind of work each.
+- **`graph.py`** — 29 nodes, one kind of work each.
 
 Nothing points outside this repository. The dependency graph closes inside `src/`.
 
@@ -231,7 +231,7 @@ dying inside it — coverage counted the lines while no assertion ever ran.
 `ai-sdlc-runner` 是一個**受治理的開發代理**:跑一條普通的開發流程(PM → 主管 → 工程師 → 自我驗證 →
 主管 review → 審議席 → QA → 回饋回 PM),並在每一步判斷這一步能不能自己走。
 
-它**不依賴其他公司的 agent**,repo 內**不存放也不讀取任何 skill**。流程在 `graph.py`(28 節點,一個
+它**不依賴其他公司的 agent**,repo 內**不存放也不讀取任何 skill**。流程在 `graph.py`(29 節點,一個
 節點只做一種工作),治理在 `policy.py`(角色、10 個閘門 × 3 個風險等級、6 個永久停點、審議席與裁決)。
 
 四件事是這個設計的重點:**閘門會真的擋住流程**(而且停下來之後可以用 `--confirm` 續走,並留下紀錄);

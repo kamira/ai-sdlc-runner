@@ -33,7 +33,7 @@ miscounts its own subject is the thing it warns about, so the count is now check
 
 ## 1 · Node — the flow
 
-28 of these, one kind of work each. `validate()` enforces cross-rules over them — the count is not
+29 of these, one kind of work each. `validate()` enforces cross-rules over them — the count is not
 stated here because no partition of that function yields the number revision 1 claimed, which a seat
 checked and could not reproduce. A decorative number is a small lie about a real mechanism.
 

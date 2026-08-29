@@ -224,17 +224,28 @@ NODES: Tuple[Node, ...] = (
     Node("lead_task_review", DECISION, "the lead reviews that module", role="lead",
          gate="task_review", gate_when="after", answer_decides=True, mode=MODEL_PANEL,
          rejects_to="fix_pass",
-         branches={"pass": "record_module", "fail": "fix_pass"},
+         branches={"pass": "module_built", "fail": "fix_pass"},
          note="the lead reviews work it did not write, and the review's answer is what routes"),
+    Node("module_built", DECISION, "did this lap build a module", mode=RUNNER,
+         branches={"yes": "record_module", "no": "next_module"},
+         note="the guard on the record (CHG-20260828-15). An engineer answering `{\"module\": \"\"}` "
+              "is saying there is nothing left, and the lap still walked on to `record_module` — "
+              "whose effects are 'tick, commit, update the worklog'. A worklog entry would claim a "
+              "module that was never built, and `examples/weather-spa` declares those operations, "
+              "so it was live rather than latent.\n\n"
+              "Nobody is asked: what the engineer said is a fact in the run's record, and reading "
+              "it is not a judgement. Both `pass` edges route through here, so a fix pass that "
+              "built nothing is caught too"),
     Node("record_module", STEP, "record the module as done", next="next_module", mode=RUNNER,
-         note="tick, commit, update the worklog — one kind of work, three ordered effects"),
+         note="tick, commit, update the worklog — one kind of work, three ordered effects. Reached "
+              "only through `module_built`, which is what keeps those three off an empty lap"),
     Node("fix_pass", STEP, "one fix pass", role="engineer", next="re_review",
          mode=FOLLOWS, follows="engineer_build",
          note="the fix goes back to whoever built it — handing a rework to a model that has not "
               "seen the module is a second first attempt"),
     Node("re_review", DECISION, "the lead re-reviews", role="lead", answer_decides=True,
          mode=MODEL_PANEL,
-         branches={"pass": "record_module", "fail": "halt_second_fail"},
+         branches={"pass": "module_built", "fail": "halt_second_fail"},
          note="bounded: exactly one fix pass, never repeat-until-green"),
     Node("halt_second_fail", TERMINAL, "a second failure halts", mode=RUNNER, permanent=True,
          note="two failures on one module is not something retrying fixes"),
@@ -280,7 +291,7 @@ def roles_used() -> List[str]:
     return sorted({n.role for n in NODES if n.role})
 
 
-def module_cycle(start: str = "engineer_build", end: str = "record_module") -> List[str]:
+def module_cycle(start: str = "engineer_build", end: str = "next_module") -> List[str]:
     """The asking nodes one module passes through, from `start` up to but not including `end`.
 
     Derived by walking the edges rather than listed, for the reason this file exists: a list of
@@ -288,7 +299,14 @@ def module_cycle(start: str = "engineer_build", end: str = "record_module") -> L
     What callers actually want is the property — "this node is part of building one module" — and
     only a traversal answers that as the graph changes.
 
-    `record_module` bounds it because that is where a module stops being the one in hand.
+    `next_module` bounds it because that is where the loop turns over — a module stops being the one
+    in hand at the moment the flow goes back to ask for another.
+
+    It used to bound on `record_module`, which was the same boundary while every path out of the
+    loop went through it. CHG-20260828-15 added `module_built --no--> next_module`, and the
+    traversal escaped: it swept in `merge`, `pr` and `lead_review`, which would have put the whole
+    change's review inside one module's worktree. The derivation is what made that visible — a
+    hand-written list of five ids would have gone on looking correct.
     """
     seen, out, frontier = {start}, [], [start]
     while frontier:
