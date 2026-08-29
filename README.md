@@ -310,6 +310,27 @@ A store write that fails **never fails the run**, and is never silent: a line on
 it fails, and `store_errors` on the report at the end. No attempt is made to write that note *into*
 the store — the thing that would hold it is the thing that just failed.
 
+### An emergency run is chased until somebody signs it off
+
+A change declared `emergency` proceeds where it would otherwise have stopped for a person, on the
+promise that somebody looks **afterwards**. That promise is now kept by something:
+
+```bash
+runner emergencies                                  # what is still waiting
+runner emergencies --reviewed <id> --by "Ana Lim"   # somebody looked, and is named
+runner emergencies --all                            # including the ones already reviewed
+```
+
+Every run that finishes says what is still outstanding, so the next run tells you about the last one
+that was let through. The queue is **derived from the runs themselves** — an emergency run is
+already in its own record — rather than kept as a second list that could disagree with it.
+
+Recording a review is an operator act, on the command line only, and it must name a person. Nothing
+a work order can carry reaches it: an answer that could record its own review would be a model
+granting itself an exemption and then signing off on it. Reviewing a run that never proceeded under
+`emergency` is refused, or the queue would empty by reviewing anything; a second review is refused
+too, and the refusal names who got there first.
+
 **It is not derived from the ask journal**, and that distinction is the whole design. The journal
 answers *"what is the current question at position N"* — a resume index, keyed by position, which
 `record` overwrites; two runs in one journal directory leave one entry. The store answers *"what
@@ -698,7 +719,7 @@ first one winning — so two of them disagreeing inside one answer resolves sile
 ## Testing
 
 ```bash
-pytest -q          # 1652 tests
+pytest -q          # 1676 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

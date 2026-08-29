@@ -648,6 +648,66 @@ MUTATIONS: List[Mutation] = [
         '        if keywords & TEXT_SWITCHES:',
         'tests/test_subprocess_codecs.py'),
 
+    # ── CHG-20260828-21: an emergency run is chased ────────────────────────────────────────────
+    #
+    # The failure that matters here is a FALSE CLOSE — a run marked reviewed by something that is
+    # not a person, or by reviewing something that never needed it. Those three refusals get one
+    # mutation each; the queue merely being wrong is the milder half.
+
+    Mutation(
+        'emergency', 'a review signed by nobody closes the obligation',
+        SRC / 'conversations.py',
+        '''    if not who:
+        raise ConversationError(
+            "a review must name who did it.''',
+        '''    if False:
+        raise ConversationError(
+            "a review must name who did it.''',
+        'tests/test_emergency_queue.py'),
+
+    Mutation(
+        'emergency', 'the queue empties by reviewing any run at all',
+        SRC / 'conversations.py',
+        '    run = runs.get(cid)',
+        '    run = runs.get(cid) or {"conversation_id": cid, "project_id": "", "reviewed_by": None}',
+        'tests/test_emergency_queue.py'),
+
+    Mutation(
+        'emergency', 'a second review is written over the first, losing who looked',
+        SRC / 'conversations.py',
+        '''    if run["reviewed_by"]:''',
+        '''    if False:''',
+        'tests/test_emergency_queue.py'),
+
+    Mutation(
+        'emergency', 'the word emergency anywhere queues a run again',
+        SRC / 'conversations.py',
+        '''    return "'emergency'" in str(turn.get("change_class") or "")''',
+        '''    return "emergency" in str(turn)''',
+        'tests/test_emergency_queue.py'),
+
+    Mutation(
+        'emergency', 'a reviewed run stays in the queue, so the queue never empties',
+        SRC / 'conversations.py',
+        '''    return [run for run in emergency_runs(back, pid) if not run["reviewed_by"]]''',
+        '''    return list(emergency_runs(back, pid))''',
+        'tests/test_emergency_queue.py'),
+
+    Mutation(
+        'emergency', "a person's review is filed under the runner in the export",
+        SRC / 'conversations.py',
+        '''    REVIEW: ("operator", "reviewed"),''',
+        '''    NOTE: ("runner", "noted"),''',
+        'tests/test_emergency_queue.py'),
+
+    Mutation(
+        'emergency', 'nothing chases the queue after a run again',
+        SRC / 'cli.py',
+        '''    _chase_emergencies(args)
+    return 0''',
+        '''    return 0''',
+        'tests/test_emergency_queue.py'),
+
     # ── CHG-20260828-20: a record's evidence has to be findable ────────────────────────────────
 
     Mutation(

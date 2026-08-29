@@ -68,7 +68,18 @@ DECISION = "decision"
 RELAXATION = "relaxation"
 NOTE = "note"
 CLOSED = "closed"
-KINDS = (OPENED, INSTRUCTION, ASK, ANSWER, UNANSWERED, DECISION, RELAXATION, NOTE, CLOSED)
+
+#: Somebody looked at an emergency run afterwards, and said so (CHG-20260828-21).
+#:
+#: The obligation an `emergency` class creates: it relaxes a `confirm` to `auto`, so a person who
+#: would have been asked was not, on the promise that somebody looks after the fact. This turn is
+#: that promise being kept, filed with the run it is about rather than in a list beside it.
+#:
+#: Reachable only from the command line, and it must name a person. An answer that could record its
+#: own review would be a model granting itself an exemption and then signing off on it.
+REVIEW = "review"
+
+KINDS = (OPENED, INSTRUCTION, ASK, ANSWER, UNANSWERED, DECISION, RELAXATION, NOTE, CLOSED, REVIEW)
 
 #: One backend (CHG-20260823-35). There were three — *「提供所有選擇的可能性」* — and the person
 #: then ruled *「只留 sqlite + file，移除 mongo 和 tinydb」*.
@@ -1116,6 +1127,112 @@ def _now() -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────────────────────────
+# The emergency review queue (CHG-20260828-21)
+# ──────────────────────────────────────────────────────────────────────────────────────────────
+#
+# `CHG-20260827-20` guard 5 was *"emergency runs are marked and queued for review"*. Marked was
+# done; queued was not, and that record said so rather than ticking the task. An `emergency` class
+# relaxes a `confirm` to `auto` — a person who would have been asked was not — on the promise that
+# somebody looks afterwards, and nothing here ever asked anybody to look.
+#
+# **The queue is derived, not stored.** An emergency run is already in its own record: the `CLOSED`
+# turn carries the class that was in force. A second list of outstanding reviews would be a second
+# source of truth about one fact, which is the shape CHG-20260828-17 was spent on — two readers of
+# the same files, disagreeing, with CI trusting the one that said fine.
+
+
+def emergency_runs(back: "Backend", pid: Optional[str] = None) -> List[Dict[str, object]]:
+    """Every closed run that proceeded under `emergency`, with who reviewed it or `None`.
+
+    Reads the run's own record. A run appears here because of what it did, not because something
+    remembered to add it to a list — so the queue cannot drift from the thing it is a queue of.
+    """
+    out = []
+    for head in back.conversations(pid):
+        project = (head.get("project") or {}) if isinstance(head.get("project"), Mapping) else {}
+        cid = str(head.get("conversation_id") or "")
+        if not cid:
+            continue
+        document = back.read(str(project.get("id") or ""), cid)
+        turns = document.get("turns") or []
+        closed = [t for t in turns if t.get("kind") == CLOSED and _is_emergency(t)]
+        if not closed:
+            continue
+        reviewed = next((t for t in turns if t.get("kind") == REVIEW), None)
+        out.append({
+            "conversation_id": cid,
+            "project": project.get("name") or project.get("id") or "?",
+            "project_id": str(project.get("id") or ""),
+            "at": str(closed[-1].get("at") or ""),
+            "change_class": str(closed[-1].get("change_class") or ""),
+            "reviewed_by": str(reviewed.get("by")) if reviewed else None,
+            "reviewed_at": str(reviewed.get("at")) if reviewed else None,
+        })
+    return out
+
+
+def _is_emergency(turn: Mapping[str, object]) -> bool:
+    """Read from the `change_class` field of a closing turn, and only from there.
+
+    `change_class` holds a sentence — *"the 'emergency' class, authorised by X, due for review on
+    Y"* — because `class_in_force` returns the reason along with the name. Matching `"emergency"`
+    anywhere in the whole turn would also match a run whose *node purpose* said the word, which is
+    the name-for-a-constraint mistake this repository keeps finding. One field, quoted.
+    """
+    return "'emergency'" in str(turn.get("change_class") or "")
+
+
+def outstanding(back: "Backend", pid: Optional[str] = None) -> List[Dict[str, object]]:
+    """The queue proper: emergency runs nobody has said they looked at."""
+    return [run for run in emergency_runs(back, pid) if not run["reviewed_by"]]
+
+
+def record_review(back: "Backend", cid: str, by: str, note: str = "") -> Dict[str, object]:
+    """Somebody says they looked. Refused unless that somebody is named and the run needs it.
+
+    Three refusals, and each is the queue being a queue rather than a list that can be emptied:
+
+    * **an unnamed reviewer** — the same rule `class_in_force` applies to `authorised_by`. A review
+      on nobody's authority closes an obligation that existed to put a person's name against a gate
+      that was skipped.
+    * **a run that was never emergency** — otherwise the queue empties by reviewing anything.
+    * **a second review** — not silently doubled, and the refusal names who got there first, since
+      the useful question after "was this reviewed?" is "by whom".
+    """
+    who = (by or "").strip()
+    if not who:
+        raise ConversationError(
+            "a review must name who did it. An emergency run skipped a gate a person would have "
+            "answered; closing that with nobody's name puts the skip on nobody's authority.")
+
+    runs = {run["conversation_id"]: run for run in emergency_runs(back)}
+    run = runs.get(cid)
+    if run is None:
+        raise ConversationError(
+            f"no emergency run {cid!r} to review. `runner emergencies` lists what is outstanding; "
+            f"a run that did not proceed under the 'emergency' class has no review to record.")
+    if run["reviewed_by"]:
+        raise ConversationError(
+            f"{cid} was already reviewed by {run['reviewed_by']} at {run['reviewed_at']}. A second "
+            f"review is not recorded over the first — if the first was wrong, that is a thing to "
+            f"say in a new run, not to overwrite here.")
+
+    document = back.read(run["project_id"], cid)
+    turns = document.get("turns") or []
+    # `_assemble` returns the header *flattened* with `turns` added — there is no `header` key, and
+    # the first draft passed `document.get("header")`, which is `None` and lost `conversation_id`.
+    header = {k: v for k, v in document.items() if k not in ("turns", "incomplete_lines")}
+    body: Dict[str, object] = {"by": who}
+    if (note or "").strip():
+        body["note"] = note.strip()
+    # After the last turn, never at a fixed number: a review is the newest thing that happened to
+    # this conversation, and `seq` is what orders every reader.
+    highest = max((int(t.get("seq", 0)) for t in turns), default=0)
+    back.append(header, Turn(seq=highest + 1, kind=REVIEW, at=_now(), body=body))
+    return {**run, "reviewed_by": who}
+
+
+# ──────────────────────────────────────────────────────────────────────────────────────────────
 # Export — 「JSON, Markdown, CSV 都支援，但用戶可選哪種形式匯出」
 # ──────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -1238,6 +1355,11 @@ _VOICES = {
     CLOSED: ("runner", "closed"),
     RELAXATION: ("runner", "relaxed"),   # unless the turn names who — see `_voice_of`
     NOTE: ("runner", "noted"),
+    # A review is always a person's: it is reachable only from the command line and refused without
+    # a name. Left out of this table it would fall through to `runner`, and an export would file
+    # somebody's sign-off under the machine — the exact defect CHG-20260828-03 fixed one kind over,
+    # in a document whose whole purpose is keeping those two apart (CHG-20260828-21).
+    REVIEW: ("operator", "reviewed"),
 }
 
 
