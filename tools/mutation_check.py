@@ -648,6 +648,69 @@ MUTATIONS: List[Mutation] = [
         '        if keywords & TEXT_SWITCHES:',
         'tests/test_subprocess_codecs.py'),
 
+    # ── CHG-20260830-01: the console's network boundary ────────────────────────────────────────
+    #
+    # `_guard` is the only thing between a local HTTP server holding an operator token and whatever
+    # else is running on the machine. Measured the way CHG-20260828-24's acceptance said it should
+    # have been: pointed at the existing test file, and the ones that come back NOT CAUGHT are the
+    # holes — no second instrument.
+
+    Mutation(
+        'console', 'a non-loopback Host reaches the router, so DNS rebinding works again',
+        SRC / 'server.py',
+        '            if not _loopback_host(self.headers.get("Host")):',
+        '            if False:',
+        'tests/test_server.py'),
+
+    Mutation(
+        'console', 'the shell is served to any Host at all',
+        SRC / 'server.py',
+        '                return _loopback_host(self.headers.get("Host")) or self._refuse_host()',
+        '                return True',
+        'tests/test_server.py'),
+
+    Mutation(
+        'console', 'a cross-origin request is answered',
+        SRC / 'server.py',
+        '            if origin and not _loopback_origin(origin):',
+        '            if False:',
+        'tests/test_server.py'),
+
+    Mutation(
+        'console', 'no operator token is needed',
+        SRC / 'server.py',
+        '            if not operator.accepts(presented):',
+        '            if False:',
+        'tests/test_server.py'),
+
+    Mutation(
+        'console', 'the token is compared with == , leaking its prefix by timing',
+        SRC / 'server.py',
+        '        return bool(presented) and secrets.compare_digest(presented, self.token)',
+        '        return bool(presented) and presented == self.token',
+        'tests/test_server.py'),
+
+    Mutation(
+        'console', 'every route takes the token from the query string, not only the stream',
+        SRC / 'server.py',
+        '            if presented is None and urlsplit(self.path).path == "/run/events":',
+        '            if presented is None:',
+        'tests/test_server.py'),
+
+    Mutation(
+        'console', 'a Host with a port stops matching, so the console refuses itself',
+        SRC / 'server.py',
+        '        host = host.rsplit(":", 1)[0]',
+        '        host = host',
+        'tests/test_server.py'),
+
+    Mutation(
+        'console', 'a body that is not JSON comes back as a traceback',
+        SRC / 'server.py',
+        '            except ValueError as exc:\n                raise ServerError(f"the request body is not JSON: {exc}")',
+        '            except TypeError as exc:\n                raise ServerError(f"the request body is not JSON: {exc}")',
+        'tests/test_server.py'),
+
     # ── CHG-20260828-24: the model store ───────────────────────────────────────────────────────
     #
     # Measured before writing: TEN OF TEN were already pinned. No hole was found, and these entries
