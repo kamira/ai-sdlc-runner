@@ -11,7 +11,7 @@ The flow and the governance are this repository's own, in two files anyone can r
 | File | What it holds |
 | --- | --- |
 | [`policy.py`](src/ai_sdlc_runner/policy.py) | the governance: roles and their capabilities, ten gates × three risk grades, the never-automated actions, the review seats and how their verdicts are adjudicated |
-| [`graph.py`](src/ai_sdlc_runner/graph.py) | the flow: 28 nodes, one kind of work each, with the module loop, the bounded retry, and the feedback edge back to PM |
+| [`graph.py`](src/ai_sdlc_runner/graph.py) | the flow: 29 nodes, one kind of work each, with the module loop, the bounded retry, and the feedback edge back to PM |
 
 Everything else serves those two: [`engine.py`](src/ai_sdlc_runner/engine.py) walks the flow and
 enforces the policy, [`workorder.py`](src/ai_sdlc_runner/workorder.py) renders the closed-schema
@@ -52,7 +52,7 @@ agent_retries: 0                  # retries are for a backend that FAILED TO ANS
 
 ## The flow
 
-28 nodes. Each does **one kind of work**, which is what decides where the boundaries fall: building,
+29 nodes. Each does **one kind of work**, which is what decides where the boundaries fall: building,
 verifying your own work, and having it reviewed are three kinds of work, so they are three nodes.
 
 ```
@@ -79,9 +79,11 @@ intake  →  intake_review        the seats read the requirement — before anyt
 next_module ─┬─ module → engineer_build            one engineer, one small module
              │             └─→ engineer_selfverify ◆self_verify  its own work, never the last word
              │                    └─→ lead_task_review ◆task_review
-             │                           ├─ pass → record_module ──→ next_module
-             │                           └─ fail → fix_pass → re_review
-             │                                                  ├─ pass → record_module
+             │                           ├─ pass → module_built ─┬─ yes → record_module ─→ next_module
+             │                           │                       └─ no ────────────────→ next_module
+             │                           └─ fail → fix_pass → re_review    (nothing built, nothing
+             │                                                  │           recorded)
+             │                                                  ├─ pass → module_built
              │                                                  └─ fail → halt_second_fail  ■
              │                                       (bounded: exactly one fix pass)
              │
@@ -111,7 +113,7 @@ Three shapes carry most of the meaning and are explicit rather than flattened:
 - **the feedback loop** — user feedback returns to PM, so the flow closes rather than ends.
 
 ```bash
-runner flow      # print all 28 nodes, their roles, gates and branches
+runner flow      # print all 29 nodes, their roles, gates and branches
 ```
 
 ---
@@ -498,7 +500,7 @@ that file is in**, not against your shell — so an example works the same wheth
 the repository root, from inside the example, or from somewhere else entirely. See
 [Where the agent runs](#where-the-agent-runs) if you keep your own `runner.yaml`.
 
-That **visits 21 of the 28 nodes** — five are failure paths a green run never takes, and two
+That **visits 22 of the 29 nodes** — five are failure paths a green run never takes, and two
 (`sub_plan`, `reconcile`) are the second planning tier, which a single-workstream plan skips —
 asks 17 questions, writes a real `examples/minimal/greet.py` beside the agent that wrote it, and
 finishes. It is three
@@ -576,7 +578,7 @@ one-instruction, one-server demo had the same bug and looked fine.
 
 ```
 src/ai_sdlc_runner/
-  graph.py        the flow: 28 nodes, their modes, gates and branches
+  graph.py        the flow: 29 nodes, their modes, gates and branches
   policy.py       the governance: roles, gates × risk, permanent halts, seats, adjudication
   engine.py       walks the flow, enforces the policy, opens one session per ask
   workorder.py    the closed-schema order every ask receives
@@ -696,7 +698,7 @@ first one winning — so two of them disagreeing inside one answer resolves sile
 ## Testing
 
 ```bash
-pytest -q          # 1596 tests
+pytest -q          # 1605 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

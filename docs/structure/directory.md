@@ -19,7 +19,7 @@ ai-sdlc-runner/
 │   └── ledger_check.py        # this repo's own ledger lint; CHG-20260823-01
 ├── src/ai_sdlc_runner/
 │   ├── policy.py              # THE GOVERNANCE: roles, capabilities, gates, seats, permanent halts
-│   ├── graph.py               # THE FLOW: 28 nodes, one kind of work each, designed from the flowchart
+│   ├── graph.py               # THE FLOW: 29 nodes, one kind of work each, designed from the flowchart
 │   ├── engine.py              # walks the flow; one session per ask, opened and closed around it
 │   ├── workorder.py           # renders one node's order: closed schema, no harness-specific field
 │   ├── effects.py             # ordered effects, each admitted only if probeable
