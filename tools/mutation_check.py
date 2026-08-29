@@ -648,6 +648,32 @@ MUTATIONS: List[Mutation] = [
         '        if keywords & TEXT_SWITCHES:',
         'tests/test_subprocess_codecs.py'),
 
+    # ── CHG-20260828-19: the file half of the same question ───────────────────────────
+
+    Mutation(
+        # The helper the file survey EXEMPTS. Most file I/O here goes through it, so if its default
+        # stopped naming a codec the survey would go on quietly exempting it — the exemption is
+        # load-bearing and had nothing checking it until this mutation had nowhere else to land.
+        'codecs', 'the file helper the survey trusts stops defaulting to utf-8',
+        SRC / 'paths.py',
+        '''def read_text(path: str | Path, encoding: str = "utf-8") -> str:''',
+        '''def read_text(path: str | Path, encoding: str = None) -> str:''',
+        'tests/test_subprocess_codecs.py'),
+
+    Mutation(
+        'codecs', 'going through `paths` stops counting as naming a codec',
+        REPO / 'tests' / 'test_subprocess_codecs.py',
+        '''CODEC_BY_DEFAULT = "paths"''',
+        '''CODEC_BY_DEFAULT = "not-paths"''',
+        'tests/test_subprocess_codecs.py'),
+
+    Mutation(
+        'codecs', 'the file survey stops looking at bare open() as well',
+        REPO / 'tests' / 'test_subprocess_codecs.py',
+        '        if name == "open" and receiver not in (None, "io"):',
+        '        if name == "open":',
+        'tests/test_subprocess_codecs.py'),
+
     # ── CHG-20260828-18: a killed run does not leave the tree mutated ──────────────────
     #
     # Every one of these anchors into `mutation_recovery.py` rather than into this file. A

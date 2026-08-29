@@ -15,6 +15,7 @@ hand-maintained list stays correct-looking while the thing it describes moves.
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
 from typing import List, Tuple
 
@@ -152,3 +153,179 @@ def test_a_launcher_reached_through_a_variable_is_still_caught(tmp_path):
                         encoding="utf-8")
     (line, keywords), = _text_mode_calls(indirect)
     assert "encoding" not in keywords
+
+
+# ── the same question one layer over: files, not pipes (CHG-20260828-19) ───────────────────────
+#
+# ACC-20260828-16 reserved this and marked it checked-by-reading: "File I/O in this repository
+# passes encoding="utf-8" explicitly, which is why nothing else surfaced. Nothing exercises that
+# claim." It was true. It is now exercised.
+#
+# `Path.read_text()` and a bare `open()` in text mode decode with the caller's locale, exactly as
+# `subprocess` does. The difference is that they raise in the calling thread, so the failure is
+# loud rather than a silent empty read — which makes this the cheaper half of the same defect, not
+# a different one.
+
+#: Reading or writing text. `read_bytes`/`write_bytes` and any `"b"` mode are excluded: no codec is
+#: involved, so there is nothing to name.
+FILE_CALLS = {"open", "open_", "read_text", "write_text"}
+
+#: `paths.read_text` and `paths.write_text` take `encoding: str = "utf-8"`, so a call that omits it
+#: has still named it. Going through `paths` is the house style — it also enforces the sandbox — and
+#: a rule that flagged it would push people back to bare `open()`.
+CODEC_BY_DEFAULT = "paths"
+
+
+def _file_calls(path: Path) -> List[Tuple[int, str, set]]:
+    """Text-mode file opens in one file, as (line, name, keywords)."""
+    found = []
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            name, receiver = func.attr, getattr(func.value, "id", None)
+        elif isinstance(func, ast.Name):
+            name, receiver = func.id, None
+        else:
+            continue
+        if name not in FILE_CALLS:
+            continue
+        if receiver == CODEC_BY_DEFAULT and name in {"read_text", "write_text"}:
+            continue
+        # `open` is only a file open when nothing or a module this project opens files through is
+        # in front of it. `conversations.py` has `conv.open()`, which opens a conversation record;
+        # the first draft flagged it, which is the name-for-a-constraint mistake again. See
+        # `test_a_method_merely_called_open_is_not_a_file` for the gap this leaves.
+        if name == "open" and receiver not in (None, "io"):
+            continue
+        mode = "".join(a.value for a in node.args
+                       if isinstance(a, ast.Constant) and isinstance(a.value, str))
+        if "b" in mode:
+            continue
+        found.append((node.lineno, f"{receiver + '.' if receiver else ''}{name}", 
+                      {kw.arg for kw in node.keywords if kw.arg}))
+    return found
+
+
+#: `paths.open_` forwards `**kwargs` to `io.open`, so the codec it uses is whichever its caller
+#: named. It is the one place that cannot name one itself, and every caller is checked below.
+FORWARDS_ITS_CALLERS_CODEC = ("src/ai_sdlc_runner/paths.py", "io.open")
+
+
+def test_every_text_file_open_names_its_codec():
+    unnamed = [
+        f"{path.relative_to(REPO).as_posix()}:{line} {name}(" 
+        for path in _sources()
+        for line, name, keywords in _file_calls(path)
+        if "encoding" not in keywords
+        and (path.relative_to(REPO).as_posix(), name) != FORWARDS_ITS_CALLERS_CODEC
+    ]
+    assert not unnamed, (
+        "these decode with the caller's locale, so a UTF-8 file fails to read on a machine whose "
+        "locale is not UTF-8: " + ", ".join(unnamed))
+
+
+def test_the_one_call_that_cannot_name_a_codec_has_no_caller_that_forgets():
+    """`paths.open_` uses its caller's codec, so the guarantee lives at the call sites."""
+    callers = [
+        f"{path.relative_to(REPO).as_posix()}:{line}"
+        for path in _sources()
+        for line, name, keywords in _file_calls(path)
+        if name.endswith("open_") and "encoding" not in keywords
+    ]
+    assert not callers, f"these reach io.open with no codec through paths.open_: {callers}"
+
+
+def test_going_through_paths_counts_as_naming_it(tmp_path):
+    """`paths.read_text(p)` has named UTF-8 — by its signature's default, not at the call."""
+    through = tmp_path / "through.py"
+    through.write_text("from ai_sdlc_runner import paths\n"
+                       "text = paths.read_text('a.json')\n", encoding="utf-8")
+    assert _file_calls(through) == []
+
+
+def test_a_bare_open_in_text_mode_is_caught(tmp_path):
+    bare = tmp_path / "bare.py"
+    bare.write_text("data = open('a.json').read()\n", encoding="utf-8")
+    (line, name, keywords), = _file_calls(bare)
+    assert name == "open" and "encoding" not in keywords
+
+
+def test_a_binary_open_is_not_asked_to_name_a_codec(tmp_path):
+    """There is no codec in play, so requiring one would be cargo cult."""
+    binary = tmp_path / "binary.py"
+    binary.write_text("blob = open('a.png', 'rb').read()\n"
+                      "more = __import__('pathlib').Path('b.png').read_bytes()\n", encoding="utf-8")
+    assert _file_calls(binary) == []
+
+
+def test_a_method_merely_called_open_is_not_a_file(tmp_path):
+    """`conversations.py` has `conv.open()`, which opens a conversation record, not a file.
+
+    The first draft of this survey flagged it — and flagged `paths.read_text` too — which is the
+    same name-for-a-constraint mistake `test_a_keyword_merely_spelled_text_is_not_a_subprocess`
+    exists for, made twice more while investigating the change that was about it.
+
+    **The gap this leaves, stated rather than hidden:** an AST walk cannot tell `conv.open()` from
+    `some_path.open()`, so the attribute form is out of scope and a `Path.open()` in text mode
+    would slip past. Nothing in `src/` or `tools/` uses one — checked, not assumed — and the two
+    forms this project does use, bare `open()` and `paths.open_()`, are both covered.
+    """
+    innocent = tmp_path / "innocent.py"
+    innocent.write_text("class Conversation:\n"
+                        "    def open(self): pass\n"
+                        "conv = Conversation()\n"
+                        "conv.open()\n", encoding="utf-8")
+    assert [c for c in _file_calls(innocent) if c[1] == "conv.open"] == []
+
+
+def test_no_path_open_has_appeared_since(tmp_path):
+    """The gap above is only acceptable while nothing uses the form it cannot see.
+
+    So the claim is checked rather than asserted: `.open(` on anything but `io` or `paths` must be
+    a method, and today the only one is `Conversation.open`. If a `Path.open()` is added, this goes
+    red and whoever added it has to decide whether to widen the rule or route through `paths`.
+    """
+    import re
+    calls = []
+    for path in _sources():
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for found in re.finditer(r"\b(\w+)\.open\(", line):
+                if found.group(1) not in ("io", "paths"):
+                    calls.append(f"{path.relative_to(REPO).as_posix()}:{number} {found.group(0)}")
+    assert calls == [
+        "src/ai_sdlc_runner/conversations.py:916 conv.open(",
+        "src/ai_sdlc_runner/conversations.py:919 conv.open(",
+    ], (
+        "the set of `.open(` calls the AST survey cannot classify has changed. If one of these is a "
+        f"Path, it opens a file with the caller's locale and needs an encoding: {calls}")
+
+
+def test_the_file_survey_finds_the_calls_it_claims_to_find():
+    """A survey that examined nothing passes `test_every_text_file_open_names_its_codec` trivially.
+
+    That is not a hypothetical here: disabling the filter made the mutation come back NOT CAUGHT
+    with fourteen tests green, because an empty list satisfies `assert not unnamed`. The subprocess
+    half of this file already had this floor; the file half shipped without it for one run.
+    """
+    counted = sum(len(_file_calls(path)) for path in _sources())
+    assert counted >= 20, f"only {counted} text file opens found; the walk is not reaching them"
+
+
+def test_the_helpers_this_survey_trusts_really_do_default_to_utf8():
+    """`_file_calls` exempts `paths.read_text`/`write_text` because their signatures name UTF-8.
+
+    Nothing checked that. A survey that exempts a helper on the strength of a default it never reads
+    is trusting a name again — and the exemption is load-bearing, since most file I/O here goes
+    through those two. Found by a mutation that had nowhere to land.
+    """
+    import inspect
+    sys.path.insert(0, str(REPO / "src"))
+    from ai_sdlc_runner import paths
+
+    for name in ("read_text", "write_text"):
+        parameter = inspect.signature(getattr(paths, name)).parameters["encoding"]
+        assert parameter.default == "utf-8", (
+            f"paths.{name} defaults to {parameter.default!r}, so every call that omits `encoding` "
+            f"— which this survey exempts — decodes with the caller's locale")
