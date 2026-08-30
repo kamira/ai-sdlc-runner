@@ -152,8 +152,13 @@ def test_the_refusal_shows_the_path_a_person_would_type(tmp_path, monkeypatch):
     assert paths.PREFIX not in said, f"the prefix reached the operator: {said}"
     assert paths.PREFIX.replace("\\", "\\\\") not in said, (
         f"the doubled prefix reached the operator: {said}")
-    # And what is left is the path itself, not a stump of one.
-    assert str(tmp_path)[:2] in said, "the drive letter was eaten along with the prefix"
+    # And what is left is the path itself, not a stump of one. `str(tmp_path)[:2] in said` was the
+    # first version of this line and did not say that: the mangled output `'\\\C:\...'` contains the
+    # drive letter too, so all four assertions here passed against the broken `plain_in` this change
+    # replaced. The path has to *begin* where the quote ends (CHG-20260830-06, defect seat).
+    assert "'" + str(tmp_path)[:2] in said, (
+        f"a stump was left where the prefix was cut, so this is still not a path anybody can type: "
+        f"{said}")
     assert "unable to open database file" in said, "the driver's reason must survive the stripping"
 
 

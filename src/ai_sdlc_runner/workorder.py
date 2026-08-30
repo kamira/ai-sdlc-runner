@@ -203,11 +203,7 @@ def render(node, node_spec: Mapping[str, object], verdict: Mapping[str, object],
         "workdir": node_spec["workdir"],
     }
     if tuple(sorted(order)) != tuple(sorted(WORK_ORDER_FIELDS)):
-        # The `# pragma: no cover` that used to sit here was the code saying nothing drove this
-        # guard, and CHG-20260828-23 made that argument at length while leaving the annotation in
-        # place — an annotation outliving its truth, inside the change about annotations outliving
-        # their truth. `test_an_order_missing_a_contract_field_is_refused_rather_than_dispatched`
-        # drives it now, so it is gone (CHG-20260830-05, found by the review panel).
+        # Driven by `test_an_order_missing_a_contract_field_is_refused_rather_than_dispatched`.
         raise WorkOrderError(
             f"rendered order does not match the closed schema: {sorted(order)}")
     return order

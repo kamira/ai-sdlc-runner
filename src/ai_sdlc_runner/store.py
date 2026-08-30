@@ -146,7 +146,7 @@ def connect(path: str | Path) -> sqlite3.Connection:
         _migrate(db)
     except sqlite3.DatabaseError as exc:
         db.close()
-        raise StoreError(f"{file} could not be migrated: {exc}")
+        raise StoreError(f"{file} could not be migrated: {paths.plain_in(str(exc))}")
     return db
 
 

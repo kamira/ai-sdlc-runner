@@ -144,7 +144,7 @@ class Store:
                 # merely too long, about a directory that exists — which is the most misleading
                 # error in this whole module, and the one that cost an hour to read correctly.
                 raise AttachmentError(
-                    f"could not store {filename!r} at {target}: {exc}. "
+                    f"could not store {filename!r} at {target}: {paths.plain_in(str(exc))}. "
                     f"The path is {len(str(target.resolve()))} characters; Windows refuses past 260 "
                     f"and reports it as a missing file. Run the project from a shorter path, or "
                     f"point --attachments somewhere shallower.")

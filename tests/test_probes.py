@@ -242,8 +242,10 @@ def test_a_git_status_that_fails_is_unanswerable_not_a_clean_tree(tmp_path):
 def test_a_probe_that_times_out_says_so_rather_than_answering(repo, py_stub):
     """A timeout is the one failure where the world is least knowable, so it must not be guessed.
 
-    Driven through `pr_open_for`, whose command is a parameter — the only probe whose subprocess a
-    test can make slow without making the suite slow.
+    Driven through `probes._run` directly, with a stub command that sleeps — the only way to make a
+    probe's subprocess slow without making the suite slow. (The docstring said `pr_open_for` while
+    the body called `_run`; a name standing in for what the test does, which is this repository's
+    commonest defect and was still here after the change about it. CHG-20260830-06.)
     """
     slow = py_stub("import time; time.sleep(30)")
     with pytest.raises(probes.ProbeError) as caught:
