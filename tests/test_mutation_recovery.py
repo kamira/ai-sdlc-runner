@@ -20,6 +20,7 @@ not the thing named. Splitting the file is what makes the red mean what the labe
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -154,6 +155,36 @@ def test_the_record_is_written_before_the_mutation_not_after(sentinel, source, m
     assert "keep ANCHOR keep" in seen["record"], "the record must hold the text to put back"
 
 
+def test_the_record_exists_before_the_file_is_touched(sentinel, source, monkeypatch):
+    """The ordering guarantee, observed *between* the two writes rather than after both.
+
+    `test_the_record_is_written_before_the_mutation_not_after` above looks at the world when
+    `_pytest` runs, by which point `begin` and `write` have both happened — in either order. So it
+    passes against the inverted body it exists to reject: swapping the two lines in `apply` left the
+    whole file green, while the harness reported `CAUGHT` because of a red the sentinel's own
+    presence produced (CHG-20260830-07, defect seat).
+
+    This one intercepts the write of the subject itself and asks what was true at that instant,
+    which is the only moment the guarantee is about: a kill between the two leaves a mutated file
+    with no record of what it used to be.
+    """
+    subject = source("ORIGINAL\n")
+    seen = {}
+    write = mutation_recovery.write
+
+    def spy(path, text):
+        if path == subject:
+            seen["record_was_already_there"] = sentinel.exists()
+        write(path, text)
+
+    monkeypatch.setattr(mutation_recovery, "write", spy)
+    mutation_recovery.apply(subject, "ORIGINAL\n", "MUTATED\n")
+
+    assert seen.get("record_was_already_there") is True, (
+        "the file was mutated before anything recorded how to put it back, so a kill in that window "
+        "strands it")
+
+
 def test_a_run_that_finishes_leaves_no_record_behind(sentinel, source, monkeypatch):
     subject = source("keep ANCHOR keep\n")
     monkeypatch.setattr(mutation_check, "_pytest",
@@ -169,11 +200,31 @@ def test_this_repository_has_no_mutation_in_flight():
 
     A mutation no test catches leaves a green suite over a mutated tree, so neither the suite nor a
     glance at `git status` says anything is wrong. This does.
+
+    ## Why a live owner is skipped rather than failed
+
+    It guards against a **killed** run's leftover. A run that is alive and holding the record is not
+    that, and failing on it made this test fire during every mutation of the `stranded` group —
+    which `_pytest` runs with `-x`, so the run stopped here, at test nine of fifteen, and the four
+    tests that pin the lock never executed. The harness then reported `CAUGHT` for a red that the
+    sentinel's own presence produced. Measured: with a record on disk, pristine source and mutated
+    source both gave `1 failed, 8 passed` with the same single failure, for every mutation in the
+    group (CHG-20260830-07, defect seat).
+
+    So the guarantee is unchanged and the trigger is narrowed to the case it names. A record whose
+    owner is gone still fails, which is the incident this exists for.
     """
+    if mutation_recovery.IN_FLIGHT.exists():
+        owner = mutation_recovery._owner()
+        if mutation_recovery._alive(owner):
+            pytest.skip(f"a mutation run (pid {owner}) is holding this worktree right now, which is "
+                        f"not the killed-run leftover this guards against")
+
     assert not mutation_recovery.IN_FLIGHT.exists(), (
-        f"{mutation_recovery.IN_FLIGHT} exists, so a mutation run was killed and a source file may "
-        f"still be mutated. Run `python3 tools/mutation_check.py` to put it back, or read that "
-        f"file and restore it by hand.")
+        f"{mutation_recovery.IN_FLIGHT} exists and the run that wrote it is gone, so a source file "
+        f"may still be mutated. `python3 tools/mutation_check.py --recover` puts it back. If that "
+        f"refuses, read that file: it holds the original text, so restore by hand from there rather "
+        f"than deleting it.")
 
 
 def test_begin_refuses_when_a_record_is_already_there(sentinel, source):
@@ -213,6 +264,22 @@ _HOLDER = (
 
 
 @pytest.fixture
+def live_pids():
+    """One pid that is running and one that certainly is not, both real.
+
+    The dead one is a process that has actually exited rather than a number chosen for looking
+    unused: a made-up pid can be reused, and a test that depends on it is a test that fails on a
+    busy machine for a reason that has nothing to do with the code.
+    """
+    alive = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    yield alive.pid, dead.pid
+    alive.kill()
+    alive.wait()
+
+
+@pytest.fixture
 def holder(sentinel, source):
     """A first run holding the lock, through `apply` — not a record written by hand.
 
@@ -237,6 +304,55 @@ def holder(sentinel, source):
     for handle in started:
         handle.kill()
         handle.wait()
+
+
+def test_a_live_process_reads_as_alive_and_a_dead_one_as_dead(live_pids):
+    """The floor under every refusal in this module. It had none.
+
+    `ACC-20260830-06` row 16 checked only that `_alive` does not *kill* what it asks about. Nothing
+    checked whether it answers correctly, and it did not: three seats of the round-3 panel found
+    three separate wrong answers in it (CHG-20260830-07).
+    """
+    alive, dead = live_pids
+
+    assert mutation_recovery._alive(alive) is True
+    assert mutation_recovery._alive(dead) is False
+    assert mutation_recovery._alive(os.getpid()) is True
+    assert mutation_recovery._alive(None) is False
+
+
+def test_a_process_this_one_may_not_inspect_reads_as_alive():
+    """Denied is not dead, and reading it as dead is the silent failure this module exists to close.
+
+    Concrete: pid 4 on Windows is the System process. It is certainly running, and `OpenProcess`
+    returns NULL with `ERROR_ACCESS_DENIED` (5) rather than `ERROR_INVALID_PARAMETER` (87), which is
+    what a pid that does not exist gives. The first version collapsed both to `False`, so recovery
+    would have written the original over the live mutated file of any run owned by another user —
+    exactly the failure the owner check was added to prevent.
+
+    The POSIX branch has always had this right (`except PermissionError: return True`); it was the
+    Windows branch, on the platform this module exists for, that did not.
+    """
+    if os.name != "nt":
+        pytest.skip("pid 4 is a Windows thing; the POSIX branch is covered by its own except clause")
+
+    assert mutation_recovery._alive(4) is True, (
+        "a running process this one may not open was reported dead, which lets recovery write over "
+        "a live run's mutated file")
+
+
+def test_a_process_that_exited_with_259_is_not_mistaken_for_a_running_one():
+    """259 is `STILL_ACTIVE`. A process may exit with it, and then it is not still active.
+
+    This is why liveness is asked with `WaitForSingleObject` rather than by comparing
+    `GetExitCodeProcess` against that constant. Wrong, it deadlocks the worktree: `recover` refuses
+    for ever, `main` exits 1 before reaching `--recover`, and the file can only be freed by hand.
+    """
+    exited = subprocess.Popen([sys.executable, "-c", "raise SystemExit(259)"])
+    exited.wait()
+    assert exited.returncode == 259, "the fixture did not produce the code this test is about"
+
+    assert mutation_recovery._alive(exited.pid) is False
 
 
 def test_a_second_run_does_not_recover_over_a_live_run(sentinel, holder):

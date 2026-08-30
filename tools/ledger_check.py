@@ -70,6 +70,12 @@ IN_PROGRESS = (
 ACC_PASS = ("pass", "passes", "passed", "通過")
 ACC_NOT_PASS = (
     "fail", "failed", "not sound", "rejected", "withdrawn", "superseded", "abandoned",
+    # An acceptance that recorded a pass for something later shown not to work. Distinct from
+    # `superseded`, which is about a change being replaced: this one says the verdict itself was
+    # never true. Added when ACC-20260828-24 needed it — it had said **Pass** for a `src/` fix that
+    # did nothing, and correcting only the prose left `_verdict` still reading `pass`, so every
+    # machine audit of this ledger reported it clean (CHG-20260830-07, risk seat).
+    "wrong",
     "未通過", "退回", "已作廢",
 )
 
