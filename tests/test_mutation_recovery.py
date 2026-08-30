@@ -341,12 +341,21 @@ def test_a_process_this_one_may_not_inspect_reads_as_alive():
         "a live run's mutated file")
 
 
+@pytest.mark.skipif(os.name != "nt", reason="259 is a Windows constant, and POSIX masks exit codes "
+                                            "to 8 bits (259 & 0xFF == 3), so the ambiguity this is "
+                                            "about cannot be constructed there")
 def test_a_process_that_exited_with_259_is_not_mistaken_for_a_running_one():
     """259 is `STILL_ACTIVE`. A process may exit with it, and then it is not still active.
 
     This is why liveness is asked with `WaitForSingleObject` rather than by comparing
     `GetExitCodeProcess` against that constant. Wrong, it deadlocks the worktree: `recover` refuses
     for ever, `main` exits 1 before reaching `--recover`, and the file can only be freed by hand.
+
+    Windows-only, and the first version was not. CI caught it: `SystemExit(259)` on Linux gives a
+    return code of **3**, because POSIX keeps the low eight bits. The assertion below is what
+    reported that rather than letting the test pass against a process which had not done the thing
+    the test is named for — a platform truth written as a universal one, which is the same shape as
+    `test_a_cjk_name_is_judged_by_the_platform_that_will_store_it` in `test_paths.py`.
     """
     exited = subprocess.Popen([sys.executable, "-c", "raise SystemExit(259)"])
     exited.wait()
