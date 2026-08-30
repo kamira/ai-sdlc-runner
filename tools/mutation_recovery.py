@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import signal
 from pathlib import Path
 from typing import Optional
@@ -39,6 +40,49 @@ IN_FLIGHT = REPO / "tools" / ".mutation-in-flight.json"
 
 class MutationInFlight(Exception):
     """Another run holds this worktree, or a killed one left its file mutated."""
+
+
+def _alive(pid: Optional[int]) -> bool:
+    """Is that process still running? A record whose owner is alive must not be recovered over.
+
+    `os.kill(pid, 0)` is the usual spelling and is **wrong here**: on Windows, Python's `os.kill`
+    calls `TerminateProcess` for every signal but the two console events, so the liveness probe
+    would kill the run it is asking about. Hence the explicit branch.
+
+    A pid can be reused after the owner exits, and a reused pid reads as alive — so the failure this
+    can still have is a refusal to recover a file a killed run left mutated, which leaves the tree
+    wrong but says so loudly. The opposite failure — recovering over a live run — is the one that
+    was silent, and that is the one this closes.
+    """
+    if pid is None:
+        return False
+    if os.name == "nt":
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION, STILL_ACTIVE = 0x1000, 259
+        kernel32 = ctypes.windll.kernel32
+        # `restype` set deliberately. A HANDLE is pointer-sized, and ctypes defaults every foreign
+        # function to returning `c_int` — so on 64-bit the handle would be silently truncated, and
+        # the call would go on to ask about whatever process that number happened to name.
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True                                    # alive, and owned by somebody else
+    return True
 
 
 def write(path: Path, text: str) -> None:
@@ -57,26 +101,51 @@ def begin(path: Path, original: str, mutated: str) -> None:
     overwriting the first one's record — which would strand the first file with nothing left saying
     how to put it back.
 
+    Exclusive creation alone was **not** enough, and CHG-20260830-05 shipped it claiming it was.
+    `mutation_check.main()` calls `recover()` before its first `apply()`, so the second run deleted
+    the first one's record on the way in and then took the lock uncontended — measured: the second
+    run wrote the original over the first run's *live* mutated file, and the first run went on to
+    report `NOT CAUGHT` for a mutation its tests do catch. The record therefore carries `owner`, and
+    recovery refuses while that pid is alive (CHG-20260830-06, three seats).
+
     This is not hypothetical. A review panel of four agents was run in one worktree while one of
     them was running the harness: two seats read a half-mutated tree, one got a false positive from
     it, and a third measured a 252-test run against source that was changing underneath it. Nothing
     was lost, because the runs happened not to overlap on the same file — the lock is what makes
     that a guarantee rather than luck (CHG-20260830-05, risk seat).
     """
-    record = json.dumps({"path": str(path), "original": original, "mutated": mutated},
-                        ensure_ascii=False)
+    record = json.dumps({"path": str(path), "original": original, "mutated": mutated,
+                         "owner": os.getpid()}, ensure_ascii=False)
     try:
         with io.open(IN_FLIGHT, "x", encoding="utf-8", newline="\n") as handle:
             handle.write(record)
     except FileExistsError:
         raise MutationInFlight(
             f"{IN_FLIGHT.name} already exists, so another mutation run holds this worktree — or a "
-            f"previous one was killed and its file is still mutated. Run this tool again on its own "
-            f"to recover, or read that file and restore by hand. Two runs at once would overwrite "
-            f"the record the first one needs to put its file back.") from None
+            f"previous one was killed and its file is still mutated. Wait for that run, or if none "
+            f"is running, `python tools/mutation_check.py --recover` puts the file back. Two runs "
+            f"at once would overwrite the record the first one needs to put its file back.") from None
+
+
+def _owner() -> Optional[int]:
+    """The pid in the record on disk, or `None` if there is no readable record."""
+    try:
+        return json.loads(io.open(IN_FLIGHT, encoding="utf-8").read()).get("owner")
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 def end() -> None:
+    """Drop the record — but only our own.
+
+    A run that ends does not get to clear a record it did not write. Without this check the first
+    run's `finally: restore()` unlinks the *second* run's record, so a kill of the second one
+    afterwards strands its file with nothing saying how to put it back (CHG-20260830-06, defect
+    seat).
+    """
+    owner = _owner()
+    if owner is not None and owner != os.getpid():
+        return
     IN_FLIGHT.unlink(missing_ok=True)
 
 
@@ -101,6 +170,9 @@ def recover(quiet: bool = False) -> Optional[str]:
 
     Called at startup, and from the signal handler so an interrupted run cleans up immediately
     rather than leaving the tree wrong until somebody happens to run this again.
+
+    Startup is why the owner matters. `main()` calls this before its first `apply()`, so this is the
+    code a *second* run reaches while the first is still mutating — see `begin`.
     """
     if not IN_FLIGHT.exists():
         return None
@@ -109,8 +181,21 @@ def recover(quiet: bool = False) -> Optional[str]:
         path = Path(record["path"])
         original, mutated = record["original"], record["mutated"]
     except (OSError, ValueError, KeyError):
-        end()
+        IN_FLIGHT.unlink(missing_ok=True)
         return "the in-flight record was unreadable and has been discarded; check `git status`"
+
+    owner = record.get("owner")
+    if owner != os.getpid() and _alive(owner):
+        # The whole reason the record carries an owner. "A killed run left this mutated" and
+        # "another run is mutating this right now" look identical on disk, and the recovery that is
+        # right for the first is a corruption of the second: it writes the original over a live
+        # mutated file, so that run's tests measure unmutated source and it reports NOT CAUGHT.
+        said = (f"REFUSING to recover {path.name}: pid {owner} is still running and holds this "
+                f"worktree. Wait for it to finish. If you are certain it is gone, delete "
+                f"{IN_FLIGHT.name} by hand after checking `git status`.")
+        if not quiet:
+            print(f"  {said}")
+        return said
 
     now = io.open(path, encoding="utf-8").read() if path.exists() else None
     if now == mutated:
@@ -128,7 +213,10 @@ def recover(quiet: bool = False) -> Optional[str]:
         if not quiet:
             print(f"  {said}")
         return said
-    end()
+    # Not `end()`. That one refuses to drop a record it does not own, which is right for a run
+    # clearing up after itself and wrong here: recovery's whole job is clearing up after a run that
+    # is *gone*, and the liveness check above has already established that it is.
+    IN_FLIGHT.unlink(missing_ok=True)
     if not quiet:
         print(f"  {said}")
     return said

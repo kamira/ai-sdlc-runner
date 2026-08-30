@@ -30,6 +30,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Sequence
 
+from . import paths
+
 #: How long any single probe may take before it is treated as unanswerable. An unanswerable probe is
 #: never read as "not done": that would re-run an effect that may have succeeded.
 DEFAULT_TIMEOUT = 60
@@ -50,7 +52,7 @@ def _run(argv: Sequence[str], cwd: Optional[str | Path] = None,
         return subprocess.run(list(argv), cwd=str(cwd) if cwd else None, capture_output=True,
                               text=True, encoding="utf-8", errors="replace", timeout=timeout)
     except FileNotFoundError as exc:
-        raise ProbeError(f"{argv[0]!r} is not available: {exc}") from None
+        raise ProbeError(f"{argv[0]!r} is not available: {paths.plain_in(str(exc))}") from None
     except subprocess.TimeoutExpired as exc:
         raise ProbeError(f"{' '.join(argv)} timed out after {timeout}s: {exc}") from None
 

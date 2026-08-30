@@ -938,6 +938,6 @@ def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
                                        db=db, plan_assignments=plan_assignments))
     except OSError as exc:
         raise ServerError(
-            f"cannot listen on {host}:{port} — {exc}. Something is already there. If it is another "
-            f"`runner serve`, stop it first: two runners on one port answer at random, and you "
-            f"would be reading one while driving the other.")
+            f"cannot listen on {host}:{port} — {paths.plain_in(str(exc))}. Something is already "
+            f"there. If it is another `runner serve`, stop it first: two runners on one port "
+            f"answer at random, and you would be reading one while driving the other.")

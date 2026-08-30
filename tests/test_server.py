@@ -1025,6 +1025,11 @@ def test_only_the_event_stream_takes_the_token_from_the_query_string(live):
     than a general one. Widening it to every route left all 56 tests green.
     """
     call, _, operator = live
+    # No header at all, not an empty one: `_guard` only consults the query string when the header is
+    # absent, so `token=""` never reaches the branch this test is about. The first version sent an
+    # empty header, passed, and left the mutation NOT CAUGHT. Restored — CHG-20260830-05 cut this as
+    # padding while adding an explanation of exactly this shape nine lines below, and ACC-20260830-01
+    # row 4 still turns on the distinction (CHG-20260830-06, idiom seat).
     status, body = call("GET", f"/run?token={operator.token}", omit_token=True)
     assert status == 401, "an ordinary route accepted the token from the query string"
     assert "operator token" in body["error"]

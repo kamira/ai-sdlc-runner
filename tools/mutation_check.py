@@ -76,7 +76,8 @@ TOOLS = REPO / "tools"
 #: mutation's `before` string sits in THIS file, so any anchor into it appears twice and the
 #: uniqueness guard correctly refuses it. A file cannot pin guarantees about itself by exact
 #: text, and the recovery is the part that most needed pinning (CHG-20260828-18).
-from mutation_recovery import IN_FLIGHT, apply, recover, restore, restore_on_signal  # noqa: E402
+from mutation_recovery import (IN_FLIGHT, MutationInFlight, apply, recover,  # noqa: E402
+                               restore, restore_on_signal)
 
 
 class Mutation(NamedTuple):
@@ -703,7 +704,7 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         'probes', 'a missing binary answers instead of saying it is not there',
         SRC / 'probes.py',
-        '''        raise ProbeError(f"{argv[0]!r} is not available: {exc}") from None''',
+        '''        raise ProbeError(f"{argv[0]!r} is not available: {paths.plain_in(str(exc))}") from None''',
         '''        return subprocess.CompletedProcess(argv, 0, "", "")''',
         'tests/test_probes.py'),
 
@@ -997,7 +998,15 @@ MUTATIONS: List[Mutation] = [
         # path mid-sentence, so the guard was a no-op wearing the name of the thing it did not do.
         'store', 'the prefix is stripped only from the start again, so a message keeps it',
         SRC / 'paths.py',
-        '    return (text\n            .replace(_DOUBLED_UNC_PREFIX, "\\\\\\\\\\\\\\\\")\n            .replace(_DOUBLED_PREFIX, "")\n            .replace(UNC_PREFIX, "\\\\\\\\")\n            .replace(PREFIX, ""))',
+        # A raw triple-quote, like `store.py`'s anchor twelve lines above: the escaped one-line form
+        # this shipped as put sixteen consecutive backslashes on a 214-character line, which nobody
+        # can check against source by eye — an unverifiable anchor in the file whose meta-test exists
+        # to keep anchors honest (CHG-20260830-06, idiom seat).
+        r'''    return (text
+            .replace(_DOUBLED_UNC_PREFIX, "\\\\\\\\")
+            .replace(_DOUBLED_PREFIX, "")
+            .replace(UNC_PREFIX, "\\\\")
+            .replace(PREFIX, ""))''',
         '    return plain(text)',
         'tests/test_paths.py'),
 
@@ -1007,15 +1016,19 @@ MUTATIONS: List[Mutation] = [
         # `repr(filename)` and doubles every backslash (CHG-20260830-05).
         'store', 'only the spelling a real OS error never uses is stripped',
         SRC / 'paths.py',
-        '            .replace(_DOUBLED_UNC_PREFIX, "\\\\\\\\\\\\\\\\")\n            .replace(_DOUBLED_PREFIX, "")\n',
+        r'''            .replace(_DOUBLED_UNC_PREFIX, "\\\\\\\\")
+            .replace(_DOUBLED_PREFIX, "")
+''',
         '',
         'tests/test_paths.py'),
 
     Mutation(
         'store', r'a UNC path is left as UNC\server\share, which is not a path anybody can use',
         SRC / 'paths.py',
-        '            .replace(UNC_PREFIX, "\\\\\\\\")\n            .replace(PREFIX, ""))',
-        '            .replace(PREFIX, "")\n            .replace(UNC_PREFIX, "\\\\\\\\"))',
+        r'''            .replace(UNC_PREFIX, "\\\\")
+            .replace(PREFIX, ""))''',
+        r'''            .replace(PREFIX, "")
+            .replace(UNC_PREFIX, "\\\\"))''',
         'tests/test_paths.py'),
 
     Mutation(
@@ -1315,7 +1328,9 @@ MUTATIONS: List[Mutation] = [
     # uniqueness guard refuses it — which is why the recovery is next door.
 
     Mutation(
-        'stranded', "two runs in one worktree overwrite each other's way back",
+        # Was "two runs in one worktree overwrite each other's way back" — which this pins only
+        # half of, and the half it does not pin was broken. See CHG-20260830-06 below.
+        'stranded', 'a record already on disk is overwritten instead of refused',
         TOOLS / 'mutation_recovery.py',
         r'''        with io.open(IN_FLIGHT, "x", encoding="utf-8", newline="\n") as handle:''',
         r'''        with io.open(IN_FLIGHT, "w", encoding="utf-8", newline="\n") as handle:''',
@@ -1350,6 +1365,45 @@ MUTATIONS: List[Mutation] = [
         """    write(path, original)
     end()""",
         """    write(path, original)""",
+        'tests/test_mutation_recovery.py'),
+
+    # ── CHG-20260830-06: exclusive creation was not the lock ──────────────────────────────────
+    #
+    # The entry above says two runs cannot overwrite each other's way back, and for one round that
+    # was false while its mutation came back CAUGHT: `main()` calls `recover()` before its first
+    # `apply()`, so the second run cleared the first one's record on the way in and never reached
+    # the exclusive create. The test carrying the claim called `begin` twice in one process — the
+    # path no real second run takes. Three seats of the CHG-20260830-05 panel found it, one by veto.
+
+    Mutation(
+        'stranded', 'a second run recovers over a live run and reports on unmutated source',
+        TOOLS / 'mutation_recovery.py',
+        '    if owner != os.getpid() and _alive(owner):',
+        '    if False:',
+        'tests/test_mutation_recovery.py'),
+
+    Mutation(
+        'stranded', 'a finishing run deletes a record another run is relying on',
+        TOOLS / 'mutation_recovery.py',
+        '    if owner is not None and owner != os.getpid():',
+        '    if False:',
+        'tests/test_mutation_recovery.py'),
+
+    Mutation(
+        'stranded', 'every process reads as dead, so the owner check never refuses anything',
+        TOOLS / 'mutation_recovery.py',
+        """    if pid is None:
+        return False""",
+        """    if pid is None:
+        return False
+    return False""",
+        'tests/test_mutation_recovery.py'),
+
+    Mutation(
+        'stranded', 'the record stops saying who owns it, so no later run can tell',
+        TOOLS / 'mutation_recovery.py',
+        '                         "owner": os.getpid()}, ensure_ascii=False)',
+        '                         }, ensure_ascii=False)',
         'tests/test_mutation_recovery.py'),
 
     # ── CHG-20260828-17: the two records are read, not just counted ────────────────────────────
@@ -1694,12 +1748,23 @@ def run(mutation: Mutation, baseline: Dict[str, bool]) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--only", help="run one group only (e.g. `importer`)")
+    parser.add_argument("--recover", action="store_true",
+                        help="put back a file a killed run left mutated, then stop")
     args = parser.parse_args()
 
     # Before anything else. A tree left mutated by a previous run would make every baseline below
     # a measurement of the wrong code.
     restore_on_signal()
-    recover()
+    said = recover()
+    if said and said.startswith("REFUSING"):
+        # Refuse here rather than at the first `apply()`. That is minutes of baselines away, and
+        # `apply` sits outside `run`'s try/finally, so the exception left main() as a traceback with
+        # no summary line at all (CHG-20260830-06, defect seat).
+        raise SystemExit(1)
+    if args.recover:
+        if said is None:
+            print("nothing in flight; the tree is as it should be")
+        return 0
 
     chosen = [m for m in MUTATIONS if not args.only or m.group == args.only]
     if not chosen:
@@ -1714,7 +1779,12 @@ def main() -> int:
         baseline[tests] = green
         print(f"  {'baseline ok  ' if green else 'BASELINE RED '}{tests}")
     print()
-    missed = [m for m in chosen if not run(m, baseline)]
+    try:
+        missed = [m for m in chosen if not run(m, baseline)]
+    except MutationInFlight as blocked:
+        # The tool's own refusal shape, not a traceback -- this is an operator telling
+        # them what to do, the same as the unknown-group refusal below.
+        raise SystemExit(str(blocked)) from None
     print()
     if missed:
         print(f"{len(missed)} of {len(chosen)} NOT caught — a test names a guarantee it does not "

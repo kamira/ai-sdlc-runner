@@ -220,7 +220,8 @@ def plain(path: str | Path) -> str:
 
 #: The prefixes as they appear **inside `str(OSError)`**, where `repr(filename)` has doubled every
 #: backslash (CHG-20260830-05). `\\?\C:\x` is quoted back as `'\\\\?\\C:\\x'`, so the four-character
-#: prefix `plain` knows is not in that text at all — what is in it is a six-character one.
+#: prefix `plain` knows is not in that text at all — what is in it is a seven-character one, and the
+#: UNC form is twelve. Both counted, not eyeballed: the first version of this line said six.
 _DOUBLED_PREFIX = PREFIX.replace("\\", "\\\\")
 _DOUBLED_UNC_PREFIX = UNC_PREFIX.replace("\\", "\\\\")
 
@@ -246,9 +247,8 @@ def plain_in(text: str) -> str:
     Longest first, in both spellings: `\\?\UNC\server\share` starts with `\\?\` too, so stripping
     the shorter prefix first would leave `UNC\server\share`, which is not a path anybody can use.
 
-    A `Path` is refused by name. `plain` takes `str | Path` and this one reads as its sibling, but
-    here the name resolves to `Path.replace` — the filesystem **rename** — and is saved only by
-    arity, so the failure is a confusing `TypeError` about argument counts. A path is `plain`'s job.
+    A `Path` is refused by name, because here `.replace` is the filesystem **rename**. A path is
+    `plain`'s job — see `test_plain_in_is_for_text_and_says_so_when_handed_a_path`.
     """
     if not isinstance(text, str):
         raise TypeError(

@@ -282,7 +282,7 @@ class Trees:
             else:
                 return False
         except OSError as exc:
-            self.not_carried.append(f"{why}: {exc.__class__.__name__}: {exc}")
+            self.not_carried.append(f"{why}: {exc.__class__.__name__}: {paths.plain_in(str(exc))}")
             return False
         return True
 

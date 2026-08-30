@@ -19,6 +19,8 @@ not the thing named. Splitting the file is what makes the red mean what the labe
 """
 from __future__ import annotations
 
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -174,12 +176,14 @@ def test_this_repository_has_no_mutation_in_flight():
         f"file and restore it by hand.")
 
 
-def test_a_second_run_in_the_same_worktree_is_refused(sentinel, source):
-    """The record is the lock. Two runs would overwrite the first one's way back.
+def test_begin_refuses_when_a_record_is_already_there(sentinel, source):
+    """Exclusive creation, on its own — and on its own it is **not** the lock.
 
-    A review panel of four agents ran in one worktree while one of them drove the harness: two seats
-    read a half-mutated tree and one took a false positive from it. Nothing was lost only because
-    the runs did not overlap on the same file (CHG-20260830-05, risk seat).
+    This reaches `begin` directly, which is not the path a second run takes: `mutation_check.main()`
+    calls `recover()` first. Under its old name (`..._a_second_run_in_the_same_worktree_is_refused`)
+    this test was cited as evidence that two runs could not collide, and it could not see that
+    `recover()` was deleting the first run's record on the way in. The scenario it claimed is now
+    driven, through that sequence and against a live owner, by the test below (CHG-20260830-06).
     """
     subject = source("ORIGINAL\n")
     mutation_recovery.begin(subject, "ORIGINAL\n", "MUTATED\n")
@@ -191,8 +195,120 @@ def test_a_second_run_in_the_same_worktree_is_refused(sentinel, source):
     assert "another mutation run" in said or "already exists" in said
     assert "recover" in said, "the refusal has to say how to get out of it"
     # And the first run's way back is intact, which is the thing the lock protects.
-    import json as _json
-    assert _json.loads(sentinel.read_text(encoding="utf-8"))["original"] == "ORIGINAL\n"
+    assert json.loads(sentinel.read_text(encoding="utf-8"))["original"] == "ORIGINAL\n"
+
+
+#: What a first run does and then keeps doing: take the lock, mutate the file, stay alive. Run as a
+#: real child process because both halves of "another run" have to be true — a *different* pid, and
+#: one that is genuinely running. A pid invented by hand is either dead or this process, and those
+#: are the two cases where recovery is supposed to proceed.
+_HOLDER = (
+    "import sys, time, pathlib;"
+    "sys.path.insert(0, sys.argv[1]);"
+    "import mutation_recovery as mr;"
+    "mr.IN_FLIGHT = pathlib.Path(sys.argv[2]);"
+    "mr.apply(pathlib.Path(sys.argv[3]), sys.argv[4], sys.argv[5]);"
+    "print('holding', flush=True);"
+    "time.sleep(60)")
+
+
+@pytest.fixture
+def holder(sentinel, source):
+    """A first run holding the lock, through `apply` — not a record written by hand.
+
+    Writing the record directly was enough to make every assertion below pass while `begin` had
+    stopped recording an owner at all: the fixture supplied the field the code under test was no
+    longer producing. Measured, on the first version of these tests (CHG-20260830-06).
+    """
+    started = []
+
+    def start(original="ORIGINAL\n", mutated="MUTATED\n"):
+        subject = source(original)
+        handle = subprocess.Popen(
+            [sys.executable, "-c", _HOLDER, str(TOOLS), str(sentinel), str(subject),
+             original, mutated],
+            stdout=subprocess.PIPE, text=True)
+        started.append(handle)
+        assert handle.stdout.readline().strip() == "holding", "the holder never took the lock"
+        assert subject.read_text(encoding="utf-8") == mutated
+        return handle, subject
+
+    yield start
+    for handle in started:
+        handle.kill()
+        handle.wait()
+
+
+def test_a_second_run_does_not_recover_over_a_live_run(sentinel, holder):
+    """The sequence every real second run takes, which no test reached before.
+
+    `main()` calls `recover()` before its first `apply()`. A record left by a killed run and a record
+    held by a run that is mutating that file *right now* are identical on disk, so recovery took the
+    second for the first: it wrote the original over a live mutated file, and that run's tests then
+    measured unmutated source and reported `NOT CAUGHT` for a mutation they do catch. Three seats of
+    the CHG-20260830-05 panel found this independently, one of them by veto.
+
+    So the assertion is on the first run's state, not on the second run's return value: its file must
+    still be mutated and its way back must still be on disk.
+    """
+    first, subject = holder()
+
+    said = mutation_recovery.recover(quiet=True)
+
+    assert subject.read_text(encoding="utf-8") == "MUTATED\n", (
+        "recovery wrote over a file a live run was measuring; that run now reports on the wrong "
+        "source")
+    assert sentinel.exists(), "recovery deleted the live run's only way back"
+    assert json.loads(sentinel.read_text(encoding="utf-8"))["owner"] == first.pid
+    assert said and said.startswith("REFUSING"), said
+    assert str(first.pid) in said, "the refusal has to name the run being waited for"
+    # And the lock still holds against the second run, which is what it could not do before.
+    with pytest.raises(mutation_recovery.MutationInFlight):
+        mutation_recovery.begin(subject, "ORIGINAL\n", "MUTATED\n")
+
+
+def test_a_killed_run_is_still_recovered_automatically(sentinel, holder):
+    """The property the owner check must not cost.
+
+    Recovery at startup is the *guarantee* on Windows, where `kill` becomes `TerminateProcess` and no
+    handler fires. Putting recovery behind an explicit flag would have closed the hole above by
+    giving up this — so the owner is checked for liveness rather than for existence, and a dead owner
+    recovers exactly as it did before.
+    """
+    killed, subject = holder()
+    killed.kill()
+    killed.wait()
+
+    said = mutation_recovery.recover(quiet=True)
+
+    assert subject.read_text(encoding="utf-8") == "ORIGINAL\n"
+    assert not sentinel.exists(), "a record that outlives its run makes every later run announce it"
+    assert said == f"restored {subject.name}, which a killed run left mutated"
+
+
+def test_a_run_does_not_drop_a_record_it_does_not_own(sentinel, holder):
+    """The other half of the same collision, and the one that strands a file for good.
+
+    The first run finishes and calls `restore`, whose `end()` cleared whatever record was on disk —
+    by then the *second* run's. A kill of the second run afterwards leaves its file mutated with
+    nothing saying what the original was (CHG-20260830-06, defect seat).
+    """
+    first, subject = holder()
+
+    mutation_recovery.restore(subject, "ORIGINAL\n")
+
+    assert sentinel.exists(), "a finishing run deleted another run's way back"
+    assert json.loads(sentinel.read_text(encoding="utf-8"))["owner"] == first.pid
+
+
+def test_a_run_still_drops_its_own_record(sentinel, source):
+    """Or the refusal above becomes permanent after the first run in any worktree."""
+    subject = source("ORIGINAL\n")
+    mutation_recovery.begin(subject, "ORIGINAL\n", "MUTATED\n")
+
+    mutation_recovery.restore(subject, "ORIGINAL\n")
+
+    assert not sentinel.exists()
 
 
 def test_the_lock_is_released_when_the_run_puts_the_file_back(sentinel, source):

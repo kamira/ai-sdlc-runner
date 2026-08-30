@@ -63,6 +63,11 @@ def test_a_git_command_that_fails_raises_rather_than_passing(repo):
     assert "git checkout" in said, "the refusal must name the command that failed"
     assert said.strip() != "git checkout no-such-branch-anywhere failed:", (
         "the refusal dropped git's own reason, which is the only actionable part")
+
+
+# ── a commit is not done while the tree is dirty ───────────────────────────────────────────────
+
+
 def test_a_commit_over_a_dirty_tree_is_not_finished(repo):
     """Both halves of the probe, deliberately — the comment says why and nothing held it.
 

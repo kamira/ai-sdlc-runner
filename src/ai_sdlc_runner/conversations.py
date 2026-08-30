@@ -359,7 +359,8 @@ class FileBackend(Backend):
             except OSError:
                 pass
             raise TargetError(
-                f"the target could not be written ({type(exc).__name__}: {exc})") from exc
+                f"the target could not be written "
+                f"({type(exc).__name__}: {paths.plain_in(str(exc))})") from exc
 
 
 class SqliteBackend(Backend):
@@ -538,7 +539,8 @@ class SqliteBackend(Backend):
         except (sqlite3.Error, OSError) as exc:
             # Not this conversation's fault: the database is locked, gone, out of room or of a
             # shape this runner cannot write. Every later write would fail the same way.
-            raise TargetError(f"the target could not be written ({type(exc).__name__}: {exc})") \
+            raise TargetError(f"the target could not be written "
+                              f"({type(exc).__name__}: {paths.plain_in(str(exc))})") \
                 from exc
 
 
@@ -762,8 +764,9 @@ def import_file_store(root: str | Path, into: Backend) -> Dict[str, object]:
             # source conversations, which is exactly the defect this replaced. A disk error
             # escaping a *write* is about the place being written, whoever raised it. Source I/O
             # sits in the earlier block and is still refused per conversation.
-            refuse("(the target)", f"{exc}. The import stopped here; nothing after this was "
-                                   f"attempted, and the store is untouched.")
+            refuse("(the target)",
+                   f"{paths.plain_in(str(exc))}. The import stopped here; nothing after this was "
+                   f"attempted, and the store is untouched.")
             return report
         except ConversationError as exc:
             refuse(cid, str(exc))
@@ -968,10 +971,8 @@ class Conversation:
                     json.dumps({"conversation_id": self.id, "project": self.project["name"]},
                                ensure_ascii=False, sort_keys=True) + "\n")
             except OSError as exc:
-                # `plain_in`, like the two sites CHG-20260828-24 named. This was the third, three
-                # lines above one of them, and that change's title said "two messages" — the review
-                # panel counted (CHG-20260830-05). Both paths here go through `paths`, so the error
-                # quotes a prefixed path back and this record is read by a person.
+                # Both paths here go through `paths`, so the error quotes a prefixed path back and
+                # this record is read by a person.
                 self.write_errors.append(
                     f"could not mark the journal: {paths.plain_in(str(exc))}")
         self.turn(OPENED, project=self.project["name"], run=dict(self.header["run"] or {}))

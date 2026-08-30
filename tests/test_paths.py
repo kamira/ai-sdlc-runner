@@ -4,7 +4,12 @@ Every earlier attempt at this defect was tested by asserting the *message* got l
 defect one layer down: a test that reads the words of a refusal proves the words, not the write. So
 each test here either writes a file too long for the plain API and reads it back, or names a limit
 no prefix lifts and shows it refused before anything is created.
+
+The last section is the exception and says so: `plain_in` is a string substitution over driver text,
+and the only way to hold a *survey* of `src/` to the same standard is to give it a floor — a set of
+violations it must find, and a set of correct forms it must not flag.
 """
+import ast
 import io
 import os
 import sqlite3
@@ -467,7 +472,7 @@ def test_the_extended_prefix_is_not_measured_as_a_name(tmp_path):
     paths.check(paths.real(tmp_path / "ordinary.txt"))
 
 
-# --- plain_in: the same stripping, inside a sentence (CHG-20260830-05) ------------------------
+# ── plain_in: the same stripping, inside a sentence (CHG-20260830-05) ─────────────────────────
 #
 # `plain` strips a LEADING prefix, which is what a path has. An OS error is a sentence with a path
 # inside it, so it needs the other function — and the form it carries is the one `repr` produces,
@@ -495,8 +500,15 @@ def test_plain_in_strips_the_prefix_from_a_real_os_error(tmp_path):
 
     assert paths.PREFIX not in said, said
     assert paths.PREFIX.replace("\\", "\\\\") not in said, said
-    # The path survives: a drive letter, not a stump left where the prefix was cut.
-    assert str(tmp_path)[:2] in said
+    # The assertion that separates fixed from broken — and the one the first version of *this* test
+    # did not make. Both checks above pass against the broken output, because it ate the `?` and so
+    # contains neither spelling of the prefix; and `str(tmp_path)[:2] in said` passes too, since
+    # `'\\\C:\...'` contains `C:` as surely as the clean form does. The panel measured all four
+    # assertions green against the body this change replaced. What is true only of the fixed form is
+    # that the quoted path *begins* at the drive letter (CHG-20260830-06, defect seat).
+    assert "'" + str(tmp_path)[:2] in said, (
+        f"something is left where the prefix was cut, so the path still is not one anybody can "
+        f"type: {said}")
     # The driver's reason survives too — but which reason it is belongs to the OS. An earlier
     # version asserted the wording, and CI was right to refuse it: Linux says "Not a directory"
     # where Windows says "No such file", so the test pinned a sentence nobody here writes.
@@ -530,31 +542,154 @@ def test_plain_in_is_for_text_and_says_so_when_handed_a_path():
         paths.plain_in(Path(r"C:\x"))
 
 
-def test_every_recorded_os_error_goes_through_plain_in():
-    """The count this repository got wrong. CHG-20260828-24 said "two messages"; there were three.
+def test_the_doubled_prefixes_are_what_repr_actually_puts_in_the_text():
+    r"""The constants are built by `.replace`, which is an argument. This is the measurement.
 
-    So the number is not counted by hand any more. Any message appended to an operator-facing error
-    list that interpolates an exception must go through `plain_in` — the rule the third site broke
-    while sitting three lines above one of the two that were fixed.
+    Deriving them from `PREFIX` and checking them against `PREFIX` would prove only that `.replace`
+    replaces. What they have to match is the text a real `repr` produces, because that is the only
+    reason they exist — so that is what this compares them against.
+
+    The lengths are here because the comment introducing them states them, and the first version
+    said six for a seven-character constant. A number in a comment that the code contradicts is
+    exactly what the CHG-20260830-05 panel vetoed, one layer down (CHG-20260830-06, idiom seat).
     """
-    import ast
+    assert paths._DOUBLED_PREFIX in repr(paths.PREFIX + r"C:\x")
+    assert paths._DOUBLED_UNC_PREFIX in repr(paths.UNC_PREFIX + r"server\share")
+    assert (len(paths._DOUBLED_PREFIX), len(paths._DOUBLED_UNC_PREFIX)) == (7, 12)
 
+
+#: Exception types whose text can carry a filename, and therefore the extended-length prefix. This
+#: is the first of the two things that puts a handler in scope; `OSError` renders its filename with
+#: `repr`, which is where the doubled spelling comes from in the first place.
+CAN_CARRY_A_PATH = frozenset({
+    "OSError", "IOError", "FileNotFoundError", "PermissionError", "NotADirectoryError",
+    "IsADirectoryError", "FileExistsError", "DatabaseError"})
+
+#: The second. A handler catching bare `Exception` may or may not be receiving an `OSError` and no
+#: static rule can tell — but one that records onto an operator-facing list is writing something a
+#: person reads, so it is in scope whatever it caught.
+OPERATOR_FACING = ("write_errors", "store_errors")
+
+
+def _handler_types(handler):
+    """The exception names a handler catches, unqualified (`sqlite3.DatabaseError` -> DatabaseError)."""
+    if handler.type is None:
+        return set()
+    parts = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    return {ast.unparse(part).rsplit(".", 1)[-1] for part in parts}
+
+
+def _uses_the_exceptions_text(expr, caught):
+    """Does this expression put the exception's **text** in a message?
+
+    Not a substring search for `exc`. The first version of this rule was
+    `"exc" in ast.unparse(argument)`, which is a name standing in for a constraint: it missed every
+    site whose message was built into a variable first, and would have missed any handler that
+    spelled its variable `err`. It reads the binding the handler actually made.
+
+    `type(exc).__name__` and `exc.__class__.__name__` are the class name. No path, so not a use.
+    """
+    if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and expr.func.id == "type":
+        return False
+    if isinstance(expr, ast.Attribute) and expr.attr in {"__name__", "__class__"}:
+        return False
+    if isinstance(expr, ast.Name):
+        return expr.id == caught
+    return any(_uses_the_exceptions_text(child, caught) for child in ast.iter_child_nodes(expr))
+
+
+def _goes_through_plain_in(expr):
+    return any(isinstance(node, ast.Call) and ast.unparse(node.func).endswith("plain_in")
+               for node in ast.walk(expr))
+
+
+def _unstripped_sites(source, label="<source>"):
+    """Every place this source lets an exception's text reach a person with the prefix still on it."""
+    found = []
+    for handler in (n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.ExceptHandler)):
+        if handler.name is None:
+            continue
+        records = any(
+            isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "append" and ast.unparse(n.func.value).endswith(OPERATOR_FACING)
+            for n in ast.walk(handler))
+        if not (_handler_types(handler) & CAN_CARRY_A_PATH or records):
+            continue
+        for part in (n for n in ast.walk(handler) if isinstance(n, ast.FormattedValue)):
+            if (_uses_the_exceptions_text(part.value, handler.name)
+                    and not _goes_through_plain_in(part.value)):
+                found.append(f"{label}:{part.lineno} {ast.unparse(part.value)[:50]}")
+    return found
+
+
+#: One violation in each shape the rule has to see. The first is the shape the old rule did catch;
+#: the second is `conversations.py:1113`, which it did not, because the message was built into a
+#: variable before being appended; the third is the same site with its exception variable renamed,
+#: which defeats any rule that matches on the identifier `exc`.
+BREAKS_THE_RULE = '''
+def a():
+    try:
+        work()
+    except OSError as exc:
+        self.write_errors.append(f"could not: {exc}")
+
+def b():
+    try:
+        work()
+    except Exception as exc:
+        note = f"could not: {exc}"
+        self.write_errors.append(note)
+
+def c():
+    try:
+        work()
+    except OSError as err:
+        raise StoreError(f"could not: {err}")
+'''
+
+#: The same three, corrected. A rule that flagged these too would be unusable, and a survey whose
+#: negative half is untested is a survey that could be flagging everything.
+KEEPS_THE_RULE = BREAKS_THE_RULE.replace("{exc}", "{paths.plain_in(str(exc))}") \
+                                .replace("{err}", "{paths.plain_in(str(err))}")
+
+
+def test_the_rule_finds_the_violations_it_claims_to_find():
+    """The floor. Without it the survey below passes by examining nothing.
+
+    This is not hypothetical here. The first version of the survey reached exactly one of the three
+    sites in `src/` and was recorded as *"the count is no longer made by hand"*; three seats of the
+    CHG-20260830-05 panel found that independently (CHG-20260830-06).
+    """
+    caught = _unstripped_sites(BREAKS_THE_RULE, "fixture")
+
+    assert len(caught) == 3, f"the rule sees {len(caught)} of 3 violations: {caught}"
+    assert not _unstripped_sites(KEEPS_THE_RULE, "fixture"), "the rule flags corrected code"
+
+
+def test_the_rule_is_not_satisfied_by_the_name_of_the_variable():
+    """Case `c` above, on its own, because it is the one that makes this a constraint and not a
+    keyword match — and because a rule keyed on a name is the defect this file exists to record."""
+    renamed = BREAKS_THE_RULE.split("def c():")[1]
+
+    assert _unstripped_sites("def c():" + renamed, "fixture"), (
+        "renaming the exception variable defeated the rule")
+
+
+def test_every_exception_a_person_reads_goes_through_plain_in():
+    """The survey. CHG-20260828-24 said "two messages"; there were three, and then nine more.
+
+    A handler is in scope when it catches something that can carry a filename, or when it records
+    onto an operator-facing list. Broad `except Exception` handlers that do neither are **not**
+    covered, and that is a real gap rather than a tidy one: **35** such sites exist, measured, most
+    of them in `cli.py`. Routing all of them was tried first and is what produced the number; it
+    also produced a source file that no longer parsed, which is why the boundary is where it is.
+    Disclosed in ACC-20260830-06 rather than papered over.
+    """
     root = Path(__file__).resolve().parents[1] / "src" / "ai_sdlc_runner"
     unstripped = []
     for module in sorted(root.glob("*.py")):
-        tree = ast.parse(module.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
-                continue
-            if node.func.attr != "append":
-                continue
-            target = ast.unparse(node.func.value)
-            if not target.endswith(("write_errors", "store_errors")):
-                continue
-            argument = ast.unparse(node.args[0]) if node.args else ""
-            if "exc" in argument and "plain_in" not in argument:
-                unstripped.append(f"{module.name}:{node.lineno} {argument[:60]}")
+        unstripped += _unstripped_sites(module.read_text(encoding="utf-8"), module.name)
 
     assert not unstripped, (
-        "these record an exception for a person without stripping the extended-length prefix: "
+        "these let an exception reach a person with the extended-length prefix still on it: "
         + ", ".join(unstripped))
