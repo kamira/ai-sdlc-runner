@@ -987,7 +987,7 @@ def test_the_models_panel_is_drawn_and_can_say_a_model_is_dispatched_nowhere():
 # --- the three the mutation group found unpinned (CHG-20260830-01) ----------------------------
 
 
-def test_the_token_is_compared_in_constant_time(tmp_path):
+def test_the_token_is_compared_in_constant_time(tmp_path, monkeypatch):
     """`==` on a secret leaks its prefix by timing, and no behavioural test can see that.
 
     So the mechanism is named rather than the symptom: `accepts` must go through
@@ -1003,12 +1003,9 @@ def test_the_token_is_compared_in_constant_time(tmp_path):
         seen.append((presented, known))
         return real(presented, known)
 
-    server.secrets.compare_digest = spy
-    try:
-        assert operator.accepts(operator.token) is True
-        assert operator.accepts("not-the-token") is False
-    finally:
-        server.secrets.compare_digest = real
+    monkeypatch.setattr(server.secrets, "compare_digest", spy)
+    assert operator.accepts(operator.token) is True
+    assert operator.accepts("not-the-token") is False
 
     assert seen, "the token was compared without secrets.compare_digest"
     assert all(known == operator.token for _, known in seen)
@@ -1028,9 +1025,6 @@ def test_only_the_event_stream_takes_the_token_from_the_query_string(live):
     than a general one. Widening it to every route left all 56 tests green.
     """
     call, _, operator = live
-    # No header at all, not an empty one: `_guard` only consults the query string when the header
-    # is absent, so `token=""` never reaches the branch this test is about. The first version of
-    # this test sent an empty header, passed, and left the mutation NOT CAUGHT.
     status, body = call("GET", f"/run?token={operator.token}", omit_token=True)
     assert status == 401, "an ordinary route accepted the token from the query string"
     assert "operator token" in body["error"]
@@ -1041,7 +1035,10 @@ def test_a_body_that_is_not_json_is_refused_in_words(live):
     green while a malformed body became a 500 — the shape `cmd_serve` catching only `StoreError`
     had, one layer out."""
     call, _, _ = live
-    status, payload = call("POST", "/run/instruction", raw=b"{not json at all")
+    # `/run/instruct`, not `/run/instruction`. The first version posted to a route that does not
+    # exist and passed anyway, because `do_POST` parses the body before dispatching — so it
+    # exercised generic parsing rather than the route its name claims (CHG-20260830-05).
+    status, payload = call("POST", "/run/instruct", raw=b"{not json at all")
 
     assert status != 500, "a malformed body reached the operator as a server error"
     assert "not JSON" in payload["error"]

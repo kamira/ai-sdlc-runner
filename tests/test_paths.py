@@ -465,3 +465,92 @@ def test_the_extended_prefix_is_not_measured_as_a_name(tmp_path):
     r"""`\\?\` arrives as parts[0] on Windows. Harmless at real lengths, but it is not a name and
     counting it as one is the sort of thing that becomes wrong later."""
     paths.check(paths.real(tmp_path / "ordinary.txt"))
+
+
+# --- plain_in: the same stripping, inside a sentence (CHG-20260830-05) ------------------------
+#
+# `plain` strips a LEADING prefix, which is what a path has. An OS error is a sentence with a path
+# inside it, so it needs the other function — and the form it carries is the one `repr` produces,
+# with every backslash doubled. The first version handled only the undoubled spelling and therefore
+# did not work on any real error at all; the review panel found that, not the suite.
+
+
+def test_plain_in_strips_the_prefix_from_a_real_os_error(tmp_path):
+    r"""Driven by an actual OSError, not by a string shaped like one.
+
+    This is the case that matters and the one the first version failed: `str(OSError)` embeds
+    `repr(filename)`, so the text carries `'\\?\C:\…'` and the four-character prefix matches
+    starting at the third backslash. Removing it left three backslashes and a drive letter.
+    """
+    blocker = tmp_path / "a-file"
+    blocker.write_text("x", encoding="utf-8")
+
+    try:
+        paths.write_text(blocker / "under-a-file.json", "hi")
+    except OSError as exc:
+        said = paths.plain_in(str(exc))
+    else:
+        pytest.fail("writing under a regular file did not raise; the fixture is wrong")
+
+    assert paths.PREFIX not in said, said
+    assert paths.PREFIX.replace("\\", "\\\\") not in said, said
+    # The path survives: a drive letter, not a stump left where the prefix was cut.
+    assert str(tmp_path)[:2] in said
+    assert "No such file or directory" in said or "cannot find the path" in said.lower()
+
+
+def test_plain_in_takes_both_spellings():
+    r"""Undoubled for anything that quotes a path plainly; doubled for `repr`."""
+    inside = paths.PREFIX + r"C:\x"
+    assert paths.plain_in(f"at {inside} end") == r"at C:\x end"
+    assert paths.plain_in(f"at {inside!r} end") == "at 'C:" + "\\" * 2 + "x' end"
+    assert paths.plain_in("nothing to strip") == "nothing to strip"
+
+
+def test_plain_in_puts_a_unc_path_back_in_both_spellings():
+    r"""`\?\UNC\srv\share` starts with `\?\` too, so the longer prefix has to go first — in each
+    spelling. Strip the shorter one and the reader is handed `UNC\srv\share`, which is not a path."""
+    unc = paths.UNC_PREFIX + r"srv\share"
+    assert paths.plain_in(f"at {unc} end") == "at " + "\\" * 2 + r"srv\share end"
+    assert paths.plain_in(f"at {unc!r} end") == "at '" + "\\" * 4 + "srv" + "\\" * 2 + "share' end"
+    assert "UNC" not in paths.plain_in(f"at {unc!r} end")
+
+
+def test_plain_in_is_for_text_and_says_so_when_handed_a_path():
+    """`plain` takes `str | Path`; this one takes a sentence, and `Path.replace` is a file rename.
+
+    Without the refusal it fails as `TypeError: Path.replace() takes 2 positional arguments` —
+    saved only by arity, and confusing about which function was wrong.
+    """
+    with pytest.raises(TypeError, match="plain"):
+        paths.plain_in(Path(r"C:\x"))
+
+
+def test_every_recorded_os_error_goes_through_plain_in():
+    """The count this repository got wrong. CHG-20260828-24 said "two messages"; there were three.
+
+    So the number is not counted by hand any more. Any message appended to an operator-facing error
+    list that interpolates an exception must go through `plain_in` — the rule the third site broke
+    while sitting three lines above one of the two that were fixed.
+    """
+    import ast
+
+    root = Path(__file__).resolve().parents[1] / "src" / "ai_sdlc_runner"
+    unstripped = []
+    for module in sorted(root.glob("*.py")):
+        tree = ast.parse(module.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            if node.func.attr != "append":
+                continue
+            target = ast.unparse(node.func.value)
+            if not target.endswith(("write_errors", "store_errors")):
+                continue
+            argument = ast.unparse(node.args[0]) if node.args else ""
+            if "exc" in argument and "plain_in" not in argument:
+                unstripped.append(f"{module.name}:{node.lineno} {argument[:60]}")
+
+    assert not unstripped, (
+        "these record an exception for a person without stripping the extended-length prefix: "
+        + ", ".join(unstripped))

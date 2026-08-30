@@ -742,14 +742,39 @@ MUTATIONS: List[Mutation] = [
         'tests/test_ship_refuses.py'),
 
     Mutation(
+        # A real reorder, not a rename. The first version changed `name="record-intent"` to
+        # `name="zzz-record-intent"` and reported CAUGHT — because the test compares effect names
+        # literally, not because anything moved. Renaming an entry does not reorder a list, so the
+        # guarantee this row names had no mutation at all until the review panel said so
+        # (CHG-20260830-05).
         'ship', 'the intent is recorded after the effects it describes, not before',
         SRC / 'ship.py',
         '''    return [
         effects.Effect(
-            name="record-intent",''',
+            name="record-intent",
+            probe=lambda: probes.chg_recorded(repo, chg_id),
+            apply=write_chg,
+            postcondition=f"docs/changes/{chg_id}.md exists and names its Branch",
+        ),
+        effects.Effect(
+            name="branch",
+            probe=lambda: probes.branch_exists_locally(repo, branch),
+            apply=lambda: _git(repo, "checkout", "-b", branch),
+            postcondition=f"refs/heads/{branch} exists",
+        ),''',
         '''    return [
         effects.Effect(
-            name="zzz-record-intent",''',
+            name="branch",
+            probe=lambda: probes.branch_exists_locally(repo, branch),
+            apply=lambda: _git(repo, "checkout", "-b", branch),
+            postcondition=f"refs/heads/{branch} exists",
+        ),
+        effects.Effect(
+            name="record-intent",
+            probe=lambda: probes.chg_recorded(repo, chg_id),
+            apply=write_chg,
+            postcondition=f"docs/changes/{chg_id}.md exists and names its Branch",
+        ),''',
         'tests/test_kill_resume.py'),
 
     Mutation(
@@ -912,7 +937,7 @@ MUTATIONS: List[Mutation] = [
         'tests/test_server.py'),
 
     Mutation(
-        'console', 'the token is compared with == , leaking its prefix by timing',
+        'console', 'the token is compared with `==`, leaking its prefix by timing',
         SRC / 'server.py',
         '        return bool(presented) and secrets.compare_digest(presented, self.token)',
         '        return bool(presented) and presented == self.token',
@@ -941,9 +966,15 @@ MUTATIONS: List[Mutation] = [
 
     # ── CHG-20260828-24: the model store ───────────────────────────────────────────────────────
     #
-    # Measured before writing: TEN OF TEN were already pinned. No hole was found, and these entries
-    # exist so a future edit to those tests cannot quietly weaken them — which is the whole of what
-    # a mutation record is for once the tests are already there.
+    # Measured before writing: nine of ten were already pinned. The tenth was not, and writing its
+    # test found the guarantee was not delivered at all — which is why this group also mutates
+    # `paths.py` below.
+    #
+    # This comment used to say "TEN OF TEN were already pinned. No hole was found." That was the
+    # figure a discarded probe reported; the harness said nine and was right, and CHG-20260828-24's
+    # own acceptance records the correction. The records were updated and this line was not, so the
+    # permanent registry stated the opposite of the change it heads — the review panel's conformance
+    # seat vetoed on it (CHG-20260830-05).
 
     Mutation(
         'store', 'a file that is not a database comes back as a raw traceback',
@@ -962,20 +993,30 @@ MUTATIONS: List[Mutation] = [
         'tests/test_store.py'),
 
     Mutation(
-        # The defect this group found. `plain` strips a LEADING prefix; an OS error quotes a path
-        # mid-sentence, so the guard was a no-op wearing the name of the thing it did not do.
+        # The defect this group found. `plain` strips a LEADING prefix; an OS error quotes a
+        # path mid-sentence, so the guard was a no-op wearing the name of the thing it did not do.
         'store', 'the prefix is stripped only from the start again, so a message keeps it',
         SRC / 'paths.py',
-        r'    return text.replace(UNC_PREFIX, "\\\\").replace(PREFIX, "")',
+        '    return (text\n            .replace(_DOUBLED_UNC_PREFIX, "\\\\\\\\\\\\\\\\")\n            .replace(_DOUBLED_PREFIX, "")\n            .replace(UNC_PREFIX, "\\\\\\\\")\n            .replace(PREFIX, ""))',
         '    return plain(text)',
-        'tests/test_store.py'),
+        'tests/test_paths.py'),
 
     Mutation(
-        'store', 'a UNC path is left as UNC\server\share, which is not a path anybody can use',
+        # The defect the REVIEW PANEL found. Only the undoubled spelling was handled — and the
+        # undoubled spelling is the one no real error carries, because `str(OSError)` embeds
+        # `repr(filename)` and doubles every backslash (CHG-20260830-05).
+        'store', 'only the spelling a real OS error never uses is stripped',
         SRC / 'paths.py',
-        r'    return text.replace(UNC_PREFIX, "\\\\").replace(PREFIX, "")',
-        r'    return text.replace(PREFIX, "").replace(UNC_PREFIX, "\\\\")',
-        'tests/test_store.py'),
+        '            .replace(_DOUBLED_UNC_PREFIX, "\\\\\\\\\\\\\\\\")\n            .replace(_DOUBLED_PREFIX, "")\n',
+        '',
+        'tests/test_paths.py'),
+
+    Mutation(
+        'store', r'a UNC path is left as UNC\server\share, which is not a path anybody can use',
+        SRC / 'paths.py',
+        '            .replace(UNC_PREFIX, "\\\\\\\\")\n            .replace(PREFIX, ""))',
+        '            .replace(PREFIX, "")\n            .replace(UNC_PREFIX, "\\\\\\\\"))',
+        'tests/test_paths.py'),
 
     Mutation(
         'store', 'a store from a newer schema is opened and written anyway',
@@ -1272,6 +1313,13 @@ MUTATIONS: List[Mutation] = [
     # Every one of these anchors into `mutation_recovery.py` rather than into this file. A
     # mutation's `before` string lives HERE, so an anchor into this file appears twice and the
     # uniqueness guard refuses it — which is why the recovery is next door.
+
+    Mutation(
+        'stranded', "two runs in one worktree overwrite each other's way back",
+        TOOLS / 'mutation_recovery.py',
+        r'''        with io.open(IN_FLIGHT, "x", encoding="utf-8", newline="\n") as handle:''',
+        r'''        with io.open(IN_FLIGHT, "w", encoding="utf-8", newline="\n") as handle:''',
+        'tests/test_mutation_recovery.py'),
 
     Mutation(
         'stranded', 'a file a killed run left mutated stays mutated',

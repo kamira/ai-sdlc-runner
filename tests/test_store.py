@@ -128,47 +128,33 @@ def test_the_refusal_shows_the_path_a_person_would_type(tmp_path, monkeypatch):
     that does not exist. `store.connect` has a comment saying exactly this, and the guarantee had no
     test: replacing `paths.plain(str(exc))` with `str(exc)` left the whole suite green.
 
-    **The obvious test does not work, and that is the point of this one.** Opening a junk file
-    raises `file is not a database` — a message with no path in it at all — so an assertion that the
-    prefix is absent passes whether or not `paths.plain` is applied. The first version of this test
-    did exactly that, in the change whose subject is tests that pass either way.
+    Opening a junk file raises `file is not a database`, a message with no path in it at all, so the
+    driver is made to produce the message the guard exists for.
 
-    So the driver is made to produce the message the guard exists for (CHG-20260828-24).
+    **In the form a driver actually produces.** The first version of this built the message with a
+    singly-escaped prefix, which no driver emits: an `OSError` renders its filename with `repr`, so
+    every backslash is doubled. The test passed against a form the code never meets while the real
+    one came out mangled — found by the review panel (CHG-20260830-05).
     """
     import sqlite3
 
-    long_form = paths.PREFIX + str(tmp_path / "config.sqlite")
+    # `repr`, deliberately: this is what `str(OSError)` contains.
+    quoted = repr(paths.PREFIX + str(tmp_path / "config.sqlite"))
 
     def refuse(*args, **kw):
-        raise sqlite3.DatabaseError(f"unable to open database file {long_form}")
+        raise sqlite3.DatabaseError(f"unable to open database file {quoted}")
 
     monkeypatch.setattr(store.sqlite3, "connect", refuse)
     with pytest.raises(store.StoreError) as caught:
         store.connect(tmp_path / "config.sqlite")
 
     said = str(caught.value)
-    assert paths.PREFIX not in said, f"the extended-length prefix reached the operator: {said}"
+    assert paths.PREFIX not in said, f"the prefix reached the operator: {said}"
+    assert paths.PREFIX.replace("\\", "\\\\") not in said, (
+        f"the doubled prefix reached the operator: {said}")
+    # And what is left is the path itself, not a stump of one.
+    assert str(tmp_path)[:2] in said, "the drive letter was eaten along with the prefix"
     assert "unable to open database file" in said, "the driver's reason must survive the stripping"
-
-
-def test_plain_in_strips_the_prefix_wherever_it_sits():
-    r"""The helper the refusal above depends on, and the reason it had to be a new one.
-
-    `plain` strips a **leading** prefix, which is right for a path and wrong for a sentence quoting
-    one. Both call sites that quote an OS error were using `plain`, both carried a comment saying
-    the prefix must not reach the reader, and neither delivered it (CHG-20260828-24).
-    """
-    inside = paths.PREFIX + r"C:\x"
-    assert paths.plain_in(f"unable to open {inside} now") == r"unable to open C:\x now"
-    assert paths.plain_in(inside) == r"C:\x"
-    assert paths.plain_in("nothing to strip") == "nothing to strip"
-
-
-def test_plain_in_puts_a_unc_path_back_the_way_a_person_types_it():
-    r"""`\\?\UNC\srv\share` starts with `\\?\` too, so the order of the two replacements is the
-    guarantee: strip the shorter one first and the reader is left with `UNC\srv\share`, which is
-    not a path anybody can use."""
-    assert paths.plain_in("at " + paths.UNC_PREFIX + r"srv\share end") == r"at \\srv\share end"
 
 
 def test_a_store_from_the_future_is_refused_rather_than_guessed_at(tmp_path):

@@ -33,8 +33,12 @@ from typing import Optional
 
 REPO = Path(__file__).resolve().parent.parent
 
-#: Written before a file is mutated, removed after it is put back.
+#: Written before a file is mutated, removed after it is put back. Also the lock — see `begin`.
 IN_FLIGHT = REPO / "tools" / ".mutation-in-flight.json"
+
+
+class MutationInFlight(Exception):
+    """Another run holds this worktree, or a killed one left its file mutated."""
 
 
 def write(path: Path, text: str) -> None:
@@ -46,9 +50,30 @@ def begin(path: Path, original: str, mutated: str) -> None:
 
     Order is the whole guarantee: a record written *after* the mutation misses exactly the window it
     exists to cover.
+
+    ## And it is the lock
+
+    Created exclusively (`"x"`), so a second run in the same worktree is refused rather than
+    overwriting the first one's record — which would strand the first file with nothing left saying
+    how to put it back.
+
+    This is not hypothetical. A review panel of four agents was run in one worktree while one of
+    them was running the harness: two seats read a half-mutated tree, one got a false positive from
+    it, and a third measured a 252-test run against source that was changing underneath it. Nothing
+    was lost, because the runs happened not to overlap on the same file — the lock is what makes
+    that a guarantee rather than luck (CHG-20260830-05, risk seat).
     """
-    write(IN_FLIGHT, json.dumps(
-        {"path": str(path), "original": original, "mutated": mutated}, ensure_ascii=False))
+    record = json.dumps({"path": str(path), "original": original, "mutated": mutated},
+                        ensure_ascii=False)
+    try:
+        with io.open(IN_FLIGHT, "x", encoding="utf-8", newline="\n") as handle:
+            handle.write(record)
+    except FileExistsError:
+        raise MutationInFlight(
+            f"{IN_FLIGHT.name} already exists, so another mutation run holds this worktree — or a "
+            f"previous one was killed and its file is still mutated. Run this tool again on its own "
+            f"to recover, or read that file and restore by hand. Two runs at once would overwrite "
+            f"the record the first one needs to put its file back.") from None
 
 
 def end() -> None:
