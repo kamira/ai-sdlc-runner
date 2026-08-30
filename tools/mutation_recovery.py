@@ -49,31 +49,53 @@ def _alive(pid: Optional[int]) -> bool:
     calls `TerminateProcess` for every signal but the two console events, so the liveness probe
     would kill the run it is asking about. Hence the explicit branch.
 
-    A pid can be reused after the owner exits, and a reused pid reads as alive — so the failure this
-    can still have is a refusal to recover a file a killed run left mutated, which leaves the tree
-    wrong but says so loudly. The opposite failure — recovering over a live run — is the one that
-    was silent, and that is the one this closes.
+    Three ways to answer this wrongly, all of them shipped once and all of them measured out:
+
+    - `OpenProcess` denied is **alive**, not dead. The first version returned `False`, which put the
+      silent failure straight back: recovery over a live run owned by another user.
+    - `GetExitCodeProcess == STILL_ACTIVE` cannot tell a running process from one that exited with
+      code 259. `WaitForSingleObject` can.
+    - `WaitForSingleObject` needs `SYNCHRONIZE`; without it every live process reads as dead.
+
+    What remains: a pid reused after the owner exits reads as alive, so recovery refuses a file a
+    killed run left mutated. That leaves the tree wrong but says so loudly, and the refusal names the
+    way out. It is the direction to fail in, not a direction that is safe.
     """
     if pid is None:
         return False
     if os.name == "nt":
         import ctypes
 
-        PROCESS_QUERY_LIMITED_INFORMATION, STILL_ACTIVE = 0x1000, 259
+        #: Both rights are needed, and asking for only the first is a silent wrong answer:
+        #: `WaitForSingleObject` requires `SYNCHRONIZE`, and without it the wait returns WAIT_FAILED
+        #: rather than WAIT_TIMEOUT, so every live process reads as dead. Measured while writing
+        #: this — the first version of the fix broke the case it was not about.
+        PROCESS_QUERY_LIMITED_INFORMATION, SYNCHRONIZE = 0x1000, 0x00100000
+        #: What `OpenProcess` sets when the pid exists but this process may not look at it — another
+        #: user, or a higher integrity level. Distinct from ERROR_INVALID_PARAMETER (87), which is
+        #: what a pid that does not exist gives, so the two are separable and must be separated.
+        ERROR_ACCESS_DENIED = 5
+        #: `WaitForSingleObject` on a process handle: still running.
+        WAIT_TIMEOUT = 0x102
+
         kernel32 = ctypes.windll.kernel32
-        # `restype` set deliberately. A HANDLE is pointer-sized, and ctypes defaults every foreign
-        # function to returning `c_int` — so on 64-bit the handle would be silently truncated, and
-        # the call would go on to ask about whatever process that number happened to name.
+        # Typed deliberately, all three. A HANDLE is pointer-sized and ctypes defaults every foreign
+        # function to `c_int`, so an untyped handle is truncated on 64-bit — and an untyped handle
+        # *argument* raises `ArgumentError: int too long to convert`, which escapes `_alive` as an
+        # exception rather than an answer.
         kernel32.OpenProcess.restype = ctypes.c_void_p
         kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)
         if not handle:
-            return False
+            # Alive, and not ours to inspect. Reading this as dead is the silent failure this whole
+            # mechanism exists to remove: recovery would write the original over a live run's
+            # mutated file. The POSIX branch below has always answered this correctly; the first
+            # version of this branch did not (CHG-20260830-07, three seats).
+            return kernel32.GetLastError() == ERROR_ACCESS_DENIED
         try:
-            code = ctypes.c_ulong()
-            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
-                return False
-            return code.value == STILL_ACTIVE
+            return kernel32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
         finally:
             kernel32.CloseHandle(handle)
     try:
@@ -168,11 +190,9 @@ def recover(quiet: bool = False) -> Optional[str]:
     """Put back a file a killed run left mutated. Returns what it did, or `None` if there was
     nothing to do.
 
-    Called at startup, and from the signal handler so an interrupted run cleans up immediately
-    rather than leaving the tree wrong until somebody happens to run this again.
-
-    Startup is why the owner matters. `main()` calls this before its first `apply()`, so this is the
-    code a *second* run reaches while the first is still mutating — see `begin`.
+    Called at startup — before the first `apply()`, which is why this is also the code a *second*
+    run reaches while the first is still mutating — and from the signal handler, so an interrupted
+    run cleans up immediately rather than leaving the tree wrong until somebody runs this again.
     """
     if not IN_FLIGHT.exists():
         return None
@@ -191,8 +211,12 @@ def recover(quiet: bool = False) -> Optional[str]:
         # right for the first is a corruption of the second: it writes the original over a live
         # mutated file, so that run's tests measure unmutated source and it reports NOT CAUGHT.
         said = (f"REFUSING to recover {path.name}: pid {owner} is still running and holds this "
-                f"worktree. Wait for it to finish. If you are certain it is gone, delete "
-                f"{IN_FLIGHT.name} by hand after checking `git status`.")
+                f"worktree, so {path.name} is mutated on purpose and must be left alone. Wait for "
+                f"that run.\n"
+                f"  If no such run exists, the pid has been reused. {path.name} is then still "
+                f"mutated and {IN_FLIGHT.name} holds the text to put back — read the original out "
+                f"of it, or `git checkout -- {path}`, and only then delete the record. Deleting it "
+                f"first throws away the only copy.")
         if not quiet:
             print(f"  {said}")
         return said

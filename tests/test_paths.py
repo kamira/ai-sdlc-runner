@@ -603,9 +603,10 @@ def _goes_through_plain_in(expr):
                for node in ast.walk(expr))
 
 
-def _unstripped_sites(source, label="<source>"):
-    """Every place this source lets an exception's text reach a person with the prefix still on it."""
-    found = []
+def _handlers_in_scope(source):
+    """Every handler the rule looks inside. Yielded rather than counted so the survey can report
+    both what it found and what it examined — a survey that reports only the first cannot tell a
+    clean tree from a search that ran over nothing."""
     for handler in (n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.ExceptHandler)):
         if handler.name is None:
             continue
@@ -613,8 +614,14 @@ def _unstripped_sites(source, label="<source>"):
             isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
             and n.func.attr == "append" and ast.unparse(n.func.value).endswith(OPERATOR_FACING)
             for n in ast.walk(handler))
-        if not (_handler_types(handler) & CAN_CARRY_A_PATH or records):
-            continue
+        if _handler_types(handler) & CAN_CARRY_A_PATH or records:
+            yield handler
+
+
+def _unstripped_sites(source, label="<source>"):
+    """Every place this source lets an exception's text reach a person with the prefix still on it."""
+    found = []
+    for handler in _handlers_in_scope(source):
         for part in (n for n in ast.walk(handler) if isinstance(n, ast.FormattedValue)):
             if (_uses_the_exceptions_text(part.value, handler.name)
                     and not _goes_through_plain_in(part.value)):
@@ -624,8 +631,9 @@ def _unstripped_sites(source, label="<source>"):
 
 #: One violation in each shape the rule has to see. The first is the shape the old rule did catch;
 #: the second is `conversations.py:1113`, which it did not, because the message was built into a
-#: variable before being appended; the third is the same site with its exception variable renamed,
-#: which defeats any rule that matches on the identifier `exc`.
+#: variable before being appended; the third raises rather than appends. Renaming is **not** tested
+#: here — `err` is too obvious a second guess to establish anything, which is what the first version
+#: of this claimed. `test_the_rule_follows_whatever_the_handler_bound` does that job.
 BREAKS_THE_RULE = '''
 def a():
     try:
@@ -666,30 +674,59 @@ def test_the_rule_finds_the_violations_it_claims_to_find():
     assert not _unstripped_sites(KEEPS_THE_RULE, "fixture"), "the rule flags corrected code"
 
 
-def test_the_rule_is_not_satisfied_by_the_name_of_the_variable():
-    """Case `c` above, on its own, because it is the one that makes this a constraint and not a
-    keyword match — and because a rule keyed on a name is the defect this file exists to record."""
-    renamed = BREAKS_THE_RULE.split("def c():")[1]
+@pytest.mark.parametrize("name", ["exc", "err", "problem", "z9_caught", "the_thing_that_went_wrong"])
+def test_the_rule_follows_whatever_the_handler_bound(name):
+    """The property that makes this a constraint rather than a keyword match, over names no rule
+    could plausibly enumerate.
 
-    assert _unstripped_sites("def c():" + renamed, "fixture"), (
-        "renaming the exception variable defeated the rule")
+    Its first version tested one rename, to `err`. That is the second most obvious name for a caught
+    exception, so it did not establish the property: replacing the rule's `expr.id == caught` with
+    `expr.id in ('exc', 'err')` — a keyword match by any reading — left the whole file green
+    (CHG-20260830-07, defect seat). A rule that passes this for `z9_caught` is reading the binding.
+    """
+    source = (f"def f():\n"
+              f"    try:\n"
+              f"        work()\n"
+              f"    except OSError as {name}:\n"
+              f"        raise StoreError(f\"could not: {{{name}}}\")\n")
+
+    assert _unstripped_sites(source, "fixture"), f"the rule lost the violation when it was {name!r}"
+    assert not _unstripped_sites(
+        source.replace(f"{{{name}}}", f"{{paths.plain_in(str({name}))}}"), "fixture"), (
+        f"the rule flagged corrected code when the variable was {name!r}")
 
 
 def test_every_exception_a_person_reads_goes_through_plain_in():
-    """The survey. CHG-20260828-24 said "two messages"; there were three, and then nine more.
+    """The survey. CHG-20260828-24 said "two messages"; there were three, and then **eight** more.
 
     A handler is in scope when it catches something that can carry a filename, or when it records
-    onto an operator-facing list. Broad `except Exception` handlers that do neither are **not**
-    covered, and that is a real gap rather than a tidy one: **35** such sites exist, measured, most
-    of them in `cli.py`. Routing all of them was tried first and is what produced the number; it
-    also produced a source file that no longer parsed, which is why the boundary is where it is.
-    Disclosed in ACC-20260830-06 rather than papered over.
+    onto an operator-facing list. Handlers that do neither are **not** covered: 35 such sites exist,
+    measured — 17 in `cli.py`, and 27 of the 35 catch a *named* type (`ValueError`,
+    `sqlite3.OperationalError`, `json.JSONDecodeError`, `subprocess.TimeoutExpired`) rather than a
+    bare `Exception`, so "no static rule can tell" is not the reason they are out. The reason is
+    that widening the rule to reach them was tried and produced a source file that no longer parsed.
+    Disclosed in ACC-20260830-07 in those terms.
+
+    ## The floor, which this did not have
+
+    The counts below are what make the assertion mean anything. Without them, pointing the glob at a
+    suffix no file has left every test in this file green — measured: `glob("*.NOPE")`, 8 passed,
+    including the three that exist to keep this honest. A survey that examined nothing reported a
+    clean tree, which is the shape `test_subprocess_codecs.py` has floors for at two places and this
+    had at none (CHG-20260830-07, idiom seat).
     """
     root = Path(__file__).resolve().parents[1] / "src" / "ai_sdlc_runner"
-    unstripped = []
+    unstripped, modules, in_scope = [], 0, 0
     for module in sorted(root.glob("*.py")):
-        unstripped += _unstripped_sites(module.read_text(encoding="utf-8"), module.name)
+        source = module.read_text(encoding="utf-8")
+        modules += 1
+        in_scope += sum(1 for _ in _handlers_in_scope(source))
+        unstripped += _unstripped_sites(source, module.name)
 
+    assert modules >= 20, f"the survey read {modules} modules; it should be reading the package"
+    assert in_scope >= 10, (
+        f"the survey looked inside {in_scope} handlers. It cannot report a clean tree without "
+        f"having examined one")
     assert not unstripped, (
         "these let an exception reach a person with the extended-length prefix still on it: "
         + ", ".join(unstripped))

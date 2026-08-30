@@ -998,10 +998,11 @@ MUTATIONS: List[Mutation] = [
         # path mid-sentence, so the guard was a no-op wearing the name of the thing it did not do.
         'store', 'the prefix is stripped only from the start again, so a message keeps it',
         SRC / 'paths.py',
-        # A raw triple-quote, like `store.py`'s anchor twelve lines above: the escaped one-line form
-        # this shipped as put sixteen consecutive backslashes on a 214-character line, which nobody
-        # can check against source by eye — an unverifiable anchor in the file whose meta-test exists
-        # to keep anchors honest (CHG-20260830-06, idiom seat).
+        # A raw triple-quote. The escaped one-line form this shipped as put sixteen consecutive
+        # backslashes on a 214-character line, which nobody can check against source by eye — an
+        # unverifiable anchor in the file whose meta-test exists to keep anchors honest. The `r`
+        # prefix is new here; the plain `'''` multi-line form is not (`store.py`'s anchor, 18 lines
+        # above). CHG-20260830-06 cited it as precedent for the raw form, which it is not.
         r'''    return (text
             .replace(_DOUBLED_UNC_PREFIX, "\\\\\\\\")
             .replace(_DOUBLED_PREFIX, "")
@@ -1367,7 +1368,7 @@ MUTATIONS: List[Mutation] = [
         """    write(path, original)""",
         'tests/test_mutation_recovery.py'),
 
-    # ── CHG-20260830-06: exclusive creation was not the lock ──────────────────────────────────
+    # ── CHG-20260830-06: exclusive creation was not the lock ───────────────────────────────────
     #
     # The entry above says two runs cannot overwrite each other's way back, and for one round that
     # was false while its mutation came back CAUGHT: `main()` calls `recover()` before its first
@@ -1397,6 +1398,26 @@ MUTATIONS: List[Mutation] = [
         """    if pid is None:
         return False
     return False""",
+        'tests/test_mutation_recovery.py'),
+
+    # ── CHG-20260830-07: the liveness probe answered wrongly three ways ───────────────────────────
+    #
+    # The owner check above is only as good as `_alive`, and nothing tested whether `_alive` was
+    # right — ACC-20260830-06 row 16 checked only that it does not *kill* what it asks about. Three
+    # seats of the round-3 panel found three separate wrong answers in it.
+
+    Mutation(
+        'stranded', 'a live process this run may not open reads as dead, so recovery overwrites it',
+        TOOLS / 'mutation_recovery.py',
+        '            return kernel32.GetLastError() == ERROR_ACCESS_DENIED',
+        '            return False',
+        'tests/test_mutation_recovery.py'),
+
+    Mutation(
+        'stranded', 'the wait is asked without SYNCHRONIZE, so every live process reads as dead',
+        TOOLS / 'mutation_recovery.py',
+        '        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)',
+        '        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)',
         'tests/test_mutation_recovery.py'),
 
     Mutation(
@@ -1783,7 +1804,7 @@ def main() -> int:
         missed = [m for m in chosen if not run(m, baseline)]
     except MutationInFlight as blocked:
         # The tool's own refusal shape, not a traceback -- this is an operator telling
-        # them what to do, the same as the unknown-group refusal below.
+        # them what to do, the same as the unknown-group refusal above.
         raise SystemExit(str(blocked)) from None
     print()
     if missed:
