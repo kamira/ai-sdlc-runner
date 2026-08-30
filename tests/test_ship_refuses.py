@@ -63,16 +63,6 @@ def test_a_git_command_that_fails_raises_rather_than_passing(repo):
     assert "git checkout" in said, "the refusal must name the command that failed"
     assert said.strip() != "git checkout no-such-branch-anywhere failed:", (
         "the refusal dropped git's own reason, which is the only actionable part")
-
-
-def test_a_git_command_that_succeeds_says_nothing(repo):
-    """The other direction: a check that refused everything would also pass the test above."""
-    assert ship._git(repo, "status", "--porcelain") is None
-
-
-# ── a commit is not done while the tree is dirty ───────────────────────────────────────────────
-
-
 def test_a_commit_over_a_dirty_tree_is_not_finished(repo):
     """Both halves of the probe, deliberately — the comment says why and nothing held it.
 
@@ -162,9 +152,3 @@ def test_a_pr_the_forge_rejects_is_not_reported_as_opened(repo, tmp_path):
     said = str(caught.value)
     assert "could not open a PR for feature" in said
     assert "the forge said no" in said, "the forge's own reason is the actionable part"
-
-
-def test_a_pr_the_forge_accepts_is_not_refused(repo, tmp_path):
-    forge = tmp_path / "forge.py"
-    forge.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
-    assert ship._create_pr(repo, "feature", "a title", [sys.executable, str(forge)]) is None

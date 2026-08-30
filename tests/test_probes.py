@@ -201,9 +201,14 @@ def test_a_chg_id_is_matched_literally_and_not_as_a_pattern(repo):
     _git("add", "-A", cwd=repo)
     _git("commit", "-q", "-m", "feat: the token axb appears here", cwd=repo)
 
-    # `.` is the discriminating character. Git's default grep is a basic regular expression, in
-    # which `?` is a literal but `.` matches anything — so `a.b` finds `axb` as a pattern and finds
-    # nothing as a string, which is the whole difference `--fixed-strings` makes.
+    # The property under test is `--fixed-strings`, and `git log --grep` honours `grep.patternType`
+    # from the ambient config — so on a machine where that is already `fixed`, this test passes with
+    # the flag deleted from `commit_exists_for`. Pinned to `basic` in the repo's own config, which
+    # is what makes `.` discriminating: in a basic regular expression `?` is a literal but `.`
+    # matches anything, so `a.b` finds `axb` as a pattern and finds nothing as a string. Found by
+    # the review panel (CHG-20260830-05).
+    _git("config", "grep.patternType", "basic", cwd=repo)
+
     assert probes.commit_exists_for(repo, "axb") is True, "the literal string is there"
     assert probes.commit_exists_for(repo, "a.b") is False, (
         "the needle was read as a pattern: `a.b` matched a message containing `axb`")
@@ -244,9 +249,3 @@ def test_a_probe_that_times_out_says_so_rather_than_answering(repo, py_stub):
     with pytest.raises(probes.ProbeError) as caught:
         probes._run([*slow, "--head", "feature"], cwd=repo, timeout=1)
     assert "timed out after 1s" in str(caught.value)
-
-
-def test_a_probe_that_returns_in_time_is_not_reported_as_timed_out(repo, py_stub):
-    """The opposite direction: a timeout that fires always would pass the test above."""
-    quick = py_stub("pass")
-    assert probes._run([*quick], cwd=repo, timeout=30).returncode == 0

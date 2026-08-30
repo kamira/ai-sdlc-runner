@@ -172,3 +172,35 @@ def test_this_repository_has_no_mutation_in_flight():
         f"{mutation_recovery.IN_FLIGHT} exists, so a mutation run was killed and a source file may "
         f"still be mutated. Run `python3 tools/mutation_check.py` to put it back, or read that "
         f"file and restore it by hand.")
+
+
+def test_a_second_run_in_the_same_worktree_is_refused(sentinel, source):
+    """The record is the lock. Two runs would overwrite the first one's way back.
+
+    A review panel of four agents ran in one worktree while one of them drove the harness: two seats
+    read a half-mutated tree and one took a false positive from it. Nothing was lost only because
+    the runs did not overlap on the same file (CHG-20260830-05, risk seat).
+    """
+    subject = source("ORIGINAL\n")
+    mutation_recovery.begin(subject, "ORIGINAL\n", "MUTATED\n")
+
+    with pytest.raises(mutation_recovery.MutationInFlight) as caught:
+        mutation_recovery.begin(subject, "SOMETHING ELSE\n", "ALSO ELSE\n")
+
+    said = str(caught.value)
+    assert "another mutation run" in said or "already exists" in said
+    assert "recover" in said, "the refusal has to say how to get out of it"
+    # And the first run's way back is intact, which is the thing the lock protects.
+    import json as _json
+    assert _json.loads(sentinel.read_text(encoding="utf-8"))["original"] == "ORIGINAL\n"
+
+
+def test_the_lock_is_released_when_the_run_puts_the_file_back(sentinel, source):
+    """Otherwise the first refusal above would be permanent."""
+    subject = source("ORIGINAL\n")
+    mutation_recovery.apply(subject, "ORIGINAL\n", "MUTATED\n")
+    mutation_recovery.restore(subject, "ORIGINAL\n")
+
+    assert not sentinel.exists()
+    mutation_recovery.begin(subject, "ORIGINAL\n", "MUTATED\n")      # no refusal
+    mutation_recovery.end()

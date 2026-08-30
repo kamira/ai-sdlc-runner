@@ -218,23 +218,47 @@ def plain(path: str | Path) -> str:
     return text
 
 
+#: The prefixes as they appear **inside `str(OSError)`**, where `repr(filename)` has doubled every
+#: backslash (CHG-20260830-05). `\\?\C:\x` is quoted back as `'\\\\?\\C:\\x'`, so the four-character
+#: prefix `plain` knows is not in that text at all — what is in it is a six-character one.
+_DOUBLED_PREFIX = PREFIX.replace("\\", "\\\\")
+_DOUBLED_UNC_PREFIX = UNC_PREFIX.replace("\\", "\\\\")
+
+
 def plain_in(text: str) -> str:
     r"""The same stripping, wherever the prefix appears — for a sentence that quotes a path.
 
     `plain` only strips a **leading** prefix, because that is what a path has. An OS error does not
-    hand back a path; it hands back a sentence with one inside it —
-    `unable to open database file \\\\?\\C:\\…` — and running that through `plain` returns it
-    unchanged.
+    hand back a path; it hands back a sentence with one inside it, and running that through `plain`
+    returns it unchanged. Two call sites were doing exactly that, each with a comment explaining
+    that the prefix must not reach the reader, and neither delivered it (CHG-20260828-24).
 
-    Two call sites were doing exactly that (`store.connect` and `conversations`), each with a
-    comment explaining that the prefix must not reach the reader, and neither delivered it. The
-    guard was a no-op wearing the name of the thing it did not do, which is this repository's most
-    recorded defect shape (CHG-20260828-24).
+    ## Both spellings, because the one that actually occurs is the doubled one
 
-    UNC first, because `\\\\?\\UNC\\server\\share` starts with `\\\\?\\` too and stripping the
-    shorter one leaves `UNC\\server\\share`, which is not a path anybody can use.
+    The first version of this handled only the four-character `\\?\`, and the review panel found it
+    did not work on a real error at all. `str(OSError)` is
+    ``f"[Errno 2] No such file or directory: {filename!r}"`` — **`repr`**, which doubles every
+    backslash. So the text carries `'\\\\?\\C:\\…'`, in which the four-character prefix matches
+    starting at the *third* backslash; removing it left `'\\\C:\\…'`, three backslashes and a drive
+    letter. Still not a path anybody can type, which is the whole failure this exists to remove
+    (CHG-20260830-05).
+
+    Longest first, in both spellings: `\\?\UNC\server\share` starts with `\\?\` too, so stripping
+    the shorter prefix first would leave `UNC\server\share`, which is not a path anybody can use.
+
+    A `Path` is refused by name. `plain` takes `str | Path` and this one reads as its sibling, but
+    here the name resolves to `Path.replace` — the filesystem **rename** — and is saved only by
+    arity, so the failure is a confusing `TypeError` about argument counts. A path is `plain`'s job.
     """
-    return text.replace(UNC_PREFIX, "\\\\").replace(PREFIX, "")
+    if not isinstance(text, str):
+        raise TypeError(
+            f"plain_in takes the text of a message, not a {type(text).__name__}. For a path itself, "
+            f"use plain — this one searches a sentence for a path quoted inside it.")
+    return (text
+            .replace(_DOUBLED_UNC_PREFIX, "\\\\\\\\")
+            .replace(_DOUBLED_PREFIX, "")
+            .replace(UNC_PREFIX, "\\\\")
+            .replace(PREFIX, ""))
 
 
 # ── the operations, each taking the long form ─────────────────────────────────────────────────

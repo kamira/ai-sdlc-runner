@@ -968,7 +968,12 @@ class Conversation:
                     json.dumps({"conversation_id": self.id, "project": self.project["name"]},
                                ensure_ascii=False, sort_keys=True) + "\n")
             except OSError as exc:
-                self.write_errors.append(f"could not mark the journal: {exc}")
+                # `plain_in`, like the two sites CHG-20260828-24 named. This was the third, three
+                # lines above one of them, and that change's title said "two messages" — the review
+                # panel counted (CHG-20260830-05). Both paths here go through `paths`, so the error
+                # quotes a prefixed path back and this record is read by a person.
+                self.write_errors.append(
+                    f"could not mark the journal: {paths.plain_in(str(exc))}")
         self.turn(OPENED, project=self.project["name"], run=dict(self.header["run"] or {}))
         return self
 

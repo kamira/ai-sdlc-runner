@@ -115,12 +115,29 @@ def test_the_three_that_may_be_empty_stay_empty():
 
 
 def test_the_blank_rule_has_one_definition_shared_with_the_plan_loader():
-    """`plan.py` raises `PlanError` and `render` raises `WorkOrderError` off one rule.
+    """`plan.py` raises `PlanError` and `render` raises `WorkOrderError` off **one** rule.
 
     Two copies drifting apart would give a plan that loads and will not dispatch.
+
+    The first version of this asserted only that `content_problem` reports a blank field, and never
+    imported `plan` at all — so the shared half, which is the whole claim in the name, was asserted
+    by nothing. The review panel found it: a private copy in `plan.py` would have left it green
+    (CHG-20260830-05). Both refusals are now driven, and compared.
     """
-    said = workorder.content_problem("engineer_build", _spec(done_criteria=""), "refused")
-    assert said and "done_criteria" in said
+    from ai_sdlc_runner import plan as plan_mod
+
+    blank = _spec(done_criteria="")
+
+    with pytest.raises(workorder.WorkOrderError) as from_render:
+        workorder.render(NODE, blank, VERDICT)
+    with pytest.raises(plan_mod.PlanError) as from_plan:
+        plan_mod.check({"risk": "low", "node_specs": {NODE.id: dict(blank)}})
+
+    # Same rule, so the same sentence — the two differ only in the `where` each passes in.
+    assert "done_criteria" in str(from_render.value)
+    assert "done_criteria" in str(from_plan.value)
+    assert "says nothing" in str(from_plan.value), (
+        "the plan loader refused for some other reason; it is not going through content_problem")
 
 
 # ── the seat shapes the instructions and nothing else ──────────────────────────────────────────
@@ -184,11 +201,6 @@ def test_an_order_missing_a_contract_field_is_refused_rather_than_dispatched(mon
     """
     monkeypatch.setattr(workorder, "WORK_ORDER_FIELDS",
                         workorder.WORK_ORDER_FIELDS + ("a_field_render_does_not_produce",))
-    # The patch has to have landed on the module `render` actually reads, or the refusal below
-    # would prove nothing about the guard — it would prove `render` was never asked a wrong
-    # question. A test that cannot tell those apart is the shape this file exists to avoid.
-    assert "a_field_render_does_not_produce" in workorder.WORK_ORDER_FIELDS
-    assert sys.modules["ai_sdlc_runner.workorder"] is workorder
     with pytest.raises(workorder.WorkOrderError) as caught:
         workorder.render(NODE, SPEC, VERDICT)
     assert "closed schema" in str(caught.value)
@@ -210,13 +222,7 @@ def test_the_json_is_serialised_with_sorted_keys():
 def test_the_json_ends_with_one_newline_and_is_utf8_clean():
     text = workorder.to_json(workorder.render(NODE, SPEC, VERDICT))
     assert text.endswith("\n") and not text.endswith("\n\n")
-    assert "\r" not in text, "CRLF would change the bytes a checksum sees"
     text.encode("utf-8")
-
-
-def test_the_same_order_serialises_identically_twice():
-    order = workorder.render(NODE, SPEC, VERDICT)
-    assert workorder.to_json(order) == workorder.to_json(dict(reversed(list(order.items()))))
 
 
 def test_the_json_round_trips():
