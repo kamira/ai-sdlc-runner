@@ -423,10 +423,13 @@ def _tests_that_exist(repo: Path) -> set:
 
 
 #: A paragraph break ends the window: an explanation belongs in one paragraph with the name.
-#: Three rounds got the character class wrong in turn — `[ \\t]` matched nothing at all, because
-#: every record here is CRLF; `\\s` missed U+200B, U+FEFF and U+2060, which is what a paste
-#: leaves behind; and U+3000 is what a Chinese IME emits, in a ledger written partly in Chinese.
-#: Six rows of `GHOST_EXCUSES` carry it (CHG-20260831-06 and -07).
+#: The class was wrong twice. `[ \t]` missed U+00A0 and U+3000 — the second is what a Chinese IME
+#: emits, in a ledger written partly in Chinese — and `\s` still misses U+200B, U+FEFF and U+2060,
+#: which is what a paste leaves behind. Six rows of `GHOST_EXCUSES` carry it.
+#:
+#: **Not** because the records are CRLF. Two rounds recorded that as the cause and it does not hold:
+#: `read_text` translates line endings, so no `\r` reaches this at all, and `[ \t]` matched 30
+#: blank lines in a real record when measured. Corrected in CHG-20260901-02 (idiom seat).
 _PARAGRAPH_BREAK = re.compile(r"\n[\s\u200b\ufeff\u2060]*?\n")
 
 #: How far from the name the phrase may sit, in **characters**, checked after the match.
@@ -449,7 +452,7 @@ _CHANGE_ID = r"(?:CHG|ACC)-\d{8}-\d{2}"
 #: substring check — it passed `(../nowhere/CHG-….md)` while refusing three link forms people
 #: write. Resolving a path needs a repo root this function does not have, so the claim was
 #: withdrawn rather than half-kept (CHG-20260831-07, three seats).
-_REMOVED_BY = (r"(?i:(?:removed|deleted|dropped|renamed to\s+`test_\w+`\s+)\s*(?:in|by)\s+)"
+_REMOVED_BY = (r"(?i:(?:removed|deleted|dropped|renamed to\s+`\w+`\s+)\s*(?:in|by)\s+)"
                r"\[?(" + _CHANGE_ID + r")\]?")
 
 #: What the window may cross: anything that is not a backtick, or another backticked test name.
@@ -466,9 +469,10 @@ _NOT_AN_END = r"(?<!\bi\.e)(?<!\be\.g)(?<!\betc)(?<!\bcf)(?<!\bvs)(?<!\bal)(?<!\
 #: something that is not a dash, or by a line end.
 #:
 #: Requiring a **capital** after it was the third formulation and it leaked on this repository's
-#: own house style: measured over all 265 records, 428 sentence ends are followed by a backticked
-#: identifier and 55 by a lowercase word, against 4306 by a capital — so roughly one boundary in
-#: ten was invisible, and the one shape that still worked was the one `GHOST_EXCUSES` pinned
+#: own house style. Measured under one rule, `[.!?]\s+`, over all 267 records: 4338 boundaries are
+#: followed by a capital and **4104 are not** — 3253 by punctuation or a dash, 429 by a backticked
+#: identifier, 355 by a digit, 67 by a lowercase word. The capital rule saw about half, and the one
+#: shape that still worked was the one `GHOST_EXCUSES` pinned
 #: (CHG-20260901-01, risk seat). The dash exclusion is what keeps `-- gone! --` and
 #: `-- did anyone read it? --` inside one sentence, and the `.` lookbehind keeps `…` there.
 _SENTENCE_END = re.compile(_NOT_AN_END + r"[.!?](?:\s+(?![-\u2013\u2014])|\s*$)",
@@ -480,9 +484,10 @@ def _excused(text: str, name: str, ledger_ids) -> bool:
 
     The refusal offers *"say in the record that the test was since removed and why"* as a remedy,
     and for three rounds this did not honour what people write. **Six** bounds, each pinned by rows
-    of `GHOST_EXCUSES` that go red when it is removed: one sentence, at most `EXCUSE_WINDOW`
-    characters, no backticks crossed except test names, a change id that names a record that
-    exists, a paragraph break, and the name matched case-sensitively.
+    of `GHOST_EXCUSES` that go red when it is removed — a paragraph break (6), the sentence rule
+    (5), `EXCUSE_WINDOW` (1), a change id that names a record that exists (1), no backticks crossed
+    except test names (2), and the name matched case-sensitively (1). Case-insensitivity of the
+    **verbs** is a widening, not a bound, and is not one of the six.
 
     Anchored at each place a match can **start** rather than run through `re.finditer` over the
     whole text. `finditer` is non-overlapping, so a long match that failed the length check
@@ -498,9 +503,7 @@ def _excused(text: str, name: str, ledger_ids) -> bool:
     quoted = "`" + re.escape(name) + "`"
     for pattern, first in ((quoted + _SPAN + _REMOVED_BY, quoted),
                            (_REMOVED_BY + _SPAN + quoted, _REMOVED_BY)):
-        # Case-insensitive: `Removed in CHG-…` opening a sentence was refused, and the reverse-order
-        # row happened to be lowercase so nothing noticed (CHG-20260831-07, both seats).
-        # Case-insensitivity scoped to the verbs, inside `_REMOVED_BY`. Applied to the whole
+        # Case-insensitivity is scoped to the verbs, inside `_REMOVED_BY`. Applied to the whole
         # pattern it also matched a differently-cased spelling of the **name** — so a record citing
         # `TEST_GONE` excused the ghost `test_gone`, which `check_named_tests_exist` reports
         # case-sensitively. The excuse has to be about the name the record cites
@@ -508,7 +511,7 @@ def _excused(text: str, name: str, ledger_ids) -> bool:
         compiled = re.compile(pattern)
         # Anchored at each place the pattern can **start**, not at every character. `re.finditer`
         # is non-overlapping, so an over-long match hid a valid short one inside it; scanning every
-        # offset fixed that and cost 149× on a 69 KB record. The starts are the name's own
+        # offset fixed that and cost 10×–72× on a 69 KB record, by name. The starts are its own
         # positions, or the phrase's (CHG-20260831-07, defect, conformance and idiom seats).
         for start in re.finditer(first, text):
             at = start.start()

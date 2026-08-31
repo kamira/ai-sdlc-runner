@@ -1763,7 +1763,14 @@ def _import_fails(path: Path) -> str:
     if path.parent.name == "ai_sdlc_runner":
         module, where = f"ai_sdlc_runner.{path.stem}", "src"
     else:
-        module, where = path.stem, "tools"
+        # `path.parent.name`, not a hard-coded `"tools"`. Three shipped mutations target
+        # `tests/test_subprocess_codecs.py`, and the fallback imported them with `PYTHONPATH`
+        # pointing at `tools/` — so `--only codecs` reported three false `BROKE`s and exited 1 on a
+        # clean checkout, telling the author to re-anchor three correctly anchored mutations. That
+        # is the failure this whole outcome exists to remove, reintroduced by fixing one arm of it
+        # and running four groups that all happened to be `src/` (CHG-20260901-02, defect and risk
+        # seats). `test_every_shipped_mutation_still_imports` runs the whole set now.
+        module, where = path.stem, path.parent.name
     stmt = f"import {module}"
     probe = subprocess.run([sys.executable, "-c", stmt], capture_output=True, text=True,
                            encoding="utf-8", errors="replace", cwd=REPO,

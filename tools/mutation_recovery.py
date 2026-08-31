@@ -256,6 +256,13 @@ def restore(path: Path, original: str) -> None:
     end()
 
 
+def _refuse(said: str, quiet: bool) -> str:
+    """Print a refusal unless asked not to, and return it. Four branches of `recover` do this."""
+    if not quiet:
+        print(f"  {said}")
+    return said
+
+
 def recover(quiet: bool = False) -> Optional[str]:
     """Put back a file a killed run left mutated. Returns what it did, or `None` if there was
     nothing to do.
@@ -268,70 +275,53 @@ def recover(quiet: bool = False) -> Optional[str]:
         return None
     try:
         record = json.loads(io.open(IN_FLIGHT, encoding="utf-8").read())
-        path = Path(record["path"])
-        original, mutated = record["original"], record["mutated"]
-        # **Types, before anything is written.** A record with `"original": null` — a half-finished
-        # hand edit, which the refusal below invites — reached `write(path, None)`, and `write`
-        # opens the file `"w"` *before* the `TypeError`, so the source was truncated to nothing and
-        # the record held no copy of it. Destroyed by the recovery, which is the one thing this
-        # module exists not to do (CHG-20260831-06, defect seat).
-        # `owner` too, and that is the half that mattered. Sending a non-integer owner to `_alive`
-        # to be answered `False` reads as "the owner is gone, recover" — so `"owner": "nope"`
-        # **restored the file and deleted the record**, where before it raised out of `_alive` and
-        # left both alone. A guard written to stop a traceback turned it into a silent overwrite
-        # (CHG-20260831-07, conformance and defect seats). Cannot-tell is refused here, which is
-        # what the rest of this branch does.
-        # **Absence too**, and only the four fields this reads. `record.items()` cannot see a key
-        # that is not there, so a hand edit deleting the `owner` line — the edit this branch's own
-        # refusal invites — passed the gate, `_owner` returned `None`, `_alive(None)` returned
-        # `False`, and `recover` read that as "the owner is gone": the file was overwritten and the
-        # record unlinked. If the owning run is alive that is CHG-20260830-06's corruption reached
-        # through absence instead of through a type (CHG-20260901-01, defect, risk and conformance).
-        #
-        # Only these four, because iterating everything present refused a record carrying an extra
-        # key of any other type — recovery unreachable until the operator guessed which spare field
-        # was the problem, on a record whose four real fields were all good (risk seat).
-        READS = ("path", "original", "mutated", "owner")
-        missing = sorted(k for k in READS if k not in record)
-        wrong = sorted(k for k in READS if k in record
-                       and (not isinstance(record[k], str if k != "owner" else int)
-                            or isinstance(record[k], bool)))
-        if missing or wrong or not record["path"].strip():
-            # Named precisely. "it cannot be read … so this cannot tell which file was mutated or
-            # what it held" was printed for a record whose `path`, `original` and `mutated` were
-            # all read and all fine, which sends the operator looking for the wrong thing.
-            raise ValueError(
-                f"the record is missing {missing} and has {wrong} of the wrong type"
-                if missing or wrong else "the record's path is empty")
-    except (OSError, ValueError, KeyError, TypeError) as unreadable:
+    except (OSError, ValueError) as unreadable:
         # **Kept, and refused.** This used to `unlink` it and return a line nobody printed, so
         # `--recover` on a truncated record was silent, exited 0, and deleted the file — while the
-        # guard that sent the operator here calls that file "the original text, and the only copy"
-        # and says "restore from the record by hand rather than deleting it". The remedy destroyed
-        # the thing the refusal was protecting, and reported success (CHG-20260831-04, risk seat).
-        #
-        # It is also the rule stated twenty lines below, about the edited-file case: *"a refusal
-        # that also throws away the original strands the file for good"*. Truncated and empty are
-        # exactly the shapes a kill mid-write leaves, so this is the branch that most needed it.
-        #
-        # `TypeError` because valid JSON that is not an object — `[]`, `null`, a bare string —
-        # makes `record["path"]` raise, and this branch is the one whose refusal tells an operator
-        # to open the file and edit it by hand. A half-finished hand edit is the expected way in,
-        # and it left a traceback instead of the refusal (CHG-20260831-05, defect seat).
-        #
-        # Not `AttributeError`: it was in this tuple for one round on the ground that `_owner`
-        # catches it, and `_owner` uses `.get` where this uses subscription — measured, no JSON
-        # shape reaches it here. Removed, and the comment stopped citing it, in CHG-20260831-07
-        # (conformance and risk seats, who found the tuple narrowed and the reason left behind).
-        said = (f"REFUSING to act on {IN_FLIGHT.name}: it cannot be read ({unreadable!r}), so this "
-                f"cannot tell which file was mutated or what it held. The file is **kept** — a "
-                f"partial record may still contain the only copy of some original text.\n"
-                f"  Open it. If it names a path and an `original`, put that text back by hand. If "
-                f"it is empty, `git status` and `git diff` on `src/` and `tools/` will show what a "
-                f"killed run left. Delete it once the tree is reconciled, and not before.")
-        if not quiet:
-            print(f"  {said}")
-        return said
+        # guard that sent the operator here calls that file "the original text, and the only copy".
+        # The rule is stated twenty lines below, about the edited-file case: *"a refusal that also
+        # throws away the original strands the file for good."*
+        return _refuse(f"REFUSING to act on {IN_FLIGHT.name}: it cannot be read ({unreadable!r}), "
+                       f"so this cannot tell which file was mutated or what it held. The file is "
+                       f"**kept** — a partial record may still contain the only copy of some "
+                       f"original text.\n"
+                       f"  Open it. If it names a path and an `original`, put that text back by "
+                       f"hand. If it is empty, `git status` and `git diff` on `src/` and `tools/` "
+                       f"will show what a killed run left. Delete it once the tree is reconciled, "
+                       f"and not before.", quiet)
+
+    # The four fields this reads, checked for presence **and** type before anything is subscripted.
+    # They were subscripted above the gate, so a record missing `path`, `original` or `mutated`
+    # raised `KeyError` first and `missing` could only ever be `['owner']` — a four-name tuple
+    # deciding one field (CHG-20260901-02, defect and risk seats). Absence matters because
+    # `record.items()` cannot see a key that is not there, and deleting the `owner` line is the
+    # repair the refusal above invites: it let the file be overwritten and the record unlinked.
+    #
+    # Only these four. Iterating everything present refused a record carrying a spare key of any
+    # other type, with recovery unreachable until the operator guessed which unread field it was.
+    READS = ("path", "original", "mutated", "owner")
+    missing = sorted(k for k in READS if k not in record) if isinstance(record, dict) else list(READS)
+    wrong = sorted(k for k in READS if isinstance(record, dict) and k in record
+                   and (not isinstance(record[k], str if k != "owner" else int)
+                        or isinstance(record[k], bool)))
+    if missing or wrong or not str(record.get("path", "")).strip():
+        # Its **own** refusal, not the unreadable one. Raising a `ValueError` into the handler above
+        # printed "it cannot be read … so this cannot tell which file was mutated or what it held"
+        # about a record whose `path`, `original` and `mutated` were all read and all fine, which
+        # sends the operator looking for the wrong thing (CHG-20260901-02, defect and risk seats).
+        said = (f"REFUSING to act on {IN_FLIGHT.name}: it reads as JSON, and "
+                + (f"the field(s) {missing} are not there. " if missing else "")
+                + (f"the field(s) {wrong} are not the type they must be. " if wrong else "")
+                + (f"its `path` is empty. " if not missing and not wrong else "")
+                + f"The file is **kept**.\n"
+                + f"  `owner` is the field that says whether a run is still mutating this tree, so "
+                + f"a record without a usable one cannot be acted on: putting the `original` back "
+                + f"by hand may overwrite a live run's source. Repair the field this names, then "
+                + f"run `--recover` again.")
+        return _refuse(said, quiet)
+
+    path = Path(record["path"])
+    original, mutated = record["original"], record["mutated"]
 
     owner = record.get("owner")
     if owner != os.getpid() and _alive(owner):

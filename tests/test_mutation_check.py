@@ -228,3 +228,28 @@ def test_a_mutation_whose_module_will_not_import_is_not_a_catch(tmp_path):
 
     assert caught is False, "a module that did not import measured nothing about the named class"
     assert target.read_text(encoding="utf-8") == original
+
+
+def test_every_mutated_file_still_imports_before_it_is_mutated():
+    """`_import_fails` must answer "" for every file the harness targets, unmutated.
+
+    It keyed on `path.parent.name == "ai_sdlc_runner"` and sent everything else to a hard-coded
+    `tools`, so the three mutations targeting `tests/test_subprocess_codecs.py` were imported with
+    `PYTHONPATH` pointing at `tools/`: `--only codecs` printed three `BROKE … ModuleNotFoundError`
+    and exited 1 on a clean checkout, telling the author to re-anchor three correctly anchored
+    mutations. That is the failure the outcome exists to remove, reintroduced by fixing one arm and
+    running four groups that all happened to be `src/` (CHG-20260901-02, defect and risk seats).
+
+    Unmutated, deliberately: a probe that cannot import the file as it stands cannot say anything
+    about the file with a mutation in it, and this is the cheap half — the whole-corpus sweep costs
+    about a minute and belongs to whoever runs the harness.
+    """
+    broken = {}
+    for path in sorted({m.path for m in mutation_check.MUTATIONS}):
+        said = mutation_check._import_fails(path)
+        if said:
+            broken[str(path.relative_to(mutation_check.REPO))] = said
+
+    assert not broken, (
+        "the harness cannot import these files as they stand, so every mutation on them reports "
+        f"BROKE about the probe rather than about the code: {broken}")

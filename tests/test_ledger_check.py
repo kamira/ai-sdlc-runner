@@ -687,10 +687,10 @@ GHOST_EXCUSES = [
     ("`test_gone` is the evidence for the halt rule. The vendored skill was deleted in "
      "CHG-20260901-01.", False, "a sentence about something else"),
     # Requiring a **capital** after the full stop was the third formulation of this bound, and it
-    # leaked on this repository's own house style: measured over all 265 records, 428 sentence ends
-    # are followed by a backticked identifier and 55 by a lowercase word, against 4306 by a capital
-    # — so roughly one boundary in ten was invisible, and the one shape that still worked was the
-    # only one pinned (CHG-20260901-01, risk seat).
+    # leaked on this repository's own house style. Measured under one rule, `[.!?]\s+`, over all
+    # 267 records: 4338 boundaries follow a capital and 4104 do not — 3253 punctuation or a dash,
+    # 429 a backticked identifier, 355 a digit, 67 a lowercase word. The capital rule saw about
+    # half, and the one shape that still worked was the only one pinned (CHG-20260901-02).
     ("`test_gone` is the evidence. `test_live` was deleted in CHG-20260901-01.", False,
      "a next sentence opening with a backticked identifier"),
     ("`test_gone` is the evidence. the vendored skill was deleted in CHG-20260901-01.", False,
@@ -723,13 +723,15 @@ GHOST_EXCUSES = [
     # A paragraph break, and only a paragraph break, decides these six: the fixture carries no
     # sentence end, so nothing else can refuse it first. The rows that stood here did end in one —
     # measured, disabling `_PARAGRAPH_BREAK` left all 21 green, so coverage went from 2 rows to 0
-    # in the round whose task was to strengthen it. **CRLF** is the one that mattered: every record
-    # in this repository is CRLF, so `[space-tab]` matched no paragraph break in any of them
+    # in the round whose task was to strengthen it. **U+3000** is the one that mattered: measured
+    # against the code as shipped, a break carrying it was excused and one carrying a plain space
+    # was not. Two rounds credited CRLF instead, which does not hold — `read_text` translates line
+    # endings, so no CR reaches the regex at all (CHG-20260901-02, idiom seat).
     # (CHG-20260831-07, idiom, defect, conformance and risk seats).
     ("`test_gone` is listed here" + NEWLINE + NEWLINE
      + "and was removed in CHG-20260901-01", False, "a paragraph break"),
     ("`test_gone` is listed here" + CRLF + CRLF
-     + "and was removed in CHG-20260901-01", False, "a CRLF break, as every record here is"),
+     + "and was removed in CHG-20260901-01", False, "a CRLF break, which read_text never produces but a raw read would"),
     ("`test_gone` is listed here" + NEWLINE + " " + NEWLINE
      + "and was removed in CHG-20260901-01", False, "a break carrying a space"),
     ("`test_gone` is listed here" + NEWLINE + chr(0x3000) + NEWLINE

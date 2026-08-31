@@ -16,6 +16,7 @@ marker naming the real duration. The time you see is honest about being compress
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import re
 from pathlib import Path
@@ -167,7 +168,12 @@ def main():
         raise SystemExit(f"no .cast files in {cast_dir}")
 
     page = render(steps, args.title or cast_dir.name)
-    Path(args.out).write_text(page, encoding="utf-8", newline="\n")
+    # `io.open`, not `Path.write_text(newline=…)`: that keyword is 3.10+ and this project's
+    # floor is 3.9. It sits in `main()`, which no test calls, so CI structurally cannot reach it
+    # — while `docs/RECORDING.md` publishes this as the command to run, so an operator on the
+    # declared floor got a `TypeError` after all the render work was done (CHG-20260901-02, risk
+    # seat, who swept the tree after the same keyword was removed from a test).
+    io.open(args.out, "w", encoding="utf-8", newline="\n").write(page)
     print(f"wrote {args.out} — {len(steps)} steps, {steps[-1]['end']:.0f}s of playback")
 
 
