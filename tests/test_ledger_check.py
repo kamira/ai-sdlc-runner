@@ -23,6 +23,11 @@ def _repo(tmp_path, chg_body, acc=None):
     return tmp_path
 
 
+#: `chr(10)` rather than an escape, for the few fixtures assembled by concatenation
+#: rather than written as one literal. The inline form is this file's norm and stays that way;
+#: this is for the cases where a literal would be unreadable.
+NEWLINE = chr(10)
+
 HEADER = "- Project: x\n- Branch: b\n- Date: 2026-09-01\n- Risk: low\n"
 
 #: A change claiming to be closed, and an acceptance saying the check that closed it never held.
@@ -605,7 +610,7 @@ def test_a_never_true_verdict_is_a_refusal_and_the_refusal_names_all_three(tmp_p
         f"{missing} would be reported as an unrecognised verdict, and the message would send the "
         f"operator to a list that reopens nothing. Add them to ACC_NOT_PASS as well")
 
-# The other direction cannot be checked by comparing the tuples: whether a word *means* "never
+    # The other direction cannot be checked by comparing the tuples: whether a word *means* "never
     # true" is a question about English, and `rstrip("d")` on both sides — what stood here for one
     # round — compares nothing at all, so `ACC_NEVER_TRUE = ("void",)` alone left the whole table
     # green (CHG-20260831-04, defect seat). What actually prevents the drift is the refusal an
@@ -641,8 +646,6 @@ def test_the_awaiting_matcher_reads_words_not_substrings(tmp_path):
     assert any("nobody wrote down" in p or "not a recognised" in p for p in problems), problems
 
 
-NEWLINE = chr(10)
-
 #: What a record may say about a test that is gone, and whether the lint accepts it. The remedy
 #: `check_named_tests_exist` offers is "say in the record that the test was since removed and why".
 #: For one round nothing tested whether saying so worked: the rule was held up only by the accident
@@ -658,6 +661,35 @@ GHOST_EXCUSES = [
     ("`test_gone` is the evidence." + NEWLINE + NEWLINE + "Other things were removed in "
      "CHG-20260901-01.", False, "an unrelated removal a paragraph away"),
     ("`test_gone` was deleted at some point.", False, "no change named at all"),
+    # The refusal says "say in the record that the test was since removed and why" and names no
+    # phrasing, so it has to accept the ones a person writes. All five of these were refused
+    # (CHG-20260831-05, defect seat) — the markdown-link form worst of all, in a markdown ledger,
+    # because `]` is not a digit.
+    ("`test_gone` was deleted in CHG-20260901-01.", True, "deleted"),
+    ("`test_gone` was dropped in CHG-20260901-01.", True, "dropped"),
+    ("`test_gone` was renamed in CHG-20260901-01.", True, "renamed"),
+    ("`test_gone` was removed by CHG-20260901-01.", True, "removed *by*, not *in*"),
+    ("`test_gone` was removed in [CHG-20260901-01](../changes/CHG-20260901-01.md).", True,
+     "the markdown-link form"),
+    # A paragraph break ends the window — and a line carrying one space is a paragraph break. The
+    # A paragraph break ends the window — and a line carrying one space is a paragraph break.
+    # A two-character newline literal missed it, so any editor leaving trailing whitespace
+    # laundered a ghost across the break.
+    ("`test_gone` is the evidence." + NEWLINE + "   " + NEWLINE
+     + "Other things were removed in CHG-20260901-01.", False,
+     "a paragraph away, with a space on the blank line"),
+    # What the window may **not** cross. Replacing the span with `.*?` — the previous round's
+    # over-broad form — leaves every other row green, so this is the row that pins it.
+    ("`test_gone` is pinned by `some_helper`, which was removed in CHG-20260901-01.", False,
+     "a backtick that is not a test name"),
+    # How far the phrase may sit from the name, in characters. `EXCUSE_WINDOW` was disclosed as
+    # "at most 200 characters" and was 200 *repetitions* of an alternation whose second branch
+    # swallows a whole backticked name — the round-10 conformance seat measured 3150, and nothing
+    # here noticed when the bound was removed entirely (CHG-20260831-05, VETO).
+    ("`test_gone` " + ("and a great deal of unrelated prose in between " * 12)
+     + "was removed in CHG-20260901-01.", False, "further away than the window allows"),
+    ("`test_gone` " + ("and a little prose in between " * 3)
+     + "was removed in CHG-20260901-01.", True, "and inside it"),
 ]
 
 
@@ -688,3 +720,30 @@ def test_the_remedy_the_ghost_refusal_offers_actually_works(tmp_path, sentence, 
     else:
         assert problems, f"{why}: this excuses nothing and must not be accepted"
         assert "removed and why" in problems[0], "and the refusal has to say what to do"
+
+
+#: Every spelling of "this acceptance's finding was never true". Each must reopen its change.
+NEVER_TRUE_HEADS = ["**Void.** the fix never worked", "**Voided.** the fix never worked",
+                    "**VOID.** the fix never worked", "已void"]
+
+
+@pytest.mark.parametrize("conclusion", NEVER_TRUE_HEADS)
+def test_every_never_true_spelling_reopens_its_change(tmp_path, conclusion):
+    """The tuples were held by a containment check in one direction and a claim in the other.
+
+    `tools/ledger_check.py`'s comment said the two "must stay **equal** on their never-true words,
+    in both directions — pinned by" the refusal-wording test. It is not: dropping `"voided"` from
+    `ACC_NEVER_TRUE` while it stays in `ACC_NOT_PASS` left the whole file green, and a DONE change
+    whose acceptance concluded `**Voided.**` then stayed closed with no problem reported at all
+    (CHG-20260831-05, defect seat).
+
+    Whether a word *means* "never true" is a question about English and cannot be compared between
+    tuples — the `rstrip("d")` attempt that stood here for one round compared nothing. What can be
+    checked is the behaviour, one spelling at a time, which is what this does.
+    """
+    repo = _repo(tmp_path, DONE_CHANGE,
+                 acc="# ACC" + NEWLINE + "- Conclusion: " + conclusion + NEWLINE)
+    problems = ledger_check.check(repo)
+
+    assert any("never true" in p for p in problems), (
+        f"{conclusion!r} did not reopen its change: {problems}")

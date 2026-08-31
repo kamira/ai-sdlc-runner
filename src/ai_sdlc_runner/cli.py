@@ -895,7 +895,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         except models_mod.ModelError as exc:
             print(f"error: {store_path} holds a model this runner refuses: {exc}")
             print(f"       This fires on **load**, so it stops every other model with it. Edit "
-                  f"that row, or pass `--assignment-store none` to walk without the store.")
+                  f"that row, or pass `--assignment-store none` to walk without the store. "
+                  f"(That escape is `run` only — `serve` refuses it, because a console with no "
+                  f"store has no models to assign.)")
             return 2
     try:
         saved = settings_mod.load(args.settings)
@@ -1300,12 +1302,23 @@ def cmd_serve(args: argparse.Namespace) -> int:
         # this one, which is checked first and is what anybody with a `models.json` hits
         # (CHG-20260831-04, risk seat).
         print(f"error: {registry_path} holds a model this runner refuses: {exc}")
-        print(f"       This fires on **load**, so it stops every other model in that file with it.")
+        print(f"       This fires on **load**, so it stops every other model in that file with it. "
+              f"Edit that model in {registry_path} — it is JSON — then start again.")
         return 2
 
     # The assignment store. This is where 「model 模型配置」 actually persists -- both halves of it,
     # after the ruling that the registry alone was not what was meant.
     store_path = args.assignment_store or (Path(args.token_dir) / "config.sqlite")
+    if str(store_path).lower() == "none":
+        # The same escape `cmd_run` has honoured since it was written, and which the store refusal
+        # below tells operators about. `serve` did not honour it: it created a sqlite database in
+        # the working directory named `none`, printed `models 0 registered`, and started — so
+        # somebody following that instruction detached from every model and assignment they had,
+        # silently, on the one command the refusal is actually about (CHG-20260831-05, risk seat).
+        print("error: serve needs a store. `--assignment-store none` detaches the console from "
+              "every model and assignment, which is a way to walk a plan, not a way to run a "
+              "console. Point it at a file, or fix the model the refusal named.")
+        return 2
     try:
         db = store_mod.connect(store_path)
         if not len(store_mod.load_registry(db)) and len(registry):
@@ -1335,10 +1348,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
         print(f"error: {store_path} holds a model this runner refuses: {exc}")
         print(f"       This fires on **load**, so it stops every other model with it. Edit that "
               f"row in {store_path} — it is a sqlite file — then start again.")
-        print(f"       If you delete it instead, delete its assignments too: `seat_models` and "
-              f"`node_models` rows pointing at it are only refused while sqlite's foreign keys are "
-              f"on, and they are off by default in every other editor. An assignment left pointing "
-              f"at nothing does not stop this console — it starts clean and says nothing.")
+        print(f"       If you delete it instead, delete its assignments too — `seat_assignments` "
+              f"and `node_assignments` rows whose model_id is that model. They are only refused "
+              f"while sqlite's foreign keys are on, and they are off by default in every editor "
+              f"but this one. An assignment left pointing at nothing does not stop this console: "
+              f"it starts clean and says nothing.")
         return 2
 
     # The plan's assignment is this change's declaration; the store's is the project's standing one.

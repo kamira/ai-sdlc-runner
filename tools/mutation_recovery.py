@@ -255,7 +255,7 @@ def recover(quiet: bool = False) -> Optional[str]:
         record = json.loads(io.open(IN_FLIGHT, encoding="utf-8").read())
         path = Path(record["path"])
         original, mutated = record["original"], record["mutated"]
-    except (OSError, ValueError, KeyError) as unreadable:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as unreadable:
         # **Kept, and refused.** This used to `unlink` it and return a line nobody printed, so
         # `--recover` on a truncated record was silent, exited 0, and deleted the file — while the
         # guard that sent the operator here calls that file "the original text, and the only copy"
@@ -265,6 +265,12 @@ def recover(quiet: bool = False) -> Optional[str]:
         # It is also the rule stated twenty lines below, about the edited-file case: *"a refusal
         # that also throws away the original strands the file for good"*. Truncated and empty are
         # exactly the shapes a kill mid-write leaves, so this is the branch that most needed it.
+        #
+        # `TypeError` and `AttributeError` because valid JSON that is not an object — `[]`, `null`,
+        # a bare string — makes `record["path"]` raise, and this branch is the one whose refusal
+        # tells an operator to open the file and edit it by hand. A half-finished hand edit is the
+        # expected way in, and it left a traceback instead of the refusal. `_owner` twenty lines
+        # down already caught `AttributeError` for exactly this shape (CHG-20260831-05, defect).
         said = (f"REFUSING to act on {IN_FLIGHT.name}: it cannot be read ({unreadable!r}), so this "
                 f"cannot tell which file was mutated or what it held. The file is **kept** — a "
                 f"partial record may still contain the only copy of some original text.\n"

@@ -828,7 +828,7 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         'reach', 'a name nobody can resolve is called internal, the generous way to be wrong',
         SRC / 'models.py',
-        '        if "." not in host or host.endswith(LOCAL_SUFFIXES):\n            return INTERNAL',
+        '        if graded_by_guess(endpoint) or host.endswith(LOCAL_SUFFIXES):\n            return INTERNAL',
         '        return INTERNAL',
         'tests/test_models.py'),
 
@@ -913,7 +913,7 @@ MUTATIONS: List[Mutation] = [
         'console', 'a non-loopback Host reaches the router, so DNS rebinding works again',
         SRC / 'server.py',
         '            if not _loopback_host(self.headers.get("Host")):',
-        '            if False:',
+        '            if True:',
         'tests/test_server.py'),
 
     Mutation(
@@ -1276,9 +1276,9 @@ MUTATIONS: List[Mutation] = [
         'tests/test_ledger_check.py'),
 
     Mutation(
-        'closure', 'the remedy the ghost refusal offers stops being honoured',
+        'closure', 'the excuse stops being bounded, so any removal note launders a ghost',
         TOOLS / 'ledger_check.py',
-        '            if BLANK_LINE not in found.group(0) and found.group(1) in ledger_ids:',
+        '            if (len(said) <= EXCUSE_WINDOW and not _PARAGRAPH_BREAK.search(said)',
         '            if False:',
         'tests/test_ledger_check.py'),
 
