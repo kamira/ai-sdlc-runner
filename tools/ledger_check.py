@@ -76,17 +76,20 @@ ACC_NOT_PASS = (
     # did nothing, and correcting only the prose left `_verdict` still reading `pass`.
     #
     # `void`, not `wrong`, and the difference is not taste. These lists are matched by substring
-    # against the head of the Conclusion field, and `wrong` is a general-purpose adjective: five
-    # acceptances already contain it in that line, four of which read as `pass` only because
-    # `_status_word` happens to cut at punctuation before reaching it. A head with no punctuation —
-    # "Pass but the first rule tried was wrong" — would match both lists at once. `void` appears in
-    # no Conclusion line in the repository and is verdict-shaped, like every other entry here.
+    # against the head of the Conclusion field, and `wrong` is a general-purpose adjective: **four**
+    # acceptances contain it in that line, and all four read as `pass` only because `_status_word`
+    # happens to cut at punctuation before reaching it. A head with no punctuation — "Pass but the
+    # first rule tried was wrong" — would match both lists at once. `void` is verdict-shaped, like
+    # every other entry here, and appears in exactly one Conclusion line: ACC-20260828-24's, put
+    # there by the change that added this word.
     #
-    # What this does **not** do, stated because the first version of this comment claimed otherwise:
-    # it changes no machine outcome. `check()` does `if not passed: continue`, so a not-pass verdict
-    # imposes nothing, and CHG-20260828-24 still reads `**Accepted**` with a void acceptance under
-    # it. Whether a void acceptance should stop satisfying a done change is a governance question
-    # this change does not answer (CHG-20260830-08, risk seat).
+    # (CHG-20260830-08 said "five … four of which", which was the count before that same commit
+    # rewrote ACC-20260828-24, and "`void` appears in no Conclusion line", which its own commit
+    # falsified. Both corrected in CHG-20260830-09, conformance seat.)
+    #
+    # This word now has teeth: `check` refuses a DONE change whose acceptance is void — see
+    # `_never_held`. CHG-20260830-08 shipped it inert and said so; the round-5 conformance seat
+    # ruled that the missing half should exist, and it fires on exactly one pair.
     "void",
     "未通過", "退回", "已作廢",
 )
@@ -144,6 +147,21 @@ def _verdict(text: str) -> str:
     """
     found = re.search(r"^[-*]\s*(?:\*\*)?Conclusion(?:\*\*)?\s*[:：]\s*(.*)$", text, re.M)
     return _status_word(found.group(1)) if found else ""
+
+
+#: Verdicts that say the acceptance's own finding never held, as against `superseded`, which says
+#: the change was replaced. Only these reopen a change — see the second half of `check`'s DONE test.
+ACC_NEVER_TRUE = ("void",)
+
+
+def _never_held(repo: Path, chg_id: str) -> bool:
+    """Does this change's acceptance record a verdict that was never true?"""
+    acc = repo / "docs" / "acceptance" / f"ACC-{chg_id[4:]}.md"
+    try:
+        verdict = _verdict(acc.read_text(encoding="utf-8"))
+    except OSError:                                   # pragma: no cover - the caller checked it
+        return False
+    return any(word in verdict for word in ACC_NEVER_TRUE)
 
 
 def _field_present(text: str, field: str) -> bool:
@@ -210,6 +228,22 @@ def check(repo: Path) -> List[str]:
             problems.append(
                 f"{chg_id}: its status says the work is finished, but docs/acceptance/ has no "
                 f"matching ACC — a change reported complete with nothing saying it was checked")
+        elif done and _never_held(repo, chg_id):
+            # The missing twin of the check above. That one asks whether an acceptance *exists*;
+            # this asks whether it still says anything. A change closed on an acceptance whose
+            # verdict was never true is closed on nothing — the same false green this file exists
+            # to catch, one field over (CHG-20260830-09, ruled by the round-5 conformance seat).
+            #
+            # Scoped to `ACC_NEVER_TRUE`, not to every refusal: `superseded` means a change was
+            # replaced, which is history and not a contradiction, and two acceptances sit under
+            # done changes that way today. `void` means the verdict itself never held, and exactly
+            # one pair is in that state — so this needs no grandfathering date, unlike
+            # `BRANCH_REQUIRED_FROM` and `TESTS_MUST_EXIST_FROM`.
+            problems.append(
+                f"{chg_id}: its status says the work is finished, but ACC-{chg_id[4:]} records a "
+                f"verdict that was never true. Reopen the change, or say in its status why the "
+                f"void acceptance does not reopen it — a change cannot be closed on a check its "
+                f"own acceptance withdraws")
 
     # ── the other direction, which nothing walked (CHG-20260828-02) ─────────────────────────────
     #

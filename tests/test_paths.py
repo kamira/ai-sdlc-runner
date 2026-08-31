@@ -727,10 +727,12 @@ def test_every_exception_a_person_reads_goes_through_plain_in():
     # read *nothing* and missed one that read *less*: dropping a single module still left
     # 57 passed, with one in-scope handler unexamined (CHG-20260830-08, defect seat). A new
     # module or handler makes these fail, and updating them is the point — the number is a
-    # claim about coverage, so it should have to be re-made.
-    assert modules >= 21, f"the survey read {modules} modules; the package has 21"
-    assert in_scope >= 12, (
-        f"the survey looked inside {in_scope} in-scope handlers; there are 12. It cannot "
+    # claim about coverage, so it should have to be re-made. Equality, not `>=`: the first
+    # version said exactly this and used `>=`, which bites on removal and not on addition, so
+    # a new module went unexamined and the survey still reported a clean tree.
+    assert modules == 21, f"the survey read {modules} modules; the package had 21"
+    assert in_scope == 12, (
+        f"the survey looked inside {in_scope} in-scope handlers; there were 12. It cannot "
         f"report a clean tree over handlers it did not open")
     assert not unstripped, (
         "these let an exception reach a person with the extended-length prefix still on it: "
