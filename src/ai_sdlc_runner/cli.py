@@ -1310,10 +1310,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
     # after the ruling that the registry alone was not what was meant.
     store_path = args.assignment_store or (Path(args.token_dir) / "config.sqlite")
     if str(store_path).lower() == "none":
-        # The same escape `cmd_run` has honoured since it was written. The people passing it came
-        # from `cmd_run`'s refusal, from `README.md`, and from `run --assignment-store`'s help — all
-        # four of those say where it works now, this one included (CHG-20260831-07, idiom seat: the
-        # comment still said "only the first of those", in the commit that fixed all of them).
+        # The same escape `cmd_run` has honoured since it was written. Five places in the tree say
+        # where it works: `cmd_run`'s refusal, `README.md`, `run --assignment-store`'s help,
+        # `serve --assignment-store`'s help, and the refusal below. For one round the comment here
+        # said "only the first of those" — in the commit that had just fixed three of them
+        # (CHG-20260901-01, idiom seat, which counted five where this said four).
         # `serve` did not honour it before: it created a sqlite database in
         # the working directory named `none`, printed `models 0 registered`, and started — so
         # somebody following that instruction detached from every model and assignment they had,

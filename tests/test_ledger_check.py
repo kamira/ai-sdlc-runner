@@ -686,12 +686,45 @@ GHOST_EXCUSES = [
     ("`test_gone` ... was removed in CHG-20260901-01.", True, "an ellipsis"),
     ("`test_gone` is the evidence for the halt rule. The vendored skill was deleted in "
      "CHG-20260901-01.", False, "a sentence about something else"),
+    # Requiring a **capital** after the full stop was the third formulation of this bound, and it
+    # leaked on this repository's own house style: measured over all 265 records, 428 sentence ends
+    # are followed by a backticked identifier and 55 by a lowercase word, against 4306 by a capital
+    # — so roughly one boundary in ten was invisible, and the one shape that still worked was the
+    # only one pinned (CHG-20260901-01, risk seat).
+    ("`test_gone` is the evidence. `test_live` was deleted in CHG-20260901-01.", False,
+     "a next sentence opening with a backticked identifier"),
+    ("`test_gone` is the evidence. the vendored skill was deleted in CHG-20260901-01.", False,
+     "a next sentence opening lowercase"),
+    ("`test_gone` is the evidence. (The skill was deleted in CHG-20260901-01.)", False,
+     "a next sentence opening with a paren"),
+    ("`test_gone` is the evidence. 3 skills were deleted in CHG-20260901-01.", False,
+     "a next sentence opening with a digit"),
+    ("`test_gone` etc. was removed in CHG-20260901-01.", True, "etc., which is not a sentence end"),
+    # Every record here is hard-wrapped, and the rename phrase was spelled with hard spaces, so a
+    # wrap inside it refused the phrasing the comment above `_REMOVED_BY` recommends (risk seat).
+    ("`test_gone` was renamed to" + NEWLINE
+     + "  `test_this_repos_own_ledger_passes` in CHG-20260901-01.", True,
+     "the rename phrase, wrapped"),
+    # A continuation that does not start with a capital. The whole one-sentence bound rests on
+    # `_SENTENCE_END` now that `_SPAN` no longer excludes `.!?`, and only its capital-letter
+    # alternative was measured — dropping the `\s*$` half left 120 green while these two came back
+    # (CHG-20260901-01, defect seat).
+    ("`test_gone` is the evidence for the halt rule." + CRLF
+     + "the vendored skill was deleted in CHG-20260901-01", False,
+     "a lowercase continuation on the next line"),
+    ("`test_gone` is the evidence for the halt rule." + CRLF
+     + "  1. the skill was deleted in CHG-20260901-01", False, "a numbered list item"),
+    # `re.IGNORECASE` is on the whole pattern, so a differently-cased spelling of the name matched
+    # it — while `check_named_tests_exist` reports the ghost case-sensitively. The excuse has to be
+    # about the name the record actually cites (CHG-20260901-01, defect seat).
+    ("`test_gone` is the pin, and `TEST_GONE` was removed in CHG-20260901-01.",
+     False, "a differently-cased name does not excuse the one cited"),
     ("`test_gone` — removed in CHG-19700101-99.", False, "a change id nobody can open"),
     # A paragraph break, and only a paragraph break, decides these six: the fixture carries no
     # sentence end, so nothing else can refuse it first. The rows that stood here did end in one —
     # measured, disabling `_PARAGRAPH_BREAK` left all 21 green, so coverage went from 2 rows to 0
     # in the round whose task was to strengthen it. **CRLF** is the one that mattered: every record
-    # in this repository is CRLF, so `[ 	]` matched no paragraph break in any of them
+    # in this repository is CRLF, so `[space-tab]` matched no paragraph break in any of them
     # (CHG-20260831-07, idiom, defect, conformance and risk seats).
     ("`test_gone` is listed here" + NEWLINE + NEWLINE
      + "and was removed in CHG-20260901-01", False, "a paragraph break"),

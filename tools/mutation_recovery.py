@@ -73,7 +73,7 @@ def _alive(pid: Optional[int]) -> bool:
     killed run left mutated. That leaves the tree wrong but says so loudly, and the refusal names the
     way out. It is the direction to fail in, not a direction that is safe.
     """
-    # Not alive, and **that is not the safe direction** - the comment here said it was. `_alive`
+    # Not alive, and **that is not the safe direction** — the comment here said it was. `_alive`
     # returning False is what lets `recover` act, so answering "not a process" for a pid it
     # cannot read is how a bad `owner` came to overwrite a file and delete its own record.
     # `recover` refuses such a record before reaching this now; the guard stays for callers that
@@ -276,15 +276,33 @@ def recover(quiet: bool = False) -> Optional[str]:
         # the record held no copy of it. Destroyed by the recovery, which is the one thing this
         # module exists not to do (CHG-20260831-06, defect seat).
         # `owner` too, and that is the half that mattered. Sending a non-integer owner to `_alive`
-        # to be answered `False` reads as "the owner is gone, recover" - so `"owner": "nope"`
+        # to be answered `False` reads as "the owner is gone, recover" — so `"owner": "nope"`
         # **restored the file and deleted the record**, where before it raised out of `_alive` and
         # left both alone. A guard written to stop a traceback turned it into a silent overwrite
         # (CHG-20260831-07, conformance and defect seats). Cannot-tell is refused here, which is
         # what the rest of this branch does.
-        wrong = {k: type(v).__name__ for k, v in record.items()
-                 if not isinstance(v, str if k != "owner" else int) or isinstance(v, bool)}
-        if wrong or not record["path"].strip():
-            raise ValueError(f"a record field is not the type it must be: {wrong or record}")
+        # **Absence too**, and only the four fields this reads. `record.items()` cannot see a key
+        # that is not there, so a hand edit deleting the `owner` line — the edit this branch's own
+        # refusal invites — passed the gate, `_owner` returned `None`, `_alive(None)` returned
+        # `False`, and `recover` read that as "the owner is gone": the file was overwritten and the
+        # record unlinked. If the owning run is alive that is CHG-20260830-06's corruption reached
+        # through absence instead of through a type (CHG-20260901-01, defect, risk and conformance).
+        #
+        # Only these four, because iterating everything present refused a record carrying an extra
+        # key of any other type — recovery unreachable until the operator guessed which spare field
+        # was the problem, on a record whose four real fields were all good (risk seat).
+        READS = ("path", "original", "mutated", "owner")
+        missing = sorted(k for k in READS if k not in record)
+        wrong = sorted(k for k in READS if k in record
+                       and (not isinstance(record[k], str if k != "owner" else int)
+                            or isinstance(record[k], bool)))
+        if missing or wrong or not record["path"].strip():
+            # Named precisely. "it cannot be read … so this cannot tell which file was mutated or
+            # what it held" was printed for a record whose `path`, `original` and `mutated` were
+            # all read and all fine, which sends the operator looking for the wrong thing.
+            raise ValueError(
+                f"the record is missing {missing} and has {wrong} of the wrong type"
+                if missing or wrong else "the record's path is empty")
     except (OSError, ValueError, KeyError, TypeError) as unreadable:
         # **Kept, and refused.** This used to `unlink` it and return a line nobody printed, so
         # `--recover` on a truncated record was silent, exited 0, and deleted the file — while the
@@ -335,7 +353,18 @@ def recover(quiet: bool = False) -> Optional[str]:
 
     # `is_file()`, not `exists()`: `{"path": "."}` exists and opening it is a `PermissionError`
     # out of an unguarded read, so a record naming a directory tracebacked instead of refusing.
-    if path.exists() and not path.is_file():
+    if not path.exists():
+        # Its own branch, like the directory below it. Falling through to the edited-since arm told
+        # the operator somebody had edited a file that is not there — it was moved, or the record's
+        # path is stale after a worktree change — and "reconcile it by hand" is not the action
+        # (CHG-20260901-01, defect seat).
+        said = (f"REFUSING to act on {IN_FLIGHT.name}: it names {path}, which does not exist. It "
+                f"may have been moved, or this record may be from another worktree. Nothing here "
+                f"was changed; the original is kept in {IN_FLIGHT.name}.")
+        if not quiet:
+            print(f"  {said}")
+        return said
+    if not path.is_file():
         # Its own branch, because falling through to the edited-since one told the operator somebody
         # had edited a file — about a directory, and `Path(".").name` is `""`, so it named nothing
         # at all (CHG-20260831-07, risk and conformance seats).
