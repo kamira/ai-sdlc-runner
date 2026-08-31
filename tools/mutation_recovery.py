@@ -257,7 +257,12 @@ def restore(path: Path, original: str) -> None:
 
 
 def _refuse(said: str, quiet: bool) -> str:
-    """Print a refusal unless asked not to, and return it. Four branches of `recover` do this."""
+    """Print a refusal unless asked not to, and return it.
+
+    Used by the two branches that were written after it existed. Five more still print by hand,
+    which is what this was extracted to stop — the docstring said "four branches" and covered two
+    (CHG-20260901-03, risk seat). Routing the rest is worth doing and is not this change.
+    """
     if not quiet:
         print(f"  {said}")
     return said
@@ -309,15 +314,26 @@ def recover(quiet: bool = False) -> Optional[str]:
         # printed "it cannot be read … so this cannot tell which file was mutated or what it held"
         # about a record whose `path`, `original` and `mutated` were all read and all fine, which
         # sends the operator looking for the wrong thing (CHG-20260901-02, defect and risk seats).
+        # The remedy names **the field that is actually wrong**. It named `owner` for every
+        # fault — a record missing `original`, a record with a blank `path`, a JSON array with
+        # no fields at all — and told the operator to repair a field that was fine. Half of task
+        # 7 last round: the diagnosis moved into the first sentence and the explanation did not
+        # follow it (CHG-20260901-03, risk seat).
+        broken = missing + wrong or ["path"]
         said = (f"REFUSING to act on {IN_FLIGHT.name}: it reads as JSON, and "
                 + (f"the field(s) {missing} are not there. " if missing else "")
                 + (f"the field(s) {wrong} are not the type they must be. " if wrong else "")
                 + (f"its `path` is empty. " if not missing and not wrong else "")
                 + f"The file is **kept**.\n"
-                + f"  `owner` is the field that says whether a run is still mutating this tree, so "
-                + f"a record without a usable one cannot be acted on: putting the `original` back "
-                + f"by hand may overwrite a live run's source. Repair the field this names, then "
-                + f"run `--recover` again.")
+                + (f"  `owner` is the field that says whether a run is still mutating this "
+                   f"tree. Without a usable one this cannot tell a killed run from a live one, "
+                   f"and putting the `original` back by hand may overwrite a live run's "
+                   f"source — so **do not invent a pid**. If you know no run is active, delete "
+                   f"the record and use `git status` and `git diff` to see what was left "
+                   f"mutated.\n"
+                   if "owner" in broken else
+                   f"  Repair {broken} in {IN_FLIGHT.name} — the other fields were read and are "
+                   f"intact — then run `--recover` again.\n"))
         return _refuse(said, quiet)
 
     path = Path(record["path"])

@@ -1276,7 +1276,7 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         'closure', 'a record can name a test that does not exist again',
         TOOLS / 'ledger_check.py',
-        '                  if name not in known and not _excused(text, name, ledger_ids)]',
+        '                  if name not in known and not _excused(text, name, ledger_ids, known)]',
         '                  if False]',
         'tests/test_ledger_check.py'),
 
@@ -1767,12 +1767,20 @@ def _import_fails(path: Path) -> str:
         # `tests/test_subprocess_codecs.py`, and the fallback imported them with `PYTHONPATH`
         # pointing at `tools/` — so `--only codecs` reported three false `BROKE`s and exited 1 on a
         # clean checkout, telling the author to re-anchor three correctly anchored mutations. That
-        # is the failure this whole outcome exists to remove, reintroduced by fixing one arm of it
-        # and running four groups that all happened to be `src/` (CHG-20260901-02, defect and risk
-        # seats). `test_every_shipped_mutation_still_imports` runs the whole set now.
+        # is the failure this whole outcome exists to remove, reintroduced by fixing one arm of it.
+        # The four groups run to check that fix were `stranded` and `closure` — which target `tools/`
+        # only, and so **passed because** the fallback was hard-coded to `"tools"` — and `reach` and
+        # `console`, which are `src/`. `codecs` is the only group with a `tests/` target, and it was
+        # the one not run (CHG-20260901-03, conformance seat, correcting -02's account of this).
+        # `test_every_mutated_file_still_imports_before_it_is_mutated` runs every target now.
         module, where = path.stem, path.parent.name
     stmt = f"import {module}"
-    probe = subprocess.run([sys.executable, "-c", stmt], capture_output=True, text=True,
+    # `-B`: no bytecode written, none trusted. `__pycache__` is validated on `int(st_mtime)` and
+    # size, so a same-size rewrite inside one second imports the stale `.pyc` — the defect seat
+    # demonstrated the mechanism on a synthetic module and could not land the shipped harness in
+    # the window (the real spacing is 0.8–2.4s), so this is a latent hole closed cheaply rather
+    # than a measured failure (CHG-20260901-03, defect seat).
+    probe = subprocess.run([sys.executable, "-B", "-c", stmt], capture_output=True, text=True,
                            encoding="utf-8", errors="replace", cwd=REPO,
                            env={**os.environ, "PYTHONPATH": str(REPO / where)})
     if probe.returncode == 0:

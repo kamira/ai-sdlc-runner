@@ -236,13 +236,16 @@ def test_every_mutated_file_still_imports_before_it_is_mutated():
     It keyed on `path.parent.name == "ai_sdlc_runner"` and sent everything else to a hard-coded
     `tools`, so the three mutations targeting `tests/test_subprocess_codecs.py` were imported with
     `PYTHONPATH` pointing at `tools/`: `--only codecs` printed three `BROKE … ModuleNotFoundError`
-    and exited 1 on a clean checkout, telling the author to re-anchor three correctly anchored
-    mutations. That is the failure the outcome exists to remove, reintroduced by fixing one arm and
-    running four groups that all happened to be `src/` (CHG-20260901-02, defect and risk seats).
+    and exited 1 on a clean checkout, telling the author to re-anchor three correctly anchored mutations. Two of the four groups run
+    to check that fix — `stranded` and `closure` — target `tools/` only, and passed **because** the
+    fallback was hard-coded to `"tools"`; `codecs` is the only group with a `tests/` target, and it
+    was the one not run (CHG-20260901-03, conformance seat, correcting -02's account).
 
     Unmutated, deliberately: a probe that cannot import the file as it stands cannot say anything
-    about the file with a mutation in it, and this is the cheap half — the whole-corpus sweep costs
-    about a minute and belongs to whoever runs the harness.
+    about the file with a mutation in it, and this is the cheap half: 19 subprocesses, ~6s. The
+    probe across a full harness run is ~84s of subprocess time, inside a full run the risk seat
+    measured at roughly **54 minutes** — "about a minute" understated that by fifty-fold
+    (CHG-20260901-03, risk seat). That half belongs to whoever runs the harness; CI does not.
     """
     broken = {}
     for path in sorted({m.path for m in mutation_check.MUTATIONS}):

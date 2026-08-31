@@ -902,8 +902,13 @@ def test_recover_destroys_nothing_it_cannot_account_for(tmp_path, monkeypatch, o
     # it. Asserting only "REFUSING" let two of the three absence rows pass through the older arm and
     # pin nothing: `path`, `original` and `mutated` were subscripted before the gate, so `missing`
     # could only ever be `['owner']` (CHG-20260901-02, defect and risk seats).
+    # The **diagnosis line**, not anywhere in the message. `field in said` was satisfied by the
+    # remedy paragraph, which named `owner` unconditionally: sabotaging the diagnosis to say
+    # "something is not there" left nine of eleven rows green (CHG-20260901-03, risk seat).
     field = next(iter(override))
-    assert field in said, f"{shape}: the refusal has to name {field!r} — {said!r}"
+    diagnosis = said.split(NEWLINE)[0]
+    assert field in diagnosis, (
+        f"{shape}: the first line has to name {field!r} — {diagnosis!r}")
     assert "cannot be read" not in said, (
         f"{shape}: this record reads as JSON; saying it does not sends the operator to the wrong "
         f"thing — {said!r}")

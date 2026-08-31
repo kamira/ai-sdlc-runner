@@ -143,6 +143,7 @@ def test_a_change_with_no_status_section_is_reported(tmp_path):
 # the vocabulary of "finished" is closed
 # --------------------------------------------------------------------------------------
 
+import io
 import pytest  # noqa: E402
 
 
@@ -674,8 +675,18 @@ GHOST_EXCUSES = [
     ("`test_gone` was removed in [CHG-20260901-01](#chg-20260901-01).", True, "a GitHub anchor"),
     # The phrasing the comment above `_REMOVED_BY` tells people to write. Dropping `renamed`
     # without making this work left no rename phrasing the check accepts at all (risk seat).
-    ("`test_gone` was renamed to `test_still_here` in CHG-20260901-01.", True,
-     "renamed, with the new name given"),
+    # The new name has to be a test that exists, or the rename gives the reader nowhere to go —
+    # which is the whole argument for accepting the phrasing (CHG-20260901-03, risk seat).
+    ("`test_gone` was renamed to `test_this_repos_own_ledger_passes` in CHG-20260901-01.", True,
+     "renamed, with a new name that resolves"),
+    ("`test_gone` was renamed to `test_never_written` in CHG-20260901-01.", False,
+     "renamed, with a new name that does not"),
+    ("`test_gone` was renamed to `helper` in CHG-20260901-01.", False,
+     "renamed to something that is not a test"),
+    # A rename of something else entirely, in a sentence that says outright the ghost is unaffected.
+    # The widening that let `renamed to `<any>`` through excused this (CHG-20260901-03, defect seat).
+    ("The helper was renamed to `some_helper` in CHG-20260901-01; `test_gone` is unaffected.", False,
+     "a helper rename that says the ghost is unaffected"),
     ("`test_gone` was renamed in CHG-20260901-01.", False, "renamed, with no new name"),
     # Ordinary prose punctuation. Excluding `.!?` outright refused all five of these, every one a
     # remedy the refusal invites (CHG-20260831-07, risk seat).
@@ -687,10 +698,11 @@ GHOST_EXCUSES = [
     ("`test_gone` is the evidence for the halt rule. The vendored skill was deleted in "
      "CHG-20260901-01.", False, "a sentence about something else"),
     # Requiring a **capital** after the full stop was the third formulation of this bound, and it
-    # leaked on this repository's own house style. Measured under one rule, `[.!?]\s+`, over all
-    # 267 records: 4338 boundaries follow a capital and 4104 do not — 3253 punctuation or a dash,
-    # 429 a backticked identifier, 355 a digit, 67 a lowercase word. The capital rule saw about
-    # half, and the one shape that still worked was the only one pinned (CHG-20260901-02).
+    # leaked on this repository's own house style. Measured under `[.!?]\s+(.)` — the following
+    # character, so end-of-text boundaries are not counted — over the
+    # 269 records as of CHG-20260901-03: 4364 boundaries follow a capital and 4148 do not — 3287
+    # punctuation or a dash, 431 a backticked identifier, 363 a digit, 67 a lowercase word. The
+    # capital rule saw about half, and the one shape that still worked was the only one pinned.
     ("`test_gone` is the evidence. `test_live` was deleted in CHG-20260901-01.", False,
      "a next sentence opening with a backticked identifier"),
     ("`test_gone` is the evidence. the vendored skill was deleted in CHG-20260901-01.", False,
@@ -770,8 +782,15 @@ def test_the_remedy_the_ghost_refusal_offers_actually_works(tmp_path, sentence, 
         "def test_this_repos_own_ledger_passes():" + NEWLINE + "    pass" + NEWLINE,
         encoding="utf-8")
     acc = repo / "docs" / "acceptance" / "ACC-20260901-01.md"
-    acc.write_text("# ACC" + NEWLINE + "- Conclusion: **Pass.**" + NEWLINE + NEWLINE + sentence,
-                   encoding="utf-8")
+    # `io.open(newline="")`, not `write_text`: `write_text` translates a newline to os.linesep,
+    # so on Windows a fixture's CRLF became a doubled CR and the paragraph rule decided two rows
+    # that the sentence rule decides on Linux. The revert figures then differed by platform — 7
+    # on POSIX, 5 here — and a correction replaced a figure true on one CI cell with one true on
+    # neither (CHG-20260901-03, defect seat). The `newline=` keyword on `write_text` is 3.10+ and
+    # this project's floor is 3.9.
+    with io.open(acc, "w", encoding="utf-8", newline="") as handle:
+        handle.write("# ACC" + NEWLINE + "- Conclusion: **Pass.**" + NEWLINE + NEWLINE
+                     + sentence)
 
     problems = [p for p in ledger_check.check_named_tests_exist(repo) if "test_gone" in p]
 
