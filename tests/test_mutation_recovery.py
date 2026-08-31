@@ -219,9 +219,16 @@ def test_this_repository_has_no_mutation_in_flight():
     `MUTATION_RUN` is set by `mutation_check._pytest` and by nothing else. A run in progress says so;
     everything else is a leftover and fails. No inference, and no coupling to `_alive`.
     """
-    if os.environ.get("MUTATION_RUN"):
-        pytest.skip(f"a mutation run (pid {os.environ['MUTATION_RUN']}) started this pytest and "
-                    f"holds the record; that is not the killed-run leftover this guards against")
+    announced = os.environ.get("MUTATION_RUN")
+    if announced and announced.isdigit() and int(announced) == mutation_recovery._owner():
+        # Both halves, and the second is not decoration. Skipping on the variable alone meant one
+        # stray `export MUTATION_RUN=1` in a shell — or the name appearing in any CI environment —
+        # disarmed this repository's stranded-tree detector everywhere, permanently and silently.
+        # `_pytest` sets it to `os.getpid()` and `begin` writes that same pid as the record's owner,
+        # so this is an identity between two things the harness wrote, not an inference about a
+        # process (CHG-20260830-09, risk seat).
+        pytest.skip(f"mutation run {announced} started this pytest and owns the record; that is not "
+                    f"the killed-run leftover this guards against")
 
     assert not mutation_recovery.IN_FLIGHT.exists(), (
         f"{mutation_recovery.IN_FLIGHT} exists and no mutation run started this pytest, so a source "
@@ -233,25 +240,60 @@ def test_this_repository_has_no_mutation_in_flight():
 def _guard_says(tmp_path, record, env):
     """Run the in-flight guard as its own pytest, against a record and an environment we choose.
 
-    In-process would test nothing: the guard reads the real `IN_FLIGHT` and the real environment,
-    which is the whole point of it. So it is driven the way it actually runs.
+    In-process would test nothing: the guard reads the environment and the record on disk, and that
+    is the whole point of it. So it is driven the way it actually runs — but pointed at a record of
+    its own.
+
+    ## Why not the real record
+
+    The first version wrote and then unlinked `mutation_recovery.IN_FLIGHT` itself. Every one of the
+    twelve `stranded` mutations runs this file, so during a mutation run this helper deleted the
+    harness's own record — the thing that is both the way back and the lock — while a source file
+    sat mutated on disk. Measured by the round-5 risk seat: absent for 2.1s of a 9.8s window, with
+    `all 12 caught` printed and nothing reporting it. A kill in that window leaves a mutated file
+    with no record of what it was, `--recover` then says *nothing in flight*, and a second run takes
+    the lock uncontended. That is the incident this whole module exists for, opened by the test
+    written to prove the guard against it (CHG-20260830-09).
     """
-    (tmp_path / "conftest.py").write_text("", encoding="utf-8")
-    if record is None:
-        mutation_recovery.IN_FLIGHT.unlink(missing_ok=True)
-    else:
-        mutation_recovery.write(mutation_recovery.IN_FLIGHT, record)
-    try:
-        return subprocess.run(
-            [sys.executable, "-m", "pytest",
-             f"{Path(__file__).name}::test_this_repository_has_no_mutation_in_flight",
-             "-q", "-p", "no:randomly", "--no-header", "--tb=no"],
-            cwd=Path(__file__).resolve().parent, capture_output=True, text=True,
-            encoding="utf-8", errors="replace",
-            env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
-                 **env})
-    finally:
-        mutation_recovery.IN_FLIGHT.unlink(missing_ok=True)
+    # A directory per call. Sharing one would leave the previous call's record in place, so the
+    # "clean tree" case would run against a record it did not write -- measured, it failed for
+    # exactly that reason while the code under test was correct.
+    here = tmp_path / f"run{len(list(tmp_path.iterdir()))}"
+    here.mkdir()
+    theirs = here / "in-flight.json"
+    if record is not None:
+        mutation_recovery.write(theirs, record)
+    return subprocess.run(
+        [sys.executable, "-m", "pytest",
+         f"{Path(__file__).name}::test_this_repository_has_no_mutation_in_flight",
+         "-q", "-p", "no:randomly", "--no-header", "--tb=no"],
+        cwd=Path(__file__).resolve().parent, capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+             "MUTATION_IN_FLIGHT": str(theirs), **env})
+
+
+def test_the_harness_tells_the_child_it_is_a_mutation_run(monkeypatch):
+    """The writer half of the contract the guard reads. Nothing pinned it.
+
+    Deleting `MUTATION_RUN` from `_pytest`'s environment left 30 tests green — and then every
+    `stranded` mutation went back to being credited to the guard at test 10 under `-x` instead of
+    the test that names it, which is the exact failure CHG-20260830-08 was written to remove. The
+    reader half was pinned; this end was asserted in a record and by nothing else
+    (CHG-20260830-09, defect seat).
+    """
+    seen = {}
+
+    def spy(argv, **kwargs):
+        seen.update(kwargs.get("env") or {})
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(mutation_check.subprocess, "run", spy)
+    mutation_check._pytest("tests/fake.py")
+
+    assert seen.get("MUTATION_RUN") == str(os.getpid()), (
+        "the harness did not tell its own pytest that a mutation run is in progress, so the "
+        "in-flight guard will fail during every mutation and mask the test that should have failed")
 
 
 def test_the_guard_fails_on_a_leftover_record_and_skips_only_for_a_running_harness(tmp_path):
@@ -264,17 +306,22 @@ def test_the_guard_fails_on_a_leftover_record_and_skips_only_for_a_running_harne
 
     Both directions, through a real pytest, because the guard reads the real environment.
     """
-    held = json.dumps({"path": "x", "original": "a", "mutated": "b", "owner": os.getpid()})
+    owner = 4242
+    held = json.dumps({"path": "x", "original": "a", "mutated": "b", "owner": owner})
 
     leftover = _guard_says(tmp_path, held, {"MUTATION_RUN": ""})
-    running = _guard_says(tmp_path, held, {"MUTATION_RUN": "12345"})
+    running = _guard_says(tmp_path, held, {"MUTATION_RUN": str(owner)})
+    stray = _guard_says(tmp_path, held, {"MUTATION_RUN": "1"})
     clean = _guard_says(tmp_path, None, {"MUTATION_RUN": ""})
 
     assert leftover.returncode != 0, (
         "a record left behind with no mutation run in progress did not fail the guard, so a killed "
         f"run's mutated file would ship silently: {leftover.stdout[-400:]}")
     assert "1 skipped" in running.stdout, (
-        f"the guard did not excuse a run that announced itself: {running.stdout[-400:]}")
+        f"the guard did not excuse the run that owns the record: {running.stdout[-400:]}")
+    assert stray.returncode != 0, (
+        "a `MUTATION_RUN` that does not own the record still excused the guard, so one stray "
+        f"`export` disarms this repository's stranded-tree detector: {stray.stdout[-400:]}")
     assert clean.returncode == 0, f"the guard failed on a clean tree: {clean.stdout[-400:]}"
 
 
@@ -470,6 +517,17 @@ def test_a_second_run_does_not_recover_over_a_live_run(sentinel, holder):
     assert json.loads(sentinel.read_text(encoding="utf-8"))["owner"] == first.pid
     assert said and said.startswith("REFUSING"), said
     assert str(first.pid) in said, "the refusal has to name the run being waited for"
+    # The advice, not just the shape. `git checkout --` restores from the *index*, so it writes a
+    # staged mutation back — and the sentence after it used to say to delete the record that proves
+    # it. Removing that was the whole of CHG-20260830-08 task 9, and nothing held a word of it: the
+    # 451 characters could be cut with the file still green. Its sibling refusal is pinned the same
+    # way, at `test_a_file_edited_since_the_run_died_is_refused_not_overwritten`
+    # (CHG-20260830-09, idiom seat).
+    assert "Not `git checkout --`" in said, (
+        "the refusal has to warn against `git checkout --` by name: it restores from the index, so "
+        "a staged mutation gets written back over the file it is telling the operator to rescue")
+    assert sentinel.name in said, "the refusal has to name the record, which is the only way back"
+    assert "only copy" in said, "the operator has to be told not to delete it first"
     # And the lock still holds against the second run, which is what it could not do before.
     with pytest.raises(mutation_recovery.MutationInFlight):
         mutation_recovery.begin(subject, "ORIGINAL\n", "MUTATED\n")

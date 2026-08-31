@@ -35,7 +35,14 @@ from typing import Optional
 REPO = Path(__file__).resolve().parent.parent
 
 #: Written before a file is mutated, removed after it is put back. Also the lock — see `begin`.
-IN_FLIGHT = REPO / "tools" / ".mutation-in-flight.json"
+#:
+#: `MUTATION_IN_FLIGHT` moves it, and exists for one caller: the test that drives the in-flight
+#: guard in a child process. That test needs the guard's real *environment*, which is what it keys
+#: on — it does not need the real record, and using it meant writing and deleting the live one while
+#: the harness had a source file mutated. Measured by the round-5 risk seat: the record was absent
+#: for 2.1s of a 9.8s window, and a kill there leaves a mutated file with no record of what it was.
+IN_FLIGHT = Path(os.environ.get("MUTATION_IN_FLIGHT")
+                 or REPO / "tools" / ".mutation-in-flight.json")
 
 
 class MutationInFlight(Exception):
@@ -132,9 +139,16 @@ def _newline_of(path: Path) -> str:
     happened to stops being read. Disclosed in three acceptances before it was fixed
     (CHG-20260830-08, risk seat).
     """
+    #: Enough of the head to decide, without reading a 126KB module to answer yes or no. It is a
+    #: bound and therefore a blind spot: a file whose head is LF and whose tail is CRLF is written
+    #: back wrong. Measured across `src/` and `tools/` — no file has mixed endings, and
+    #: `.gitattributes` `* text=auto` is what keeps it that way. A wrong answer rewrites every line
+    #: ending in the file, which shows as a whole-file `git diff` rather than as a silent change
+    #: (CHG-20260830-09, idiom and risk seats).
+    ENOUGH_TO_DECIDE = 65536
     try:
         with io.open(path, "rb") as handle:
-            return "\r\n" if b"\r\n" in handle.read(65536) else "\n"
+            return "\r\n" if b"\r\n" in handle.read(ENOUGH_TO_DECIDE) else "\n"
     except OSError:
         return "\n"
 

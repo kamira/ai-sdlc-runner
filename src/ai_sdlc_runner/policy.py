@@ -1209,7 +1209,20 @@ def adjudicate(verdicts: Mapping[str, str], *, voices: str = "seats") -> Dict[st
 
     vetoed = [s for s, v in verdicts.items() if BY_SEAT[s].veto and v != "pass"]
     if vetoed:
-        return {"outcome": "fail", "reason": f"veto from {sorted(vetoed)}", "vetoed": sorted(vetoed)}
+        # The *rule*, not a speech act. What this knows is that a seat holding a veto did not return
+        # `pass`; it does not know that the seat chose to veto. Round 4's conformance seat returned
+        # `fail` and wrote "No veto" with reasons, and this reported `veto from ['conformance']` —
+        # a record stating something its own author denied, which is this repository's recurring
+        # defect class appearing in the code that adjudicates it.
+        #
+        # Only the sentence changes. `outcome` and `vetoed` are byte-identical, so no gate, class or
+        # graph edge moves. The rule itself is right and was ruled so by the seat that holds the
+        # veto: a seat able to decline its own veto makes the veto advisory, and counting votes on a
+        # matter of fact is what the veto exists to prevent. What remains — that `policy` and the
+        # seat prompts use "veto" for two different things — is a design question for a person, and
+        # is the same collision `ledger_check` had between `wrong` and `void` (CHG-20260830-09).
+        return {"outcome": "fail", "vetoed": sorted(vetoed),
+                "reason": f"{sorted(vetoed)} holds a veto and did not pass"}
 
     passes = sum(1 for v in verdicts.values() if v == PASS)
     if passes * 2 > len(verdicts):

@@ -25,6 +25,10 @@ def _repo(tmp_path, chg_body, acc=None):
 
 HEADER = "- Project: x\n- Branch: b\n- Date: 2026-09-01\n- Risk: low\n"
 
+#: A change claiming to be closed, and an acceptance saying the check that closed it never held.
+DONE_CHANGE = f"# CHG\n{HEADER}\n## Status\n\n**Accepted**\n"
+VOID_ACCEPTANCE = "# ACC\n- Conclusion: **VOID.** the fix never worked\n"
+
 
 def test_this_repos_own_ledger_passes():
     assert ledger_check.check(REPO) == []
@@ -38,6 +42,43 @@ def test_a_change_reported_built_without_an_acceptance_record_fails(tmp_path):
 
 def test_the_same_change_passes_once_it_has_one(tmp_path):
     repo = _repo(tmp_path, HEADER + "\n## Status\n\nbuilt and shipped.\n", acc="# ACC\n")
+    assert ledger_check.check(repo) == []
+
+
+def test_a_change_closed_on_a_void_acceptance_is_reported(tmp_path):
+    """The missing twin of the no-acceptance check.
+
+    That one asks whether an acceptance *exists*; this asks whether it still says anything. A change
+    closed on an acceptance whose verdict was never true is closed on nothing — the same false green
+    this lint exists to catch, one field over.
+
+    Scoped to `void` rather than to every refusal: `superseded` means the change was replaced, which
+    is history and not a contradiction, and two acceptances sit under done changes that way
+    (CHG-20260830-09, ruled by the round-5 conformance seat).
+    """
+    repo = _repo(tmp_path, DONE_CHANGE, acc=VOID_ACCEPTANCE)
+
+    problems = ledger_check.check(repo)
+
+    assert len(problems) == 1, problems
+    assert "never true" in problems[0]
+    assert "Reopen the change" in problems[0], "a refusal has to say what to do next"
+
+
+def test_a_change_superseded_by_a_later_one_is_not_reopened_by_its_acceptance(tmp_path):
+    """`superseded` is history, not a contradiction, so it must not trip the rule above."""
+    repo = _repo(tmp_path, DONE_CHANGE,
+                 acc="# ACC\n- Conclusion: **Superseded** by a later change\n")
+
+    assert ledger_check.check(repo) == []
+
+
+def test_a_change_that_says_why_a_void_acceptance_does_not_close_it_passes(tmp_path):
+    """The escape hatch. A status that is not `done` is not claiming to be closed on anything."""
+    repo = _repo(tmp_path,
+                 f"# CHG\n{HEADER}\n## Status\n\n**Superseded** — the fix was redone\n",
+                 acc=VOID_ACCEPTANCE)
+
     assert ledger_check.check(repo) == []
 
 
