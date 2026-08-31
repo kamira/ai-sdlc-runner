@@ -342,6 +342,17 @@ SECRET_ELSEWHERE = [
     ("https://sk-ant-SECRET@api.vendor.com/v1", "a bare token in the userinfo"),
     ("https://api.vendor.com/v1?api_key=SECRET", "the original case, still refused"),
     ("https://api.vendor.com/v1#api_key=SECRET", "a key in the fragment, not the query"),
+    # Eight vendors the round-9 defect and risk seats pasted in to show that gating the refusal on
+    # a shape guess let real tokens through. Every one validated clean and reached `config.sqlite`
+    # for one round; the guess picks the wording now and refuses either way (CHG-20260831-04).
+    ("https://gsk_A1b2C3d4E5f6G7h8@api.groq.com/v1", "a Groq key"),
+    ("https://hf_QwErTyUiOpAsDf@api-inference.hf.co/v1", "a Hugging Face token"),
+    ("https://r8_abcdefGHIJKLmnop@api.replicate.com/v1", "a Replicate token"),
+    ("https://glpat-ABCDEFGHIJKLMNOPQRST@gl.example.com/api", "a GitLab PAT, 26 characters"),
+    ("https://npm_AbCdEfGhIjKlMnOpQr@registry.example.com/v1", "an npm token"),
+    ("https://ATATT3xFfGF0T4JQ@jira.example.com/v1", "an Atlassian token"),
+    ("https://co-1a2b3c4d5e6f@api.cohere.ai/v1", "a Cohere key"),
+    ("https://3f9a1c8e77b04d21@api.vendor.com/v1", "16 hex characters and no prefix at all"),
 ]
 
 
@@ -361,20 +372,29 @@ def test_a_url_with_an_ordinary_fragment_is_not_a_secret():
     assert models._secret_in_url("https://api.vendor.com/v1#section") is None
 
 
-def test_a_plain_user_name_in_the_endpoint_is_not_a_secret():
-    """`https://alice@host/v1` carries no key, so the refusal's remedy would not apply to it.
+def test_a_plain_user_name_is_refused_with_a_remedy_that_applies_to_it():
+    """`https://alice@host/v1` carries no key — so the *sentence* changes, not the answer.
 
-    Refusing every userinfo was broader than the finding, and sent the operator to move a
-    credential that does not exist into `key_env` (CHG-20260831-03, risk and conformance seats).
+    For one round this asserted `is None`: the round-8 objection was that sending the operator to
+    move a non-existent credential into `key_env` names a remedy that does not apply, and I answered
+    it by accepting the userinfo. The round-9 defect and risk seats then measured eight real vendor
+    token formats validating clean and reaching `config.sqlite` (CHG-20260831-04).
+
+    Nothing can tell a user name from a pasted token, which is the argument for refusing both — and
+    for saying something different about each.
     """
-    assert models._secret_in_url("https://alice@api.vendor.com/v1") is None
+    found, where, remedy = models._secret_in_url("https://alice@api.vendor.com/v1")
+
+    assert (found, where) == ("a user name", "the userinfo before @")
+    assert "key_env" not in remedy, "there is no key to move; that instruction does not apply"
+    assert "Remove it" in remedy
 
 
 def test_the_refusal_names_where_it_found_the_secret():
     """It said "query string" for a credential in the userinfo and for one in the fragment.
 
     A fragment is never sent to a server, so that sentence was false as well as misdirecting — and
-    `cli.py` says so four lines from where this change prints. Nothing read the message the
+    `cli.py`'s comment on the token link says exactly that. Nothing read the message the
     operator reads; these do.
     """
     for endpoint, place in [("https://u:sk-ant-S@api.v.com/v1", "the userinfo before @"),
@@ -407,18 +427,27 @@ def test_the_console_names_only_the_models_the_guess_graded(endpoint, guessed, w
     failure as naming none — the operator cannot tell which grade to go and check.
     """
     model = models.Model(id="m", vendor="v", name="n", transport="api", endpoint=endpoint)
-    assert models.graded_by_the_bare_host_rule(endpoint) is guessed, why
+    assert models.graded_by_guess(endpoint) is guessed, why
 
     named = models.Registry(models=(model,)).internal_by_guess()
     assert [m.id for m in named] == (["m"] if guessed else []), why
 
 
-def test_the_guess_and_the_grade_cannot_disagree_about_the_rule():
-    """Every endpoint the disclosure names must in fact be graded `internal`.
+@pytest.mark.parametrize("endpoint,guessed,why", BARE_HOST_CASES,
+                         ids=[c[0] for c in BARE_HOST_CASES])
+def test_the_guess_and_the_grade_cannot_disagree_about_the_rule(endpoint, guessed, why):
+    """Every endpoint the disclosure names must in fact be graded `internal`, and no other.
 
-    The disclosure used to restate `reach_of`'s rule in its own words. It calls it now, and this
-    is what says the two have not drifted apart again.
+    The disclosure used to restate `reach_of`'s rule in its own words. It calls it now, and this is
+    what says the two have not drifted apart again.
+
+    Parametrised, not a `for` inside the body: as a loop under `if guessed:` five of the six rows
+    were walked past in silence, a table that looked like six guarantees and was one — which is the
+    defect this file's sibling table had one round earlier (CHG-20260831-04, idiom seat).
     """
-    for endpoint, guessed, why in BARE_HOST_CASES:
-        if guessed:
-            assert models.reach_of("api", endpoint) == models.INTERNAL, why
+    graded_internal = models.reach_of("api", endpoint) == models.INTERNAL
+    if guessed:
+        assert graded_internal, f"{why}: the disclosure names it, so the grade must be internal"
+    else:
+        assert not models.graded_by_guess(endpoint), (
+            f"{why}: whatever the grade is, the guess is not what produced it")

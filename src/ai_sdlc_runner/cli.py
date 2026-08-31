@@ -893,7 +893,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"error: {exc}")
             return 2
         except models_mod.ModelError as exc:
-            print(f"error: the assignment store holds a model this runner refuses: {exc}")
+            print(f"error: {store_path} holds a model this runner refuses: {exc}")
+            print(f"       This fires on **load**, so it stops every other model with it. Edit "
+                  f"that row, or pass `--assignment-store none` to walk without the store.")
             return 2
     try:
         saved = settings_mod.load(args.settings)
@@ -1293,7 +1295,12 @@ def cmd_serve(args: argparse.Namespace) -> int:
     try:
         registry = models_mod.load(registry_path)
     except models_mod.ModelError as exc:
-        print(f"error: {exc}")
+        # Named, like the store door below. A refusal widened after something was written reaches an
+        # operator through four doors in this file and only one carried the explanation — and not
+        # this one, which is checked first and is what anybody with a `models.json` hits
+        # (CHG-20260831-04, risk seat).
+        print(f"error: {registry_path} holds a model this runner refuses: {exc}")
+        print(f"       This fires on **load**, so it stops every other model in that file with it.")
         return 2
 
     # The assignment store. This is where 「model 模型配置」 actually persists -- both halves of it,
@@ -1315,17 +1322,23 @@ def cmd_serve(args: argparse.Namespace) -> int:
         # `load_registry` rebuilds a `Registry`, and `__post_init__` re-validates every row — so a
         # refusal widened after something was stored fires on **load**, not on registration, and
         # takes every other model with it. `ModelError` is not a `StoreError`, so before this it
-        # left as a traceback and the console simply did not start. The identical handler exists on
-        # the assignment-store path above; this one was missed (CHG-20260831-03, risk seat).
-        # And the remedy names the **file**, because there is no models subcommand to send
-        # anybody to — the registry is edited through the console, and the console is the thing that
-        # will not start. A refusal whose instructions do not lead where they say is the defect this
-        # round fixed twice already (CHG-20260831-03, risk seat; the first draft of this very
-        # handler named a subcommand that does not exist).
-        print(f"error: {store_path} holds a model this runner now refuses: {exc}")
-        print(f"       This is a refusal that was widened after that model was stored, so it fires "
-              f"on load and stops every other model with it. Edit or delete that row in "
-              f"{store_path} — it is a sqlite file — then start again.")
+        # left as a traceback and the console simply did not start. The registry path twenty lines
+        # above already had this handler; this is the assignment-store path, and it was missed
+        # (CHG-20260831-03, risk seat — the two were named the wrong way round here until -04).
+        #
+        # The remedy names the **file**, because there is no models subcommand to send anybody to:
+        # the registry is edited through the console, and the console is the thing that will not
+        # start. `test_every_command_the_cli_tells_you_to_run_exists` is what keeps that true.
+        # Not "a refusal that was widened after this model was stored" — that was asserted
+        # unconditionally and is false for a row hand-written into the file, which is the only way
+        # some of these can be reached at all (CHG-20260831-04, risk seat).
+        print(f"error: {store_path} holds a model this runner refuses: {exc}")
+        print(f"       This fires on **load**, so it stops every other model with it. Edit that "
+              f"row in {store_path} — it is a sqlite file — then start again.")
+        print(f"       If you delete it instead, delete its assignments too: `seat_models` and "
+              f"`node_models` rows pointing at it are only refused while sqlite's foreign keys are "
+              f"on, and they are off by default in every other editor. An assignment left pointing "
+              f"at nothing does not stop this console — it starts clean and says nothing.")
         return 2
 
     # The plan's assignment is this change's declaration; the store's is the project's standing one.

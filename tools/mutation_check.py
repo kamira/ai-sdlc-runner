@@ -1271,8 +1271,15 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         'closure', 'a record can name a test that does not exist again',
         TOOLS / 'ledger_check.py',
-        '        ghosts = [name for name in named if name not in known and name not in excused]',
-        '        ghosts = []',
+        '                  if name not in known and not _excused(text, name, ledger_ids)]',
+        '                  if False]',
+        'tests/test_ledger_check.py'),
+
+    Mutation(
+        'closure', 'the remedy the ghost refusal offers stops being honoured',
+        TOOLS / 'ledger_check.py',
+        '            if BLANK_LINE not in found.group(0) and found.group(1) in ledger_ids:',
+        '            if False:',
         'tests/test_ledger_check.py'),
 
     Mutation(
