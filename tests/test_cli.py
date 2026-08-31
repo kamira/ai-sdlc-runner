@@ -765,19 +765,23 @@ def test_every_command_the_cli_tells_you_to_run_exists():
     for node in ast.walk(tree):
         if (isinstance(node, ast.Constant) and isinstance(node.value, str)
                 and id(node) not in docstrings):
-            # At the start of a line, **or** anywhere on a line that also carries a flag. Line
-            # start alone missed `"Then run runner rollback --to ID to undo it."` — an
-            # instruction printed mid-sentence, which is how half of this file writes them
-            # (CHG-20260831-05, defect seat). Anywhere-on-any-line reads "the runner will",
-            # "the runner writes" and five more pieces of prose as subcommands; a `--` on the
-            # same line is what separates a command from a sentence about one.
+            # Line start only. An arm matching anywhere on a line that also carries a `--` was
+            # added for a mid-sentence instruction and was measured **dead** — it contributed no
+            # name the other two did not already have — while its comment cited a string that is
+            # not in this file, and it read ordinary prose as commands: `"the runner writes each
+            # answer; pass --ask-journal"` yielded `['writes']` (CHG-20260831-06, defect and risk
+            # seats). Removed rather than tuned: a heuristic that fires on prose turns this test
+            # into a tax on writing refusals, which is the opposite of what it is for.
+            #
+            # The gap it leaves is disclosed, not closed: an instruction printed mid-sentence and
+            # unbackticked is invisible here. Backtick it, or start its line with it.
             named |= set(re.findall(r"^\s*runner ([a-z][a-z-]*)", node.value, re.MULTILINE))
-            named |= set(re.findall(r"runner ([a-z][a-z-]*)(?=[^\n]*--)", node.value))
     named = sorted(named)
     # Three is what the file names today, and the guard exists so a scan that has silently
     # stopped reading anything is not mistaken for a clean result. Backticks alone yielded two —
-    # `conversations` (from a printed refusal, not a comment) and `run` — and missed the printed
-    # `runner emergencies --reviewed ID --by NAME` entirely (CHG-20260831-05, defect and idiom).
+    # `conversations`, from a printed refusal rather than a comment, and `run` — and missed the
+    # printed `runner emergencies --reviewed ID --by NAME` entirely, which is what the line-start
+    # arm is for (CHG-20260831-05, defect and idiom seats).
     assert len(named) >= 3, f"the scan sees only {named}, so it has stopped reading"
 
     parser = cli.build_parser()
@@ -821,7 +825,6 @@ def test_a_stored_model_a_widened_rule_refuses_stops_serve_with_a_remedy(tmp_pat
     # nonsense (CHG-20260831-05, conformance seat). And they are the real tables: the first draft
     # named `seat_models` and `node_models`, which are function names in `store.py`, so an operator
     # following it got `no such table` (risk seat).
-    from ai_sdlc_runner import store as store_mod
     tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     for table in ("seat_assignments", "node_assignments"):
         assert table in tables, f"{table} is not a table in this store; the remedy would misdirect"

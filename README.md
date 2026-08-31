@@ -665,7 +665,7 @@ Two halves, and both persist.
 ```bash
 runner --config runner.yaml serve --plan plan.json          # POST /config/nodes, /config/seats
 runner --config runner.yaml run   --plan plan.json          # reads the same store
-runner run --plan plan.json --assignment-store none         # the plan alone
+runner run --plan plan.json --assignment-store none         # the plan alone (run only; serve refuses it)
 ```
 
 **The plan wins where it says something; the store fills where the plan is silent.** That is
@@ -724,7 +724,7 @@ first one winning — so two of them disagreeing inside one answer resolves sile
 ## Testing
 
 ```bash
-pytest -q          # 1859 tests
+pytest -q          # 1865 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

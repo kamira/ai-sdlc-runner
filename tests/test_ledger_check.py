@@ -653,43 +653,51 @@ def test_the_awaiting_matcher_reads_words_not_substrings(tmp_path):
 #: would have left the fix untested (CHG-20260831-04, conformance seat, VETO).
 GHOST_EXCUSES = [
     ("`test_gone` was removed in CHG-20260901-01.", True, "the advertised case"),
-    ("`test_gone_a` and `test_gone` were removed in CHG-20260901-01.", True, "a list of two"),
-    ("removed in CHG-20260901-01: `test_gone`.", True, "the reverse order"),
-    ("Pinned by `test_this_repos_own_ledger_passes`, and `test_gone` was removed in "
-     "CHG-20260901-01.", True, "a live test cited first does not block it"),
-    ("`test_gone` — removed in CHG-19700101-99.", False, "a change id nobody can open"),
-    ("`test_gone` is the evidence." + NEWLINE + NEWLINE + "Other things were removed in "
-     "CHG-20260901-01.", False, "an unrelated removal a paragraph away"),
-    ("`test_gone` was deleted at some point.", False, "no change named at all"),
-    # The refusal says "say in the record that the test was since removed and why" and names no
-    # phrasing, so it has to accept the ones a person writes. All five of these were refused
-    # (CHG-20260831-05, defect seat) — the markdown-link form worst of all, in a markdown ledger,
-    # because `]` is not a digit.
     ("`test_gone` was deleted in CHG-20260901-01.", True, "deleted"),
     ("`test_gone` was dropped in CHG-20260901-01.", True, "dropped"),
-    ("`test_gone` was renamed in CHG-20260901-01.", True, "renamed"),
     ("`test_gone` was removed by CHG-20260901-01.", True, "removed *by*, not *in*"),
+    ("removed in CHG-20260901-01: `test_gone`.", True, "the reverse order"),
+    ("`test_gone_a` and `test_gone` were removed in CHG-20260901-01.", True, "a list of two"),
+    ("Pinned by `test_this_repos_own_ledger_passes`, and `test_gone` was removed in "
+     "CHG-20260901-01.", True, "a live test cited first does not block it"),
+    # A link is checked twice — text and href. Validating the text alone let a dead link through,
+    # in the check whose whole subject is pointers that do not resolve (CHG-20260831-06, risk).
     ("`test_gone` was removed in [CHG-20260901-01](../changes/CHG-20260901-01.md).", True,
-     "the markdown-link form"),
-    # A paragraph break ends the window — and a line carrying one space is a paragraph break. The
-    # A paragraph break ends the window — and a line carrying one space is a paragraph break.
-    # A two-character newline literal missed it, so any editor leaving trailing whitespace
-    # laundered a ghost across the break.
-    ("`test_gone` is the evidence." + NEWLINE + "   " + NEWLINE
-     + "Other things were removed in CHG-20260901-01.", False,
-     "a paragraph away, with a space on the blank line"),
-    # What the window may **not** cross. Replacing the span with `.*?` — the previous round's
-    # over-broad form — leaves every other row green, so this is the row that pins it.
+     "a markdown link whose href resolves"),
+    ("`test_gone` was removed in [CHG-20260901-01](../nowhere/nothing.md).", False,
+     "a markdown link whose href does not"),
+    # `renamed` excuses the case this check exists to catch: a renamed test still exists, and the
+    # record still points at a name that resolves to nothing. Say `renamed to `test_x` in CHG-…`
+    # and the reader has somewhere to go (CHG-20260831-06, risk seat).
+    ("`test_gone` was renamed in CHG-20260901-01.", False, "renamed, with no new name"),
+    ("`test_gone` — removed in CHG-19700101-99.", False, "a change id nobody can open"),
+    # One **sentence**, not one paragraph. A paragraph-sized window excused a name from a sentence
+    # about something else entirely, and records here say things were deleted constantly
+    # (CHG-20260831-06, defect seat).
+    ("`test_gone` is the evidence for the halt rule. The vendored skill was deleted in "
+     "CHG-20260901-01.", False, "a sentence about something else"),
+    ("`test_gone` is the evidence." + NEWLINE + NEWLINE
+     + "Other things were removed in CHG-20260901-01.", False, "a paragraph away"),
+    # `\s`, not `[ 	]`. U+3000 is what a Chinese IME emits, in a ledger written partly in
+    # Chinese; the round before had fixed exactly this for a plain space (CHG-20260831-06, risk).
+    ("`test_gone` is the evidence." + NEWLINE + " " + NEWLINE
+     + "Removed in CHG-20260901-01.", False, "a blank line carrying a space"),
+    ("`test_gone` is the evidence." + NEWLINE + chr(0xA0) + NEWLINE
+     + "Removed in CHG-20260901-01.", False, "a blank line carrying a non-breaking space"),
+    ("`test_gone` is the evidence." + NEWLINE + chr(0x3000) + NEWLINE
+     + "Removed in CHG-20260901-01.", False, "a blank line carrying an ideographic space"),
+    # `re.finditer` is non-overlapping, so an over-long match consumed the region and the valid
+    # short one inside it was never offered — a false refusal on a remedy already followed.
+    ("`test_gone` is the evidence." + NEWLINE + NEWLINE
+     + "`test_gone` was removed in CHG-20260901-01.", True,
+     "named twice; the second mention is a valid excuse"),
     ("`test_gone` is pinned by `some_helper`, which was removed in CHG-20260901-01.", False,
      "a backtick that is not a test name"),
-    # How far the phrase may sit from the name, in characters. `EXCUSE_WINDOW` was disclosed as
-    # "at most 200 characters" and was 200 *repetitions* of an alternation whose second branch
-    # swallows a whole backticked name — the round-10 conformance seat measured 3150, and nothing
-    # here noticed when the bound was removed entirely (CHG-20260831-05, VETO).
     ("`test_gone` " + ("and a great deal of unrelated prose in between " * 12)
      + "was removed in CHG-20260901-01.", False, "further away than the window allows"),
     ("`test_gone` " + ("and a little prose in between " * 3)
      + "was removed in CHG-20260901-01.", True, "and inside it"),
+    ("`test_gone` was deleted at some point.", False, "no change named at all"),
 ]
 
 

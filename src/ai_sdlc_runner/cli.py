@@ -1310,14 +1310,17 @@ def cmd_serve(args: argparse.Namespace) -> int:
     # after the ruling that the registry alone was not what was meant.
     store_path = args.assignment_store or (Path(args.token_dir) / "config.sqlite")
     if str(store_path).lower() == "none":
-        # The same escape `cmd_run` has honoured since it was written, and which the store refusal
-        # below tells operators about. `serve` did not honour it: it created a sqlite database in
+        # The same escape `cmd_run` has honoured since it was written. No `serve` message has ever
+        # mentioned it — the people passing it came from `cmd_run`'s refusal, from `README.md`,
+        # and from `run --assignment-store`'s own help text, and only the first of those now says
+        # where it works (CHG-20260831-06, risk seat). `serve` did not honour it: it created a
+        # sqlite database in
         # the working directory named `none`, printed `models 0 registered`, and started — so
         # somebody following that instruction detached from every model and assignment they had,
         # silently, on the one command the refusal is actually about (CHG-20260831-05, risk seat).
         print("error: serve needs a store. `--assignment-store none` detaches the console from "
               "every model and assignment, which is a way to walk a plan, not a way to run a "
-              "console. Point it at a file, or fix the model the refusal named.")
+              "console. It works on `runner run`; point `serve` at a file.")
         return 2
     try:
         db = store_mod.connect(store_path)
@@ -1528,7 +1531,7 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--assignment-store", default=None, metavar="FILE",
                     help="the model configuration this run reads (default .runner/config.sqlite). "
                          "The plan wins where it names a node or seat; the store fills the rest. "
-                         "Pass `none` to depend on the plan alone.")
+                         "Pass `none` to depend on the plan alone; `serve` refuses that.")
     pr.add_argument("--resume", action="store_true",
                     help="continue an interrupted run: skip what the journal already answered and "
                          "re-ask only what it does not have. Needs --ask-journal.")

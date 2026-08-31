@@ -264,10 +264,11 @@ def test_this_repository_has_no_mutation_in_flight():
         f"source file may still be mutated. Start with `python3 tools/mutation_check.py --recover`: "
         f"it puts the file back when the recorded owner is gone, and refuses without touching "
         f"anything when it cannot tell.\n"
-        f"  If it refuses, open the record. When it names a path and an `original`, that text is "
-        f"the only copy — put it back by hand. When it is empty or truncated it holds nothing, and "
-        f"`git status` and `git diff` are what show you what the killed run left. **Then** delete "
-        f"the record; it is what keeps this red until somebody has looked.")
+        f"  If it refuses, open the record. It may still hold the only copy of some original \n"
+        f"text even when it is truncated — that is why `--recover` keeps it rather than \n"
+        f"discarding it. Put back whatever it names; use `git status` and `git diff` for \n"
+        f"whatever it does not. Delete it only once the tree is reconciled: it is what keeps \n"
+        f"this red until somebody has looked.")
 
 
 def _guard_says(tmp_path, record, env):
