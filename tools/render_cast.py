@@ -173,7 +173,12 @@ def main():
     # — while `docs/RECORDING.md` publishes this as the command to run, so an operator on the
     # declared floor got a `TypeError` after all the render work was done (CHG-20260901-02, risk
     # seat, who swept the tree after the same keyword was removed from a test).
-    io.open(args.out, "w", encoding="utf-8", newline="\n").write(page)
+    # `with`, because `io.open(...).write(...)` leaves the handle to the collector — under
+    # `-X dev -W error::ResourceWarning` this printed `unclosed file`. `Path.write_text`,
+    # which it replaced, closed deterministically; on any interpreter without refcounting
+    # the page could be short (CHG-20260901-03, risk seat).
+    with io.open(args.out, "w", encoding="utf-8", newline="\n") as out:
+        out.write(page)
     print(f"wrote {args.out} — {len(steps)} steps, {steps[-1]['end']:.0f}s of playback")
 
 

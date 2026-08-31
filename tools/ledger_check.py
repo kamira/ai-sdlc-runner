@@ -436,6 +436,7 @@ _PARAGRAPH_BREAK = re.compile(r"\n[\s\u200b\ufeff\u2060]*?\n")
 EXCUSE_WINDOW = 400
 
 _QUOTED_TEST = r"`(test_\w+)`"
+WORD_NAME = r"\w+"
 _CHANGE_ID = r"(?:CHG|ACC)-\d{8}-\d{2}"
 
 #: What counts as saying it is gone, and by what. `renamed` alone is not on the list: a renamed
@@ -469,16 +470,19 @@ _NOT_AN_END = r"(?<!\bi\.e)(?<!\be\.g)(?<!\betc)(?<!\bcf)(?<!\bvs)(?<!\bal)(?<!\
 #: something that is not a dash, or by a line end.
 #:
 #: Requiring a **capital** after it was the third formulation and it leaked on this repository's
-#: own house style. Measured under one rule, `[.!?]\s+`, over all 267 records: 4338 boundaries are
-#: followed by a capital and **4104 are not** — 3253 by punctuation or a dash, 429 by a backticked
-#: identifier, 355 by a digit, 67 by a lowercase word. The capital rule saw about half, and the one
+#: own house style. Measured under one rule, `[.!?]\s+(.)` — the following character, so a
+#: boundary at end of text is not counted — over the 269 records **as of
+#: CHG-20260901-03** — the two previous statements of this census each said "all" and each excluded
+#: their own change's records, which is the fourth instance of that shape: 4364 boundaries are
+#: followed by a capital and **4148 are not** — 3287 by punctuation or a dash, 431 by a backticked
+#: identifier, 363 by a digit, 67 by a lowercase word. The capital rule saw about half, and the one
 #: shape that still worked was the one `GHOST_EXCUSES` pinned
 #: (CHG-20260901-01, risk seat). The dash exclusion is what keeps `-- gone! --` and
 #: `-- did anyone read it? --` inside one sentence, and the `.` lookbehind keeps `…` there.
 _SENTENCE_END = re.compile(_NOT_AN_END + r"[.!?](?:\s+(?![-\u2013\u2014])|\s*$)",
                            re.MULTILINE)
 
-def _excused(text: str, name: str, ledger_ids) -> bool:
+def _excused(text: str, name: str, ledger_ids, known=frozenset()) -> bool:
     """Does this record say, in the same sentence as the name, that this test was removed and by
     what change?
 
@@ -528,6 +532,18 @@ def _excused(text: str, name: str, ledger_ids) -> bool:
             # here would need the repo root this function does not have, so the claim is withdrawn
             # rather than half-kept (CHG-20260831-07, conformance, defect and risk seats).
             names = found.group(1)
+            # A rename has to name a test that **exists**, or it gives the reader nowhere to go —
+            # which is the whole argument for accepting the phrasing at all. It was checked against
+            # nothing, so `renamed to `helper` in CHG-…` and even `renamed to `x`` excused a ghost
+            # (CHG-20260901-03, risk seat).
+            renamed = re.search(r"renamed to `(" + WORD_NAME + r")`", said, re.IGNORECASE)
+            if renamed and (not renamed.group(1).startswith("test_")
+                            or (known and renamed.group(1) not in known)):
+                # Two bounds, because the caller may not pass `known`. A rename to something that is
+                # not test-shaped is not a rename of this test at all: "The helper was renamed to
+                # `some_helper` in CHG-…; `test_gone` is unaffected." excused the ghost, in a
+                # sentence saying outright that it did not (CHG-20260901-03, defect seat).
+                continue
             if (names in ledger_ids and len(said) <= EXCUSE_WINDOW
                     and not _PARAGRAPH_BREAK.search(said)):
                 return True
@@ -561,7 +577,7 @@ def check_named_tests_exist(repo: Path) -> List[str]:
         text = path.read_text(encoding="utf-8")
         named = sorted(set(re.findall(_QUOTED_TEST, text)))
         ghosts = [name for name in named
-                  if name not in known and not _excused(text, name, ledger_ids)]
+                  if name not in known and not _excused(text, name, ledger_ids, known)]
         if ghosts:
             problems.append(
                 f"{path.stem}: names {len(ghosts)} test(s) that do not exist — {', '.join(ghosts)}. "
