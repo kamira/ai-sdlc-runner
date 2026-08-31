@@ -169,8 +169,14 @@ def _verdict(text: str) -> str:
 #: the change was replaced. Only these reopen a change — see the second half of `check`'s DONE test.
 ACC_NEVER_TRUE = ("void", "voided")
 
-#: The two tuples are written by hand and must stay **equal** on their never-true words, in both
-#: directions — pinned by `test_a_never_true_verdict_is_a_refusal_and_the_refusal_names_all_three`.
+#: Every never-true word must also be a refusal, or `check` calls it unrecognised and sends the
+#: operator to a list that reopens nothing — pinned by
+#: `test_a_never_true_verdict_is_a_refusal_and_the_refusal_names_all_three`. The **other**
+#: direction is not a comparison between tuples at all: whether a word *means* "never true" is a
+#: question about English. It is pinned one spelling at a time, behaviourally, by
+#: `test_every_never_true_spelling_reopens_its_change` — because for one round this comment claimed
+#: the pair was held "in both directions" and dropping `voided` from here left the file green with
+#: a `**Voided.**` acceptance silently closing its change (CHG-20260831-05, defect seat).
 #: It was an import-time `assert` for one round, and it constrained the containment that has never
 #: drifted: the drift it was written for runs the other way. `Voided.` was refused as unrecognised,
 #: the operator did what the refusal said and added it to `ACC_NOT_PASS` alone, and the void rule
@@ -416,44 +422,65 @@ def _tests_that_exist(repo: Path) -> set:
     return names
 
 
-#: Spelled as names because this file is edited through tooling that eats a lone backslash,
-#: and a regex assembled from wrong bytes fails open — it excuses everything.
-BACKTICK = chr(96)
-BLANK_LINE = chr(10) + chr(10)
-_W = chr(92) + "w"
-_D = chr(92) + "d"
+#: A paragraph break ends the window: an explanation belongs in one paragraph with the name.
+#: A **whitespace-only** line is one — `"\\n\\n"` as a literal missed a line carrying a single space
+#: or a tab, so any editor that leaves trailing whitespace laundered a ghost across a paragraph
+#: break (CHG-20260831-05, defect seat).
+_PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
+
+#: How far from the name the phrase may sit, in **characters**, checked after the match. `{0,200}`
+#: bounds *repetitions* of an alternation whose second branch swallows a whole backticked name, so
+#: the "at most 200 characters" this acceptance disclosed measured 3150 in the round-10
+#: conformance seat's hands — fifteen times the number a reader was given to judge by
+#: (CHG-20260831-05, VETO).
+EXCUSE_WINDOW = 400
+
+#: Ordinary raw strings, like the five other regexes in this file. The `chr(92)` spelling that
+#: stood here for one round justified itself as "this file is edited through tooling that eats a
+#: lone backslash" — and `_tests_that_exist`, six lines above, matches `test_\\w+` with a plain
+#: backslash and always has. The tooling that ate them was the author's, not the file's
+#: (CHG-20260831-05, idiom seat).
+TICK_LITERAL = chr(96)
+_QUOTED_TEST = r"`(test_\w+)`"
+#: What counts as saying it is gone. Four verbs, because the refusal says "say in the record
+#: that the test was **since removed** and why" and does not name a phrasing — `deleted in`,
+#: `dropped in` and `renamed in` were all refused, and so was the markdown-link form
+#: `[CHG-…](../changes/CHG-….md)`, in a ledger written in markdown, because `]` is not a digit
+#: (CHG-20260831-05, defect seat).
+_REMOVED_BY = (r"(?:removed|deleted|dropped|renamed)\s+(?:in|by)\s+"
+               r"\[?((?:CHG|ACC)-\d{8}-\d{2})\]?")
+
+#: What the window may cross: anything that is not a backtick, or another backticked test name.
+#: The second branch is what makes "`test_a`, `test_b` and `test_c` were removed in CHG-X" work,
+#: and it is also what leaves the bystander case open — see `_excused`.
+_SPAN = r"(?:[^`]|`test_\w+`)*?"
 
 
 def _excused(text: str, name: str, ledger_ids) -> bool:
     """Does this record say, next to the name itself, that this test was removed and by what?
 
     The refusal below offers *"say in the record that the test was since removed and why"* as a
-    remedy, and for one round the check did not honour it at all: a record that did exactly that was
-    still refused, because the sentence saying the test is gone contains the name. The first fix
-    honoured it and then over-honoured it — `.*?` from the first backticked name swallowed the span,
-    so a sentence naming two removed tests still failed; a *live* test cited earlier on the same line
-    was excused as a bystander; and `removed in CHG-19700101-99`, an id that has never existed,
-    laundered anything beside it. All measured by the round-9 defect and risk seats
-    (CHG-20260831-04).
+    remedy, and for one round the check did not honour it at all: a record that did exactly that
+    was still refused, because the sentence saying the test is gone contains the name. The first
+    fix honoured it and then over-honoured it — `.*?` from the first backticked name swallowed the
+    span, so a sentence naming two removed tests still failed; a *live* test cited earlier on the
+    same line was excused as a bystander; and `removed in CHG-19700101-99`, an id that has never
+    existed, laundered anything beside it (CHG-20260831-04, defect and risk seats).
 
-    The window walks from the name to the phrase and may cross other **test names** — that is what
-    makes "`test_a`, `test_b` and `test_c` were removed in CHG-X" work — but nothing else in
-    backticks, and never a blank line. Supporting the list form is what leaves the bystander case
-    open: a live test named inside such a run is excused with it. Bounded rather than closed, and
-    said out loud here rather than in a reservation nobody reads.
-
-    The id must also be a record that exists. An explanation pointing at a change nobody can open is
-    the same failure this whole function is about, one level up.
+    Three things bound it, and the third is the one that was claimed and not held: the window stays
+    in one paragraph, the change id must be a record that exists, and the whole match must be at
+    most `EXCUSE_WINDOW` characters. Supporting the list form is what leaves the bystander case
+    open — a live test named inside such a run is excused with it — and that is bounded here rather
+    than closed, because a list and a bystander are the same sentence to a regex.
     """
-    span = "(?:[^" + BACKTICK + "]|" + BACKTICK + "test_" + _W + "+" + BACKTICK + "){0,200}?"
-    phrase = "removed in ((?:CHG|ACC)-" + _D + "{8}-" + _D + "{2})"
-    quoted = BACKTICK + re.escape(name) + BACKTICK
-    for pattern in (quoted + span + phrase, phrase + span + quoted):
+    quoted = TICK_LITERAL + re.escape(name) + TICK_LITERAL
+    for pattern in (quoted + _SPAN + _REMOVED_BY, _REMOVED_BY + _SPAN + quoted):
         for found in re.finditer(pattern, text):
-            if BLANK_LINE not in found.group(0) and found.group(1) in ledger_ids:
+            said = found.group(0)
+            if (len(said) <= EXCUSE_WINDOW and not _PARAGRAPH_BREAK.search(said)
+                    and found.group(1) in ledger_ids):
                 return True
     return False
-
 
 def check_named_tests_exist(repo: Path) -> List[str]:
     """A record naming a test that does not exist is vouching for nothing (CHG-20260828-20).
@@ -481,7 +508,7 @@ def check_named_tests_exist(repo: Path) -> List[str]:
         # Backticked only. Prose that merely mentions a test in passing is not a pointer, and this
         # repository's records discuss tests constantly.
         text = path.read_text(encoding="utf-8")
-        named = sorted(set(re.findall(BACKTICK + "(test_" + _W + "+)" + BACKTICK, text)))
+        named = sorted(set(re.findall(_QUOTED_TEST, text)))
         ghosts = [name for name in named
                   if name not in known and not _excused(text, name, ledger_ids)]
         if ghosts:

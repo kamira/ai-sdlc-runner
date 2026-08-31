@@ -765,14 +765,20 @@ def test_every_command_the_cli_tells_you_to_run_exists():
     for node in ast.walk(tree):
         if (isinstance(node, ast.Constant) and isinstance(node.value, str)
                 and id(node) not in docstrings):
-            # At the start of a line, which is how this file lays out a command it wants typed.
-            # Anywhere in the string would read "the runner will", "the runner writes" and five
-            # more pieces of ordinary prose as subcommands.
+            # At the start of a line, **or** anywhere on a line that also carries a flag. Line
+            # start alone missed `"Then run runner rollback --to ID to undo it."` — an
+            # instruction printed mid-sentence, which is how half of this file writes them
+            # (CHG-20260831-05, defect seat). Anywhere-on-any-line reads "the runner will",
+            # "the runner writes" and five more pieces of prose as subcommands; a `--` on the
+            # same line is what separates a command from a sentence about one.
             named |= set(re.findall(r"^\s*runner ([a-z][a-z-]*)", node.value, re.MULTILINE))
+            named |= set(re.findall(r"runner ([a-z][a-z-]*)(?=[^\n]*--)", node.value))
     named = sorted(named)
-    assert len(named) > 2, (
-        f"the scan sees only {named}; backticks alone found two mentions in comments and none of "
-        f"the eight subcommands this file actually prints")
+    # Three is what the file names today, and the guard exists so a scan that has silently
+    # stopped reading anything is not mistaken for a clean result. Backticks alone yielded two —
+    # `conversations` (from a printed refusal, not a comment) and `run` — and missed the printed
+    # `runner emergencies --reviewed ID --by NAME` entirely (CHG-20260831-05, defect and idiom).
+    assert len(named) >= 3, f"the scan sees only {named}, so it has stopped reading"
 
     parser = cli.build_parser()
     real = set(next(a.choices for a in parser._actions if a.choices))
@@ -810,10 +816,15 @@ def test_a_stored_model_a_widened_rule_refuses_stops_serve_with_a_remedy(tmp_pat
     assert code == 2, said
     assert str(db_path) in said, f"the remedy has to name the file that holds the row: {said!r}"
     assert "svc" in said, "and which model"
-    for word in ("assignment", "assignments"):
-        if word in said:
-            break
-    else:
-        raise AssertionError(
-            f"deleting the row orphans any seat or node assignment pointing at it, and the console "
-            f"then starts clean and says nothing about it. The remedy has to warn: {said!r}")
+    # The **table names**, not the word "assignment" — which the fourth sentence of the message
+    # contains anyway, so the loop that stood here passed with the warning's names replaced by
+    # nonsense (CHG-20260831-05, conformance seat). And they are the real tables: the first draft
+    # named `seat_models` and `node_models`, which are function names in `store.py`, so an operator
+    # following it got `no such table` (risk seat).
+    from ai_sdlc_runner import store as store_mod
+    tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    for table in ("seat_assignments", "node_assignments"):
+        assert table in tables, f"{table} is not a table in this store; the remedy would misdirect"
+        assert table in said, (
+            f"deleting the row orphans {table} rows pointing at it, and the console then starts "
+            f"clean and says nothing. The remedy has to name the table: {said!r}")

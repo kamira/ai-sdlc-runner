@@ -69,9 +69,13 @@ class ModelError(Exception):
 #: apply to it; that is an argument about the sentence, and it is fixed in the sentence
 #: (CHG-20260831-04).
 _SECRET_PREFIXES = ("sk-", "sk_", "pk-", "ghp_", "gho_", "xox", "AKIA", "AIza",
-                    # The eight the round-9 seats pasted in to show the shape guess was too narrow.
-                    # They change only the sentence now, which is the whole point of the fix above.
-                    "gsk_", "hf_", "r8_", "glpat-", "npm_", "ATATT", "co-", "Bearer-")
+                    # Seven of the eight credentials the round-9 seats pasted in. The eighth was
+                    # `3f9a1c8e77b04d21` — sixteen hex characters and no prefix at all — which no
+                    # entry here can represent, and which is refused anyway because this tuple only
+                    # picks the sentence. A `Bearer-` entry stood here for one round: invented, in a
+                    # comment claiming to list what was measured (CHG-20260831-05, conformance and
+                    # idiom seats).
+                    "gsk_", "hf_", "r8_", "glpat-", "npm_", "ATATT", "co-")
 
 
 def _looks_secret(value: str) -> bool:
@@ -98,7 +102,7 @@ def _secret_in_url(endpoint: str) -> Optional[Tuple[str, str, str]]:
     The remedy travels with the finding because it differs: a key in the query string moves to
     `key_env`; a bare user name has nothing to move and is simply dropped. Sending the second case
     to `key_env` is what the round-8 seats objected to, and answering that by *accepting* the
-    userinfo is what the round-9 seats measured as five real vendor tokens reaching the store.
+    userinfo is what the round-9 seats measured as eight real credentials reaching the store.
 
     Returns the place as well as the finding, because the refusal has to name it. Saying "query
     string" about a credential in the userinfo sends the operator to look somewhere it is not, and
@@ -108,10 +112,10 @@ def _secret_in_url(endpoint: str) -> Optional[Tuple[str, str, str]]:
     Matching on the *key* wherever there is a key to match on: shapes differ per vendor and change
     without notice, while somebody writing ``?api_key=`` has told you what it is.
 
-    The userinfo has no key — `https://TOKEN@host/v1` is a bare value — so that one branch asks
-    `_looks_secret` about its **shape**, and pays the price this paragraph describes. It is the
-    exception to the rule above, not a repeal of it; the docstring said the shape approach had
-    been rejected while the code twelve lines up was using it (CHG-20260831-04, idiom seat).
+    The userinfo has no key — `https://TOKEN@host/v1` is a bare value — so there is nothing to
+    match on and the branch refuses **all** of it. `_looks_secret` reads the shape only to pick
+    which sentence to print, so the price this paragraph describes is not paid: a vendor prefix
+    nobody has heard of gets the milder wording and the same refusal (CHG-20260831-05).
     """
     parts = urlsplit(endpoint)
 
@@ -145,7 +149,10 @@ def _secret_in_url(endpoint: str) -> Optional[Tuple[str, str, str]]:
 
 
 #: Name suffixes that say "my own network" outright, as against the bare-host judgement below.
-#: Shared with `graded_by_guess`, because a disclosure that restates its subject's rule
+#: Read by `reach_of` alone; the single-label half of its judgement lives in `graded_by_guess`,
+#: which `reach_of` calls. For one round the disclosure had its own copy of `"." not in host` and
+#: the record said it "calls the rule" — the rename happened and the body did not
+#: (CHG-20260831-05, defect seat). A disclosure that restates its subject's rule
 #: instead of calling it drifts from it — and did: the restatement `"." not in hostname` named every
 #: dotless host, and an IPv6 literal has no dot (CHG-20260831-03, conformance and defect seats).
 LOCAL_SUFFIXES = (".local", ".internal", ".lan", ".home.arpa")
@@ -188,7 +195,7 @@ def reach_of(transport: str, endpoint: str = "") -> str:
         # A name. A single label (`gpu-box`) or an explicitly local suffix is a network name; a
         # dotted public name is not. Unresolvable is treated as external, because guessing the
         # generous answer about where data goes is the wrong way to be wrong.
-        if "." not in host or host.endswith(LOCAL_SUFFIXES):
+        if graded_by_guess(endpoint) or host.endswith(LOCAL_SUFFIXES):
             return INTERNAL
         return EXTERNAL
     if address.is_loopback:

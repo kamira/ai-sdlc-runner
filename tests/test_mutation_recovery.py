@@ -124,22 +124,6 @@ def test_a_file_that_vanished_is_refused_rather_than_recreated(sentinel, source)
     assert "REFUSING" in mutation_recovery.recover(quiet=True)
 
 
-def test_an_unreadable_record_is_kept_and_said_so(sentinel, source):
-    """It used to assert the opposite, and that is why the defect survived four rounds.
-
-    `assert not sentinel.exists(), "an unparseable record must not block every later run"` —
-    written as a convenience argument, and it is the argument for discarding the only copy of
-    an original that a killed run left behind. Blocking every later run is exactly right here:
-    a person has to look. Corrected in CHG-20260831-04 (risk seat).
-    """
-    source("ORIGINAL\n")
-    sentinel.write_text("{not json", encoding="utf-8")
-    said = mutation_recovery.recover(quiet=True)
-
-    assert said.startswith("REFUSING") and "git status" in said
-    assert sentinel.exists(), "the record is the only copy of the original; it must survive"
-
-
 def test_the_record_is_written_before_the_mutation_not_after(sentinel, source, monkeypatch):
     """The window this covers is between the two writes, so the order is the whole guarantee.
 
@@ -277,9 +261,13 @@ def test_this_repository_has_no_mutation_in_flight():
 
     assert not present, (
         f"{', '.join(str(p) for p in present)} exists and no mutation run started this pytest, so a "
-        f"source file may still be mutated. Read that file — it holds the original text, and is the "
-        f"only copy. `python3 tools/mutation_check.py --recover` puts it back when the recorded "
-        f"owner is gone; if it refuses, restore from the record by hand rather than deleting it.")
+        f"source file may still be mutated. Start with `python3 tools/mutation_check.py --recover`: "
+        f"it puts the file back when the recorded owner is gone, and refuses without touching "
+        f"anything when it cannot tell.\n"
+        f"  If it refuses, open the record. When it names a path and an `original`, that text is "
+        f"the only copy — put it back by hand. When it is empty or truncated it holds nothing, and "
+        f"`git status` and `git diff` are what show you what the killed run left. **Then** delete "
+        f"the record; it is what keeps this red until somebody has looked.")
 
 
 def _guard_says(tmp_path, record, env):
@@ -718,6 +706,13 @@ UNOWNED_RECORDS = [
     ('{"path": "x", "original": "a", "mutated": "b", "owner": null}', "an owner of null"),
     ('{not json', "truncated, which is what a kill mid-write leaves"),
     ("", "an empty file"),
+    # Valid JSON that is not an object. `record["path"]` raised `TypeError`, which the except tuple
+    # did not catch, so the branch whose refusal tells an operator to open the file and edit it by
+    # hand answered a half-finished hand edit with a traceback (CHG-20260831-05, defect seat).
+    ("[]", "a JSON list"),
+    ("null", "a JSON null"),
+    ('"just a string"', "a bare JSON string"),
+    ('{"path": 5, "original": "a", "mutated": "b"}', "a path that is not a path"),
 ]
 
 
@@ -816,6 +811,9 @@ def test_recover_keeps_a_record_it_cannot_read(tmp_path, monkeypatch, body, shap
     assert record.read_text(encoding="utf-8") == body, f"{shape}: the record was rewritten"
     assert said and said.startswith("REFUSING"), f"{shape}: {said!r}"
     assert "kept" in said, f"{shape}: the refusal has to say the file is still there"
+    assert "git status" in said, (
+        f"{shape}: for an empty or truncated record there is no original to put back, "
+        f"so the working tree is the only thing that shows what a killed run left")
 
 
 def test_recover_reports_an_unreadable_record_to_the_operator(sentinel, source, capsys,
