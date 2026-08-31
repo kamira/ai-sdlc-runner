@@ -28,6 +28,8 @@ from pathlib import Path
 import pytest
 from _pytest.outcomes import Skipped
 
+NEWLINE = chr(10)
+
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS))
 
@@ -837,3 +839,74 @@ def test_recover_reports_an_unreadable_record_to_the_operator(sentinel, source, 
     assert sentinel.exists(), "the command that refuses to touch it deleted it"
     assert code != 0, f"exit 0 says the tree is fine; it is not: {printed!r}"
     assert "REFUSING" in printed, f"it said nothing at all: {printed!r}"
+
+
+#: Record shapes a hand edit produces, and what `recover` must do with each. Every one of these
+#: guards shipped unpinned: reverting any of the four left `45 passed` (CHG-20260831-07, defect
+#: seat), and one of them — a non-integer `owner` — had turned a traceback into a silent overwrite.
+DESTRUCTIVE_SHAPES = [
+    ({"original": None}, "an original that is null"),
+    ({"original": 123}, "an original that is a number"),
+    ({"mutated": []}, "a mutated that is a list"),
+    ({"path": ""}, "an empty path"),
+    ({"owner": "nope"}, "an owner that is a string"),
+    ({"owner": [1]}, "an owner that is a list"),
+    ({"owner": 1.5}, "an owner that is a float"),
+]
+
+
+@pytest.mark.parametrize("override,shape", DESTRUCTIVE_SHAPES,
+                         ids=[c[1] for c in DESTRUCTIVE_SHAPES])
+def test_recover_destroys_nothing_it_cannot_account_for(tmp_path, monkeypatch, override, shape):
+    """Every one of these was reachable by the hand edit `--recover`'s own refusal invites.
+
+    `"original": null` truncated the source file to `''` and left no copy anywhere; `"owner":
+    "nope"` **restored the file and deleted the record**, because answering "not a process" for a
+    pid it could not read is what lets `recover` act. The module's one rule is that a refusal must
+    not throw away the original, and both broke it (CHG-20260831-07, conformance and defect seats).
+    """
+    victim = tmp_path / "target.py"
+    victim.write_text("MUTATED SOURCE" + NEWLINE, encoding="utf-8")
+    record = tmp_path / "in-flight.json"
+    body = {"path": str(victim), "original": "ORIGINAL SOURCE" + NEWLINE,
+            "mutated": "MUTATED SOURCE" + NEWLINE, "owner": 999999}
+    body.update(override)
+    record.write_text(json.dumps(body), encoding="utf-8")
+    monkeypatch.setattr(mutation_recovery, "IN_FLIGHT", record)
+
+    said = mutation_recovery.recover(quiet=True)
+
+    assert said and said.startswith("REFUSING"), f"{shape}: {said!r}"
+    assert record.exists(), f"{shape}: the record was discarded"
+    assert victim.read_text(encoding="utf-8") == "MUTATED SOURCE" + NEWLINE, (
+        f"{shape}: the victim was written over on a record that could not be read")
+
+
+def test_write_refuses_a_non_string_before_it_truncates(tmp_path):
+    """`io.open(path, "w")` truncates, then the write fails. The order is the whole defect."""
+    target = tmp_path / "target.py"
+    target.write_text("KEEP ME" + NEWLINE, encoding="utf-8")
+
+    with pytest.raises(TypeError, match="destroy"):
+        mutation_recovery.write(target, None)
+
+    assert target.read_text(encoding="utf-8") == "KEEP ME" + NEWLINE
+
+
+def test_recover_refuses_a_record_naming_something_that_is_not_a_file(tmp_path, monkeypatch):
+    """`exists()` is true of a directory and opening one is a `PermissionError`, out of an
+    unguarded read. The refusal has to name what it is refusing, which the first fix did not:
+    `Path(".").name` is `""`, so it printed `REFUSING to touch :` (CHG-20260831-07, risk seat).
+    """
+    record = tmp_path / "in-flight.json"
+    record.write_text(json.dumps(
+        {"path": str(tmp_path), "original": "a", "mutated": "b", "owner": 999999}),
+        encoding="utf-8")
+    monkeypatch.setattr(mutation_recovery, "IN_FLIGHT", record)
+
+    said = mutation_recovery.recover(quiet=True)
+
+    assert said.startswith("REFUSING"), said
+    assert str(tmp_path) in said, f"the refusal must name what it will not touch: {said!r}"
+    assert "edited it since" not in said, f"nobody edited a directory: {said!r}"
+    assert record.exists()

@@ -27,6 +27,7 @@ def _repo(tmp_path, chg_body, acc=None):
 #: rather than written as one literal. The inline form is this file's norm and stays that way;
 #: this is for the cases where a literal would be unreadable.
 NEWLINE = chr(10)
+CRLF = chr(13) + chr(10)
 
 HEADER = "- Project: x\n- Branch: b\n- Date: 2026-09-01\n- Risk: low\n"
 
@@ -660,34 +661,50 @@ GHOST_EXCUSES = [
     ("`test_gone_a` and `test_gone` were removed in CHG-20260901-01.", True, "a list of two"),
     ("Pinned by `test_this_repos_own_ledger_passes`, and `test_gone` was removed in "
      "CHG-20260901-01.", True, "a live test cited first does not block it"),
-    # A link is checked twice — text and href. Validating the text alone let a dead link through,
-    # in the check whose whole subject is pointers that do not resolve (CHG-20260831-06, risk).
+    # Case. `Removed in CHG-…` opening a sentence was refused, and the reverse-order row above
+    # happened to be lowercase so nothing noticed (CHG-20260831-07, conformance and risk seats).
+    ("Removed in CHG-20260901-01: `test_gone`.", True, "a capital at a sentence start"),
+    ("`test_gone` was Deleted in CHG-20260901-01.", True, "a capital mid-sentence"),
+    # Every link form a person writes. The `linked in href` test that stood here read as "the href
+    # is validated" and was a substring check — `(../nowhere/CHG-20260901-01.md)` passed it — while
+    # refusing these three. The claim is withdrawn; the id is what is checked (CHG-20260831-07).
     ("`test_gone` was removed in [CHG-20260901-01](../changes/CHG-20260901-01.md).", True,
-     "a markdown link whose href resolves"),
-    ("`test_gone` was removed in [CHG-20260901-01](../nowhere/nothing.md).", False,
-     "a markdown link whose href does not"),
-    # `renamed` excuses the case this check exists to catch: a renamed test still exists, and the
-    # record still points at a name that resolves to nothing. Say `renamed to `test_x` in CHG-…`
-    # and the reader has somewhere to go (CHG-20260831-06, risk seat).
+     "an inline link"),
+    ("`test_gone` was removed in [CHG-20260901-01][1].", True, "a reference-style link"),
+    ("`test_gone` was removed in [CHG-20260901-01](#chg-20260901-01).", True, "a GitHub anchor"),
+    # The phrasing the comment above `_REMOVED_BY` tells people to write. Dropping `renamed`
+    # without making this work left no rename phrasing the check accepts at all (risk seat).
+    ("`test_gone` was renamed to `test_still_here` in CHG-20260901-01.", True,
+     "renamed, with the new name given"),
     ("`test_gone` was renamed in CHG-20260901-01.", False, "renamed, with no new name"),
-    ("`test_gone` — removed in CHG-19700101-99.", False, "a change id nobody can open"),
-    # One **sentence**, not one paragraph. A paragraph-sized window excused a name from a sentence
-    # about something else entirely, and records here say things were deleted constantly
-    # (CHG-20260831-06, defect seat).
+    # Ordinary prose punctuation. Excluding `.!?` outright refused all five of these, every one a
+    # remedy the refusal invites (CHG-20260831-07, risk seat).
+    ("`test_gone`, i.e. the halt case, was removed in CHG-20260901-01.", True, "i.e."),
+    ("`test_gone` (e.g. the halt case) was removed in CHG-20260901-01.", True, "e.g."),
+    ("`test_gone` -- gone! -- was removed in CHG-20260901-01.", True, "an exclamation mid-clause"),
+    ("`test_gone` -- did anyone read it? -- was removed in CHG-20260901-01.", True, "a question"),
+    ("`test_gone` ... was removed in CHG-20260901-01.", True, "an ellipsis"),
     ("`test_gone` is the evidence for the halt rule. The vendored skill was deleted in "
      "CHG-20260901-01.", False, "a sentence about something else"),
-    ("`test_gone` is the evidence." + NEWLINE + NEWLINE
-     + "Other things were removed in CHG-20260901-01.", False, "a paragraph away"),
-    # `\s`, not `[ 	]`. U+3000 is what a Chinese IME emits, in a ledger written partly in
-    # Chinese; the round before had fixed exactly this for a plain space (CHG-20260831-06, risk).
-    ("`test_gone` is the evidence." + NEWLINE + " " + NEWLINE
-     + "Removed in CHG-20260901-01.", False, "a blank line carrying a space"),
-    ("`test_gone` is the evidence." + NEWLINE + chr(0xA0) + NEWLINE
-     + "Removed in CHG-20260901-01.", False, "a blank line carrying a non-breaking space"),
-    ("`test_gone` is the evidence." + NEWLINE + chr(0x3000) + NEWLINE
-     + "Removed in CHG-20260901-01.", False, "a blank line carrying an ideographic space"),
-    # `re.finditer` is non-overlapping, so an over-long match consumed the region and the valid
-    # short one inside it was never offered — a false refusal on a remedy already followed.
+    ("`test_gone` — removed in CHG-19700101-99.", False, "a change id nobody can open"),
+    # A paragraph break, and only a paragraph break, decides these six: the fixture carries no
+    # sentence end, so nothing else can refuse it first. The rows that stood here did end in one —
+    # measured, disabling `_PARAGRAPH_BREAK` left all 21 green, so coverage went from 2 rows to 0
+    # in the round whose task was to strengthen it. **CRLF** is the one that mattered: every record
+    # in this repository is CRLF, so `[ 	]` matched no paragraph break in any of them
+    # (CHG-20260831-07, idiom, defect, conformance and risk seats).
+    ("`test_gone` is listed here" + NEWLINE + NEWLINE
+     + "and was removed in CHG-20260901-01", False, "a paragraph break"),
+    ("`test_gone` is listed here" + CRLF + CRLF
+     + "and was removed in CHG-20260901-01", False, "a CRLF break, as every record here is"),
+    ("`test_gone` is listed here" + NEWLINE + " " + NEWLINE
+     + "and was removed in CHG-20260901-01", False, "a break carrying a space"),
+    ("`test_gone` is listed here" + NEWLINE + chr(0x3000) + NEWLINE
+     + "and was removed in CHG-20260901-01", False, "a break carrying an ideographic space"),
+    ("`test_gone` is listed here" + NEWLINE + chr(0x200B) + NEWLINE
+     + "and was removed in CHG-20260901-01", False, "a break carrying a zero-width space"),
+    ("`test_gone` is listed here" + NEWLINE + chr(0xFEFF) + NEWLINE
+     + "and was removed in CHG-20260901-01", False, "a break carrying a byte-order mark"),
     ("`test_gone` is the evidence." + NEWLINE + NEWLINE
      + "`test_gone` was removed in CHG-20260901-01.", True,
      "named twice; the second mention is a valid excuse"),

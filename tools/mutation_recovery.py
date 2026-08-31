@@ -73,14 +73,16 @@ def _alive(pid: Optional[int]) -> bool:
     killed run left mutated. That leaves the tree wrong but says so loudly, and the refusal names the
     way out. It is the direction to fail in, not a direction that is safe.
     """
-    # A pid that is not an integer is not a process. `"owner": "nope"` and `"owner": [1]` —
-    # both reachable by the hand edit the refusal invites — reached `_alive_nt` and came back
-    # as `ctypes.ArgumentError` rather than a refusal (CHG-20260831-06, defect seat). Treated
-    # as **not alive**, which is the safe direction here: an unowned record is refused, not
-    # recovered over.
+    # Not alive, and **that is not the safe direction** - the comment here said it was. `_alive`
+    # returning False is what lets `recover` act, so answering "not a process" for a pid it
+    # cannot read is how a bad `owner` came to overwrite a file and delete its own record.
+    # `recover` refuses such a record before reaching this now; the guard stays for callers that
+    # ask directly, and now says what it does rather than what would have been convenient
+    # (CHG-20260831-07, conformance and defect seats).
+    # `isinstance(None, int)` is False, so this covers the `Optional[int]` None case as well —
+    # the separate `if pid is None` that stood below it was unreachable from the moment this was
+    # added (CHG-20260831-07, idiom seat).
     if not isinstance(pid, int) or isinstance(pid, bool):
-        return False
-    if pid is None:
         return False
     return _alive_nt(pid) if os.name == "nt" else _alive_posix(pid)
 
@@ -273,10 +275,16 @@ def recover(quiet: bool = False) -> Optional[str]:
         # opens the file `"w"` *before* the `TypeError`, so the source was truncated to nothing and
         # the record held no copy of it. Destroyed by the recovery, which is the one thing this
         # module exists not to do (CHG-20260831-06, defect seat).
-        if not (isinstance(record["path"], str) and record["path"].strip()
-                and isinstance(original, str) and isinstance(mutated, str)):
-            raise ValueError(f"a record field is not the type it must be: "
-                             f"{ {k: type(v).__name__ for k, v in record.items()} }")
+        # `owner` too, and that is the half that mattered. Sending a non-integer owner to `_alive`
+        # to be answered `False` reads as "the owner is gone, recover" - so `"owner": "nope"`
+        # **restored the file and deleted the record**, where before it raised out of `_alive` and
+        # left both alone. A guard written to stop a traceback turned it into a silent overwrite
+        # (CHG-20260831-07, conformance and defect seats). Cannot-tell is refused here, which is
+        # what the rest of this branch does.
+        wrong = {k: type(v).__name__ for k, v in record.items()
+                 if not isinstance(v, str if k != "owner" else int) or isinstance(v, bool)}
+        if wrong or not record["path"].strip():
+            raise ValueError(f"a record field is not the type it must be: {wrong or record}")
     except (OSError, ValueError, KeyError, TypeError) as unreadable:
         # **Kept, and refused.** This used to `unlink` it and return a line nobody printed, so
         # `--recover` on a truncated record was silent, exited 0, and deleted the file — while the
@@ -288,11 +296,15 @@ def recover(quiet: bool = False) -> Optional[str]:
         # that also throws away the original strands the file for good"*. Truncated and empty are
         # exactly the shapes a kill mid-write leaves, so this is the branch that most needed it.
         #
-        # `TypeError` and `AttributeError` because valid JSON that is not an object — `[]`, `null`,
-        # a bare string — makes `record["path"]` raise, and this branch is the one whose refusal
-        # tells an operator to open the file and edit it by hand. A half-finished hand edit is the
-        # expected way in, and it left a traceback instead of the refusal. `_owner` twenty lines
-        # down already caught `AttributeError` for exactly this shape (CHG-20260831-05, defect).
+        # `TypeError` because valid JSON that is not an object — `[]`, `null`, a bare string —
+        # makes `record["path"]` raise, and this branch is the one whose refusal tells an operator
+        # to open the file and edit it by hand. A half-finished hand edit is the expected way in,
+        # and it left a traceback instead of the refusal (CHG-20260831-05, defect seat).
+        #
+        # Not `AttributeError`: it was in this tuple for one round on the ground that `_owner`
+        # catches it, and `_owner` uses `.get` where this uses subscription — measured, no JSON
+        # shape reaches it here. Removed, and the comment stopped citing it, in CHG-20260831-07
+        # (conformance and risk seats, who found the tuple narrowed and the reason left behind).
         said = (f"REFUSING to act on {IN_FLIGHT.name}: it cannot be read ({unreadable!r}), so this "
                 f"cannot tell which file was mutated or what it held. The file is **kept** — a "
                 f"partial record may still contain the only copy of some original text.\n"
@@ -323,7 +335,27 @@ def recover(quiet: bool = False) -> Optional[str]:
 
     # `is_file()`, not `exists()`: `{"path": "."}` exists and opening it is a `PermissionError`
     # out of an unguarded read, so a record naming a directory tracebacked instead of refusing.
-    now = io.open(path, encoding="utf-8").read() if path.is_file() else None
+    if path.exists() and not path.is_file():
+        # Its own branch, because falling through to the edited-since one told the operator somebody
+        # had edited a file — about a directory, and `Path(".").name` is `""`, so it named nothing
+        # at all (CHG-20260831-07, risk and conformance seats).
+        said = (f"REFUSING to touch {path}: the record names it as the mutated file and it is not a "
+                f"file. Nothing here was changed. Fix the `path` in {IN_FLIGHT.name} or, if no "
+                f"source was left mutated, delete that record.")
+        if not quiet:
+            print(f"  {said}")
+        return said
+    try:
+        now = io.open(path, encoding="utf-8").read() if path.is_file() else None
+    except (OSError, UnicodeDecodeError) as unreadable:
+        # A file that is not UTF-8 is the same shape as the directory case: a read outside the
+        # try/except that guards the record, on a path a hand edit chose (risk seat).
+        said = (f"REFUSING to touch {path}: it cannot be read as UTF-8 ({unreadable!r}), so this "
+                f"cannot tell whether it is still mutated. Nothing here was changed. The original "
+                f"is kept in {IN_FLIGHT.name}.")
+        if not quiet:
+            print(f"  {said}")
+        return said
     if now == mutated:
         write(path, original)
         said = f"restored {path.name}, which a killed run left mutated"
