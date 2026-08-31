@@ -723,10 +723,15 @@ def test_every_exception_a_person_reads_goes_through_plain_in():
         in_scope += sum(1 for _ in _handlers_in_scope(source))
         unstripped += _unstripped_sites(source, module.name)
 
-    assert modules >= 20, f"the survey read {modules} modules; it should be reading the package"
-    assert in_scope >= 10, (
-        f"the survey looked inside {in_scope} handlers. It cannot report a clean tree without "
-        f"having examined one")
+    # The real numbers, not round ones below them. Floors of 20 and 10 caught a survey that
+    # read *nothing* and missed one that read *less*: dropping a single module still left
+    # 57 passed, with one in-scope handler unexamined (CHG-20260830-08, defect seat). A new
+    # module or handler makes these fail, and updating them is the point — the number is a
+    # claim about coverage, so it should have to be re-made.
+    assert modules >= 21, f"the survey read {modules} modules; the package has 21"
+    assert in_scope >= 12, (
+        f"the survey looked inside {in_scope} in-scope handlers; there are 12. It cannot "
+        f"report a clean tree over handlers it did not open")
     assert not unstripped, (
         "these let an exception reach a person with the extended-length prefix still on it: "
         + ", ".join(unstripped))

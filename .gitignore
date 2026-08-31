@@ -200,3 +200,6 @@ examples/*/greet.py
 
 # The mutation harness's in-flight record (CHG-20260828-18)
 tools/.mutation-in-flight.json
+
+# Session tooling, not part of the project (CHG-20260830-08).
+.claude/

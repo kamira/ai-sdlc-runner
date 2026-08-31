@@ -201,30 +201,81 @@ def test_this_repository_has_no_mutation_in_flight():
     A mutation no test catches leaves a green suite over a mutated tree, so neither the suite nor a
     glance at `git status` says anything is wrong. This does.
 
-    ## Why a live owner is skipped rather than failed
+    ## Why the harness announces itself instead of being inferred
 
-    It guards against a **killed** run's leftover. A run that is alive and holding the record is not
-    that, and failing on it made this test fire during every mutation of the `stranded` group —
-    which `_pytest` runs with `-x`, so the run stopped here, at test nine of fifteen, and the four
-    tests that pin the lock never executed. The harness then reported `CAUGHT` for a red that the
-    sentinel's own presence produced. Measured: with a record on disk, pristine source and mutated
-    source both gave `1 failed, 8 passed` with the same single failure, for every mutation in the
-    group (CHG-20260830-07, defect seat).
+    It guards against a **killed** run's leftover. A run in progress legitimately holds the record,
+    so it has to be excused — and CHG-20260830-07 excused it by asking whether the record's owner
+    was still *alive*. That was wrong in both directions, and round 4 measured both:
 
-    So the guarantee is unchanged and the trigger is narrowed to the case it names. A record whose
-    owner is gone still fails, which is the incident this exists for.
+    - a mutation that broke `_alive` made the owner read dead, so this test **failed** rather than
+      skipping. `_pytest` runs with `-x`, so the run stopped here and the tests written for `_alive`
+      never executed — 2 of 11 `stranded` mutations were reported `CAUGHT` by this test's red rather
+      than by the test that names them.
+    - a genuinely stranded tree whose dead owner's pid had been reused, or whose owner this process
+      may not open, read as **alive** — so the guard skipped, the suite returned `rc=0` over a
+      mutated `src/` file, and the record is gitignored so `git status` said nothing either. That is
+      the *quiet* failure this module's docstring exists to describe, with the detector disarmed.
+
+    `MUTATION_RUN` is set by `mutation_check._pytest` and by nothing else. A run in progress says so;
+    everything else is a leftover and fails. No inference, and no coupling to `_alive`.
     """
-    if mutation_recovery.IN_FLIGHT.exists():
-        owner = mutation_recovery._owner()
-        if mutation_recovery._alive(owner):
-            pytest.skip(f"a mutation run (pid {owner}) is holding this worktree right now, which is "
-                        f"not the killed-run leftover this guards against")
+    if os.environ.get("MUTATION_RUN"):
+        pytest.skip(f"a mutation run (pid {os.environ['MUTATION_RUN']}) started this pytest and "
+                    f"holds the record; that is not the killed-run leftover this guards against")
 
     assert not mutation_recovery.IN_FLIGHT.exists(), (
-        f"{mutation_recovery.IN_FLIGHT} exists and the run that wrote it is gone, so a source file "
-        f"may still be mutated. `python3 tools/mutation_check.py --recover` puts it back. If that "
-        f"refuses, read that file: it holds the original text, so restore by hand from there rather "
-        f"than deleting it.")
+        f"{mutation_recovery.IN_FLIGHT} exists and no mutation run started this pytest, so a source "
+        f"file may still be mutated. Read that file — it holds the original text, and is the only "
+        f"copy. `python3 tools/mutation_check.py --recover` puts it back when the recorded owner is "
+        f"gone; if it refuses, restore from the record by hand rather than deleting it.")
+
+
+def _guard_says(tmp_path, record, env):
+    """Run the in-flight guard as its own pytest, against a record and an environment we choose.
+
+    In-process would test nothing: the guard reads the real `IN_FLIGHT` and the real environment,
+    which is the whole point of it. So it is driven the way it actually runs.
+    """
+    (tmp_path / "conftest.py").write_text("", encoding="utf-8")
+    if record is None:
+        mutation_recovery.IN_FLIGHT.unlink(missing_ok=True)
+    else:
+        mutation_recovery.write(mutation_recovery.IN_FLIGHT, record)
+    try:
+        return subprocess.run(
+            [sys.executable, "-m", "pytest",
+             f"{Path(__file__).name}::test_this_repository_has_no_mutation_in_flight",
+             "-q", "-p", "no:randomly", "--no-header", "--tb=no"],
+            cwd=Path(__file__).resolve().parent, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+            env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+                 **env})
+    finally:
+        mutation_recovery.IN_FLIGHT.unlink(missing_ok=True)
+
+
+def test_the_guard_fails_on_a_leftover_record_and_skips_only_for_a_running_harness(tmp_path):
+    """The branch that decides whether this repository's stranded-tree detector is armed.
+
+    Nothing drove it. CHG-20260830-07 changed the condition and recorded the change as verified;
+    round 4 measured the result as a green suite over a genuinely mutated `src/` file, because the
+    condition it chose — *is the recorded owner alive* — read `True` for a reused pid. The branch is
+    the guard, so the branch needs a test (CHG-20260830-08, defect seat).
+
+    Both directions, through a real pytest, because the guard reads the real environment.
+    """
+    held = json.dumps({"path": "x", "original": "a", "mutated": "b", "owner": os.getpid()})
+
+    leftover = _guard_says(tmp_path, held, {"MUTATION_RUN": ""})
+    running = _guard_says(tmp_path, held, {"MUTATION_RUN": "12345"})
+    clean = _guard_says(tmp_path, None, {"MUTATION_RUN": ""})
+
+    assert leftover.returncode != 0, (
+        "a record left behind with no mutation run in progress did not fail the guard, so a killed "
+        f"run's mutated file would ship silently: {leftover.stdout[-400:]}")
+    assert "1 skipped" in running.stdout, (
+        f"the guard did not excuse a run that announced itself: {running.stdout[-400:]}")
+    assert clean.returncode == 0, f"the guard failed on a clean tree: {clean.stdout[-400:]}"
 
 
 def test_begin_refuses_when_a_record_is_already_there(sentinel, source):
@@ -362,6 +413,38 @@ def test_a_process_that_exited_with_259_is_not_mistaken_for_a_running_one():
     assert exited.returncode == 259, "the fixture did not produce the code this test is about"
 
     assert mutation_recovery._alive(exited.pid) is False
+
+
+def test_the_posix_branch_reads_a_process_it_may_not_signal_as_alive(monkeypatch):
+    """The same denied-is-alive rule, on the other branch — and nothing was driving it.
+
+    `except PermissionError: return True` is the POSIX half of the answer the Windows half got wrong,
+    and both this module's docstring and the skip reason on the 259 test above cited it as the
+    already-correct precedent. Round 4 enumerated every `_alive` call in the suite and found none
+    that raises `PermissionError`: the clause the argument rested on was executed by nothing, on any
+    platform (CHG-20260830-08, defect seat).
+
+    `_alive_posix` is called directly, which is why it is its own function. Reaching it through
+    `_alive` would mean standing in for `os.name` — and `mutation_recovery.os` *is* the `os` module,
+    so that patches it for the whole process and `pathlib` stops being able to make a `Path`.
+    Measured, while writing this: `NotImplementedError: cannot instantiate 'PosixPath' on your
+    system`, from a test that had nothing to do with paths.
+    """
+    def denied(pid, sig):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(mutation_recovery.os, "kill", denied)
+    assert mutation_recovery._alive_posix(4321) is True, (
+        "a process this one may not signal was read as dead, so recovery would overwrite its file")
+
+    def gone(pid, sig):
+        raise ProcessLookupError(3, "No such process")
+
+    monkeypatch.setattr(mutation_recovery.os, "kill", gone)
+    assert mutation_recovery._alive_posix(4321) is False
+
+    monkeypatch.setattr(mutation_recovery.os, "kill", lambda pid, sig: None)
+    assert mutation_recovery._alive_posix(4321) is True
 
 
 def test_a_second_run_does_not_recover_over_a_live_run(sentinel, holder):

@@ -1400,7 +1400,7 @@ MUTATIONS: List[Mutation] = [
     return False""",
         'tests/test_mutation_recovery.py'),
 
-    # ── CHG-20260830-07: the liveness probe answered wrongly three ways ───────────────────────────
+    # ── CHG-20260830-07: the liveness probe answered wrongly three ways ────────────────────────
     #
     # The owner check above is only as good as `_alive`, and nothing tested whether `_alive` was
     # right — ACC-20260830-06 row 16 checked only that it does not *kill* what it asks about. Three
@@ -1409,15 +1409,28 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         'stranded', 'a live process this run may not open reads as dead, so recovery overwrites it',
         TOOLS / 'mutation_recovery.py',
-        '            return kernel32.GetLastError() == ERROR_ACCESS_DENIED',
-        '            return False',
+        '        return ctypes.get_last_error() == ERROR_ACCESS_DENIED',
+        '        return False',
         'tests/test_mutation_recovery.py'),
 
     Mutation(
         'stranded', 'the wait is asked without SYNCHRONIZE, so every live process reads as dead',
         TOOLS / 'mutation_recovery.py',
-        '        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)',
-        '        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)',
+        '    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)',
+        '    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)',
+        'tests/test_mutation_recovery.py'),
+
+    # The two entries above mutate lines inside `_alive_nt`, so on POSIX they are unreachable and
+    # this group is 9/11 there rather than 11/11. Nothing reports that: CI never runs this file.
+    # The entry below is their POSIX twin, and is the one that runs everywhere.
+
+    Mutation(
+        'stranded', 'a process this run may not signal reads as dead on POSIX too',
+        TOOLS / 'mutation_recovery.py',
+        """    except PermissionError:
+        return True""",
+        """    except PermissionError:
+        return False""",
         'tests/test_mutation_recovery.py'),
 
     Mutation(
@@ -1704,7 +1717,15 @@ def _pytest(tests: str):
         # locale no ordinary run of this suite has, and a guarantee about decoding could not be
         # pinned here: reverting the fix left the tests green. `PYTHONIOENCODING` fixes the pipe and
         # leaves the locale alone, which is the part that had to stay real.
-        env={**os.environ, "PYTHONPATH": "src", "PYTHONIOENCODING": "utf-8"})
+        # `MUTATION_RUN` is how the harness announces itself to
+        # `test_this_repository_has_no_mutation_in_flight`, which would otherwise fail on the record
+        # this run legitimately holds. It was keyed on the record's owner being *alive* instead, and
+        # that coupled the guard to `_alive`: a mutation that broke `_alive` made the guard fail, so
+        # the run stopped there under `-x` and the tests written for `_alive` never ran — while a
+        # genuinely stranded tree whose dead owner's pid had been reused read as alive and went
+        # **green**. Announcing beats inferring (CHG-20260830-08, defect and risk seats).
+        env={**os.environ, "PYTHONPATH": "src", "PYTHONIOENCODING": "utf-8",
+             "MUTATION_RUN": str(os.getpid())})
 
 
 def run(mutation: Mutation, baseline: Dict[str, bool]) -> bool:
@@ -1777,15 +1798,19 @@ def main() -> int:
     # a measurement of the wrong code.
     restore_on_signal()
     said = recover()
+    if args.recover:
+        # Before the refusal below, not after it. `--recover` is what the refusal itself tells the
+        # operator to run, and ordering these the other way round meant it exited 1 without ever
+        # reaching this branch — so the documented way out could not be taken, and hand-editing a
+        # gitignored dotfile was the only exit left (CHG-20260830-08, risk seat).
+        if said is None:
+            print("nothing in flight; the tree is as it should be")
+        return 1 if said and said.startswith("REFUSING") else 0
     if said and said.startswith("REFUSING"):
         # Refuse here rather than at the first `apply()`. That is minutes of baselines away, and
         # `apply` sits outside `run`'s try/finally, so the exception left main() as a traceback with
         # no summary line at all (CHG-20260830-06, defect seat).
         raise SystemExit(1)
-    if args.recover:
-        if said is None:
-            print("nothing in flight; the tree is as it should be")
-        return 0
 
     chosen = [m for m in MUTATIONS if not args.only or m.group == args.only]
     if not chosen:
