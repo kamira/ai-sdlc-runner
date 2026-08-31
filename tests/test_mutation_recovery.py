@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _pytest.outcomes import Skipped
 
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS))
@@ -241,17 +242,31 @@ def test_this_repository_has_no_mutation_in_flight():
     # instrument went constant again (CHG-20260831-02, risk seat).
     announced = os.environ.get("MUTATION_RUN")
     owned = int(announced) if announced and announced.isdigit() else None
-    present = [p for p in present if mutation_recovery._owner(p) != owned]
 
-    if not present and announced:
-        # Both halves, and the second is not decoration. Skipping on the variable alone meant one
-        # stray `export MUTATION_RUN=1` in a shell — or the name appearing in any CI environment —
-        # disarmed this repository's stranded-tree detector everywhere, permanently and silently.
-        # `_pytest` sets it to `os.getpid()` and `begin` writes that same pid as the record's owner,
-        # so this is an identity between two things the harness wrote, not an inference about a
-        # process (CHG-20260830-09, risk seat).
-        pytest.skip(f"mutation run {announced} started this pytest and owns the record; that is not "
-                    f"the killed-run leftover this guards against")
+    # `owned is None` first, and it is the whole fix. `_owner` also returns `None` for a record it
+    # cannot read — no `owner` key, `null`, truncated JSON, an empty file — so comparing them made
+    # "nobody announced a run" and "this record will not say who owns it" the same answer, and the
+    # guard excused the second. Measured on the CI path, where `MUTATION_RUN` is unset: four record
+    # states went from red to **green**, including the truncated file a kill mid-write leaves, which
+    # is the leftover this guard exists for (CHG-20260831-03, risk and idiom seats).
+    #
+    # Unreadable is not owned. Only a record that names the announced pid is excused.
+    excused = [p for p in present
+               if owned is not None and mutation_recovery._owner(p) == owned]
+    present = [p for p in present if p not in excused]
+
+    if excused and not present:
+        # `excused`, not `announced`. Skipping on the variable meant one stray `export
+        # MUTATION_RUN=1` in a shell — or the name appearing in any CI environment — disarmed this
+        # repository's stranded-tree detector everywhere, permanently and silently: with no record
+        # on disk at all the guard skipped, reporting that a run "owns the record" over a tree that
+        # held none (CHG-20260831-03, defect and idiom seats). A skip now requires a record that
+        # exists **and** names the announced pid. `_pytest` sets `MUTATION_RUN` to `os.getpid()` and
+        # `begin` writes that same pid as the owner, so that is an identity between two things the
+        # harness wrote, not an inference about a process (CHG-20260830-09, risk seat).
+        pytest.skip(f"mutation run {announced} started this pytest and owns "
+                    f"{', '.join(str(p) for p in excused)}; that is not the killed-run leftover "
+                    f"this guards against")
 
     assert not present, (
         f"{', '.join(str(p) for p in present)} exists and no mutation run started this pytest, so a "
@@ -341,8 +356,7 @@ def test_the_guard_reads_the_default_path_even_when_the_override_moves_it(tmp_pa
     mutation_recovery.write(default, json.dumps(
         {"path": "x", "original": "a", "mutated": "b", "owner": 999999}))
 
-    with pytest.raises(AssertionError, match="may still be mutated"):
-        test_this_repository_has_no_mutation_in_flight()
+    _guard_must_fail("a record at the default path, override elsewhere")
 
 
 def test_the_harness_refuses_to_run_with_the_record_moved(tmp_path):
@@ -665,3 +679,95 @@ def test_the_lock_is_released_when_the_run_puts_the_file_back(sentinel, source):
     assert not sentinel.exists()
     mutation_recovery.begin(subject, "ORIGINAL\n", "MUTATED\n")      # no refusal
     mutation_recovery.end()
+
+
+#: Record bodies a killed run can leave, and what each says about who owns it. Every one of these
+#: went from red to **green** when the guard compared `_owner(p)` against the announced pid without
+#: checking whether anything had been announced: `_owner` returns `None` for a record it cannot
+#: read, so "nobody is running" and "this record will not say" became the same answer
+#: (CHG-20260831-03, risk and idiom seats).
+def _guard_must_fail(why):
+    """Run the in-flight guard and require it to **fail** — a skip is not an acquittal.
+
+    Written because the first draft of these tests could not tell the two apart. Both halves of
+    the guard fix were reverted and the suite reported `31 passed, 4 skipped` and `34 passed,
+    1 skipped` — green both times, because `pytest.skip` raises `Skipped` and `pytest.raises(
+    AssertionError)` lets it straight through. Tests written to close a silent-disarm defect,
+    disarmed silently (CHG-20260831-03, found by reverting the fix rather than by a seat).
+    """
+    try:
+        test_this_repository_has_no_mutation_in_flight()
+    except Skipped as skipped:
+        pytest.fail(f"{why}: the guard skipped instead of failing — {skipped}")
+    except AssertionError as failed:
+        assert "may still be mutated" in str(failed), failed
+        return
+    pytest.fail(f"{why}: the guard passed")
+
+
+UNOWNED_RECORDS = [
+    ('{"path": "x", "original": "a", "mutated": "b", "owner": 999999}', "a pid that is gone"),
+    ('{"path": "x", "original": "a", "mutated": "b"}', "no owner key at all"),
+    ('{"path": "x", "original": "a", "mutated": "b", "owner": null}', "an owner of null"),
+    ('{not json', "truncated, which is what a kill mid-write leaves"),
+    ("", "an empty file"),
+]
+
+
+@pytest.mark.parametrize("body,shape", UNOWNED_RECORDS, ids=[c[1] for c in UNOWNED_RECORDS])
+def test_a_record_nobody_owns_fails_the_guard(tmp_path, monkeypatch, body, shape):
+    """With no run announced, every record present is a leftover — however unreadable it is.
+
+    The unreadable ones matter most: `recover`'s own refusal tells an operator to *"reconcile it by
+    hand, then delete that file"*, so a half-edited record is a state this module expects. Excusing
+    it means going quiet over a worktree that may still hold a mutated source file whose only copy
+    of the original is the record just excused.
+    """
+    record = tmp_path / "in-flight.json"
+    record.write_text(body, encoding="utf-8")
+    monkeypatch.setattr(mutation_recovery, "DEFAULT_IN_FLIGHT", record)
+    monkeypatch.setattr(mutation_recovery, "IN_FLIGHT", record)
+    monkeypatch.delenv("MUTATION_RUN", raising=False)
+
+    _guard_must_fail(shape)
+
+
+@pytest.mark.parametrize("body,shape", UNOWNED_RECORDS, ids=[c[1] for c in UNOWNED_RECORDS])
+def test_a_record_nobody_owns_fails_even_while_a_run_is_announced(tmp_path, monkeypatch,
+                                                                  body, shape):
+    """Announcing a run excuses the record that run owns. It does not excuse the others.
+
+    Same five shapes, `MUTATION_RUN` set this time. The per-path filter compared `_owner(p)`
+    against the announced pid, and `_owner` returns `None` for anything it cannot read, so four
+    of these five were excused on the CI path where the variable is unset. The fifth — a pid that
+    is simply gone — is the one the harness plants, and it is the only column a mutation run
+    could reach (CHG-20260831-03, defect and risk seats).
+    """
+    record = tmp_path / "in-flight.json"
+    record.write_text(body, encoding="utf-8")
+    monkeypatch.setattr(mutation_recovery, "DEFAULT_IN_FLIGHT", record)
+    monkeypatch.setattr(mutation_recovery, "IN_FLIGHT", record)
+    monkeypatch.setenv("MUTATION_RUN", "999998")
+
+    _guard_must_fail(shape)
+
+
+def test_the_guard_does_not_skip_over_a_tree_that_holds_no_record(tmp_path, monkeypatch):
+    """A skip has to be about a record. It was about a variable.
+
+    `if not present and announced` read "a run announced itself" as "a run owns the record", so
+    one stray `export MUTATION_RUN=1` — or the name appearing in any CI environment — turned the
+    stranded-tree detector into a skip forever, over a tree it had not looked at. Measured: with
+    the variable set and nothing on disk the guard skipped, reporting that run "owns the record"
+    (CHG-20260831-03, defect and idiom seats).
+    """
+    absent = tmp_path / "nothing-here.json"
+    monkeypatch.setattr(mutation_recovery, "DEFAULT_IN_FLIGHT", absent)
+    monkeypatch.setattr(mutation_recovery, "IN_FLIGHT", absent)
+    monkeypatch.setenv("MUTATION_RUN", "999998")
+
+    # Passes, and does not skip. A clean tree is an answer, not an abstention.
+    try:
+        test_this_repository_has_no_mutation_in_flight()
+    except Skipped as skipped:
+        pytest.fail(f"nothing is on disk and the guard abstained anyway — {skipped}")

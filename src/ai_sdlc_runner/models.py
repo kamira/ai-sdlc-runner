@@ -52,7 +52,7 @@ REACHES = (LOCAL, INTERNAL, EXTERNAL)
 #: An environment variable's name, not its value. `sk-ant-...` fails this, which is the point.
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-#: Query keys that mean a secret is in the URL. Not exhaustive by design — see `_secret_in_query`.
+#: Query keys that mean a secret is in the URL. Not exhaustive by design — see `_secret_in_url`.
 _SECRET_KEYS = ("key", "token", "secret", "password", "apikey", "api_key", "access_token", "sig")
 
 
@@ -60,8 +60,26 @@ class ModelError(Exception):
     """Refused. A registry that accepted this would be describing something else."""
 
 
-def _secret_in_query(endpoint: str) -> Optional[str]:
-    """A secret in the query string, if there is one.
+#: A username that is really a credential. Refusing *every* userinfo would refuse
+#: `https://alice@host/v1`, which carries no secret and has no key to move to `key_env` — the
+#: refusal would name a remedy that does not apply (CHG-20260831-03, risk and conformance seats).
+#: Length plus a vendor prefix, because that is what a pasted token looks like and a person's name
+#: does not.
+_SECRET_PREFIXES = ("sk-", "sk_", "pk-", "ghp_", "gho_", "xox", "AKIA", "AIza")
+
+
+def _looks_secret(value: str) -> bool:
+    """Does this userinfo field look like a pasted credential rather than a user name?"""
+    return value.startswith(_SECRET_PREFIXES) or len(value) >= 32
+
+
+def _secret_in_url(endpoint: str) -> Optional[Tuple[str, str]]:
+    """Where a secret sits in this URL, if it does — `(what was found, where)`.
+
+    Returns the place as well as the finding, because the refusal has to name it. Saying "query
+    string" about a credential in the userinfo sends the operator to look somewhere it is not, and
+    about a fragment it says something false as well — a fragment is never sent to a server, which
+    is why it needs a different reason rather than the same sentence (CHG-20260831-03).
 
     Matching on the *key* rather than trying to recognise a secret's shape: shapes differ per vendor
     and change without notice, while somebody writing ``?api_key=`` has told you what it is.
@@ -76,17 +94,44 @@ def _secret_in_query(endpoint: str) -> Optional[str]:
     # already refuses `parts.username or parts.password` on its own bind URL, so the codebase
     # checked the shape in one place and not the other (CHG-20260831-02, ruled a defect by the
     # round-7 risk seat after six rounds as a disclosure).
-    if parts.username or parts.password:
-        return "the userinfo before @"
+    if parts.password:
+        return ("a password", "the userinfo before @")
+    if parts.username and _looks_secret(parts.username):
+        return (f"a value shaped like a credential ({parts.username[:6]}…)",
+                "the userinfo before @")
 
     # The fragment travels with the URL and is read the same way; `#api_key=…` hid from a scan that
     # looked only at `?`.
-    for carrier in (parts.query, parts.fragment):
+    for carrier, where in ((parts.query, "the query string"), (parts.fragment, "the fragment")):
         for pair in carrier.split("&"):
             name = pair.split("=", 1)[0].strip().lower()
             if name in _SECRET_KEYS:
-                return name
+                return (name, where)
     return None
+
+
+#: Name suffixes that say "my own network" outright, as against the bare-host judgement below.
+#: Shared with `graded_by_the_bare_host_rule`, because a disclosure that restates its subject's rule
+#: instead of calling it drifts from it — and did: the restatement `"." not in hostname` named every
+#: dotless host, and an IPv6 literal has no dot (CHG-20260831-03, conformance and defect seats).
+LOCAL_SUFFIXES = (".local", ".internal", ".lan", ".home.arpa")
+
+
+def graded_by_the_bare_host_rule(endpoint: str) -> bool:
+    """Would `reach_of` call this endpoint `internal` *because its host has no dot in it*?
+
+    Not "is it internal" — `fd00::1` is internal on an RFC 4193 fact, and `gpu-box.local` on a
+    suffix somebody wrote deliberately. Only the single-label guess is a judgement, and only it is
+    what the console discloses.
+    """
+    host = (urlsplit(endpoint).hostname or "").lower()
+    if not host or host in ("localhost", "localhost.localdomain"):
+        return False
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return "." not in host
+    return False
 
 
 def reach_of(transport: str, endpoint: str = "") -> str:
@@ -109,7 +154,7 @@ def reach_of(transport: str, endpoint: str = "") -> str:
         # A name. A single label (`gpu-box`) or an explicitly local suffix is a network name; a
         # dotted public name is not. Unresolvable is treated as external, because guessing the
         # generous answer about where data goes is the wrong way to be wrong.
-        if "." not in host or host.endswith((".local", ".internal", ".lan", ".home.arpa")):
+        if "." not in host or host.endswith(LOCAL_SUFFIXES):
             return INTERNAL
         return EXTERNAL
     if address.is_loopback:
@@ -183,12 +228,13 @@ def validate(model: Model) -> Model:
         raise ModelError(
             f"model {model.id!r} has endpoint scheme {scheme or '(none)'}; this runner speaks http "
             f"and https")
-    leaked = _secret_in_query(model.endpoint)
+    leaked = _secret_in_url(model.endpoint)
     if leaked:
+        found, where = leaked
         raise ModelError(
-            f"model {model.id!r} puts {leaked!r} in the endpoint's query string. Query strings land "
-            f"in access logs and proxy logs, which are the two places nobody thinks to inspect. Put "
-            f"the key in an environment variable and name it in `key_env`.")
+            f"model {model.id!r} puts {found} in {where} of its endpoint. A URL is copied into "
+            f"logs, bug reports and shell history whole, so anything inside it travels with it. "
+            f"Put the key in an environment variable and name it in `key_env`.")
     if model.command:
         raise ModelError(f"api model {model.id!r} carries a command it cannot use")
     if model.key_env and not _ENV_NAME.match(model.key_env):
@@ -247,24 +293,16 @@ class Registry:
         """Every model whose work orders leave this machine, so the console can say so plainly."""
         return [m for m in self.models if m.leaves_this_machine]
 
-    def graded_internal_by_a_bare_host(self) -> List[Model]:
-        """Models called `internal` only because their host has no dot in it.
+    def internal_by_guess(self) -> List[Model]:
+        """Models called `internal` only because somebody wrote a host with no dot in it.
 
-        `reach_of` grades a single-label host `internal` on the reasoning that somebody who writes a
-        bare host means their own network. That is a judgement, not a fact, and it decides two
-        thing: the model skips the `EXTERNAL and not key_env` refusal. It does **not** leave the
-        console's "N of which leave this machine" count — `leaves_this_machine` is `reach != LOCAL`,
-        so an internal model is counted there; the round-7 risk seat's claim that it was not did not
-        reproduce. On a network where `gpu-box` resolves publicly the grade is wrong, and nothing
-        said so anywhere a person reads.
-
-        The round-7 risk seat ruled the heuristic **right** and its silence wrong: accept it, and
-        name the models it applies to where the count is printed. Six rounds under *Not claimed*
-        had made the disclosure into a decision taken by default (CHG-20260831-02).
+        That is a judgement, not a fact, and what it buys is the exemption from the refusal that an
+        external endpoint must name a key variable. On a network where `gpu-box` resolves publicly
+        the grade is wrong. The console names these, so the guess is visible to the person who can
+        tell whether it is right (CHG-20260831-02, risk seat).
         """
         return [m for m in self.models
-                if m.transport == "api" and m.reach == INTERNAL
-                and "." not in (urlsplit(m.endpoint).hostname or ".")]
+                if m.transport == "api" and graded_by_the_bare_host_rule(m.endpoint)]
 
     def as_dict(self) -> Dict[str, object]:
         return {"models": [m.as_dict() for m in self.models]}

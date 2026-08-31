@@ -23,6 +23,8 @@ def _repo(tmp_path, chg_body, acc=None):
     return tmp_path
 
 
+NEWLINE = chr(10)  # written literally, so nothing between here and the file eats the escape
+
 HEADER = "- Project: x\n- Branch: b\n- Date: 2026-09-01\n- Risk: low\n"
 
 #: A change claiming to be closed, and an acceptance saying the check that closed it never held.
@@ -31,6 +33,11 @@ VOID_ACCEPTANCE = "# ACC\n- Conclusion: **VOID.** the fix never worked\n"
 
 #: The same change, not claiming to be closed — the escape hatch a void acceptance leaves open.
 SUPERSEDED_CHANGE = f"# CHG\n{HEADER}\n## Status\n\n**Superseded** — the fix was redone\n"
+
+#: A change still asking the question its acceptance may or may not have answered — the only
+#: fixture on which `check` says something different for a pass than it does for a refusal.
+AWAITING_CHANGE = SUPERSEDED_CHANGE.replace("**Superseded** — the fix was redone",
+                                            "**Under review**")
 
 
 def test_this_repos_own_ledger_passes():
@@ -135,7 +142,7 @@ def test_a_change_with_no_status_section_is_reported(tmp_path):
 import pytest  # noqa: E402
 
 
-@pytest.mark.parametrize("status", ["accepted", "completed", "merged", "完成", "done", "shipped",
+@pytest.mark.parametrize("status", ["completed", "merged", "done", "shipped",
                                     "closed", "已驗收", "released"])
 def test_every_way_of_saying_finished_needs_an_acceptance(tmp_path, status):
     """The finding this closes: the lint knew only the word "built", so a change whose status said
@@ -145,7 +152,7 @@ def test_every_way_of_saying_finished_needs_an_acceptance(tmp_path, status):
     assert any("nothing saying it was checked" in p for p in problems), status
 
 
-@pytest.mark.parametrize("status", ["draft", "in progress", "blocked", "草稿", "進行中",
+@pytest.mark.parametrize("status", ["in progress", "blocked", "草稿", "進行中",
                                     "superseded", "pending"])
 def test_an_unfinished_change_needs_nothing(tmp_path, status):
     repo = _repo(tmp_path, HEADER + f"\n## Status\n\n{status}\n")
@@ -406,24 +413,10 @@ def test_an_unrecognised_verdict_is_a_problem_rather_than_a_pass(tmp_path):
     assert any("ACC_PASS or to ACC_NOT_PASS" in p for p in problems), "it must say how to fix it"
 
 
-def test_a_chinese_refusal_is_not_read_as_a_pass_as_well(tmp_path):
-    """未通過 contains 通過, so a substring match called it both a pass and a refusal.
-
-    This repository is operated in Chinese and the vocabularies carry Chinese words, so a refusal
-    that cannot be written in the operator's own language is a real hole rather than a curiosity.
-    A match nested inside another match is the same word read short; two matches that do not
-    contain each other are a genuine disagreement, and the test below still refuses those
-    (CHG-20260831-01).
-    """
-    repo = _repo(tmp_path, SUPERSEDED_CHANGE, acc="# ACC\n- Conclusion: **未通過**\n")
-
-    assert ledger_check.check(repo) == []
-
-
-def test_a_verdict_that_reads_both_ways_is_refused(tmp_path):
-    repo = _repo(tmp_path, HEADER + "\n## Status\n\n**Under review.**\n",
-                 acc="- Target CHG: CHG-20260901-01\n- Conclusion: **Pass / withdrawn.**\n")
-    assert any("reads as both" in p for p in ledger_check.check(repo))
+# 未通過 and `Pass / withdrawn` had a standalone test each. They are rows of `VERDICT_CASES`
+# now, which is where a later boundary rule has to satisfy every head at once; the standalone copies
+# asserted less against a fixture that could not tell a refusal from a pass at all, which is finding
+# 9 of the same round (CHG-20260831-03, idiom seat).
 
 
 def test_this_repos_own_changes_are_all_closed_or_openly_open():
@@ -522,7 +515,7 @@ def test_this_repositorys_own_recent_records_name_only_tests_that_exist():
 #: has been wrong about one of these while looking right on the English ones
 #: (CHG-20260831-02, conformance seat).
 VERDICT_CASES = [
-    ("**未通過**", "refusal", "一 word containing another is one word, not two opinions"),
+    ("**未通過**", "refusal", "a word containing another is one word, not two opinions"),
     ("**通過／未通過**", "both", "two words side by side are a real disagreement"),
     ("**Pass / withdrawn.**", "both", "the English form of the same thing"),
     ("**通過failed**", "both", "a Latin word against Chinese text is still that word"),
@@ -535,13 +528,19 @@ VERDICT_CASES = [
 @pytest.mark.parametrize("head,means,why", VERDICT_CASES,
                          ids=[c[0].strip("*") for c in VERDICT_CASES])
 def test_a_verdict_head_means_one_thing(tmp_path, head, means, why):
-    """Every boundary rule tried here has been right about English and wrong about Chinese.
+    r"""Every boundary rule tried here has been right about English and wrong about Chinese.
 
     `\b` let `通過failed` read as a **pass** and made `已void` unrecognised; matching the vocabulary
     entries against each other could not tell 未通過 (one word) from 通過／未通過 (two). Both were
     measured after shipping, so the cases live in a table that a later rule has to satisfy whole.
     """
-    repo = _repo(tmp_path, SUPERSEDED_CHANGE, acc=f"# ACC\n- Conclusion: {head}\n")
+    # The change is **awaiting a decision**, so a pass and a refusal are distinguishable: a pass
+    # closes the question the status is still asking and `check` says so; a refusal leaves it open
+    # and says nothing. Against `SUPERSEDED_CHANGE` both landed in one `assert not problems`, so the
+    # `refusal` rows asserted exactly what the `pass` rows did and the table pinned six heads while
+    # claiming seven. Proved by moving 未通過 into `ACC_PASS`: the table stayed green
+    # (CHG-20260831-03, conformance and idiom seats).
+    repo = _repo(tmp_path, AWAITING_CHANGE, acc=f"# ACC\n- Conclusion: {head}\n")
     problems = ledger_check.check(repo)
     said = problems[0] if problems else ""
 
@@ -549,6 +548,8 @@ def test_a_verdict_head_means_one_thing(tmp_path, head, means, why):
         assert "reads as both" in said, f"{why}: {said or 'clean'}"
     elif means == "unrecognised":
         assert "not a recognised verdict" in said, f"{why}: {said or 'clean'}"
+    elif means == "pass":
+        assert "already made" in said, f"{why}: {said or 'clean'}"
     else:
         assert not problems, f"{why}: {said}"
 
@@ -560,6 +561,12 @@ STATUS_CASES = [
     ("完成", "done"), ("已完成", "done"), ("已收尾", "done"), ("accepted", "done"),
     ("未完成", "open"), ("尚未完成", "open"), ("未收尾", "open"),
     ("abandoned", "open"), ("draft", "open"),
+    # English negates with a space, so no ASCII boundary falls inside `not done` and there was no
+    # vocabulary entry for the `done` to nest in. Nine of the ten English DONE words read as
+    # **finished** when negated — the exact inverse of the finding the round above recorded, which
+    # was that every boundary rule so far had been right about English (CHG-20260831-03, risk seat).
+    ("not done", "open"), ("not yet complete", "open"), ("not merged", "open"),
+    ("not accepted", "open"), ("not yet shipped", "open"),
 ]
 
 
@@ -577,3 +584,46 @@ def test_a_status_head_falls_on_one_side(tmp_path, status, means):
         assert any("nothing saying it was checked" in p for p in problems), f"{status}: {problems}"
     else:
         assert problems == [], f"{status} means not finished, so nothing is required: {problems}"
+
+
+def test_a_never_true_verdict_is_a_refusal_and_the_pair_stays_equal():
+    """The two tuples are hand-written and must agree in **both** directions.
+
+    An import-time `assert set(ACC_NEVER_TRUE) <= set(ACC_NOT_PASS)` stood here for one round and
+    constrained the containment that has never drifted. The drift it was written for runs the other
+    way: `Voided.` was refused as unrecognised, the operator did what the refusal said and added it
+    to `ACC_NOT_PASS` alone, and the void rule went silently inert — which that `<=` reports as
+    fine. It is a test for a second reason too: `python -O` deletes an `assert`, and CI runs
+    `ledger_check.py` as a script (CHG-20260831-03, conformance, risk and idiom seats).
+    """
+    missing = sorted(set(ledger_check.ACC_NEVER_TRUE) - set(ledger_check.ACC_NOT_PASS))
+    assert not missing, (
+        f"{missing} would be reported as an unrecognised verdict, and the message would send the "
+        f"operator to a list that reopens nothing. Add them to ACC_NOT_PASS as well")
+
+    inert = sorted(w for w in ledger_check.ACC_NOT_PASS
+                   if w.rstrip("d") in {v.rstrip("d") for v in ledger_check.ACC_NEVER_TRUE}
+                   and w not in ledger_check.ACC_NEVER_TRUE)
+    assert not inert, (
+        f"{inert} is a spelling of a never-true verdict that only ACC_NOT_PASS knows about, so it "
+        f"refuses the acceptance and does not reopen the change. Add it to ACC_NEVER_TRUE too")
+
+
+def test_the_awaiting_matcher_reads_words_not_substrings(tmp_path):
+    """The third vocabulary scan in the file, and the last one still written as `w in status`.
+
+    Two of the three were converted to `_standing` and this one was left, in the same function as
+    the docstring that names `[w for w in WORDS if w in status]` as the bug. It tripped on nothing
+    in the real ledger, which is why it survived a round: it was exposure, not a live defect, and
+    the next word added to `AWAITING_DECISION` would have inherited it (CHG-20260831-03,
+    conformance, risk and idiom seats).
+    """
+    repo = _repo(tmp_path, HEADER + NEWLINE + "## Status" + NEWLINE + NEWLINE + "**Redrafted**"
+                 + NEWLINE, acc="# ACC" + NEWLINE + "- Conclusion: **Pass.**" + NEWLINE)
+    problems = ledger_check.check(repo)
+
+    # `draft` sits inside `Redrafted` and is not a word there. The status is unrecognised and that
+    # is its own problem, correctly raised; what must not be raised is the second sentence telling
+    # the operator their change is waiting for a decision the acceptance already made.
+    assert not any("already made" in p for p in problems), problems
+    assert any("nobody wrote down" in p or "not a recognised" in p for p in problems), problems

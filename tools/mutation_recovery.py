@@ -34,15 +34,9 @@ from typing import Optional
 
 REPO = Path(__file__).resolve().parent.parent
 
-#: Written before a file is mutated, removed after it is put back. Also the lock — see `begin`.
-#:
-#: `MUTATION_IN_FLIGHT` moves it, and exists for one caller: the test that drives the in-flight
-#: guard in a child process. That test needs the guard's real *environment*, which is what it keys
-#: on — it does not need the real record, and using it meant writing and deleting the live one while
-#: the harness had a source file mutated. Measured by the round-5 risk seat: the record was absent
-#: for 2.1s of a 9.8s window, and a kill there leaves a mutated file with no record of what it was.
 #: Where the record lives when nothing has moved it. Named separately so a refusal can say what an
-#: override displaced — by the time anyone reads `IN_FLIGHT`, it *is* the override.
+#: override displaced — by the time anyone reads `IN_FLIGHT`, it *is* the override; and the guard
+#: reads this path too, so moving the record can hide nothing.
 DEFAULT_IN_FLIGHT = REPO / "tools" / ".mutation-in-flight.json"
 
 #: Written before a file is mutated, removed after it is put back. Also the lock — see `begin`.
@@ -50,8 +44,9 @@ DEFAULT_IN_FLIGHT = REPO / "tools" / ".mutation-in-flight.json"
 #: `MUTATION_IN_FLIGHT` moves it, and exists for one caller: the test that drives the in-flight
 #: guard in a child process. That test needs the guard's real *environment*, which is what it keys
 #: on — it does not need the real record, and using it meant writing and deleting the live one
-#: while the harness had a source file mutated. `mutation_check` refuses to run when it is set,
-#: and the guard reads both paths, so moving the record can hide nothing.
+#: while the harness had a source file mutated. Measured by the round-5 risk seat: the record was
+#: absent for 2.1s of a 9.8s window, and a kill there leaves a mutated file with no record of what
+#: it was. `mutation_check` refuses to run when this is set.
 IN_FLIGHT = Path(os.environ.get("MUTATION_IN_FLIGHT") or DEFAULT_IN_FLIGHT)
 
 

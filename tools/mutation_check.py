@@ -828,7 +828,7 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         'reach', 'a name nobody can resolve is called internal, the generous way to be wrong',
         SRC / 'models.py',
-        '        if "." not in host or host.endswith((".local", ".internal", ".lan", ".home.arpa")):\n            return INTERNAL',
+        '        if "." not in host or host.endswith(LOCAL_SUFFIXES):\n            return INTERNAL',
         '        return INTERNAL',
         'tests/test_models.py'),
 
@@ -856,8 +856,8 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         'reach', 'a secret in the query string is accepted into the registry',
         SRC / 'models.py',
-        '    leaked = _secret_in_query(model.endpoint)\n    if leaked:',
-        '    leaked = _secret_in_query(model.endpoint)\n    if False:',
+        '    leaked = _secret_in_url(model.endpoint)\n    if leaked:',
+        '    leaked = _secret_in_url(model.endpoint)\n    if False:',
         'tests/test_models.py'),
 
     Mutation(
@@ -1271,7 +1271,7 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         'closure', 'a record can name a test that does not exist again',
         TOOLS / 'ledger_check.py',
-        '        ghosts = [name for name in named if name not in known]',
+        '        ghosts = [name for name in named if name not in known and name not in excused]',
         '        ghosts = []',
         'tests/test_ledger_check.py'),
 
