@@ -60,29 +60,58 @@ class ModelError(Exception):
     """Refused. A registry that accepted this would be describing something else."""
 
 
-#: A username that is really a credential. Refusing *every* userinfo would refuse
-#: `https://alice@host/v1`, which carries no secret and has no key to move to `key_env` — the
-#: refusal would name a remedy that does not apply (CHG-20260831-03, risk and conformance seats).
-#: Length plus a vendor prefix, because that is what a pasted token looks like and a person's name
-#: does not.
-_SECRET_PREFIXES = ("sk-", "sk_", "pk-", "ghp_", "gho_", "xox", "AKIA", "AIza")
+#: A userinfo value that is recognisably a pasted credential. This picks the **wording** of a
+#: refusal; it does not decide whether to refuse. For one round it decided that too, and the round-9
+#: defect and risk seats measured what the shape guess let through: `gsk_…` (Groq), `hf_…`, `r8_…`,
+#: `glpat-…`, `npm_…`, `ATATT…`, `co-…` and any hex token under 32 characters all validated clean
+#: and were written to `config.sqlite` — the exact harm this module's docstring says the scan exists
+#: to prevent. The argument for narrowing was that `https://alice@host/v1` got a remedy that did not
+#: apply to it; that is an argument about the sentence, and it is fixed in the sentence
+#: (CHG-20260831-04).
+_SECRET_PREFIXES = ("sk-", "sk_", "pk-", "ghp_", "gho_", "xox", "AKIA", "AIza",
+                    # The eight the round-9 seats pasted in to show the shape guess was too narrow.
+                    # They change only the sentence now, which is the whole point of the fix above.
+                    "gsk_", "hf_", "r8_", "glpat-", "npm_", "ATATT", "co-", "Bearer-")
 
 
 def _looks_secret(value: str) -> bool:
-    """Does this userinfo field look like a pasted credential rather than a user name?"""
+    """Is this userinfo recognisably a pasted credential? Chooses wording, never whether to refuse.
+
+    Wrong in both directions and it does not matter, because both directions are refused. A vendor
+    prefix this does not know gets the milder sentence and the same refusal.
+    """
     return value.startswith(_SECRET_PREFIXES) or len(value) >= 32
 
 
-def _secret_in_url(endpoint: str) -> Optional[Tuple[str, str]]:
-    """Where a secret sits in this URL, if it does — `(what was found, where)`.
+#: What to do about a key that is in the URL and should not be.
+_KEY_ENV = "Put the key in an environment variable and name it in `key_env`."
+
+#: And what to do about userinfo that is not a key. `key_env` would be the wrong instruction — there
+#: is nothing to move — and this runner sends no HTTP basic auth, so the field is unused either way.
+_DROP_USERINFO = ("Remove it: this runner sends no HTTP basic auth, so userinfo in an endpoint is "
+                  "never read — and nothing here can tell a user name from a pasted token.")
+
+
+def _secret_in_url(endpoint: str) -> Optional[Tuple[str, str, str]]:
+    """Where a secret sits in this URL, if it does — `(what was found, where, what to do)`.
+
+    The remedy travels with the finding because it differs: a key in the query string moves to
+    `key_env`; a bare user name has nothing to move and is simply dropped. Sending the second case
+    to `key_env` is what the round-8 seats objected to, and answering that by *accepting* the
+    userinfo is what the round-9 seats measured as five real vendor tokens reaching the store.
 
     Returns the place as well as the finding, because the refusal has to name it. Saying "query
     string" about a credential in the userinfo sends the operator to look somewhere it is not, and
     about a fragment it says something false as well — a fragment is never sent to a server, which
     is why it needs a different reason rather than the same sentence (CHG-20260831-03).
 
-    Matching on the *key* rather than trying to recognise a secret's shape: shapes differ per vendor
-    and change without notice, while somebody writing ``?api_key=`` has told you what it is.
+    Matching on the *key* wherever there is a key to match on: shapes differ per vendor and change
+    without notice, while somebody writing ``?api_key=`` has told you what it is.
+
+    The userinfo has no key — `https://TOKEN@host/v1` is a bare value — so that one branch asks
+    `_looks_secret` about its **shape**, and pays the price this paragraph describes. It is the
+    exception to the rule above, not a repeal of it; the docstring said the shape approach had
+    been rejected while the code twelve lines up was using it (CHG-20260831-04, idiom seat).
     """
     parts = urlsplit(endpoint)
 
@@ -95,10 +124,15 @@ def _secret_in_url(endpoint: str) -> Optional[Tuple[str, str]]:
     # checked the shape in one place and not the other (CHG-20260831-02, ruled a defect by the
     # round-7 risk seat after six rounds as a disclosure).
     if parts.password:
-        return ("a password", "the userinfo before @")
-    if parts.username and _looks_secret(parts.username):
-        return (f"a value shaped like a credential ({parts.username[:6]}…)",
-                "the userinfo before @")
+        return ("a password", "the userinfo before @", _KEY_ENV)
+    if parts.username:
+        # Refused either way. The shape only chooses which sentence, and the value itself is never
+        # echoed: the message's own reason is that these travel into logs, and it was printing the
+        # first six characters of the thing it was refusing (CHG-20260831-04, risk seat).
+        looks = _looks_secret(parts.username)
+        return ("a value shaped like a credential" if looks else "a user name",
+                "the userinfo before @",
+                _KEY_ENV if looks else _DROP_USERINFO)
 
     # The fragment travels with the URL and is read the same way; `#api_key=…` hid from a scan that
     # looked only at `?`.
@@ -106,18 +140,18 @@ def _secret_in_url(endpoint: str) -> Optional[Tuple[str, str]]:
         for pair in carrier.split("&"):
             name = pair.split("=", 1)[0].strip().lower()
             if name in _SECRET_KEYS:
-                return (name, where)
+                return (name, where, _KEY_ENV)
     return None
 
 
 #: Name suffixes that say "my own network" outright, as against the bare-host judgement below.
-#: Shared with `graded_by_the_bare_host_rule`, because a disclosure that restates its subject's rule
+#: Shared with `graded_by_guess`, because a disclosure that restates its subject's rule
 #: instead of calling it drifts from it — and did: the restatement `"." not in hostname` named every
 #: dotless host, and an IPv6 literal has no dot (CHG-20260831-03, conformance and defect seats).
 LOCAL_SUFFIXES = (".local", ".internal", ".lan", ".home.arpa")
 
 
-def graded_by_the_bare_host_rule(endpoint: str) -> bool:
+def graded_by_guess(endpoint: str) -> bool:
     """Would `reach_of` call this endpoint `internal` *because its host has no dot in it*?
 
     Not "is it internal" — `fd00::1` is internal on an RFC 4193 fact, and `gpu-box.local` on a
@@ -230,11 +264,11 @@ def validate(model: Model) -> Model:
             f"and https")
     leaked = _secret_in_url(model.endpoint)
     if leaked:
-        found, where = leaked
+        found, where, remedy = leaked
         raise ModelError(
             f"model {model.id!r} puts {found} in {where} of its endpoint. A URL is copied into "
             f"logs, bug reports and shell history whole, so anything inside it travels with it. "
-            f"Put the key in an environment variable and name it in `key_env`.")
+            f"{remedy}")
     if model.command:
         raise ModelError(f"api model {model.id!r} carries a command it cannot use")
     if model.key_env and not _ENV_NAME.match(model.key_env):
@@ -302,7 +336,7 @@ class Registry:
         tell whether it is right (CHG-20260831-02, risk seat).
         """
         return [m for m in self.models
-                if m.transport == "api" and graded_by_the_bare_host_rule(m.endpoint)]
+                if m.transport == "api" and graded_by_guess(m.endpoint)]
 
     def as_dict(self) -> Dict[str, object]:
         return {"models": [m.as_dict() for m in self.models]}

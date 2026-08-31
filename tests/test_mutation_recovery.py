@@ -124,13 +124,20 @@ def test_a_file_that_vanished_is_refused_rather_than_recreated(sentinel, source)
     assert "REFUSING" in mutation_recovery.recover(quiet=True)
 
 
-def test_an_unreadable_record_is_discarded_and_said_so(sentinel, source):
+def test_an_unreadable_record_is_kept_and_said_so(sentinel, source):
+    """It used to assert the opposite, and that is why the defect survived four rounds.
+
+    `assert not sentinel.exists(), "an unparseable record must not block every later run"` —
+    written as a convenience argument, and it is the argument for discarding the only copy of
+    an original that a killed run left behind. Blocking every later run is exactly right here:
+    a person has to look. Corrected in CHG-20260831-04 (risk seat).
+    """
     source("ORIGINAL\n")
     sentinel.write_text("{not json", encoding="utf-8")
     said = mutation_recovery.recover(quiet=True)
 
-    assert "unreadable" in said and "git status" in said
-    assert not sentinel.exists(), "an unparseable record must not block every later run"
+    assert said.startswith("REFUSING") and "git status" in said
+    assert sentinel.exists(), "the record is the only copy of the original; it must survive"
 
 
 def test_the_record_is_written_before_the_mutation_not_after(sentinel, source, monkeypatch):
@@ -737,11 +744,14 @@ def test_a_record_nobody_owns_fails_even_while_a_run_is_announced(tmp_path, monk
                                                                   body, shape):
     """Announcing a run excuses the record that run owns. It does not excuse the others.
 
-    Same five shapes, `MUTATION_RUN` set this time. The per-path filter compared `_owner(p)`
-    against the announced pid, and `_owner` returns `None` for anything it cannot read, so four
-    of these five were excused on the CI path where the variable is unset. The fifth — a pid that
-    is simply gone — is the one the harness plants, and it is the only column a mutation run
-    could reach (CHG-20260831-03, defect and risk seats).
+    Same five shapes, `MUTATION_RUN` set this time — and that is a **different** guarantee from the
+    twin above, not more evidence for the same one. Under the pre-fix guard every row here has
+    `_owner(p) != 999998`, so all five were already kept and all five already failed: this test
+    goes green against the defect the round was about, and its docstring used to claim otherwise
+    (CHG-20260831-04, defect seat).
+
+    What it does hold is that a run announcing itself gets no blanket excuse — only the record that
+    names its pid. That is worth a test; it is just not the one the round's veto was about.
     """
     record = tmp_path / "in-flight.json"
     record.write_text(body, encoding="utf-8")
@@ -771,3 +781,60 @@ def test_the_guard_does_not_skip_over_a_tree_that_holds_no_record(tmp_path, monk
         test_this_repository_has_no_mutation_in_flight()
     except Skipped as skipped:
         pytest.fail(f"nothing is on disk and the guard abstained anyway — {skipped}")
+
+
+#: The two shapes a kill mid-write leaves. `--recover` used to delete both, print nothing, and
+#: exit 0 (CHG-20260831-04, risk seat).
+UNREADABLE_RECORDS = [
+    ('{"path": "src/ai_sdlc_runner/models.py", "original": "THE ONLY COPY OF', "truncated"),
+    ("", "an empty file"),
+]
+
+
+@pytest.mark.parametrize("body,shape", UNREADABLE_RECORDS,
+                         ids=[c[1] for c in UNREADABLE_RECORDS])
+def test_recover_keeps_a_record_it_cannot_read(tmp_path, monkeypatch, body, shape):
+    """The remedy must not destroy the thing the refusal calls the only copy.
+
+    The in-flight guard tells whoever trips it: *"it holds the original text, and is the only
+    copy ... `python3 tools/mutation_check.py --recover` puts it back ... if it refuses, restore
+    from the record by hand rather than deleting it."* For a truncated record and an empty one,
+    that command unlinked the file, printed nothing and exited 0 — it deleted the only copy and
+    reported success. Measured on both shapes (CHG-20260831-04, risk seat).
+
+    The rule was already written in this function, twenty lines further down, about the
+    edited-file case: *"a refusal that also throws away the original strands the file for good."*
+    These are the two shapes that most needed it.
+    """
+    record = tmp_path / "in-flight.json"
+    record.write_text(body, encoding="utf-8")
+    monkeypatch.setattr(mutation_recovery, "IN_FLIGHT", record)
+
+    said = mutation_recovery.recover(quiet=True)
+
+    assert record.exists(), f"{shape}: the record was discarded, and it is the only copy"
+    assert record.read_text(encoding="utf-8") == body, f"{shape}: the record was rewritten"
+    assert said and said.startswith("REFUSING"), f"{shape}: {said!r}"
+    assert "kept" in said, f"{shape}: the refusal has to say the file is still there"
+
+
+def test_recover_reports_an_unreadable_record_to_the_operator(sentinel, source, capsys,
+                                                             monkeypatch):
+    """Silence and exit 0 read as "nothing was wrong". `recover` returned a string nobody printed.
+
+    Driven through `mutation_check.main(["--recover"])`, because the defect was in the wiring
+    between `recover()`'s return value and what `--recover` does with it, not in either alone. Not
+    through a subprocess with `MUTATION_IN_FLIGHT` set: the harness refuses on that variable before
+    it reaches this branch, so a subprocess driven that way passes whatever `--recover` does — the
+    first draft of this test did exactly that (CHG-20260831-04).
+    """
+    source("ORIGINAL")
+    sentinel.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", ["mutation_check.py", "--recover"])
+    code = mutation_check.main()
+    printed = capsys.readouterr().out
+
+    assert sentinel.exists(), "the command that refuses to touch it deleted it"
+    assert code != 0, f"exit 0 says the tree is fine; it is not: {printed!r}"
+    assert "REFUSING" in printed, f"it said nothing at all: {printed!r}"

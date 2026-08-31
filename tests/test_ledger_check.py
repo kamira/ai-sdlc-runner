@@ -23,8 +23,6 @@ def _repo(tmp_path, chg_body, acc=None):
     return tmp_path
 
 
-NEWLINE = chr(10)  # written literally, so nothing between here and the file eats the escape
-
 HEADER = "- Project: x\n- Branch: b\n- Date: 2026-09-01\n- Risk: low\n"
 
 #: A change claiming to be closed, and an acceptance saying the check that closed it never held.
@@ -562,11 +560,17 @@ STATUS_CASES = [
     ("未完成", "open"), ("尚未完成", "open"), ("未收尾", "open"),
     ("abandoned", "open"), ("draft", "open"),
     # English negates with a space, so no ASCII boundary falls inside `not done` and there was no
-    # vocabulary entry for the `done` to nest in. Nine of the ten English DONE words read as
-    # **finished** when negated — the exact inverse of the finding the round above recorded, which
-    # was that every boundary rule so far had been right about English (CHG-20260831-03, risk seat).
+    # vocabulary entry for the `done` to nest in. **All ten** English DONE words read as *finished*
+    # when negated, across both prefixes — the exact inverse of the finding the round above
+    # recorded, which was that every boundary rule so far had been right about English
+    # (CHG-20260831-03; the count corrected in -04, idiom seat).
     ("not done", "open"), ("not yet complete", "open"), ("not merged", "open"),
     ("not accepted", "open"), ("not yet shipped", "open"),
+    # And the forms the first generator missed, all measured as **finished** before
+    # (CHG-20260831-04, risk seat). `isn't done` is still not covered: the apostrophe form negates
+    # the verb rather than the state, and a prefix list cannot reach it.
+    ("never merged", "open"), ("no longer done", "open"), ("not-done", "open"),
+    ("un-merged", "open"),
 ]
 
 
@@ -586,7 +590,7 @@ def test_a_status_head_falls_on_one_side(tmp_path, status, means):
         assert problems == [], f"{status} means not finished, so nothing is required: {problems}"
 
 
-def test_a_never_true_verdict_is_a_refusal_and_the_pair_stays_equal():
+def test_a_never_true_verdict_is_a_refusal_and_the_refusal_names_all_three(tmp_path):
     """The two tuples are hand-written and must agree in **both** directions.
 
     An import-time `assert set(ACC_NEVER_TRUE) <= set(ACC_NOT_PASS)` stood here for one round and
@@ -601,12 +605,20 @@ def test_a_never_true_verdict_is_a_refusal_and_the_pair_stays_equal():
         f"{missing} would be reported as an unrecognised verdict, and the message would send the "
         f"operator to a list that reopens nothing. Add them to ACC_NOT_PASS as well")
 
-    inert = sorted(w for w in ledger_check.ACC_NOT_PASS
-                   if w.rstrip("d") in {v.rstrip("d") for v in ledger_check.ACC_NEVER_TRUE}
-                   and w not in ledger_check.ACC_NEVER_TRUE)
-    assert not inert, (
-        f"{inert} is a spelling of a never-true verdict that only ACC_NOT_PASS knows about, so it "
-        f"refuses the acceptance and does not reopen the change. Add it to ACC_NEVER_TRUE too")
+# The other direction cannot be checked by comparing the tuples: whether a word *means* "never
+    # true" is a question about English, and `rstrip("d")` on both sides — what stood here for one
+    # round — compares nothing at all, so `ACC_NEVER_TRUE = ("void",)` alone left the whole table
+    # green (CHG-20260831-04, defect seat). What actually prevents the drift is the refusal an
+    # operator follows, so that is what this asserts: the message that sends someone to add a word
+    # must name all three lists, or following it disarms the void rule exactly as `Voided.` did.
+    said = ledger_check.check(_repo(
+        tmp_path, SUPERSEDED_CHANGE, acc="# ACC" + NEWLINE + "- Conclusion: **Nullified.**" + NEWLINE))
+
+    assert said and "not a recognised verdict" in said[0], said
+    for tuple_name in ("ACC_PASS", "ACC_NOT_PASS", "ACC_NEVER_TRUE"):
+        assert tuple_name in said[0], (
+            f"the refusal names {tuple_name!r} nowhere, so an operator who follows it can add a "
+            f"never-true verdict to ACC_NOT_PASS alone and silently switch the void rule off")
 
 
 def test_the_awaiting_matcher_reads_words_not_substrings(tmp_path):
@@ -618,8 +630,8 @@ def test_the_awaiting_matcher_reads_words_not_substrings(tmp_path):
     the next word added to `AWAITING_DECISION` would have inherited it (CHG-20260831-03,
     conformance, risk and idiom seats).
     """
-    repo = _repo(tmp_path, HEADER + NEWLINE + "## Status" + NEWLINE + NEWLINE + "**Redrafted**"
-                 + NEWLINE, acc="# ACC" + NEWLINE + "- Conclusion: **Pass.**" + NEWLINE)
+    repo = _repo(tmp_path, HEADER + "\n## Status\n\n**Redrafted**\n",
+                 acc="# ACC\n- Conclusion: **Pass.**\n")
     problems = ledger_check.check(repo)
 
     # `draft` sits inside `Redrafted` and is not a word there. The status is unrecognised and that
@@ -627,3 +639,52 @@ def test_the_awaiting_matcher_reads_words_not_substrings(tmp_path):
     # the operator their change is waiting for a decision the acceptance already made.
     assert not any("already made" in p for p in problems), problems
     assert any("nobody wrote down" in p or "not a recognised" in p for p in problems), problems
+
+
+NEWLINE = chr(10)
+
+#: What a record may say about a test that is gone, and whether the lint accepts it. The remedy
+#: `check_named_tests_exist` offers is "say in the record that the test was since removed and why".
+#: For one round nothing tested whether saying so worked: the rule was held up only by the accident
+#: that one real acceptance happened to use the one phrasing that did, so rewording that blockquote
+#: would have left the fix untested (CHG-20260831-04, conformance seat, VETO).
+GHOST_EXCUSES = [
+    ("`test_gone` was removed in CHG-20260901-01.", True, "the advertised case"),
+    ("`test_gone_a` and `test_gone` were removed in CHG-20260901-01.", True, "a list of two"),
+    ("removed in CHG-20260901-01: `test_gone`.", True, "the reverse order"),
+    ("Pinned by `test_this_repos_own_ledger_passes`, and `test_gone` was removed in "
+     "CHG-20260901-01.", True, "a live test cited first does not block it"),
+    ("`test_gone` — removed in CHG-19700101-99.", False, "a change id nobody can open"),
+    ("`test_gone` is the evidence." + NEWLINE + NEWLINE + "Other things were removed in "
+     "CHG-20260901-01.", False, "an unrelated removal a paragraph away"),
+    ("`test_gone` was deleted at some point.", False, "no change named at all"),
+]
+
+
+@pytest.mark.parametrize("sentence,accepted,why", GHOST_EXCUSES,
+                         ids=[c[2] for c in GHOST_EXCUSES])
+def test_the_remedy_the_ghost_refusal_offers_actually_works(tmp_path, sentence, accepted, why):
+    """A refusal that names a remedy has to accept a record that follows it.
+
+    The second of the three refusals CHG-20260831-03 was about. Its acceptance claimed "the tests
+    added for all three read the message"; no test was added for this one at all.
+    """
+    repo = _repo(tmp_path, SUPERSEDED_CHANGE)
+    # `check_named_tests_exist` returns [] outright when the repo has no `tests/` — deliberately,
+    # so it cannot fire on a tree it cannot read. Without this the whole table passed on an empty
+    # list and the negative rows asserted nothing, which is the defect one file over.
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_alive.py").write_text(
+        "def test_this_repos_own_ledger_passes():" + NEWLINE + "    pass" + NEWLINE,
+        encoding="utf-8")
+    acc = repo / "docs" / "acceptance" / "ACC-20260901-01.md"
+    acc.write_text("# ACC" + NEWLINE + "- Conclusion: **Pass.**" + NEWLINE + NEWLINE + sentence,
+                   encoding="utf-8")
+
+    problems = [p for p in ledger_check.check_named_tests_exist(repo) if "test_gone" in p]
+
+    if accepted:
+        assert not problems, f"{why}: the remedy was followed and the record was still refused"
+    else:
+        assert problems, f"{why}: this excuses nothing and must not be accepted"
+        assert "removed and why" in problems[0], "and the refusal has to say what to do"

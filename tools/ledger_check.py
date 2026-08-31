@@ -70,12 +70,17 @@ IN_PROGRESS = (
     # negations recorded "every boundary rule so far was right about English" — and here it was the
     # inverse. English negates with a **space**, so the ASCII boundary rule fires between `not` and
     # `done`, and there was no vocabulary entry for `_standing` to nest the `done` inside. Measured:
-    # `not done`, `not yet done`, `not complete`, `not accepted`, `not merged`, `not shipped`,
-    # `not released`, `not closed`, `not built` all classified **DONE** — nine of the ten English
-    # words (CHG-20260831-03, risk seat). Generated from `DONE`, so a word added there cannot
-    # acquire the defect by being typed into one tuple and not the other.
+    # every one of the twenty phrases — both prefixes against all **ten** ASCII `DONE` words —
+    # classified as **DONE**. The round-8 risk seat said nine of ten and I repeated it in three
+    # places without measuring; it is ten of ten, and the nine-item list it gave covered only eight
+    # distinct words (CHG-20260831-04, idiom seat). Generated from `DONE`, so a word added there
+    # cannot acquire the defect by being typed into one tuple and not the other.
     f"{prefix}{word}" for word in DONE if word.isascii()
-    for prefix in ("not ", "not yet ")
+    # The round-9 risk seat measured the gap in the first list: `never merged`, `no longer done`,
+    # `not-done` and `un-merged` all still read as **finished**, because only these exact two
+    # prefixes were generated. `isn't done` is still not covered and cannot be by a prefix list —
+    # the apostrophe form puts the negation on the verb, not the state (CHG-20260831-04).
+    for prefix in ("not ", "not yet ", "never ", "no longer ", "not-", "un-")
 )
 
 
@@ -165,7 +170,7 @@ def _verdict(text: str) -> str:
 ACC_NEVER_TRUE = ("void", "voided")
 
 #: The two tuples are written by hand and must stay **equal** on their never-true words, in both
-#: directions — pinned by `test_a_never_true_verdict_is_a_refusal_and_the_pair_stays_equal`.
+#: directions — pinned by `test_a_never_true_verdict_is_a_refusal_and_the_refusal_names_all_three`.
 #: It was an import-time `assert` for one round, and it constrained the containment that has never
 #: drifted: the drift it was written for runs the other way. `Voided.` was refused as unrecognised,
 #: the operator did what the refusal said and added it to `ACC_NOT_PASS` alone, and the void rule
@@ -411,6 +416,45 @@ def _tests_that_exist(repo: Path) -> set:
     return names
 
 
+#: Spelled as names because this file is edited through tooling that eats a lone backslash,
+#: and a regex assembled from wrong bytes fails open — it excuses everything.
+BACKTICK = chr(96)
+BLANK_LINE = chr(10) + chr(10)
+_W = chr(92) + "w"
+_D = chr(92) + "d"
+
+
+def _excused(text: str, name: str, ledger_ids) -> bool:
+    """Does this record say, next to the name itself, that this test was removed and by what?
+
+    The refusal below offers *"say in the record that the test was since removed and why"* as a
+    remedy, and for one round the check did not honour it at all: a record that did exactly that was
+    still refused, because the sentence saying the test is gone contains the name. The first fix
+    honoured it and then over-honoured it — `.*?` from the first backticked name swallowed the span,
+    so a sentence naming two removed tests still failed; a *live* test cited earlier on the same line
+    was excused as a bystander; and `removed in CHG-19700101-99`, an id that has never existed,
+    laundered anything beside it. All measured by the round-9 defect and risk seats
+    (CHG-20260831-04).
+
+    The window walks from the name to the phrase and may cross other **test names** — that is what
+    makes "`test_a`, `test_b` and `test_c` were removed in CHG-X" work — but nothing else in
+    backticks, and never a blank line. Supporting the list form is what leaves the bystander case
+    open: a live test named inside such a run is excused with it. Bounded rather than closed, and
+    said out loud here rather than in a reservation nobody reads.
+
+    The id must also be a record that exists. An explanation pointing at a change nobody can open is
+    the same failure this whole function is about, one level up.
+    """
+    span = "(?:[^" + BACKTICK + "]|" + BACKTICK + "test_" + _W + "+" + BACKTICK + "){0,200}?"
+    phrase = "removed in ((?:CHG|ACC)-" + _D + "{8}-" + _D + "{2})"
+    quoted = BACKTICK + re.escape(name) + BACKTICK
+    for pattern in (quoted + span + phrase, phrase + span + quoted):
+        for found in re.finditer(pattern, text):
+            if BLANK_LINE not in found.group(0) and found.group(1) in ledger_ids:
+                return True
+    return False
+
+
 def check_named_tests_exist(repo: Path) -> List[str]:
     """A record naming a test that does not exist is vouching for nothing (CHG-20260828-20).
 
@@ -423,6 +467,8 @@ def check_named_tests_exist(repo: Path) -> List[str]:
     would be inventing a past rather than fixing one.
     """
     known = _tests_that_exist(repo)
+    ledger_ids = {p.stem for p in (repo / "docs" / "changes").glob("CHG-*.md")}
+    ledger_ids |= {p.stem for p in (repo / "docs" / "acceptance").glob("ACC-*.md")}
     if not known:                                   # pragma: no cover - a repo with no tests
         return []
     problems = []
@@ -435,17 +481,9 @@ def check_named_tests_exist(repo: Path) -> List[str]:
         # Backticked only. Prose that merely mentions a test in passing is not a pointer, and this
         # repository's records discuss tests constantly.
         text = path.read_text(encoding="utf-8")
-        named = sorted(set(re.findall(r"`(test_\w+)`", text)))
-        # The refusal below offers "say in the record that the test was since removed and why" as a
-        # remedy, and for one round the check did not honour it: a record that did exactly that was
-        # still refused, because the sentence saying the test is gone contains the name. A refusal
-        # whose instructions do not lead where they say is the same defect this round's task 3 fixed
-        # in `models.py` (CHG-20260831-03). `removed in CHG-…` on the same line is the remedy, and
-        # it costs nothing: the record still has to name the change that removed it, so the reader
-        # has somewhere to go.
-        excused = set(re.findall(r"`(test_\w+)`.*?removed in (?:CHG|ACC)-\d{8}-\d\d", text))
-        excused |= set(re.findall(r"removed in (?:CHG|ACC)-\d{8}-\d\d.*?`(test_\w+)`", text))
-        ghosts = [name for name in named if name not in known and name not in excused]
+        named = sorted(set(re.findall(BACKTICK + "(test_" + _W + "+)" + BACKTICK, text)))
+        ghosts = [name for name in named
+                  if name not in known and not _excused(text, name, ledger_ids)]
         if ghosts:
             problems.append(
                 f"{path.stem}: names {len(ghosts)} test(s) that do not exist — {', '.join(ghosts)}. "

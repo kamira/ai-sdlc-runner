@@ -13,6 +13,7 @@ effects. The three things worth pinning here are the ones a reader cannot check 
 """
 from __future__ import annotations
 
+import ast
 import json
 import re
 import sys
@@ -731,6 +732,16 @@ def test_an_unverified_operation_is_printed(tmp_path, py_stub, capsys):
     assert "unverified:" in capsys.readouterr().out
 
 
+def _docstring_nodes(tree):
+    """Every string node that is a docstring, so prose about the runner is not read as an order."""
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = getattr(node, "body", None)
+            if (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                yield body[0].value
+
+
 def test_every_command_the_cli_tells_you_to_run_exists():
     """A refusal that names a command nobody can run is worse than one that names none.
 
@@ -742,12 +753,67 @@ def test_every_command_the_cli_tells_you_to_run_exists():
     Backticked only, like the ledger lint's test-name pointer: prose that mentions the runner in
     passing is not an instruction, and this file discusses the runner constantly.
     """
-    source = Path(cli.__file__).read_text(encoding="utf-8")
-    named = sorted(set(re.findall(r"`runner ([a-z][a-z-]*)", source)))
-    assert named, "the scan found nothing, so it is pinning nothing"
+    tree = ast.parse(Path(cli.__file__).read_text(encoding="utf-8"))
+    docstrings = {id(d) for d in _docstring_nodes(tree)}
+
+    # Backticked prose **and** every string literal that is not a docstring. Backticks alone read
+    # two mentions in comments and missed all eight subcommands the file actually prints, including
+    # `cli.py`'s own `runner emergencies --reviewed ID --by NAME` — so the check could not see the
+    # shape it exists for: an instruction an operator is handed (CHG-20260831-04, defect seat).
+    named = set(re.findall(r"`runner ([a-z][a-z-]*)",
+                           Path(cli.__file__).read_text(encoding="utf-8")))
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and id(node) not in docstrings):
+            # At the start of a line, which is how this file lays out a command it wants typed.
+            # Anywhere in the string would read "the runner will", "the runner writes" and five
+            # more pieces of ordinary prose as subcommands.
+            named |= set(re.findall(r"^\s*runner ([a-z][a-z-]*)", node.value, re.MULTILINE))
+    named = sorted(named)
+    assert len(named) > 2, (
+        f"the scan sees only {named}; backticks alone found two mentions in comments and none of "
+        f"the eight subcommands this file actually prints")
 
     parser = cli.build_parser()
     real = set(next(a.choices for a in parser._actions if a.choices))
     ghosts = [c for c in named if c not in real]
     assert not ghosts, (
         f"cli.py tells the operator to run {ghosts}, and {sorted(real)} is every command there is")
+
+
+def test_a_stored_model_a_widened_rule_refuses_stops_serve_with_a_remedy(tmp_path, capsys):
+    """The third of CHG-20260831-03's three refusals, and the one that had no test on its message.
+
+    `store.load_registry` rebuilds a `Registry`, and `__post_init__` re-validates every row — so a
+    refusal widened after a model was stored fires on **load**. `ModelError` is not a `StoreError`,
+    so it used to leave `cmd_serve` as a traceback. The handler was added with a source-grep test
+    that never executed it; this drives it (CHG-20260831-04, conformance seat, VETO).
+
+    The row is written straight into sqlite because that is the only way to reach the state: no
+    version of `validate` would accept it, which is also why the refusal must not claim the rule was
+    widened after this particular row was written.
+    """
+    from ai_sdlc_runner import store as store_mod
+
+    db_path = tmp_path / "config.sqlite"
+    db = store_mod.connect(db_path)
+    db.execute(
+        "INSERT INTO models (id, vendor, name, transport, command_json, endpoint, key_env, note) "
+        "VALUES ('svc', 'v', 'n', 'api', '[]', 'https://svc-token@gpu-box/v1', 'K', '')")
+    db.commit()
+
+    code = cli.main(["serve", "--plan", _plan_file(tmp_path),
+                     "--assignment-store", str(db_path),
+                     "--token-dir", str(tmp_path / "tok")])
+    said = capsys.readouterr().out
+
+    assert code == 2, said
+    assert str(db_path) in said, f"the remedy has to name the file that holds the row: {said!r}"
+    assert "svc" in said, "and which model"
+    for word in ("assignment", "assignments"):
+        if word in said:
+            break
+    else:
+        raise AssertionError(
+            f"deleting the row orphans any seat or node assignment pointing at it, and the console "
+            f"then starts clean and says nothing about it. The remedy has to warn: {said!r}")
