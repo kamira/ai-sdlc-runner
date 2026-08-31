@@ -425,9 +425,11 @@ def _tests_that_exist(repo: Path) -> set:
 #: A paragraph break ends the window: an explanation belongs in one paragraph with the name.
 #: `\\s`, not `[ \\t]` — a line carrying U+00A0, U+3000 (which is what a Chinese IME emits, in a
 #: ledger written partly in Chinese), a form feed or a zero-width space crossed the break and
-#: laundered a ghost. The same defect the round before had fixed for a plain space, one character
+#: laundered a ghost. `\\s` alone was not enough either: it does **not** match U+200B, U+FEFF or
+#: U+2060, and the comment that stood here named the zero-width space as closed while it was still
+#: a laundering path (CHG-20260831-07, defect seat). The same defect for a plain space, one character
 #: class over (CHG-20260831-06, risk seat).
-_PARAGRAPH_BREAK = re.compile(r"\n\s*?\n")
+_PARAGRAPH_BREAK = re.compile("\\n[\\s\\u200b\\ufeff\\u2060]*?\\n")
 
 #: How far from the name the phrase may sit, in **characters**, checked after the match.
 EXCUSE_WINDOW = 400
@@ -445,8 +447,8 @@ _QUOTED_TEST = r"`(test_\w+)`"
 #: let `[CHG-20260901-01](../nowhere/nothing.md)` through — a dead link with a live-looking id, in
 #: the check whose whole subject is pointers that do not resolve (risk seat).
 _CHANGE_ID = r"(?:CHG|ACC)-\d{8}-\d{2}"
-_REMOVED_BY = (r"(?:removed|deleted|dropped)\s+(?:in|by)\s+"
-               r"(?:\[(" + _CHANGE_ID + r")\]\(([^)]*)\)|(" + _CHANGE_ID + r"))")
+_REMOVED_BY = (r"(?:removed|deleted|dropped|renamed to `test_\w+` )\s*(?:in|by)\s+"
+               r"\[?(" + _CHANGE_ID + r")\]?")
 
 #: What the window may cross: anything that is not a backtick or a sentence end, or another
 #: backticked test name. **Sentence** and not paragraph, because a paragraph-sized window excused
@@ -454,7 +456,13 @@ _REMOVED_BY = (r"(?:removed|deleted|dropped)\s+(?:in|by)\s+"
 #: halt rule. The vendored skill was deleted in CHG-…" was accepted, and records here say things
 #: were deleted and dropped constantly (CHG-20260831-06, defect seat). A dot followed by a word
 #: character is not a sentence end, so `CHG-….md` and `1.5` do not close the window.
-_SPAN = r"(?:[^`.!?]|`test_\w+`|\.(?=\w))*?"
+_SPAN = r"(?:[^`]|`test_\w+`)*?"
+
+#: Where the window stops. Punctuation followed by whitespace and a capital, or by a line end —
+#: not any `.!?`. Excluding them outright refused `i.e.`, `e.g.`, `…`, `-- gone! --` and
+#: `-- did anyone read it? --`, every one a legitimate remedy the refusal invites
+#: (CHG-20260831-07, risk seat).
+_SENTENCE_END = re.compile("[.!?](?:\\s+[A-Z\\u4e00-\\u9fff]|\\s*$)", re.MULTILINE)
 
 
 def _excused(text: str, name: str, ledger_ids) -> bool:
@@ -478,18 +486,30 @@ def _excused(text: str, name: str, ledger_ids) -> bool:
     to a regex.
     """
     quoted = "`" + re.escape(name) + "`"
-    for pattern in (quoted + _SPAN + _REMOVED_BY, _REMOVED_BY + _SPAN + quoted):
-        # Anchored at each occurrence in turn, so one over-long match cannot hide a valid one.
-        for at in range(len(text)):
-            found = re.compile(pattern).match(text, at)
+    for pattern, first in ((quoted + _SPAN + _REMOVED_BY, quoted),
+                           (_REMOVED_BY + _SPAN + quoted, _REMOVED_BY)):
+        # Case-insensitive: `Removed in CHG-…` opening a sentence was refused, and the reverse-order
+        # row happened to be lowercase so nothing noticed (CHG-20260831-07, both seats).
+        compiled = re.compile(pattern, re.IGNORECASE)
+        # Anchored at each place the pattern can **start**, not at every character. `re.finditer`
+        # is non-overlapping, so an over-long match hid a valid short one inside it; scanning every
+        # offset fixed that and cost 149× on a 69 KB record. The starts are the name's own
+        # positions, or the phrase's (CHG-20260831-07, defect, conformance and idiom seats).
+        for found_start in re.finditer(first, text, re.IGNORECASE):
+            at = found_start.start()
+            found = compiled.match(text, at)
             if found is None:
                 continue
             said = found.group(0)
-            linked, href, bare = found.groups()
-            # A bare id is checked once. A markdown link is checked twice — the text **and** the
-            # href — because a reader clicks the href, and validating the text alone let
-            # `[CHG-20260901-01](../nowhere/nothing.md)` through.
-            names = bare or (linked if linked and href and linked in href else None)
+            if _SENTENCE_END.search(said):
+                continue
+            # The **id**, wherever it is written. `linked in href` stood here as "the href is
+            # validated too" and was a substring test: `(../nowhere/CHG-20260901-01.md)` passed it,
+            # and it refused three link forms a person actually writes — reference-style `[id][1]`,
+            # a GitHub anchor `(#chg-…)`, and any href whose case differs. Resolving a path from
+            # here would need the repo root this function does not have, so the claim is withdrawn
+            # rather than half-kept (CHG-20260831-07, conformance, defect and risk seats).
+            names = found.group(1)
             if (names in ledger_ids and len(said) <= EXCUSE_WINDOW
                     and not _PARAGRAPH_BREAK.search(said)):
                 return True

@@ -1310,11 +1310,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
     # after the ruling that the registry alone was not what was meant.
     store_path = args.assignment_store or (Path(args.token_dir) / "config.sqlite")
     if str(store_path).lower() == "none":
-        # The same escape `cmd_run` has honoured since it was written. No `serve` message has ever
-        # mentioned it — the people passing it came from `cmd_run`'s refusal, from `README.md`,
-        # and from `run --assignment-store`'s own help text, and only the first of those now says
-        # where it works (CHG-20260831-06, risk seat). `serve` did not honour it: it created a
-        # sqlite database in
+        # The same escape `cmd_run` has honoured since it was written. The people passing it came
+        # from `cmd_run`'s refusal, from `README.md`, and from `run --assignment-store`'s help — all
+        # four of those say where it works now, this one included (CHG-20260831-07, idiom seat: the
+        # comment still said "only the first of those", in the commit that fixed all of them).
+        # `serve` did not honour it before: it created a sqlite database in
         # the working directory named `none`, printed `models 0 registered`, and started — so
         # somebody following that instruction detached from every model and assignment they had,
         # silently, on the one command the refusal is actually about (CHG-20260831-05, risk seat).
@@ -1470,7 +1470,8 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("--assignment-store", default=None, metavar="FILE",
                     help="where model configuration persists — the registry AND which node or seat "
                          "each model is assigned to (default <token-dir>/config.sqlite). An "
-                         "existing models.json is imported once and left where it is.")
+                         "existing models.json is imported once and left where it is. Unlike `run`, "
+                         "this takes no `none`: a console with no store has no models to assign.")
     # Not `default=None`: this flag shadows the global `--settings`, whose default exists
     # precisely so nobody has to pass it. With None it reached `Path(None)` and `runner
     # serve` — the dashboard, in its plainest form — died with a raw TypeError.

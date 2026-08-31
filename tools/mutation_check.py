@@ -1284,15 +1284,13 @@ MUTATIONS: List[Mutation] = [
         'closure', 'the excuse stops being bounded, so any removal note launders a ghost',
         TOOLS / 'ledger_check.py',
         # The **whole** condition, both lines. Anchoring the first line alone orphaned the
-        # continuation `and found.group(1) in ledger_ids):`, so the mutated file raised
-        # `SyntaxError: unmatched ')'` and every test in the module died on import — CAUGHT, and
-        # proving only that the file compiles (CHG-20260831-06, idiom seat). `if True:` and not
-        # `if False:`, because over-excusing is what `says` describes; `if False:` excuses nothing,
-        # which is the opposite defect.
-        # The **whole** condition, both lines. Anchoring the first line alone orphaned the
-        # continuation and the file stopped parsing, so this reported CAUGHT while proving
-        # only that `ledger_check.py` compiles — now held by
-        # `test_no_shipped_mutation_makes_its_file_unparsable` (CHG-20260831-06, all four seats).
+        # continuation, so the mutated file raised `SyntaxError: unmatched ')'`, every test in the
+        # module died on import, and this reported CAUGHT while proving only that the file
+        # compiles — now held by `test_no_shipped_mutation_makes_its_file_unparsable`
+        # (CHG-20260831-06, all four seats; the paragraph was pasted twice and the two copies
+        # disagreed, corrected in CHG-20260831-07).
+        #
+        # `if True:` and not `if False:`, because over-excusing is what `says` describes.
         '            if (names in ledger_ids and len(said) <= EXCUSE_WINDOW\n'
         '                    and not _PARAGRAPH_BREAK.search(said)):',
         '            if True:',
@@ -1416,11 +1414,8 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         'stranded', 'every process reads as dead, so the owner check never refuses anything',
         TOOLS / 'mutation_recovery.py',
-        """    if pid is None:
-        return False""",
-        """    if pid is None:
-        return False
-    return False""",
+        """    return _alive_nt(pid) if os.name == "nt" else _alive_posix(pid)""",
+        """    return False""",
         'tests/test_mutation_recovery.py'),
 
     # ── CHG-20260830-07: the liveness probe answered wrongly three ways ────────────────────────
@@ -1805,9 +1800,23 @@ def run(mutation: Mutation, baseline: Dict[str, bool]) -> bool:
     finally:
         restore(mutation.path, original)
 
-    caught = proc.returncode != 0
     summary = next((ln for ln in reversed(proc.stdout.splitlines())
                     if "passed" in ln or "failed" in ln or "error" in ln), "")
+
+    # A collection error is not a catch. `returncode != 0` alone reported CAUGHT when the mutated
+    # module simply would not import — every test in the file "fails", for a reason that has nothing
+    # to do with the guarantee named. `test_no_shipped_mutation_makes_its_file_unparsable` closes
+    # the `SyntaxError` half of this at author time; a mutation that parses and raises at module
+    # scope (a `NameError`, a bad import) is the other half, and only the run can see it
+    # (CHG-20260831-07, defect and risk seats).
+    if " error" in summary and "failed" not in summary:
+        print(f"  BROKE      {mutation.says}")
+        print(f"               {summary}")
+        print(f"               the mutated module did not import, so this measured nothing about "
+              f"the class it names. Re-anchor it.")
+        return False
+
+    caught = proc.returncode != 0
     print(f"  {'CAUGHT     ' if caught else 'NOT CAUGHT '}{mutation.says}")
     print(f"               {summary}")
     return caught
