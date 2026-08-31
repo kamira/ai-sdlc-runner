@@ -63,41 +63,18 @@ def _alive(pid: Optional[int]) -> bool:
     """
     if pid is None:
         return False
-    if os.name == "nt":
-        import ctypes
+    return _alive_nt(pid) if os.name == "nt" else _alive_posix(pid)
 
-        #: Both rights are needed, and asking for only the first is a silent wrong answer:
-        #: `WaitForSingleObject` requires `SYNCHRONIZE`, and without it the wait returns WAIT_FAILED
-        #: rather than WAIT_TIMEOUT, so every live process reads as dead. Measured while writing
-        #: this — the first version of the fix broke the case it was not about.
-        PROCESS_QUERY_LIMITED_INFORMATION, SYNCHRONIZE = 0x1000, 0x00100000
-        #: What `OpenProcess` sets when the pid exists but this process may not look at it — another
-        #: user, or a higher integrity level. Distinct from ERROR_INVALID_PARAMETER (87), which is
-        #: what a pid that does not exist gives, so the two are separable and must be separated.
-        ERROR_ACCESS_DENIED = 5
-        #: `WaitForSingleObject` on a process handle: still running.
-        WAIT_TIMEOUT = 0x102
 
-        kernel32 = ctypes.windll.kernel32
-        # Typed deliberately, all three. A HANDLE is pointer-sized and ctypes defaults every foreign
-        # function to `c_int`, so an untyped handle is truncated on 64-bit — and an untyped handle
-        # *argument* raises `ArgumentError: int too long to convert`, which escapes `_alive` as an
-        # exception rather than an answer.
-        kernel32.OpenProcess.restype = ctypes.c_void_p
-        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-        kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+def _alive_posix(pid: int) -> bool:
+    """Signal 0 asks without sending. Split out from `_alive` so it can be driven on any platform.
 
-        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)
-        if not handle:
-            # Alive, and not ours to inspect. Reading this as dead is the silent failure this whole
-            # mechanism exists to remove: recovery would write the original over a live run's
-            # mutated file. The POSIX branch below has always answered this correctly; the first
-            # version of this branch did not (CHG-20260830-07, three seats).
-            return kernel32.GetLastError() == ERROR_ACCESS_DENIED
-        try:
-            return kernel32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
-        finally:
-            kernel32.CloseHandle(handle)
+    It was reachable only on POSIX and, measured, executed by no test on either — while this
+    module's docstring and a skip reason both cited it as the already-correct precedent the Windows
+    branch should have followed (CHG-20260830-08, defect seat). Standing in for `os.name` to reach
+    it instead would mean patching the real `os` module, which breaks `pathlib` for the whole
+    process; that was tried.
+    """
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -107,8 +84,63 @@ def _alive(pid: Optional[int]) -> bool:
     return True
 
 
+def _alive_nt(pid: int) -> bool:
+    """The Windows half. See `_alive` for the three ways this was answered wrongly."""
+    import ctypes
+
+    #: Both rights are needed, and asking for only the first is a silent wrong answer:
+    #: `WaitForSingleObject` requires `SYNCHRONIZE`, and without it the wait returns WAIT_FAILED
+    #: rather than WAIT_TIMEOUT, so every live process reads as dead.
+    PROCESS_QUERY_LIMITED_INFORMATION, SYNCHRONIZE = 0x1000, 0x00100000
+    #: What `OpenProcess` sets when the pid exists but this process may not look at it. Distinct
+    #: from ERROR_INVALID_PARAMETER (87), which is what a pid that does not exist gives.
+    ERROR_ACCESS_DENIED = 5
+    #: `WaitForSingleObject` on a process handle: still running.
+    WAIT_TIMEOUT = 0x102
+
+    # `use_last_error=True` plus `ctypes.get_last_error()`, not `kernel32.GetLastError()`. The
+    # latter is a second foreign call, and any ctypes work between the two — including resolving
+    # `GetLastError` itself the first time through — can overwrite the code before it is read.
+    # Getting it wrong here reads a denied live process as dead, silently (CHG-20260830-08, risk).
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)
+    if not handle:
+        # Alive, and not ours to inspect. Reading this as dead is the silent failure this whole
+        # mechanism exists to remove: recovery would write the original over a live run's mutated
+        # file. `_alive_posix` above has always answered this correctly; the first version of this
+        # branch did not (CHG-20260830-07, three seats).
+        return ctypes.get_last_error() == ERROR_ACCESS_DENIED
+    try:
+        return kernel32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _newline_of(path: Path) -> str:
+    """The line ending already in that file, or `\\n` if there is no file to ask.
+
+    `run()` reads source with universal newlines so a mutation's `before` string can be spelled with
+    `\\n` and still match. Writing it back with `\\n` was the other half of that and was wrong: on a
+    `core.autocrlf=true` checkout every file the harness touched came back LF, so `git status`
+    reported it modified with an empty `git diff`. Content was never at risk — but `git status` is
+    what this module's refusals tell an operator to read, and a check that names files nothing
+    happened to stops being read. Disclosed in three acceptances before it was fixed
+    (CHG-20260830-08, risk seat).
+    """
+    try:
+        with io.open(path, "rb") as handle:
+            return "\r\n" if b"\r\n" in handle.read(65536) else "\n"
+    except OSError:
+        return "\n"
+
+
 def write(path: Path, text: str) -> None:
-    io.open(path, "w", encoding="utf-8", newline="\n").write(text)
+    io.open(path, "w", encoding="utf-8", newline=_newline_of(path)).write(text)
 
 
 def begin(path: Path, original: str, mutated: str) -> None:
@@ -214,9 +246,10 @@ def recover(quiet: bool = False) -> Optional[str]:
                 f"worktree, so {path.name} is mutated on purpose and must be left alone. Wait for "
                 f"that run.\n"
                 f"  If no such run exists, the pid has been reused. {path.name} is then still "
-                f"mutated and {IN_FLIGHT.name} holds the text to put back — read the original out "
-                f"of it, or `git checkout -- {path}`, and only then delete the record. Deleting it "
-                f"first throws away the only copy.")
+                f"mutated, and {IN_FLIGHT.name} holds the original text and is the only copy of it. "
+                f"Restore from that record, then delete it. Not `git checkout --`: that restores "
+                f"from the index, so if the mutation was staged it writes the mutation back, and "
+                f"the record you would delete next is what proves it.")
         if not quiet:
             print(f"  {said}")
         return said

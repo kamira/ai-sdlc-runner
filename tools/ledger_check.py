@@ -73,9 +73,21 @@ ACC_NOT_PASS = (
     # An acceptance that recorded a pass for something later shown not to work. Distinct from
     # `superseded`, which is about a change being replaced: this one says the verdict itself was
     # never true. Added when ACC-20260828-24 needed it — it had said **Pass** for a `src/` fix that
-    # did nothing, and correcting only the prose left `_verdict` still reading `pass`, so every
-    # machine audit of this ledger reported it clean (CHG-20260830-07, risk seat).
-    "wrong",
+    # did nothing, and correcting only the prose left `_verdict` still reading `pass`.
+    #
+    # `void`, not `wrong`, and the difference is not taste. These lists are matched by substring
+    # against the head of the Conclusion field, and `wrong` is a general-purpose adjective: five
+    # acceptances already contain it in that line, four of which read as `pass` only because
+    # `_status_word` happens to cut at punctuation before reaching it. A head with no punctuation —
+    # "Pass but the first rule tried was wrong" — would match both lists at once. `void` appears in
+    # no Conclusion line in the repository and is verdict-shaped, like every other entry here.
+    #
+    # What this does **not** do, stated because the first version of this comment claimed otherwise:
+    # it changes no machine outcome. `check()` does `if not passed: continue`, so a not-pass verdict
+    # imposes nothing, and CHG-20260828-24 still reads `**Accepted**` with a void acceptance under
+    # it. Whether a void acceptance should stop satisfying a done change is a governance question
+    # this change does not answer (CHG-20260830-08, risk seat).
+    "void",
     "未通過", "退回", "已作廢",
 )
 
