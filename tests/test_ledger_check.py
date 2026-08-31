@@ -88,9 +88,7 @@ def test_a_change_whose_status_word_is_no_longer_done_passes(tmp_path):
     and still fails. The body always set `**Superseded**`, so the clause was pinned by a test
     that would have stayed green if it were deleted (CHG-20260831-01, risk seat).
     """
-    repo = _repo(tmp_path,
-                 f"# CHG\n{HEADER}\n## Status\n\n**Superseded** — the fix was redone\n",
-                 acc=VOID_ACCEPTANCE)
+    repo = _repo(tmp_path, SUPERSEDED_CHANGE, acc=VOID_ACCEPTANCE)
 
     assert ledger_check.check(repo) == []
 
@@ -516,3 +514,66 @@ def test_the_check_runs_as_part_of_the_ledger(tmp_path):
 def test_this_repositorys_own_recent_records_name_only_tests_that_exist():
     """Zero today, which is why the cutoff is where it is: the rule ships green."""
     assert ledger_check.check_named_tests_exist(REPO) == []
+
+
+#: Verdict heads that have each been classified wrongly at some point, with what they must mean.
+#: The Chinese ones are the reason this table exists: `\b` is defined against `\w`, CJK characters
+#: are `\w`, and Chinese typography does not space Latin words — so every boundary rule tried so far
+#: has been wrong about one of these while looking right on the English ones
+#: (CHG-20260831-02, conformance seat).
+VERDICT_CASES = [
+    ("**未通過**", "refusal", "一 word containing another is one word, not two opinions"),
+    ("**通過／未通過**", "both", "two words side by side are a real disagreement"),
+    ("**Pass / withdrawn.**", "both", "the English form of the same thing"),
+    ("**通過failed**", "both", "a Latin word against Chinese text is still that word"),
+    ("**驗收pass**", "pass", "and so is this one"),
+    ("**Avoided**", "unrecognised", "`void` inside `avoided` is not a verdict"),
+    ("**Pass.** fine", "pass", "the ordinary case"),
+]
+
+
+@pytest.mark.parametrize("head,means,why", VERDICT_CASES,
+                         ids=[c[0].strip("*") for c in VERDICT_CASES])
+def test_a_verdict_head_means_one_thing(tmp_path, head, means, why):
+    """Every boundary rule tried here has been right about English and wrong about Chinese.
+
+    `\b` let `通過failed` read as a **pass** and made `已void` unrecognised; matching the vocabulary
+    entries against each other could not tell 未通過 (one word) from 通過／未通過 (two). Both were
+    measured after shipping, so the cases live in a table that a later rule has to satisfy whole.
+    """
+    repo = _repo(tmp_path, SUPERSEDED_CHANGE, acc=f"# ACC\n- Conclusion: {head}\n")
+    problems = ledger_check.check(repo)
+    said = problems[0] if problems else ""
+
+    if means == "both":
+        assert "reads as both" in said, f"{why}: {said or 'clean'}"
+    elif means == "unrecognised":
+        assert "not a recognised verdict" in said, f"{why}: {said or 'clean'}"
+    else:
+        assert not problems, f"{why}: {said}"
+
+
+#: Status heads and what each must mean. The Chinese negations are the reason: 未完成 and 尚未完成
+#: contain 完成, so a substring matcher read "not finished" as **finished** — silently, over a
+#: 127-change ledger, in the language it is written in (CHG-20260831-02, risk seat).
+STATUS_CASES = [
+    ("完成", "done"), ("已完成", "done"), ("已收尾", "done"), ("accepted", "done"),
+    ("未完成", "open"), ("尚未完成", "open"), ("未收尾", "open"),
+    ("abandoned", "open"), ("draft", "open"),
+]
+
+
+@pytest.mark.parametrize("status,means", STATUS_CASES, ids=[c[0] for c in STATUS_CASES])
+def test_a_status_head_falls_on_one_side(tmp_path, status, means):
+    """A status that means *not finished* must not require an acceptance, and vice versa.
+
+    `abandoned` is the English case of the same bug — it contains `done`, so a word this file lists
+    under `IN_PROGRESS` read as both and could not be used.
+    """
+    repo = _repo(tmp_path, f"# CHG\n{HEADER}\n## Status\n\n**{status}**\n")
+    problems = ledger_check.check(repo)
+
+    if means == "done":
+        assert any("nothing saying it was checked" in p for p in problems), f"{status}: {problems}"
+    else:
+        assert problems == [], f"{status} means not finished, so nothing is required: {problems}"

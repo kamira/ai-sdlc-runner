@@ -332,3 +332,29 @@ def test_a_cli_model_needs_no_endpoint_to_have_a_reach():
     would refuse every local model in the project's own examples.
     """
     assert models.reach_of(models.CLI, "") == models.LOCAL
+
+
+#: URLs that carry a credential somewhere other than `?key=`. Each validated clean for six rounds
+#: and was written to the registry and to `config.sqlite` — the harm `_secret_in_query`'s docstring
+#: says it exists to prevent (CHG-20260831-02, ruled a defect by the round-7 risk seat).
+SECRET_ELSEWHERE = [
+    ("https://user:sk-ant-SECRET@api.vendor.com/v1", "a credential in the userinfo"),
+    ("https://sk-ant-SECRET@api.vendor.com/v1", "a bare token in the userinfo"),
+    ("https://api.vendor.com/v1#api_key=SECRET", "a key in the fragment, not the query"),
+]
+
+
+@pytest.mark.parametrize("endpoint,why", SECRET_ELSEWHERE, ids=[c[1] for c in SECRET_ELSEWHERE])
+def test_a_secret_outside_the_query_string_is_still_refused(endpoint, why):
+    """`https://user:TOKEN@host` is a credential by position and needs no key to recognise.
+
+    The scan read `?…` and nothing else. `server.py` already refused `parts.username or
+    parts.password` on its own bind URL, so this codebase checked the shape in one place and not
+    the other.
+    """
+    assert models._secret_in_query(endpoint) is not None, why
+
+
+def test_a_url_with_an_ordinary_fragment_is_not_a_secret():
+    """The other direction — the fragment is read, not feared."""
+    assert models._secret_in_query("https://api.vendor.com/v1#section") is None

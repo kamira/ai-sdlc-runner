@@ -66,13 +66,26 @@ def _secret_in_query(endpoint: str) -> Optional[str]:
     Matching on the *key* rather than trying to recognise a secret's shape: shapes differ per vendor
     and change without notice, while somebody writing ``?api_key=`` has told you what it is.
     """
-    query = urlsplit(endpoint).query
-    if not query:
-        return None
-    for pair in query.split("&"):
-        name = pair.split("=", 1)[0].strip().lower()
-        if name in _SECRET_KEYS:
-            return name
+    parts = urlsplit(endpoint)
+
+    # Userinfo first, and it needs no key to recognise: `https://user:TOKEN@host/…` *is* a
+    # credential by position. Six rounds of review disclosed only that the key list is
+    # non-exhaustive; nobody had disclosed that the scan reads the query string and nothing else, so
+    # a secret written this way validated clean and was stored in the registry and in
+    # `config.sqlite` — the harm this function's own docstring says it exists to prevent. `server.py`
+    # already refuses `parts.username or parts.password` on its own bind URL, so the codebase
+    # checked the shape in one place and not the other (CHG-20260831-02, ruled a defect by the
+    # round-7 risk seat after six rounds as a disclosure).
+    if parts.username or parts.password:
+        return "the userinfo before @"
+
+    # The fragment travels with the URL and is read the same way; `#api_key=…` hid from a scan that
+    # looked only at `?`.
+    for carrier in (parts.query, parts.fragment):
+        for pair in carrier.split("&"):
+            name = pair.split("=", 1)[0].strip().lower()
+            if name in _SECRET_KEYS:
+                return name
     return None
 
 
@@ -233,6 +246,25 @@ class Registry:
     def leaving(self) -> List[Model]:
         """Every model whose work orders leave this machine, so the console can say so plainly."""
         return [m for m in self.models if m.leaves_this_machine]
+
+    def graded_internal_by_a_bare_host(self) -> List[Model]:
+        """Models called `internal` only because their host has no dot in it.
+
+        `reach_of` grades a single-label host `internal` on the reasoning that somebody who writes a
+        bare host means their own network. That is a judgement, not a fact, and it decides two
+        thing: the model skips the `EXTERNAL and not key_env` refusal. It does **not** leave the
+        console's "N of which leave this machine" count — `leaves_this_machine` is `reach != LOCAL`,
+        so an internal model is counted there; the round-7 risk seat's claim that it was not did not
+        reproduce. On a network where `gpu-box` resolves publicly the grade is wrong, and nothing
+        said so anywhere a person reads.
+
+        The round-7 risk seat ruled the heuristic **right** and its silence wrong: accept it, and
+        name the models it applies to where the count is printed. Six rounds under *Not claimed*
+        had made the disclosure into a decision taken by default (CHG-20260831-02).
+        """
+        return [m for m in self.models
+                if m.transport == "api" and m.reach == INTERNAL
+                and "." not in (urlsplit(m.endpoint).hostname or ".")]
 
     def as_dict(self) -> Dict[str, object]:
         return {"models": [m.as_dict() for m in self.models]}
