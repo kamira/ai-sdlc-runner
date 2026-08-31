@@ -233,10 +233,17 @@ def test_this_repository_has_no_mutation_in_flight():
     records = {mutation_recovery.DEFAULT_IN_FLIGHT, mutation_recovery.IN_FLIGHT}
     present = sorted(p for p in records if p.exists())
 
+    # Ownership **per path**, not across all of them at once. Comparing a set of owners against the
+    # announced pid meant one unowned record made every record look unowned — and during a real
+    # mutation run there are two: the harness's, at the default, and one planted at the override by
+    # the test below. The guard then failed in the harness's own state with nothing mutated, `-x`
+    # stopped the run there, and every mutation in the group returned non-zero whatever it did. The
+    # instrument went constant again (CHG-20260831-02, risk seat).
     announced = os.environ.get("MUTATION_RUN")
-    owners = {mutation_recovery._owner(p) for p in present}
-    if (present and announced and announced.isdigit()
-            and owners == {int(announced)}):
+    owned = int(announced) if announced and announced.isdigit() else None
+    present = [p for p in present if mutation_recovery._owner(p) != owned]
+
+    if not present and announced:
         # Both halves, and the second is not decoration. Skipping on the variable alone meant one
         # stray `export MUTATION_RUN=1` in a shell — or the name appearing in any CI environment —
         # disarmed this repository's stranded-tree detector everywhere, permanently and silently.
@@ -275,8 +282,8 @@ def _guard_says(tmp_path, record, env):
     if record is None:
         # Not a leftover from the previous call: the "clean tree" case has to run against no record,
         # and these calls share one `tmp_path`. The first version counted calls with
-        # `len(list(tmp_path.iterdir()))` and made a directory each time — a shape nothing else in
-        # 1764 tests uses, to solve what one `else` solves. Unlinking is safe here, unlike in the
+        # `len(list(tmp_path.iterdir()))` and made a directory each time — a shape used nowhere
+        # else in this suite, to solve what one `else` solves. Unlinking is safe here, unlike in the
         # version this replaced, because `theirs` is a temporary path and never the live record
         # (CHG-20260831-01, idiom seat).
         theirs.unlink(missing_ok=True)
@@ -315,6 +322,29 @@ def test_the_harness_tells_the_child_it_is_a_mutation_run(monkeypatch):
         "in-flight guard will fail during every mutation and mask the test that should have failed")
 
 
+def test_the_guard_reads_the_default_path_even_when_the_override_moves_it(tmp_path, monkeypatch):
+    """The half of CHG-20260831-01 that nothing held.
+
+    That change made the guard read both the default record path and wherever `MUTATION_IN_FLIGHT`
+    points, because reading only the override made a leaked value a one-`export` off switch. It
+    recorded the fix as pinned. It was not: reverting `records` to `{IN_FLIGHT}` left the whole file
+    green — 23 passed, nothing red (CHG-20260831-02, conformance seat).
+
+    Driven in-process against two temporary paths. The child-process helper cannot do this one: the
+    state it needs is a record at the *default* location, and that location is the repository's own.
+    Writing there is what the round-5 veto was about.
+    """
+    default, moved = tmp_path / "default.json", tmp_path / "moved.json"
+    monkeypatch.setattr(mutation_recovery, "DEFAULT_IN_FLIGHT", default)
+    monkeypatch.setattr(mutation_recovery, "IN_FLIGHT", moved)
+    monkeypatch.delenv("MUTATION_RUN", raising=False)
+    mutation_recovery.write(default, json.dumps(
+        {"path": "x", "original": "a", "mutated": "b", "owner": 999999}))
+
+    with pytest.raises(AssertionError, match="may still be mutated"):
+        test_this_repository_has_no_mutation_in_flight()
+
+
 def test_the_harness_refuses_to_run_with_the_record_moved(tmp_path):
     """The override is for the guard's own test, and for nothing else.
 
@@ -341,6 +371,10 @@ def test_the_harness_refuses_to_run_with_the_record_moved(tmp_path):
         "a refusal has to say what to do next")
 
 
+@pytest.mark.skipif(bool(os.environ.get("MUTATION_RUN")),
+                    reason="a mutation run holds the real record at the default path; this test "
+                           "drives the guard against records it plants itself, and cannot control "
+                           "that one")
 def test_the_guard_fails_on_a_leftover_record_and_skips_only_for_a_running_harness(tmp_path):
     """The branch that decides whether this repository's stranded-tree detector is armed.
 

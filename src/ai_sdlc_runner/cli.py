@@ -1362,6 +1362,16 @@ def cmd_serve(args: argparse.Namespace) -> int:
     leaving = registry.leaving()
     print(f"models         {len(registry)} registered, {len(leaving)} of which leave this machine"
           + (f": {', '.join(m.id + ' (' + m.reach + ')' for m in leaving)}" if leaving else ""))
+    # `internal` rests on `reach_of`'s judgement that a host with no dot in it is on your own
+    # network. It does not hide the model from the line above — `leaves_this_machine` is
+    # `reach != LOCAL`, so these are counted there — but it does exempt them from the refusal that
+    # an external endpoint must name a key variable. So the grade is stated where the operator can
+    # see which models it was applied to (CHG-20260831-02, risk seat; its claim that these were
+    # missing from the count above did not reproduce, and the exemption is the real cost).
+    bare = registry.graded_internal_by_a_bare_host()
+    if bare:
+        print(f"               {len(bare)} of those are internal only because the host has no dot: "
+              f"{', '.join(m.id for m in bare)} — they need no key variable")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

@@ -61,6 +61,10 @@ IN_PROGRESS = (
     "draft", "in progress", "wip", "blocked", "halted", "paused", "pending", "under review",
     "proposed", "superseded", "abandoned", "withdrawn",
     "草稿", "進行中", "擱置", "停擺", "待審", "已作廢", "已取代",
+    # The negated forms, so `_standing` has something to nest 完成 inside. Without them
+    # 未完成 matched only 完成 and read as finished — the rule needs both words present to
+    # tell "not finished" from "finished" (CHG-20260831-02, risk seat).
+    "未完成", "尚未完成", "未收尾",
 )
 
 
@@ -70,36 +74,21 @@ IN_PROGRESS = (
 ACC_PASS = ("pass", "passes", "passed", "通過")
 ACC_NOT_PASS = (
     "fail", "failed", "not sound", "rejected", "withdrawn", "superseded", "abandoned",
-    # An acceptance that recorded a pass for something later shown not to work. Distinct from
-    # `superseded`, which is about a change being replaced: this one says the verdict itself was
-    # never true. Added when ACC-20260828-24 needed it — it had said **Pass** for a `src/` fix that
-    # did nothing, and correcting only the prose left `_verdict` still reading `pass`.
+    # An acceptance whose verdict was never true, as against `superseded`, which says the change was
+    # replaced. `void` and not `wrong`: these words are matched against the head of the Conclusion
+    # field, and `wrong` is a general-purpose adjective that four acceptances already carry there.
+    # `void` is verdict-shaped like every other entry — and it is inside *avoid*, which is why
+    # `_says` matches whole words rather than substrings.
     #
-    # `void`, not `wrong`, and the difference is not taste. These lists are matched by substring
-    # against the head of the Conclusion field, and `wrong` is a general-purpose adjective: **four**
-    # acceptances contain it in that line, and all four read as `pass` only because `_status_word`
-    # happens to cut at punctuation before reaching it. A head with no punctuation — "Pass but the
-    # first rule tried was wrong" — would match both lists at once. `void` is verdict-shaped, like
-    # every other entry here, and appears in exactly one Conclusion line: ACC-20260828-24's, put
-    # there by the change that added this word.
+    # This word has teeth: `check` refuses a DONE change whose acceptance is void — see
+    # `_never_held`. It fires on nothing in this ledger today and is prospective, like
+    # `BRANCH_REQUIRED_FROM` above.
     #
-    # (CHG-20260830-08 said "five … four of which", which was the count before that same commit
-    # rewrote ACC-20260828-24, and "`void` appears in no Conclusion line", which its own commit
-    # falsified. Both corrected in CHG-20260830-09, conformance seat.)
-    #
-    # This word now has teeth: `check` refuses a DONE change whose acceptance is void — see
-    # `_never_held`. CHG-20260830-08 shipped it inert and said so; the round-5 conformance seat
-    # ruled that the missing half should exist.
-    #
-    # It fires on **nothing** today, and the paragraph above is why that sentence is here rather
-    # than "exactly one pair". The seat predicted one — CHG/ACC-20260828-24 — and CHG-20260830-09
-    # wrote that down *and then changed that change's status to `superseded` in the same commit*,
-    # which is `IN_PROGRESS`, so the `elif done and …` never runs. Measured in CHG-20260831-01:
-    # zero. The rule is prospective, like `BRANCH_REQUIRED_FROM` and `TESTS_MUST_EXIST_FROM`: it
-    # catches the next one. Writing a claim true at the time and falsifying it later in the same
-    # commit is the third round in a row this has happened, four lines below the correction of the
-    # last one.
-    "void",
+    # Three rounds of corrections to the paragraphs that used to sit here are in CHG-20260830-08,
+    # -09 and CHG-20260831-01. They belong in the records; a comment that carries its own changelog
+    # stops being read, and this one had grown to the largest in the repository while still
+    # asserting the substring matching its own change had removed (CHG-20260831-02, idiom seat).
+    "void", "voided",
     "未通過", "退回", "已作廢",
 )
 
@@ -160,7 +149,15 @@ def _verdict(text: str) -> str:
 
 #: Verdicts that say the acceptance's own finding never held, as against `superseded`, which says
 #: the change was replaced. Only these reopen a change — see the second half of `check`'s DONE test.
-ACC_NEVER_TRUE = ("void",)
+ACC_NEVER_TRUE = ("void", "voided")
+
+#: Every never-true word must also be a refusal, or `check` would call it unrecognised and send
+#: the operator to a list that does not reopen anything. Asserted at import because the two
+#: tuples are written by hand and drifted once already: `Voided.` was refused as unrecognised,
+#: and doing what that refusal said — adding it to `ACC_NOT_PASS` — silently disarmed the void
+#: rule, because `ACC_NEVER_TRUE` is a tuple the message never mentions (CHG-20260831-02,
+#: defect seat).
+assert set(ACC_NEVER_TRUE) <= set(ACC_NOT_PASS), sorted(set(ACC_NEVER_TRUE) - set(ACC_NOT_PASS))
 
 
 def _never_held(repo: Path, chg_id: str) -> bool:
@@ -173,25 +170,52 @@ def _never_held(repo: Path, chg_id: str) -> bool:
     return _says(verdict, ACC_NEVER_TRUE)
 
 
-def _says(verdict: str, words) -> bool:
-    """Does the verdict use one of these words — as a word, not as a run of letters inside another?
+def _matches(verdict: str, words) -> List[tuple]:
+    """Every `(start, end, word)` where one of these words appears *as a word*.
 
-    Substring matching is what made `wrong` unusable, and `void` turned out to have the same defect
-    one letter deeper: it is inside **avoid**, **avoided** and **unavoidable**. Measured — a
-    Conclusion head of `**Avoided**` parsed as a never-true verdict and reopened its change
-    (CHG-20260831-01, defect seat). The comment on `ACC_NOT_PASS` had argued `void` was immune to
-    exactly this, which is the argument that should have been checked rather than made.
+    Spans, not booleans, because the caller has to tell a word nested inside another word from two
+    words sitting side by side, and only positions can do that — see `check`.
+
+    The boundary is **ASCII word characters**, not `\\b`. `\\b` is defined against `\\w`, and CJK
+    characters are `\\w`, so no boundary falls between Chinese text and an adjoining Latin word —
+    which Chinese typography does not space. Measured, with `\\b`: `通過failed` read as a **pass**
+    (the `failed` was invisible), and `已void` was not a recognised verdict at all. Two false greens
+    in the lint that exists to catch false greens (CHG-20260831-02, conformance seat).
+
+    Substring matching is what made `wrong` unusable, and `void` had the same defect one letter
+    deeper — it is inside *avoid*, *avoided*, *unavoidable*.
     """
+    found = []
     for word in words:
-        if word.isascii():
-            if re.search(rf"\b{re.escape(word)}\b", verdict):
-                return True
-        elif word in verdict:
-            # \b is defined against \w, and every character of the CJK entries is a
-            # \w, so a boundary never falls between them. The words needing protection here
-            # are the English ones that live inside other English words.
-            return True
-    return False
+        pattern = (rf"(?<![A-Za-z0-9_]){re.escape(word)}(?![A-Za-z0-9_])"
+                   if word.isascii() else re.escape(word))
+        found += [(m.start(), m.end(), word) for m in re.finditer(pattern, verdict)]
+    return found
+
+
+def _standing(text: str, *vocabularies):
+    """Which words of each vocabulary the text actually says, with nested matches dropped.
+
+    Shared, because the status matcher and the verdict matcher are the same problem and only one of
+    them had the rule. `done = [w for w in DONE if w in status]` read 未完成 and 尚未完成 — "not
+    finished" — as **finished**, because they contain 完成 and nothing else matched to nest it in;
+    a change that was not done was silently done, in the language this ledger is written in, over
+    127 records with this lint wired into CI (CHG-20260831-02, risk seat).
+
+    A match inside another match's span is the same text read short. Two matches at different places
+    are a real disagreement and both stand — that is what makes 未通過 (one word) different from
+    通過／未通過 (two).
+    """
+    hits = _matches(text, [word for words in vocabularies for word in words])
+    standing = {word for start, end, word in hits
+                if not any((s, e) != (start, end) and s <= start and end <= e
+                           for s, e, _ in hits)}
+    return [[word for word in words if word in standing] for words in vocabularies]
+
+
+def _says(verdict: str, words) -> bool:
+    """Does the verdict use one of these words? See `_matches` for what counts as a word."""
+    return bool(_matches(verdict, words))
 
 
 def _field_present(text: str, field: str) -> bool:
@@ -235,8 +259,7 @@ def check(repo: Path) -> List[str]:
             problems.append(f"{chg_id}: has no Status section")
             continue
 
-        done = [w for w in DONE if w in status]
-        open_ = [w for w in IN_PROGRESS if w in status]
+        done, open_ = _standing(status, DONE, IN_PROGRESS)
 
         # The vocabulary is closed on purpose. An unrecognised status used to be treated as
         # not-finished, so a change whose status said "accepted" or "完成" sailed past a lint that
@@ -274,7 +297,7 @@ def check(repo: Path) -> List[str]:
                 f"{chg_id}: its status says the work is finished, but ACC-{chg_id[4:]} records a "
                 f"verdict that was never true — a change cannot be closed on a check its own "
                 f"acceptance withdraws. Change the status word itself: `superseded` if a later "
-                f"change redid the work, or any of {list(IN_PROGRESS[:4])} if it is open again. "
+                f"change redid the work, or one of: {', '.join(IN_PROGRESS[:4])}. "
                 f"Explaining it after the word will not clear this, because `_status_word` reads "
                 f"only the head of the line")
 
@@ -321,22 +344,21 @@ def check(repo: Path) -> List[str]:
         verdict = _verdict(acc_text)
         if not verdict:
             continue
-        # Longest match wins, across both lists. Without it a Chinese refusal is unrecordable:
-        # 未通過 (not passed) contains 通過 (passed), so it read as both a pass and a refusal and the
-        # lint refused a legitimate verdict in the language this repository is operated in.
-        # Pre-existing, found while closing the void/avoided collision (CHG-20260831-01).
-        hits = [w for w in ACC_PASS + ACC_NOT_PASS if _says(verdict, [w])]
-        # A match nested inside another match is not a second opinion, it is the same word read
-        # short: 通過 sits inside 未通過. Two matches that do not contain each other are a real
-        # disagreement -- "Pass / withdrawn" -- and must still be refused, which is why this drops
-        # only the contained ones rather than keeping the longest.
-        standing = [w for w in hits if not any(w != o and w in o for o in hits)]
-        passed = [w for w in ACC_PASS if w in standing]
-        refused = [w for w in ACC_NOT_PASS if w in standing]
+        # A match sitting *inside another match's span* is not a second opinion, it is the same
+        # text read short: the 通過 in 未通過 is those characters, not a separate word. Two matches
+        # at different places are a real disagreement — "Pass / withdrawn", or its Chinese form
+        # 通過／未通過 — and must still be refused.
+        #
+        # By span, not by word. Dropping on `w in o` compared the *vocabulary entries*, so it could
+        # not tell 未通過 (nesting) from 通過／未通過 (juxtaposition) at all: both look like "one
+        # entry contains the other", and the second went clean. Measured (CHG-20260831-02).
+        passed, refused = _standing(verdict, ACC_PASS, ACC_NOT_PASS)
         if not passed and not refused:
             problems.append(
                 f"{acc_id}: conclusion {verdict!r} is not a recognised verdict. Add the word to "
-                f"ACC_PASS or to ACC_NOT_PASS in tools/ledger_check.py — an unrecognised verdict "
+                f"ACC_PASS or to ACC_NOT_PASS in tools/ledger_check.py — and to ACC_NEVER_TRUE as "
+                f"well if it means the finding never held, or it will not reopen its change. An "
+                f"unrecognised verdict "
                 f"is not a pass")
             continue
         if passed and refused:

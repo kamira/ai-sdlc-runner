@@ -733,6 +733,7 @@ def test_every_exception_a_person_reads_goes_through_plain_in():
     # every `*.py` and collects its violations whatever the operator is, measured in
     # CHG-20260831-01. The first version of this comment said the module went unexamined, which
     # is a hole that did not exist.
+    #
     # The finding first, the floors after. Ordered the other way round, a new module carrying a real
     # violation reported `the survey read 22 modules; the package had 21` and never evaluated
     # `unstripped` at all — the survey's actual output hidden behind an arithmetic complaint.
