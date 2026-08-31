@@ -1749,6 +1749,30 @@ def _pytest(tests: str):
              "MUTATION_RUN": str(os.getpid())})
 
 
+def _import_fails(path: Path) -> str:
+    """Does the mutated file still import? Returns the error, or `""`.
+
+    A separate interpreter, because importing it here would poison this process for every mutation
+    after it. `-c` rather than a test run: the question is about the module, and pytest can only
+    answer it when the test file happens to import it at its own module scope.
+    """
+    # By its **package path**, not by bare name. `src/ai_sdlc_runner/models.py` imported standalone
+    # raises `ImportError: attempted relative import with no known parent package` — which is a
+    # property of how it was loaded, not of the mutation, and reported BROKE for four honest
+    # mutations in the `reach` group alone (CHG-20260901-01, found by running it).
+    if path.parent.name == "ai_sdlc_runner":
+        module, where = f"ai_sdlc_runner.{path.stem}", "src"
+    else:
+        module, where = path.stem, "tools"
+    stmt = f"import {module}"
+    probe = subprocess.run([sys.executable, "-c", stmt], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", cwd=REPO,
+                           env={**os.environ, "PYTHONPATH": str(REPO / where)})
+    if probe.returncode == 0:
+        return ""
+    return (probe.stderr.strip().splitlines() or ["import failed"])[-1]
+
+
 def run(mutation: Mutation, baseline: Dict[str, bool]) -> bool:
     """Apply, run, restore. The restore is in a `finally` because leaving a mutated tree behind is
     a worse outcome than any result this function can report.
@@ -1796,6 +1820,7 @@ def run(mutation: Mutation, baseline: Dict[str, bool]) -> bool:
     mutated = original.replace(mutation.before, mutation.after, 1)
     apply(mutation.path, original, mutated)
     try:
+        broke = _import_fails(mutation.path)
         proc = _pytest(mutation.tests)
     finally:
         restore(mutation.path, original)
@@ -1803,15 +1828,24 @@ def run(mutation: Mutation, baseline: Dict[str, bool]) -> bool:
     summary = next((ln for ln in reversed(proc.stdout.splitlines())
                     if "passed" in ln or "failed" in ln or "error" in ln), "")
 
-    # A collection error is not a catch. `returncode != 0` alone reported CAUGHT when the mutated
-    # module simply would not import — every test in the file "fails", for a reason that has nothing
-    # to do with the guarantee named. `test_no_shipped_mutation_makes_its_file_unparsable` closes
-    # the `SyntaxError` half of this at author time; a mutation that parses and raises at module
-    # scope (a `NameError`, a bad import) is the other half, and only the run can see it
-    # (CHG-20260831-07, defect and risk seats).
-    if " error" in summary and "failed" not in summary:
+    # A mutated module that does not import is not a catch. `returncode != 0` alone reported CAUGHT
+    # for it: every test in the file "fails", for a reason that has nothing to do with the guarantee
+    # named. `test_no_shipped_mutation_makes_its_file_unparsable` closes the `SyntaxError` half at
+    # author time; a module that parses and raises at import — a `NameError` at module scope, a bad
+    # import — is the other half (CHG-20260831-07, defect and risk seats).
+    #
+    # Asked of the **module**, not of pytest's summary line. Reading the summary only caught it when
+    # the *test* file happened to import the mutated module at its own module scope: measured, 12 of
+    # 32 (tests, module) pairs here do not, and for those the false green survived the fix
+    # (CHG-20260901-01, defect seat).
+    # `broke` alone. The summary half was how this was first written, and it cannot tell an
+    # import failure from an ordinary fixture that raises: both print `1 error`, and the second is
+    # a real catch being reported as a non-catch with "re-anchor it" advice for a correctly
+    # anchored mutation (CHG-20260901-01, risk seat). The module is asked directly now, so the
+    # summary is not needed and is wrong more often than it is right.
+    if broke:
         print(f"  BROKE      {mutation.says}")
-        print(f"               {summary}")
+        print(f"               {broke or summary}")
         print(f"               the mutated module did not import, so this measured nothing about "
               f"the class it names. Re-anchor it.")
         return False
@@ -1887,15 +1921,16 @@ def main() -> int:
         raise SystemExit(str(blocked)) from None
     print()
     if missed:
-        # "NOT caught" is one of four outcomes `run` returns False for, and the other three are not
+        # "NOT caught" is one of five outcomes `run` returns False for, and the other four are not
         # a missing test at all: `ANCHOR GONE` means the code moved, `AMBIGUOUS` means the anchor
         # appears twice, `NO BASELINE` means the file was already red. Saying "a test names a
         # guarantee it does not check" about those sends a reader to write a test for something
         # that may already be pinned, while the real fault goes unnamed. The per-mutation lines
         # above say which is which; this one stops claiming to know (CHG-20260831-06, defect seat).
         print(f"{len(missed)} of {len(chosen)} did not report CAUGHT. Read the lines above for "
-              f"which: a missing test, a stale anchor, a duplicated anchor, or a red baseline are "
-              f"four different faults and only the first is about coverage:")
+              f"which: a missing test, a stale anchor, a duplicated anchor, a red baseline, or a "
+              f"module that would not import are five different faults, and only the first is "
+              f"about coverage:")
         for m in missed:
             print(f"  - {m.says}  ({m.tests})")
         return 1

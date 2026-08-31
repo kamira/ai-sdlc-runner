@@ -194,3 +194,33 @@ def test_no_shipped_mutation_makes_its_file_unparsable():
         "these mutations leave a file that does not compile, so every test in their module dies on "
         "import and the harness reports CAUGHT about nothing:" + "".join(NEWLINE + "  - " + u
                                                                           for u in unparsable))
+
+
+def test_a_mutation_whose_module_will_not_import_is_not_a_catch(tmp_path):
+    """`returncode != 0` is what CAUGHT means, and a module that will not import produces it.
+
+    The first fix read pytest's summary line for `error`, which only says so when the **test**
+    module imports the mutated one at its own module scope — measured, 12 of this repository's 32
+    (tests, module) pairs do not, and for those the false green survived (CHG-20260901-01, defect
+    seat). It is asked of the module now, in its own interpreter.
+
+    Driven against a real shipped file and restored in a `finally`, because that is what `run` does
+    and the restore is the part worth exercising.
+    """
+    target = mutation_check.SRC / "cli.py"
+    original = target.read_text(encoding="utf-8")
+    anchor = "from __future__ import annotations"
+    assert anchor in original
+
+    probe = mutation_check.Mutation(
+        "probe", "a module that parses and will not import", target,
+        anchor, anchor + NEWLINE + "raise NameError('planted at module scope')",
+        "tests/test_run_provenance.py")
+
+    try:
+        caught = mutation_check.run(probe, {"tests/test_run_provenance.py": True})
+    finally:
+        target.write_text(original, encoding="utf-8", newline="")
+
+    assert caught is False, "a module that did not import measured nothing about the named class"
+    assert target.read_text(encoding="utf-8") == original

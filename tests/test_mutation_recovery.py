@@ -844,6 +844,9 @@ def test_recover_reports_an_unreadable_record_to_the_operator(sentinel, source, 
 #: Record shapes a hand edit produces, and what `recover` must do with each. Every one of these
 #: guards shipped unpinned: reverting any of the four left `45 passed` (CHG-20260831-07, defect
 #: seat), and one of them — a non-integer `owner` — had turned a traceback into a silent overwrite.
+#: A sentinel, because `None` is itself a shape worth testing.
+REMOVE_KEY = object()
+
 DESTRUCTIVE_SHAPES = [
     ({"original": None}, "an original that is null"),
     ({"original": 123}, "an original that is a number"),
@@ -852,6 +855,18 @@ DESTRUCTIVE_SHAPES = [
     ({"owner": "nope"}, "an owner that is a string"),
     ({"owner": [1]}, "an owner that is a list"),
     ({"owner": 1.5}, "an owner that is a float"),
+    # `isinstance(True, int)` is True, so a bool owner passes an `isinstance(v, int)` gate and then
+    # answers `_alive` as False — which is what lets `recover` act. The clause that stops it was
+    # unpinned: deleting it left `54 passed` while a bool owner destroyed the file again, which is
+    # byte-for-byte the defect the round before closed (CHG-20260901-01, defect seat).
+    ({"owner": True}, "an owner that is a bool"),
+    # And **absence**. `record.items()` cannot see a key that is not there, so deleting the `owner`
+    # line — the hand edit this refusal invites — was not refused at all: the file was overwritten
+    # and the record unlinked. If the owning run is alive, that is the corruption CHG-20260830-06
+    # closed, reached through absence instead of through a type.
+    ({"owner": REMOVE_KEY}, "no owner key at all"),
+    ({"original": REMOVE_KEY}, "no original key at all"),
+    ({"path": REMOVE_KEY}, "no path key at all"),
 ]
 
 
@@ -871,6 +886,8 @@ def test_recover_destroys_nothing_it_cannot_account_for(tmp_path, monkeypatch, o
     body = {"path": str(victim), "original": "ORIGINAL SOURCE" + NEWLINE,
             "mutated": "MUTATED SOURCE" + NEWLINE, "owner": 999999}
     body.update(override)
+    for key in [k for k, v in override.items() if v is REMOVE_KEY]:
+        del body[key]
     record.write_text(json.dumps(body), encoding="utf-8")
     monkeypatch.setattr(mutation_recovery, "IN_FLIGHT", record)
 
@@ -910,3 +927,63 @@ def test_recover_refuses_a_record_naming_something_that_is_not_a_file(tmp_path, 
     assert str(tmp_path) in said, f"the refusal must name what it will not touch: {said!r}"
     assert "edited it since" not in said, f"nobody edited a directory: {said!r}"
     assert record.exists()
+
+
+def test_recover_refuses_a_record_naming_a_file_that_is_gone(tmp_path, monkeypatch):
+    """Moved, or a record from another worktree. Nobody edited it, and that is what it used to say.
+
+    The round that added a branch for a directory left `not path.exists()` falling into the
+    edited-since arm, so the refusal named an edit that did not happen (CHG-20260901-01, defect).
+    """
+    record = tmp_path / "in-flight.json"
+    record.write_text(json.dumps(
+        {"path": str(tmp_path / "gone.py"), "original": "a", "mutated": "b", "owner": 999999}),
+        encoding="utf-8")
+    monkeypatch.setattr(mutation_recovery, "IN_FLIGHT", record)
+
+    said = mutation_recovery.recover(quiet=True)
+
+    assert said.startswith("REFUSING"), said
+    assert "does not exist" in said, f"the diagnosis has to be the real one: {said!r}"
+    assert "edited it since" not in said, f"nobody edited a file that is gone: {said!r}"
+    assert record.exists()
+
+
+def test_recover_refuses_a_file_it_cannot_decode(tmp_path, monkeypatch):
+    """`recover` is called unguarded from `main()` and from the signal handler, so a raise here
+    leaves the operator with a traceback at the moment a killed run needs putting back."""
+    victim = tmp_path / "target.py"
+    victim.write_bytes(b"MUTATED " + bytes([0xFF, 0xFE]) + b" SOURCE")
+    record = tmp_path / "in-flight.json"
+    record.write_text(json.dumps(
+        {"path": str(victim), "original": "a", "mutated": "b", "owner": 999999}),
+        encoding="utf-8")
+    monkeypatch.setattr(mutation_recovery, "IN_FLIGHT", record)
+
+    said = mutation_recovery.recover(quiet=True)
+
+    assert said.startswith("REFUSING"), said
+    assert "UTF-8" in said, said
+    assert record.exists() and victim.read_bytes().startswith(b"MUTATED ")
+
+
+def test_recover_reads_four_fields_and_ignores_the_rest(tmp_path, monkeypatch):
+    """A gate that iterated every key present refused a record carrying a spare one.
+
+    Recovery was then unreachable until the operator guessed which field the tool did not read was
+    the problem — on a record whose `path`, `original`, `mutated` and `owner` were all good
+    (CHG-20260901-01, risk seat).
+    """
+    victim = tmp_path / "target.py"
+    victim.write_text("MUTATED SOURCE" + NEWLINE, encoding="utf-8")
+    record = tmp_path / "in-flight.json"
+    record.write_text(json.dumps(
+        {"path": str(victim), "original": "ORIGINAL SOURCE" + NEWLINE,
+         "mutated": "MUTATED SOURCE" + NEWLINE, "owner": 999999,
+         "note": 3, "started": ["not", "a", "string"]}), encoding="utf-8")
+    monkeypatch.setattr(mutation_recovery, "IN_FLIGHT", record)
+
+    said = mutation_recovery.recover(quiet=True)
+
+    assert said and said.startswith("restored"), said
+    assert victim.read_text(encoding="utf-8") == "ORIGINAL SOURCE" + NEWLINE
