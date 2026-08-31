@@ -76,8 +76,8 @@ TOOLS = REPO / "tools"
 #: mutation's `before` string sits in THIS file, so any anchor into it appears twice and the
 #: uniqueness guard correctly refuses it. A file cannot pin guarantees about itself by exact
 #: text, and the recovery is the part that most needed pinning (CHG-20260828-18).
-from mutation_recovery import (IN_FLIGHT, MutationInFlight, apply, recover,  # noqa: E402
-                               restore, restore_on_signal)
+from mutation_recovery import (DEFAULT_IN_FLIGHT, IN_FLIGHT, MutationInFlight,  # noqa: E402
+                               apply, recover, restore, restore_on_signal)
 
 
 class Mutation(NamedTuple):
@@ -1420,9 +1420,12 @@ MUTATIONS: List[Mutation] = [
         '    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)',
         'tests/test_mutation_recovery.py'),
 
-    # The two entries above mutate lines inside `_alive_nt`, so on POSIX they are unreachable and
-    # this group is 9/11 there rather than 11/11. Nothing reports that: CI never runs this file.
-    # The entry below is their POSIX twin, and is the one that runs everywhere.
+    # The two entries above mutate lines inside `_alive_nt`, so on POSIX they are unreachable:
+    # this group is **10 of 12** there. Counted, not carried — CHG-20260830-08 wrote 9/11 here and
+    # 11/12 in its acceptance while the group held twelve entries, and CHG-20260830-09's claims
+    # table corrected both to 10/12 without touching this line (CHG-20260831-01, conformance).
+    # Nothing reports the difference: CI never runs this file. The entry below is their POSIX twin
+    # and is the one that runs everywhere.
 
     Mutation(
         'stranded', 'a process this run may not signal reads as dead on POSIX too',
@@ -1797,12 +1800,31 @@ def main() -> int:
     # Before anything else. A tree left mutated by a previous run would make every baseline below
     # a measurement of the wrong code.
     restore_on_signal()
+    if os.environ.get("MUTATION_IN_FLIGHT"):
+        # A mutation run must write its record where the guard looks for it, and this moves it. The
+        # override exists for one caller — the child pytest that drives
+        # `test_this_repository_has_no_mutation_in_flight` — and a run that honoured it would mutate
+        # source while `tools/.mutation-in-flight.json` stayed absent: `--recover` from an ordinary
+        # shell then says "nothing in flight; the tree is as it should be" and exits 0 over a
+        # mutated file, and the record is the lock, so a second run takes it uncontended.
+        #
+        # CHG-20260830-09 claimed a leaked value "points the harness at a file it will not find,
+        # which fails loudly". It does not: `begin()` *creates* the record, so every writable value
+        # is the silent case. Measured, and made true here rather than restated
+        # (CHG-20260831-01, risk seat).
+        raise SystemExit(
+            f"MUTATION_IN_FLIGHT is set ({os.environ['MUTATION_IN_FLIGHT']}), which moves the "
+            f"in-flight record there instead of {DEFAULT_IN_FLIGHT}. A mutation run must write it "
+            f"where the stranded-tree guard reads it. Unset the variable and run again.")
+
     said = recover()
     if args.recover:
-        # Before the refusal below, not after it. `--recover` is what the refusal itself tells the
-        # operator to run, and ordering these the other way round meant it exited 1 without ever
-        # reaching this branch — so the documented way out could not be taken, and hand-editing a
-        # gitignored dotfile was the only exit left (CHG-20260830-08, risk seat).
+        # Before the refusal below, not after it — though the ordering changes nothing, and the
+        # comment that shipped here said otherwise. It claimed the old order meant `--recover`
+        # "exited 1 without ever reaching this branch, so the documented way out could not be
+        # taken". Measured: both orderings produce byte-identical output and both exit 1, because
+        # the refusal comes from `recover()` itself. The defect the reorder claimed to fix did not
+        # exist; this order is simply the one that reads correctly (CHG-20260831-01, conformance).
         if said is None:
             print("nothing in flight; the tree is as it should be")
         return 1 if said and said.startswith("REFUSING") else 0
