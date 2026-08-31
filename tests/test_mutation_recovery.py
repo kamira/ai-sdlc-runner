@@ -898,6 +898,16 @@ def test_recover_destroys_nothing_it_cannot_account_for(tmp_path, monkeypatch, o
     assert victim.read_text(encoding="utf-8") == "MUTATED SOURCE" + NEWLINE, (
         f"{shape}: the victim was written over on a record that could not be read")
 
+    # The **message**, because that is what separates the shape gate from the `KeyError` arm above
+    # it. Asserting only "REFUSING" let two of the three absence rows pass through the older arm and
+    # pin nothing: `path`, `original` and `mutated` were subscripted before the gate, so `missing`
+    # could only ever be `['owner']` (CHG-20260901-02, defect and risk seats).
+    field = next(iter(override))
+    assert field in said, f"{shape}: the refusal has to name {field!r} — {said!r}"
+    assert "cannot be read" not in said, (
+        f"{shape}: this record reads as JSON; saying it does not sends the operator to the wrong "
+        f"thing — {said!r}")
+
 
 def test_write_refuses_a_non_string_before_it_truncates(tmp_path):
     """`io.open(path, "w")` truncates, then the write fails. The order is the whole defect."""
