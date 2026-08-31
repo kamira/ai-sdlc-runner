@@ -29,6 +29,9 @@ HEADER = "- Project: x\n- Branch: b\n- Date: 2026-09-01\n- Risk: low\n"
 DONE_CHANGE = f"# CHG\n{HEADER}\n## Status\n\n**Accepted**\n"
 VOID_ACCEPTANCE = "# ACC\n- Conclusion: **VOID.** the fix never worked\n"
 
+#: The same change, not claiming to be closed — the escape hatch a void acceptance leaves open.
+SUPERSEDED_CHANGE = f"# CHG\n{HEADER}\n## Status\n\n**Superseded** — the fix was redone\n"
+
 
 def test_this_repos_own_ledger_passes():
     assert ledger_check.check(REPO) == []
@@ -62,7 +65,10 @@ def test_a_change_closed_on_a_void_acceptance_is_reported(tmp_path):
 
     assert len(problems) == 1, problems
     assert "never true" in problems[0]
-    assert "Reopen the change" in problems[0], "a refusal has to say what to do next"
+    assert "Change the status word itself" in problems[0], (
+        "a refusal has to say what to do next, and only what actually works")
+    assert "will not clear this" in problems[0], (
+        "the refusal has to say that explaining it after the status word does nothing")
 
 
 def test_a_change_superseded_by_a_later_one_is_not_reopened_by_its_acceptance(tmp_path):
@@ -73,8 +79,15 @@ def test_a_change_superseded_by_a_later_one_is_not_reopened_by_its_acceptance(tm
     assert ledger_check.check(repo) == []
 
 
-def test_a_change_that_says_why_a_void_acceptance_does_not_close_it_passes(tmp_path):
-    """The escape hatch. A status that is not `done` is not claiming to be closed on anything."""
+def test_a_change_whose_status_word_is_no_longer_done_passes(tmp_path):
+    """The escape hatch, named for what it actually is.
+
+    Its first name was `..._that_says_why_a_void_acceptance_does_not_close_it_passes`, and the
+    refusal offered that as an alternative — but `_status_word` reads only the head of the line,
+    so `**Accepted** — here is why the void ACC does not reopen it` still parses as `accepted`
+    and still fails. The body always set `**Superseded**`, so the clause was pinned by a test
+    that would have stayed green if it were deleted (CHG-20260831-01, risk seat).
+    """
     repo = _repo(tmp_path,
                  f"# CHG\n{HEADER}\n## Status\n\n**Superseded** — the fix was redone\n",
                  acc=VOID_ACCEPTANCE)
@@ -393,6 +406,20 @@ def test_an_unrecognised_verdict_is_a_problem_rather_than_a_pass(tmp_path):
     problems = ledger_check.check(repo)
     assert any("not a recognised verdict" in p for p in problems), problems
     assert any("ACC_PASS or to ACC_NOT_PASS" in p for p in problems), "it must say how to fix it"
+
+
+def test_a_chinese_refusal_is_not_read_as_a_pass_as_well(tmp_path):
+    """未通過 contains 通過, so a substring match called it both a pass and a refusal.
+
+    This repository is operated in Chinese and the vocabularies carry Chinese words, so a refusal
+    that cannot be written in the operator's own language is a real hole rather than a curiosity.
+    A match nested inside another match is the same word read short; two matches that do not
+    contain each other are a genuine disagreement, and the test below still refuses those
+    (CHG-20260831-01).
+    """
+    repo = _repo(tmp_path, SUPERSEDED_CHANGE, acc="# ACC\n- Conclusion: **未通過**\n")
+
+    assert ledger_check.check(repo) == []
 
 
 def test_a_verdict_that_reads_both_ways_is_refused(tmp_path):

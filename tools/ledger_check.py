@@ -89,7 +89,16 @@ ACC_NOT_PASS = (
     #
     # This word now has teeth: `check` refuses a DONE change whose acceptance is void — see
     # `_never_held`. CHG-20260830-08 shipped it inert and said so; the round-5 conformance seat
-    # ruled that the missing half should exist, and it fires on exactly one pair.
+    # ruled that the missing half should exist.
+    #
+    # It fires on **nothing** today, and the paragraph above is why that sentence is here rather
+    # than "exactly one pair". The seat predicted one — CHG/ACC-20260828-24 — and CHG-20260830-09
+    # wrote that down *and then changed that change's status to `superseded` in the same commit*,
+    # which is `IN_PROGRESS`, so the `elif done and …` never runs. Measured in CHG-20260831-01:
+    # zero. The rule is prospective, like `BRANCH_REQUIRED_FROM` and `TESTS_MUST_EXIST_FROM`: it
+    # catches the next one. Writing a claim true at the time and falsifying it later in the same
+    # commit is the third round in a row this has happened, four lines below the correction of the
+    # last one.
     "void",
     "未通過", "退回", "已作廢",
 )
@@ -161,7 +170,28 @@ def _never_held(repo: Path, chg_id: str) -> bool:
         verdict = _verdict(acc.read_text(encoding="utf-8"))
     except OSError:                                   # pragma: no cover - the caller checked it
         return False
-    return any(word in verdict for word in ACC_NEVER_TRUE)
+    return _says(verdict, ACC_NEVER_TRUE)
+
+
+def _says(verdict: str, words) -> bool:
+    """Does the verdict use one of these words — as a word, not as a run of letters inside another?
+
+    Substring matching is what made `wrong` unusable, and `void` turned out to have the same defect
+    one letter deeper: it is inside **avoid**, **avoided** and **unavoidable**. Measured — a
+    Conclusion head of `**Avoided**` parsed as a never-true verdict and reopened its change
+    (CHG-20260831-01, defect seat). The comment on `ACC_NOT_PASS` had argued `void` was immune to
+    exactly this, which is the argument that should have been checked rather than made.
+    """
+    for word in words:
+        if word.isascii():
+            if re.search(rf"\b{re.escape(word)}\b", verdict):
+                return True
+        elif word in verdict:
+            # \b is defined against \w, and every character of the CJK entries is a
+            # \w, so a boundary never falls between them. The words needing protection here
+            # are the English ones that live inside other English words.
+            return True
+    return False
 
 
 def _field_present(text: str, field: str) -> bool:
@@ -237,13 +267,16 @@ def check(repo: Path) -> List[str]:
             # Scoped to `ACC_NEVER_TRUE`, not to every refusal: `superseded` means a change was
             # replaced, which is history and not a contradiction, and two acceptances sit under
             # done changes that way today. `void` means the verdict itself never held, and exactly
-            # one pair is in that state — so this needs no grandfathering date, unlike
+            # one pair was in that state when the seat ruled, and zero are now — this commit's
+            # predecessor changed that one's status. Either way it needs no grandfathering, unlike
             # `BRANCH_REQUIRED_FROM` and `TESTS_MUST_EXIST_FROM`.
             problems.append(
                 f"{chg_id}: its status says the work is finished, but ACC-{chg_id[4:]} records a "
-                f"verdict that was never true. Reopen the change, or say in its status why the "
-                f"void acceptance does not reopen it — a change cannot be closed on a check its "
-                f"own acceptance withdraws")
+                f"verdict that was never true — a change cannot be closed on a check its own "
+                f"acceptance withdraws. Change the status word itself: `superseded` if a later "
+                f"change redid the work, or any of {list(IN_PROGRESS[:4])} if it is open again. "
+                f"Explaining it after the word will not clear this, because `_status_word` reads "
+                f"only the head of the line")
 
     # ── the other direction, which nothing walked (CHG-20260828-02) ─────────────────────────────
     #
@@ -288,8 +321,18 @@ def check(repo: Path) -> List[str]:
         verdict = _verdict(acc_text)
         if not verdict:
             continue
-        passed = [w for w in ACC_PASS if w in verdict]
-        refused = [w for w in ACC_NOT_PASS if w in verdict]
+        # Longest match wins, across both lists. Without it a Chinese refusal is unrecordable:
+        # 未通過 (not passed) contains 通過 (passed), so it read as both a pass and a refusal and the
+        # lint refused a legitimate verdict in the language this repository is operated in.
+        # Pre-existing, found while closing the void/avoided collision (CHG-20260831-01).
+        hits = [w for w in ACC_PASS + ACC_NOT_PASS if _says(verdict, [w])]
+        # A match nested inside another match is not a second opinion, it is the same word read
+        # short: 通過 sits inside 未通過. Two matches that do not contain each other are a real
+        # disagreement -- "Pass / withdrawn" -- and must still be refused, which is why this drops
+        # only the contained ones rather than keeping the longest.
+        standing = [w for w in hits if not any(w != o and w in o for o in hits)]
+        passed = [w for w in ACC_PASS if w in standing]
+        refused = [w for w in ACC_NOT_PASS if w in standing]
         if not passed and not refused:
             problems.append(
                 f"{acc_id}: conclusion {verdict!r} is not a recognised verdict. Add the word to "

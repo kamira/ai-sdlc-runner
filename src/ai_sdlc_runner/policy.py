@@ -1221,8 +1221,13 @@ def adjudicate(verdicts: Mapping[str, str], *, voices: str = "seats") -> Dict[st
         # matter of fact is what the veto exists to prevent. What remains — that `policy` and the
         # seat prompts use "veto" for two different things — is a design question for a person, and
         # is the same collision `ledger_check` had between `wrong` and `void` (CHG-20260830-09).
+        # `", ".join(...)`, not the list itself. An operator reads this through `report.halt_reason`,
+        # and `['conformance'] holds a veto` puts a Python repr in the subject of a sentence — which
+        # nothing else in `src/` does: all twenty other `{sorted(...)}` interpolations put the list
+        # after a colon, after a verb, or at the end (CHG-20260831-01, idiom seat).
+        held = "holds" if len(vetoed) == 1 else "hold"
         return {"outcome": "fail", "vetoed": sorted(vetoed),
-                "reason": f"{sorted(vetoed)} holds a veto and did not pass"}
+                "reason": f"{', '.join(sorted(vetoed))} {held} a veto and did not pass"}
 
     passes = sum(1 for v in verdicts.values() if v == PASS)
     if passes * 2 > len(verdicts):

@@ -41,8 +41,11 @@ REPO = Path(__file__).resolve().parent.parent
 #: on — it does not need the real record, and using it meant writing and deleting the live one while
 #: the harness had a source file mutated. Measured by the round-5 risk seat: the record was absent
 #: for 2.1s of a 9.8s window, and a kill there leaves a mutated file with no record of what it was.
-IN_FLIGHT = Path(os.environ.get("MUTATION_IN_FLIGHT")
-                 or REPO / "tools" / ".mutation-in-flight.json")
+#: Where it lives when nothing has moved it. Named separately so a refusal can say what the override
+#: displaced — `IN_FLIGHT` is already the override by the time anyone reads it.
+DEFAULT_IN_FLIGHT = REPO / "tools" / ".mutation-in-flight.json"
+
+IN_FLIGHT = Path(os.environ.get("MUTATION_IN_FLIGHT") or DEFAULT_IN_FLIGHT)
 
 
 class MutationInFlight(Exception):
@@ -195,10 +198,14 @@ def begin(path: Path, original: str, mutated: str) -> None:
             f"at once would overwrite the record the first one needs to put its file back.") from None
 
 
-def _owner() -> Optional[int]:
-    """The pid in the record on disk, or `None` if there is no readable record."""
+def _owner(path: Optional[Path] = None) -> Optional[int]:
+    """The pid in a record on disk, or `None` if there is no readable record.
+
+    Takes a path because the guard has to ask about **two** — the default location and wherever
+    `MUTATION_IN_FLIGHT` moved it — so that moving the record cannot hide one that is really there.
+    """
     try:
-        return json.loads(io.open(IN_FLIGHT, encoding="utf-8").read()).get("owner")
+        return json.loads(io.open(path or IN_FLIGHT, encoding="utf-8").read()).get("owner")
     except (OSError, ValueError, AttributeError):
         return None
 
