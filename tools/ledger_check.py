@@ -65,6 +65,17 @@ IN_PROGRESS = (
     # 未完成 matched only 完成 and read as finished — the rule needs both words present to
     # tell "not finished" from "finished" (CHG-20260831-02, risk seat).
     "未完成", "尚未完成", "未收尾",
+) + tuple(
+    # And the English ones, generated rather than typed, because the round that added the Chinese
+    # negations recorded "every boundary rule so far was right about English" — and here it was the
+    # inverse. English negates with a **space**, so the ASCII boundary rule fires between `not` and
+    # `done`, and there was no vocabulary entry for `_standing` to nest the `done` inside. Measured:
+    # `not done`, `not yet done`, `not complete`, `not accepted`, `not merged`, `not shipped`,
+    # `not released`, `not closed`, `not built` all classified **DONE** — nine of the ten English
+    # words (CHG-20260831-03, risk seat). Generated from `DONE`, so a word added there cannot
+    # acquire the defect by being typed into one tuple and not the other.
+    f"{prefix}{word}" for word in DONE if word.isascii()
+    for prefix in ("not ", "not yet ")
 )
 
 
@@ -76,9 +87,11 @@ ACC_NOT_PASS = (
     "fail", "failed", "not sound", "rejected", "withdrawn", "superseded", "abandoned",
     # An acceptance whose verdict was never true, as against `superseded`, which says the change was
     # replaced. `void` and not `wrong`: these words are matched against the head of the Conclusion
-    # field, and `wrong` is a general-purpose adjective that four acceptances already carry there.
+    # field, and `wrong` is a general-purpose adjective that four acceptances already carry in that
+    # **line** — they read as `pass` only because `_status_word` cuts at the punctuation before
+    # reaching it, so what keeps them green is where the match happens, not the word.
     # `void` is verdict-shaped like every other entry — and it is inside *avoid*, which is why
-    # `_says` matches whole words rather than substrings.
+    # `_matches` matches whole words rather than substrings.
     #
     # This word has teeth: `check` refuses a DONE change whose acceptance is void — see
     # `_never_held`. It fires on nothing in this ledger today and is prospective, like
@@ -151,13 +164,14 @@ def _verdict(text: str) -> str:
 #: the change was replaced. Only these reopen a change — see the second half of `check`'s DONE test.
 ACC_NEVER_TRUE = ("void", "voided")
 
-#: Every never-true word must also be a refusal, or `check` would call it unrecognised and send
-#: the operator to a list that does not reopen anything. Asserted at import because the two
-#: tuples are written by hand and drifted once already: `Voided.` was refused as unrecognised,
-#: and doing what that refusal said — adding it to `ACC_NOT_PASS` — silently disarmed the void
-#: rule, because `ACC_NEVER_TRUE` is a tuple the message never mentions (CHG-20260831-02,
-#: defect seat).
-assert set(ACC_NEVER_TRUE) <= set(ACC_NOT_PASS), sorted(set(ACC_NEVER_TRUE) - set(ACC_NOT_PASS))
+#: The two tuples are written by hand and must stay **equal** on their never-true words, in both
+#: directions — pinned by `test_a_never_true_verdict_is_a_refusal_and_the_pair_stays_equal`.
+#: It was an import-time `assert` for one round, and it constrained the containment that has never
+#: drifted: the drift it was written for runs the other way. `Voided.` was refused as unrecognised,
+#: the operator did what the refusal said and added it to `ACC_NOT_PASS` alone, and the void rule
+#: went silently inert — an addition the `<=` assert reports as fine (CHG-20260831-03, conformance,
+#: risk and idiom seats). It is a test now for a second reason: `python -O` deletes an `assert`, and
+#: CI runs this file as a script.
 
 
 def _never_held(repo: Path, chg_id: str) -> bool:
@@ -167,7 +181,7 @@ def _never_held(repo: Path, chg_id: str) -> bool:
         verdict = _verdict(acc.read_text(encoding="utf-8"))
     except OSError:                                   # pragma: no cover - the caller checked it
         return False
-    return _says(verdict, ACC_NEVER_TRUE)
+    return bool(_matches(verdict, ACC_NEVER_TRUE))
 
 
 def _matches(verdict: str, words) -> List[tuple]:
@@ -193,7 +207,7 @@ def _matches(verdict: str, words) -> List[tuple]:
     return found
 
 
-def _standing(text: str, *vocabularies):
+def _standing(text: str, *vocabularies) -> List[List[str]]:
     """Which words of each vocabulary the text actually says, with nested matches dropped.
 
     Shared, because the status matcher and the verdict matcher are the same problem and only one of
@@ -211,11 +225,6 @@ def _standing(text: str, *vocabularies):
                 if not any((s, e) != (start, end) and s <= start and end <= e
                            for s, e, _ in hits)}
     return [[word for word in words if word in standing] for words in vocabularies]
-
-
-def _says(verdict: str, words) -> bool:
-    """Does the verdict use one of these words? See `_matches` for what counts as a word."""
-    return bool(_matches(verdict, words))
 
 
 def _field_present(text: str, field: str) -> bool:
@@ -369,7 +378,11 @@ def check(repo: Path) -> List[str]:
         if not passed:
             continue
 
-        waiting = [w for w in AWAITING_DECISION if w in _status_word(_status_line(texts[f"CHG-{suffix}"]))]
+        # `_standing`, like the other two. This was the one raw `w in status` left in the file,
+        # in the same function as the docstring naming that construction as the bug (CHG-20260831-03,
+        # conformance, risk and idiom seats). Nothing in the ledger tripped it wrongly — it was
+        # exposure, and the next word added to `AWAITING_DECISION` would have inherited it.
+        waiting, = _standing(_status_word(_status_line(texts[f"CHG-{suffix}"])), AWAITING_DECISION)
         if waiting:
             problems.append(
                 f"CHG-{suffix}: its acceptance concluded {verdict!r}, but its own status still says "
@@ -421,8 +434,18 @@ def check_named_tests_exist(repo: Path) -> List[str]:
             continue
         # Backticked only. Prose that merely mentions a test in passing is not a pointer, and this
         # repository's records discuss tests constantly.
-        named = sorted(set(re.findall(r"`(test_\w+)`", path.read_text(encoding="utf-8"))))
-        ghosts = [name for name in named if name not in known]
+        text = path.read_text(encoding="utf-8")
+        named = sorted(set(re.findall(r"`(test_\w+)`", text)))
+        # The refusal below offers "say in the record that the test was since removed and why" as a
+        # remedy, and for one round the check did not honour it: a record that did exactly that was
+        # still refused, because the sentence saying the test is gone contains the name. A refusal
+        # whose instructions do not lead where they say is the same defect this round's task 3 fixed
+        # in `models.py` (CHG-20260831-03). `removed in CHG-…` on the same line is the remedy, and
+        # it costs nothing: the record still has to name the change that removed it, so the reader
+        # has somewhere to go.
+        excused = set(re.findall(r"`(test_\w+)`.*?removed in (?:CHG|ACC)-\d{8}-\d\d", text))
+        excused |= set(re.findall(r"removed in (?:CHG|ACC)-\d{8}-\d\d.*?`(test_\w+)`", text))
+        ghosts = [name for name in named if name not in known and name not in excused]
         if ghosts:
             problems.append(
                 f"{path.stem}: names {len(ghosts)} test(s) that do not exist — {', '.join(ghosts)}. "

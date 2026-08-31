@@ -14,7 +14,9 @@ effects. The three things worth pinning here are the ones a reader cannot check 
 from __future__ import annotations
 
 import json
+import re
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -727,3 +729,25 @@ def test_an_unverified_operation_is_printed(tmp_path, py_stub, capsys):
     cli.main(["--config", str(config), "run", "--undeclared", "allow", "--plan", plan,
               "--confirm", "merge"])
     assert "unverified:" in capsys.readouterr().out
+
+
+def test_every_command_the_cli_tells_you_to_run_exists():
+    """A refusal that names a command nobody can run is worse than one that names none.
+
+    Three refusals in one round pointed somewhere they did not go: a secret scan naming the query
+    string for a credential in the fragment, a ledger lint offering "say the test was removed"
+    when saying so was still refused, and this file telling an operator whose console will not
+    start to run `runner models`, which has never been a subcommand (CHG-20260831-03).
+
+    Backticked only, like the ledger lint's test-name pointer: prose that mentions the runner in
+    passing is not an instruction, and this file discusses the runner constantly.
+    """
+    source = Path(cli.__file__).read_text(encoding="utf-8")
+    named = sorted(set(re.findall(r"`runner ([a-z][a-z-]*)", source)))
+    assert named, "the scan found nothing, so it is pinning nothing"
+
+    parser = cli.build_parser()
+    real = set(next(a.choices for a in parser._actions if a.choices))
+    ghosts = [c for c in named if c not in real]
+    assert not ghosts, (
+        f"cli.py tells the operator to run {ghosts}, and {sorted(real)} is every command there is")

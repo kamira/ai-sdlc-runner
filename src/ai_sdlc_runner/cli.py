@@ -1298,8 +1298,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     # The assignment store. This is where 「model 模型配置」 actually persists -- both halves of it,
     # after the ruling that the registry alone was not what was meant.
+    store_path = args.assignment_store or (Path(args.token_dir) / "config.sqlite")
     try:
-        db = store_mod.connect(args.assignment_store or (Path(args.token_dir) / "config.sqlite"))
+        db = store_mod.connect(store_path)
         if not len(store_mod.load_registry(db)) and len(registry):
             # One-time migration, and additive: the file is left exactly where it was. Without this
             # an operator's existing models would be invisible to every assignment, because a
@@ -1309,6 +1310,22 @@ def cmd_serve(args: argparse.Namespace) -> int:
             registry = store_mod.load_registry(db) if len(store_mod.load_registry(db)) else registry
     except store_mod.StoreError as exc:
         print(f"error: {exc}")
+        return 2
+    except models_mod.ModelError as exc:
+        # `load_registry` rebuilds a `Registry`, and `__post_init__` re-validates every row — so a
+        # refusal widened after something was stored fires on **load**, not on registration, and
+        # takes every other model with it. `ModelError` is not a `StoreError`, so before this it
+        # left as a traceback and the console simply did not start. The identical handler exists on
+        # the assignment-store path above; this one was missed (CHG-20260831-03, risk seat).
+        # And the remedy names the **file**, because there is no models subcommand to send
+        # anybody to — the registry is edited through the console, and the console is the thing that
+        # will not start. A refusal whose instructions do not lead where they say is the defect this
+        # round fixed twice already (CHG-20260831-03, risk seat; the first draft of this very
+        # handler named a subcommand that does not exist).
+        print(f"error: {store_path} holds a model this runner now refuses: {exc}")
+        print(f"       This is a refusal that was widened after that model was stored, so it fires "
+              f"on load and stops every other model with it. Edit or delete that row in "
+              f"{store_path} — it is a sqlite file — then start again.")
         return 2
 
     # The plan's assignment is this change's declaration; the store's is the project's standing one.
@@ -1362,16 +1379,12 @@ def cmd_serve(args: argparse.Namespace) -> int:
     leaving = registry.leaving()
     print(f"models         {len(registry)} registered, {len(leaving)} of which leave this machine"
           + (f": {', '.join(m.id + ' (' + m.reach + ')' for m in leaving)}" if leaving else ""))
-    # `internal` rests on `reach_of`'s judgement that a host with no dot in it is on your own
-    # network. It does not hide the model from the line above — `leaves_this_machine` is
-    # `reach != LOCAL`, so these are counted there — but it does exempt them from the refusal that
-    # an external endpoint must name a key variable. So the grade is stated where the operator can
-    # see which models it was applied to (CHG-20260831-02, risk seat; its claim that these were
-    # missing from the count above did not reproduce, and the exemption is the real cost).
-    bare = registry.graded_internal_by_a_bare_host()
-    if bare:
-        print(f"               {len(bare)} of those are internal only because the host has no dot: "
-              f"{', '.join(m.id for m in bare)} — they need no key variable")
+    # These are graded on a guess, and the guess exempts them from the key-variable refusal. Stated
+    # here because this is where a person reads the count (CHG-20260831-02, risk seat).
+    guessed = registry.internal_by_guess()
+    if guessed:
+        print(f"               {len(guessed)} of those are internal only because somebody wrote a "
+              f"host with no dot: {', '.join(m.id for m in guessed)} — they need no key variable")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

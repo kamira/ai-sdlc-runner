@@ -335,11 +335,12 @@ def test_a_cli_model_needs_no_endpoint_to_have_a_reach():
 
 
 #: URLs that carry a credential somewhere other than `?key=`. Each validated clean for six rounds
-#: and was written to the registry and to `config.sqlite` — the harm `_secret_in_query`'s docstring
+#: and was written to the registry and to `config.sqlite` — the harm `_secret_in_url`'s docstring
 #: says it exists to prevent (CHG-20260831-02, ruled a defect by the round-7 risk seat).
 SECRET_ELSEWHERE = [
     ("https://user:sk-ant-SECRET@api.vendor.com/v1", "a credential in the userinfo"),
     ("https://sk-ant-SECRET@api.vendor.com/v1", "a bare token in the userinfo"),
+    ("https://api.vendor.com/v1?api_key=SECRET", "the original case, still refused"),
     ("https://api.vendor.com/v1#api_key=SECRET", "a key in the fragment, not the query"),
 ]
 
@@ -352,9 +353,72 @@ def test_a_secret_outside_the_query_string_is_still_refused(endpoint, why):
     parts.password` on its own bind URL, so this codebase checked the shape in one place and not
     the other.
     """
-    assert models._secret_in_query(endpoint) is not None, why
+    assert models._secret_in_url(endpoint) is not None, why
 
 
 def test_a_url_with_an_ordinary_fragment_is_not_a_secret():
     """The other direction — the fragment is read, not feared."""
-    assert models._secret_in_query("https://api.vendor.com/v1#section") is None
+    assert models._secret_in_url("https://api.vendor.com/v1#section") is None
+
+
+def test_a_plain_user_name_in_the_endpoint_is_not_a_secret():
+    """`https://alice@host/v1` carries no key, so the refusal's remedy would not apply to it.
+
+    Refusing every userinfo was broader than the finding, and sent the operator to move a
+    credential that does not exist into `key_env` (CHG-20260831-03, risk and conformance seats).
+    """
+    assert models._secret_in_url("https://alice@api.vendor.com/v1") is None
+
+
+def test_the_refusal_names_where_it_found_the_secret():
+    """It said "query string" for a credential in the userinfo and for one in the fragment.
+
+    A fragment is never sent to a server, so that sentence was false as well as misdirecting — and
+    `cli.py` says so four lines from where this change prints. Nothing read the message the
+    operator reads; these do.
+    """
+    for endpoint, place in [("https://u:sk-ant-S@api.v.com/v1", "the userinfo before @"),
+                            ("https://api.v.com/v1#api_key=S", "the fragment"),
+                            ("https://api.v.com/v1?api_key=S", "the query string")]:
+        model = models.Model(id="m", vendor="v", name="n", transport="api", endpoint=endpoint)
+        with pytest.raises(models.ModelError) as caught:
+            models.validate(model)
+        assert place in str(caught.value), f"{endpoint} -> {caught.value}"
+
+
+#: Every endpoint the console's disclosure could name, and whether the bare-host **guess** is what
+#: graded it. Four of these six are `internal` on a fact, not a guess, and the disclosure named
+#: two of them: it restated the rule as `"." not in hostname` instead of calling it, and an IPv6
+#: literal has no dot (CHG-20260831-03, conformance and defect seats).
+BARE_HOST_CASES = [
+    ("http://gpu-box:8000/v1", True, "the guess itself: a single label and nothing else"),
+    ("http://[fd00::1]:8000/v1", False, "RFC 4193 unique-local — a fact, and it has no dot"),
+    ("http://[fe80::1]:8000/v1", False, "link-local — also a fact, also dotless"),
+    ("http://box.local/v1", False, "a suffix somebody wrote deliberately"),
+    ("http://192.168.1.9/v1", False, "RFC 1918"),
+    ("http://127.0.0.1:8000/v1", False, "loopback is LOCAL, and never reaches the rule"),
+]
+
+
+@pytest.mark.parametrize("endpoint,guessed,why", BARE_HOST_CASES,
+                         ids=[c[0] for c in BARE_HOST_CASES])
+def test_the_console_names_only_the_models_the_guess_graded(endpoint, guessed, why):
+    """The line exists to name the models resting on a judgement. Naming others is the same
+    failure as naming none — the operator cannot tell which grade to go and check.
+    """
+    model = models.Model(id="m", vendor="v", name="n", transport="api", endpoint=endpoint)
+    assert models.graded_by_the_bare_host_rule(endpoint) is guessed, why
+
+    named = models.Registry(models=(model,)).internal_by_guess()
+    assert [m.id for m in named] == (["m"] if guessed else []), why
+
+
+def test_the_guess_and_the_grade_cannot_disagree_about_the_rule():
+    """Every endpoint the disclosure names must in fact be graded `internal`.
+
+    The disclosure used to restate `reach_of`'s rule in its own words. It calls it now, and this
+    is what says the two have not drifted apart again.
+    """
+    for endpoint, guessed, why in BARE_HOST_CASES:
+        if guessed:
+            assert models.reach_of("api", endpoint) == models.INTERNAL, why

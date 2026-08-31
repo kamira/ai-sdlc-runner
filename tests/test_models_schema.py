@@ -151,7 +151,7 @@ def test_every_secret_key_the_code_knows_is_refused_in_a_query_string(key):
 
 def test_the_page_is_honest_that_the_secret_list_is_not_exhaustive():
     """A check that refuses what it recognises, and does not claim to recognise everything."""
-    assert models._secret_in_query("https://x.example/v1?auth=abc") is None
+    assert models._secret_in_url("https://x.example/v1?auth=abc") is None
     assert "Not exhaustive" in FLAT and "does not claim to recognise everything" in FLAT
 
 
