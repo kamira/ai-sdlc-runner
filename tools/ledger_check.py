@@ -436,7 +436,9 @@ _PARAGRAPH_BREAK = re.compile(r"\n[\s\u200b\ufeff\u2060]*?\n")
 EXCUSE_WINDOW = 400
 
 _QUOTED_TEST = r"`(test_\w+)`"
-WORD_NAME = r"\w+"
+# `WORD_NAME = r"\w+"` stood here, the one **public** fragment in a block of private ones, with no
+# reader outside the module and, since the rename check was rewritten, none inside it either. A
+# name that deduplicates nothing is a name to look up for no reason (CHG-20260901-04, idiom seat).
 _CHANGE_ID = r"(?:CHG|ACC)-\d{8}-\d{2}"
 
 #: What counts as saying it is gone, and by what. `renamed` alone is not on the list: a renamed
@@ -453,8 +455,28 @@ _CHANGE_ID = r"(?:CHG|ACC)-\d{8}-\d{2}"
 #: substring check — it passed `(../nowhere/CHG-….md)` while refusing three link forms people
 #: write. Resolving a path needs a repo root this function does not have, so the claim was
 #: withdrawn rather than half-kept (CHG-20260831-07, three seats).
-_REMOVED_BY = (r"(?i:(?:removed|deleted|dropped|renamed to\s+`\w+`\s+)\s*(?:in|by)\s+)"
-               r"\[?(" + _CHANGE_ID + r")\]?")
+def _removed_by(rename: bool) -> str:
+    """The phrase that says a test is gone, and names the change that removed it.
+
+    Built here for both variants, because the rename-free one below is this rule minus a single
+    alternative. Spelled out twice it silently unpinned a bound: dropping `(?i:` from one of the
+    two copies left all 49 rows of `GHOST_EXCUSES` green, so the figure the acceptance table
+    records for that widening measured nothing at all. One patch, one figure, is the property that
+    table exists to give (CHG-20260901-04).
+    """
+    verbs = r"removed|deleted|dropped" + (r"|renamed to\s+`\w+`\s+" if rename else "")
+    return r"(?i:(?:" + verbs + r")\s*(?:in|by)\s+)\[?(" + _CHANGE_ID + r")\]?"
+
+
+_REMOVED_BY = _removed_by(rename=True)
+
+#: The same phrase without the rename alternative. A rename that does not resolve makes its
+#: match unusable, and `compiled.match` is non-greedy — so the scan stopped at the *first*
+#: `_REMOVED_BY` and abandoned the offset, losing a longer valid match ending at a plain
+#: `removed in CHG-…` later in the same sentence. That is the shape `_excused`'s docstring
+#: records CHG-20260831-06 as fixing, with the rename check as the new consumer
+#: (CHG-20260901-04, risk seat). Both variants are tried.
+_REMOVED_NO_RENAME = _removed_by(rename=False)
 
 #: What the window may cross: anything that is not a backtick, or another backticked test name.
 #: It used to exclude `.!?` outright, which made `i.e.`, `e.g.`, `…`, `-- gone! --` and
@@ -471,42 +493,75 @@ _NOT_AN_END = r"(?<!\bi\.e)(?<!\be\.g)(?<!\betc)(?<!\bcf)(?<!\bvs)(?<!\bal)(?<!\
 #:
 #: Requiring a **capital** after it was the third formulation and it leaked on this repository's
 #: own house style. Measured under one rule, `[.!?]\s+(.)` — the following character, so a
-#: boundary at end of text is not counted — over the 269 records **as of
-#: CHG-20260901-03** — the two previous statements of this census each said "all" and each excluded
-#: their own change's records, which is the fourth instance of that shape: 4364 boundaries are
-#: followed by a capital and **4148 are not** — 3287 by punctuation or a dash, 431 by a backticked
-#: identifier, 363 by a digit, 67 by a lowercase word. The capital rule saw about half, and the one
-#: shape that still worked was the one `GHOST_EXCUSES` pinned
-#: (CHG-20260901-01, risk seat). The dash exclusion is what keeps `-- gone! --` and
+#: boundary at end of text is not counted — over the 271 records in `docs/changes` and
+#: `docs/acceptance` **at commit `3a49c57`**: 4405 boundaries are followed by a capital and
+#: **4195 are not** — 3323 by punctuation or a dash, 435 by a backticked identifier, 370 by a
+#: digit, 67 by a lowercase word. (`[.!?]\s+` without the capture matches 247 more; that is exactly
+#: the 247 files whose text ends in sentence punctuation, one apiece.) The capital rule saw about
+#: half, and the one shape that still worked was the one `GHOST_EXCUSES` pinned
+#: (CHG-20260901-01, risk seat).
+#:
+#: A **commit**, not a count. Five successive statements of this census gave a denominator that was
+#: the tree *before* the recording change's own two records — the ledger calls CHG-20260901-02's
+#: the fourth instance and CHG-20260901-03's the fifth, and each of those two was written to
+#: correct the one before it — because "the current tree" is not a thing a record can measure about
+#: itself, since writing the record changes it. A named
+#: commit is one `git ls-tree` away and cannot drift, and the claim these figures are here to make
+#: is re-measured over whatever tree it runs on by
+#: `test_the_capital_rule_would_still_miss_about_half`, so it cannot quietly stop being true
+#: (CHG-20260901-04, conformance seat).
+#:
+#: The dash exclusion is what keeps `-- gone! --` and
 #: `-- did anyone read it? --` inside one sentence, and the `.` lookbehind keeps `…` there.
 _SENTENCE_END = re.compile(_NOT_AN_END + r"[.!?](?:\s+(?![-\u2013\u2014])|\s*$)",
                            re.MULTILINE)
 
-def _excused(text: str, name: str, ledger_ids, known=frozenset()) -> bool:
+def _excused(text: str, name: str, ledger_ids, known) -> bool:
     """Does this record say, in the same sentence as the name, that this test was removed and by
     what change?
 
     The refusal offers *"say in the record that the test was since removed and why"* as a remedy,
-    and for three rounds this did not honour what people write. **Six** bounds, each pinned by rows
-    of `GHOST_EXCUSES` that go red when it is removed — a paragraph break (6), the sentence rule
-    (5), `EXCUSE_WINDOW` (1), a change id that names a record that exists (1), no backticks crossed
-    except test names (2), and the name matched case-sensitively (1). Case-insensitivity of the
-    **verbs** is a widening, not a bound, and is not one of the six.
+    and for three rounds this did not honour what people write. **Seven** bounds, each pinned by
+    rows of `GHOST_EXCUSES` that go red when it is removed — a paragraph break (6), the sentence
+    rule (7), `EXCUSE_WINDOW` (1), a change id that names a record that exists (1), no backticks
+    crossed except test names (2), the name matched case-sensitively (1), and a rename that is
+    *this* test's and resolves (6). Case-insensitivity of the **verbs** is a widening, not a bound
+    (2), and is not one of the seven.
+
+    Every one of those figures is the count under one specific edit, and three of them were wrong
+    for three rounds in three different ways: the sentence rule read `5` because it was measured
+    on Windows through a fixture that translated its own newlines; the id bound read `8` because
+    the edit that produced it — `if (True or names in ledger_ids and …` — short-circuits two other
+    bounds along with it, `and` binding tighter than `or`; and the rename bound read `3` before
+    this round added the rows that separate its two halves. The patch that produces each figure is
+    recorded beside it in ACC-20260901-04, because the number alone has not once survived a round
+    (CHG-20260901-04, conformance seat).
+
+    `known` — the set of test names that do exist — is **required**. It defaulted to an empty
+    frozenset for one round, and the single caller has always passed it, so the default was reached
+    by nobody; what it would have done if reached is refuse every rename, silently, since a rename
+    resolves by looking its new name up in that set. A default that is never taken cannot be tested
+    and cannot be right (CHG-20260901-04, idiom seat).
 
     Anchored at each place a match can **start** rather than run through `re.finditer` over the
     whole text. `finditer` is non-overlapping, so a long match that failed the length check
     consumed the region and the short valid match inside it was never offered: a record that
-    mentioned a test
-    twice in one paragraph was refused for a reason no operator could reason about, and the
-    refusal it got was one they had already followed (CHG-20260831-06, risk seat).
+    mentioned a test twice in one paragraph was refused for a reason no operator could reason
+    about, and the refusal it got was one they had already followed (CHG-20260831-06, risk seat).
 
     The bystander case stays open and bounded: a live test named inside a run of names that ends
     in a removal note is excused with them, because a list and a bystander are the same sentence
     to a regex.
     """
     quoted = "`" + re.escape(name) + "`"
-    for pattern, first in ((quoted + _SPAN + _REMOVED_BY, quoted),
-                           (_REMOVED_BY + _SPAN + quoted, _REMOVED_BY)):
+    # Four patterns: the phrase before or after the name, with and without the rename alternative.
+    # The rename-free pair is what stops a foreign rename inside a sentence from swallowing the
+    # offset and hiding the plain `removed in CHG-…` further along it. `renamed` says which pair a
+    # match came from, so the resolution check runs only on matches that are actually renames.
+    for pattern, first, renamed in ((quoted + _SPAN + _REMOVED_BY, quoted, True),
+                                    (_REMOVED_BY + _SPAN + quoted, _REMOVED_BY, True),
+                                    (quoted + _SPAN + _REMOVED_NO_RENAME, quoted, False),
+                                    (_REMOVED_NO_RENAME + _SPAN + quoted, _REMOVED_NO_RENAME, False)):
         # Case-insensitivity is scoped to the verbs, inside `_REMOVED_BY`. Applied to the whole
         # pattern it also matched a differently-cased spelling of the **name** — so a record citing
         # `TEST_GONE` excused the ghost `test_gone`, which `check_named_tests_exist` reports
@@ -532,18 +587,29 @@ def _excused(text: str, name: str, ledger_ids, known=frozenset()) -> bool:
             # here would need the repo root this function does not have, so the claim is withdrawn
             # rather than half-kept (CHG-20260831-07, conformance, defect and risk seats).
             names = found.group(1)
-            # A rename has to name a test that **exists**, or it gives the reader nowhere to go —
-            # which is the whole argument for accepting the phrasing at all. It was checked against
-            # nothing, so `renamed to `helper` in CHG-…` and even `renamed to `x`` excused a ghost
-            # (CHG-20260901-03, risk seat).
-            renamed = re.search(r"renamed to `(" + WORD_NAME + r")`", said, re.IGNORECASE)
-            if renamed and (not renamed.group(1).startswith("test_")
-                            or (known and renamed.group(1) not in known)):
-                # Two bounds, because the caller may not pass `known`. A rename to something that is
-                # not test-shaped is not a rename of this test at all: "The helper was renamed to
-                # `some_helper` in CHG-…; `test_gone` is unaffected." excused the ghost, in a
-                # sentence saying outright that it did not (CHG-20260901-03, defect seat).
-                continue
+            # `renamed to X in CHG-…` is on the accepted list only because it gives the reader
+            # somewhere to go, so two things have to hold: the rename must be **this test's**, and
+            # `X` must be a name the checker can find. Two halves, each with its own rows — 1 red
+            # for the scoping, 4 for the resolution, 6 for both (ACC-20260901-04).
+            #
+            # It was checked against nothing at first, so `renamed to `helper` in CHG-…` and even
+            # `renamed to `x`` excused a ghost (CHG-20260901-03, risk seat). The repair then went
+            # wrong three ways at once (CHG-20260901-04, defect and risk seats): a literal single
+            # space where the rule itself writes `\s+`, so two spaces or a line wrap walked past it
+            # in a ledger where every record is hard-wrapped; `re.search` over the whole sentence,
+            # so an unrelated **helper**'s rename decided this test's excuse in either direction;
+            # and `startswith("test_")` as a third bound that no row could tell apart from the
+            # must-resolve one.
+            #
+            # Forward order only. "renamed to X … `the ghost`" is a sentence about renaming X, and
+            # read as this test's rename it excused a ghost in a sentence saying outright that the
+            # ghost was unaffected. Case-sensitive, because a differently-cased spelling is a
+            # different name — the same reason the constants block gives for `quoted`.
+            if renamed:
+                phrase = r"renamed to\s+`(\w+)`"
+                mine = re.search(quoted + _SPAN + phrase, said)
+                if re.search(phrase, said) and (mine is None or mine.group(1) not in known):
+                    continue
             if (names in ledger_ids and len(said) <= EXCUSE_WINDOW
                     and not _PARAGRAPH_BREAK.search(said)):
                 return True
