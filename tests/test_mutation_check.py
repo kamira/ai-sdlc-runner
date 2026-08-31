@@ -220,7 +220,11 @@ def test_a_mutation_whose_module_will_not_import_is_not_a_catch(tmp_path):
     try:
         caught = mutation_check.run(probe, {"tests/test_run_provenance.py": True})
     finally:
-        target.write_text(original, encoding="utf-8", newline="")
+        # `mutation_recovery.write`, not `Path.write_text(newline=…)`: that keyword is 3.10+, and
+        # this suite runs on 3.9. It failed **inside the `finally`**, so the restore did not happen
+        # and the mutated file stayed on disk for the rest of that pytest process — caught by CI on
+        # both 3.9 jobs, not here (CHG-20260901-01). `write` is also what `run` itself uses.
+        mutation_recovery.write(target, original)
 
     assert caught is False, "a module that did not import measured nothing about the named class"
     assert target.read_text(encoding="utf-8") == original
