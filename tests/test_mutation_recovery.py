@@ -867,6 +867,14 @@ DESTRUCTIVE_SHAPES = [
     ({"owner": REMOVE_KEY}, "no owner key at all"),
     ({"original": REMOVE_KEY}, "no original key at all"),
     ({"path": REMOVE_KEY}, "no path key at all"),
+    # Two faults at once. The empty-`path` clause was gated on nothing else being wrong, so a
+    # record that was both missing `original` and carrying a blank `path` was refused for one of
+    # them and told about the other never — a diagnosis that is a strict subset of what the gate
+    # decided, and the remedy beside it then said "the other fields were read and are intact"
+    # about a `path` of `""` (CHG-20260901-04, conformance seat).
+    ({"path": "", "original": REMOVE_KEY}, "an empty path and no original"),
+    ({"path": "", "owner": "nope"}, "an empty path and an owner that is a string"),
+    ({"original": REMOVE_KEY, "owner": REMOVE_KEY}, "neither an original nor an owner"),
 ]
 
 
@@ -905,13 +913,27 @@ def test_recover_destroys_nothing_it_cannot_account_for(tmp_path, monkeypatch, o
     # The **diagnosis line**, not anywhere in the message. `field in said` was satisfied by the
     # remedy paragraph, which named `owner` unconditionally: sabotaging the diagnosis to say
     # "something is not there" left nine of eleven rows green (CHG-20260901-03, risk seat).
-    field = next(iter(override))
+    # **Every** field the shape breaks, not the first one. `next(iter(override))` passed a record
+    # broken two ways on the strength of one of them (CHG-20260901-04, conformance seat).
     diagnosis = said.split(NEWLINE)[0]
-    assert field in diagnosis, (
-        f"{shape}: the first line has to name {field!r} — {diagnosis!r}")
+    for field in override:
+        assert field in diagnosis, (
+            f"{shape}: the first line has to name {field!r} — {diagnosis!r}")
     assert "cannot be read" not in said, (
         f"{shape}: this record reads as JSON; saying it does not sends the operator to the wrong "
         f"thing — {said!r}")
+
+    # A remedy that says *delete* before it says *restore* destroys the only copy. Measured in a
+    # scratch repo with the mutation staged: `git status` shows `M  target.py`, `git diff` is
+    # **empty**, the file is still mutated and the record is gone. That was the advice this gate
+    # gave for a missing `owner`, twelve lines above the rule it breaks — *"a refusal that also
+    # throws away the original strands the file for good"* (CHG-20260901-04, risk seat).
+    if "delete" in said:
+        assert "back by hand" in said, (
+            f"{shape}: it says to delete the record and never says to put the original back "
+            f"first — {said!r}")
+        assert said.index("delete") > said.index("back by hand"), (
+            f"{shape}: delete comes before restore — {said!r}")
 
 
 def test_write_refuses_a_non_string_before_it_truncates(tmp_path):

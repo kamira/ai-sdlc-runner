@@ -305,7 +305,10 @@ def recover(quiet: bool = False) -> Optional[str]:
     # Only these four. Iterating everything present refused a record carrying a spare key of any
     # other type, with recovery unreachable until the operator guessed which unread field it was.
     READS = ("path", "original", "mutated", "owner")
-    missing = sorted(k for k in READS if k not in record) if isinstance(record, dict) else list(READS)
+    # `sorted` on both arms, so the one message cannot name the same four fields in two different
+    # orders — which it did for a JSON array: READS order in the diagnosis, alphabetical in the
+    # remedy (CHG-20260901-04).
+    missing = sorted(k for k in READS if k not in record) if isinstance(record, dict) else sorted(READS)
     wrong = sorted(k for k in READS if isinstance(record, dict) and k in record
                    and (not isinstance(record[k], str if k != "owner" else int)
                         or isinstance(record[k], bool)))
@@ -314,26 +317,50 @@ def recover(quiet: bool = False) -> Optional[str]:
         # printed "it cannot be read … so this cannot tell which file was mutated or what it held"
         # about a record whose `path`, `original` and `mutated` were all read and all fine, which
         # sends the operator looking for the wrong thing (CHG-20260901-02, defect and risk seats).
-        # The remedy names **the field that is actually wrong**. It named `owner` for every
-        # fault — a record missing `original`, a record with a blank `path`, a JSON array with
-        # no fields at all — and told the operator to repair a field that was fine. Half of task
-        # 7 last round: the diagnosis moved into the first sentence and the explanation did not
-        # follow it (CHG-20260901-03, risk seat).
-        broken = missing + wrong or ["path"]
+        #
+        # Four rounds have gone into what this message says, each one fixing the last, so the four
+        # rules it has to keep are written out:
+        #
+        # 1. It names **the field that is actually wrong**. It named `owner` for every fault — a
+        #    record missing `original`, a blank `path`, a JSON array with no fields at all — and
+        #    told the operator to repair a field that was fine (CHG-20260901-03, risk seat).
+        # 2. It names **every** fault it decided on. The blank-`path` clause was printed only when
+        #    nothing else was wrong, so a record both missing `original` and carrying an empty
+        #    `path` was refused for one and told about the other never — a diagnosis that is a
+        #    strict subset of what the gate decided (CHG-20260901-04, conformance seat).
+        # 3. It **never says delete before it says restore**. The first split told the operator,
+        #    for a missing `owner`, to "delete the record and use `git status` and `git diff`".
+        #    Measured in a scratch repo with the mutation staged, that leaves `git diff` empty,
+        #    the file still mutated and the record gone — the only copy of the original destroyed
+        #    by following the advice, in the case this module's own pid-reuse refusal warns about,
+        #    against the rule stated below: *"a refusal that also throws away the original strands
+        #    the file for good"* (CHG-20260901-04, risk seat).
+        # 4. It does not promise a repair that cannot work. A record whose `original` is missing
+        #    cannot be repaired from itself, so "repair it and re-run" returns the same refusal
+        #    forever. Git is where that text is, and the record is kept either way.
+        blank_path = (isinstance(record, dict) and "path" not in missing and "path" not in wrong
+                      and not record["path"].strip())
+        broken = sorted(set(missing) | set(wrong) | ({"path"} if blank_path else set()))
+        recoverable = "original" not in broken and "path" not in broken
         said = (f"REFUSING to act on {IN_FLIGHT.name}: it reads as JSON, and "
                 + (f"the field(s) {missing} are not there. " if missing else "")
                 + (f"the field(s) {wrong} are not the type they must be. " if wrong else "")
-                + (f"its `path` is empty. " if not missing and not wrong else "")
-                + f"The file is **kept**.\n"
+                + (f"its `path` is empty. " if blank_path else "")
+                + f"The file is **kept** — it may hold the only copy of the original." + "\n"
                 + (f"  `owner` is the field that says whether a run is still mutating this "
                    f"tree. Without a usable one this cannot tell a killed run from a live one, "
-                   f"and putting the `original` back by hand may overwrite a live run's "
-                   f"source — so **do not invent a pid**. If you know no run is active, delete "
-                   f"the record and use `git status` and `git diff` to see what was left "
-                   f"mutated.\n"
-                   if "owner" in broken else
-                   f"  Repair {broken} in {IN_FLIGHT.name} — the other fields were read and are "
-                   f"intact — then run `--recover` again.\n"))
+                   f"so it will not act — **do not invent a pid**. "
+                   if "owner" in broken else "  ")
+                # "cannot say what {broken} held" was wrong for the shape that reaches it most: a
+                # record whose `path` is present and **empty** does hold the field. What is true
+                # of every branch here is that those fields are unusable, so the record cannot
+                # lead you back (CHG-20260901-04).
+                + (f"Put the `original` this record names back by hand, then delete it."
+                   if recoverable else
+                   f"With {broken} unusable this record cannot lead you back to the original, so "
+                   f"`git status` and `git diff` on `src/` and `tools/` are what show you what a "
+                   f"killed run left. Check staged changes too: a staged mutation shows in "
+                   f"neither."))
         return _refuse(said, quiet)
 
     path = Path(record["path"])

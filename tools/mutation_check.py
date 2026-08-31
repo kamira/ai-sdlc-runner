@@ -61,6 +61,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional
 
@@ -1775,14 +1776,17 @@ def _import_fails(path: Path) -> str:
         # `test_every_mutated_file_still_imports_before_it_is_mutated` runs every target now.
         module, where = path.stem, path.parent.name
     stmt = f"import {module}"
-    # `-B`: no bytecode written, none trusted. `__pycache__` is validated on `int(st_mtime)` and
-    # size, so a same-size rewrite inside one second imports the stale `.pyc` — the defect seat
-    # demonstrated the mechanism on a synthetic module and could not land the shipped harness in
-    # the window (the real spacing is 0.8–2.4s), so this is a latent hole closed cheaply rather
-    # than a measured failure (CHG-20260901-03, defect seat).
-    probe = subprocess.run([sys.executable, "-B", "-c", stmt], capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", cwd=REPO,
-                           env={**os.environ, "PYTHONPATH": str(REPO / where)})
+    # A **fresh cache prefix**, not `-B`. `__pycache__` is validated on `int(st_mtime)` plus size,
+    # so a same-size rewrite inside one second imports the stale `.pyc`. `-B` was the first fix and
+    # it does not close that: it stops bytecode being *written*, never read. Measured — a planted
+    # same-size, same-mtime rewrite imports clean under `python` and under `python -B` alike, and
+    # refuses only when the cache prefix points somewhere with nothing in it (CHG-20260901-04,
+    # defect seat, against this comment's own claim of "none trusted").
+    with tempfile.TemporaryDirectory(prefix="mutation-probe-") as cache:
+        probe = subprocess.run([sys.executable, "-c", stmt], capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", cwd=REPO,
+                               env={**os.environ, "PYTHONPATH": str(REPO / where),
+                                    "PYTHONPYCACHEPREFIX": cache})
     if probe.returncode == 0:
         return ""
     return (probe.stderr.strip().splitlines() or ["import failed"])[-1]

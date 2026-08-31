@@ -144,6 +144,8 @@ def test_a_change_with_no_status_section_is_reported(tmp_path):
 # --------------------------------------------------------------------------------------
 
 import io
+import re
+
 import pytest  # noqa: E402
 
 
@@ -687,6 +689,29 @@ GHOST_EXCUSES = [
     # The widening that let `renamed to `<any>`` through excused this (CHG-20260901-03, defect seat).
     ("The helper was renamed to `some_helper` in CHG-20260901-01; `test_gone` is unaffected.", False,
      "a helper rename that says the ghost is unaffected"),
+    # The gate was written with a literal single space where `_REMOVED_BY` uses `\s+`, so two spaces
+    # or a line wrap walked past it — in a ledger where every record is hard-wrapped, and where the
+    # wrapped row above was green because the gate never fired rather than because the name resolved
+    # (CHG-20260901-04, defect seat).
+    ("`test_gone` was renamed to  `helper` in CHG-20260901-01.", False,
+     "two spaces before a name that does not resolve"),
+    # The scoping half, which the rows above cannot separate from the must-resolve half: here the
+    # renamed name **does** resolve, so only "is this rename about this test?" can refuse it.
+    ("The fixture was renamed to `test_this_repos_own_ledger_passes` in CHG-20260901-01; "
+     "`test_gone` is unaffected.", False,
+     "someone else's rename, to a name that resolves"),
+    # A foreign rename inside an otherwise valid removal note. The rename check used to `continue`
+    # off the whole offset, so the longer match ending at the plain `removed in CHG-…` further
+    # along the sentence was never offered — the shape `_excused`'s docstring records
+    # CHG-20260831-06 as fixing, with the rename check as the new consumer (CHG-20260901-04, risk).
+    ("`test_gone` was, like `test_old` which was renamed to `test_never_written` in "
+     "CHG-20260901-01, removed in CHG-20260901-01.", True,
+     "a foreign rename beside a valid removal note"),
+    ("`test_gone` was renamed to" + NEWLINE + "`test_never_written` in CHG-20260901-01.", False,
+     "wrapped, and the name does not resolve"),
+    ("`test_gone` was renamed to" + NEWLINE
+     + "`test_this_repos_own_ledger_passes` in CHG-20260901-01.", True,
+     "wrapped, and the name resolves"),
     ("`test_gone` was renamed in CHG-20260901-01.", False, "renamed, with no new name"),
     # Ordinary prose punctuation. Excluding `.!?` outright refused all five of these, every one a
     # remedy the refusal invites (CHG-20260831-07, risk seat).
@@ -699,10 +724,13 @@ GHOST_EXCUSES = [
      "CHG-20260901-01.", False, "a sentence about something else"),
     # Requiring a **capital** after the full stop was the third formulation of this bound, and it
     # leaked on this repository's own house style. Measured under `[.!?]\s+(.)` — the following
-    # character, so end-of-text boundaries are not counted — over the
-    # 269 records as of CHG-20260901-03: 4364 boundaries follow a capital and 4148 do not — 3287
-    # punctuation or a dash, 431 a backticked identifier, 363 a digit, 67 a lowercase word. The
-    # capital rule saw about half, and the one shape that still worked was the only one pinned.
+    # character, so end-of-text boundaries are not counted — over the 271 records at commit
+    # `3a49c57`: 4405 boundaries follow a capital and 4195 do not — 3323 punctuation or a dash, 435
+    # a backticked identifier, 370 a digit, 67 a lowercase word. The capital rule saw about half,
+    # and the one shape that still worked was the only one pinned. A commit rather than a count,
+    # and the claim itself re-measured by `test_the_capital_rule_would_still_miss_about_half`
+    # below, because five statements of this census in a row named a tree that excluded the
+    # recording change's own records (CHG-20260901-04, conformance seat).
     ("`test_gone` is the evidence. `test_live` was deleted in CHG-20260901-01.", False,
      "a next sentence opening with a backticked identifier"),
     ("`test_gone` is the evidence. the vendored skill was deleted in CHG-20260901-01.", False,
@@ -799,6 +827,41 @@ def test_the_remedy_the_ghost_refusal_offers_actually_works(tmp_path, sentence, 
     else:
         assert problems, f"{why}: this excuses nothing and must not be accepted"
         assert "removed and why" in problems[0], "and the refusal has to say what to do"
+
+
+def test_the_capital_rule_would_still_miss_about_half():
+    """The census `_SENTENCE_END`'s comment argues from, re-measured over whatever tree this runs on.
+
+    Five statements of that census in a row published a denominator that was the tree **before**
+    the recording change's own two records. The ledger calls CHG-20260901-02's the fourth instance
+    and CHG-20260901-03's the fifth, and each of those two was written to correct the one before
+    it — which is what finally made the shape legible: "the current tree" is not something a record
+    can measure about itself, because writing the record changes it. The comment names a commit
+    now, which is checkable in one `git ls-tree` and cannot drift.
+
+    That leaves the *claim* unpinned, and the claim is the part that matters: requiring a capital
+    after the full stop was the third formulation of this bound and it leaked on this repository's
+    own house style. This asserts the claim, not the count — no figure here goes stale when a
+    record is added, and if the house style ever changes enough that a capital really would be a
+    safe proxy for a sentence end, this is what says so (CHG-20260901-04, conformance seat).
+    """
+    boundary = re.compile(r"[.!?]\s+(.)")
+    records = sorted((REPO / "docs" / "changes").glob("*.md"))
+    records += sorted((REPO / "docs" / "acceptance").glob("*.md"))
+    assert len(records) > 200, "the ledger is not where this expects it"
+
+    followers = [f for path in records
+                 for f in boundary.findall(path.read_text(encoding="utf-8"))]
+    not_capital = [f for f in followers if not f.isupper()]
+
+    assert len(followers) > 5000, "too few boundaries for the proportion to mean anything"
+    # A third would still be a leak worth the bound; the measured figure at `3a49c57` is 4195 of
+    # 8600, a little under half. The assertion is loose on purpose — it is the direction that is
+    # being pinned, and a tight bound here would be one more figure to correct every round.
+    assert len(not_capital) / len(followers) > 0.33, (
+        "a capital after the full stop would now be a fair proxy for a sentence end here — "
+        "%d of %d boundaries are followed by one" % (len(followers) - len(not_capital),
+                                                     len(followers)))
 
 
 #: Every spelling of "this acceptance's finding was never true". Each must reopen its change.

@@ -18,8 +18,10 @@ the tool now, and why this file exists — the tool had no tests at all.
 """
 from __future__ import annotations
 
-import io
 import ast
+import io
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -228,6 +230,49 @@ def test_a_mutation_whose_module_will_not_import_is_not_a_catch(tmp_path):
 
     assert caught is False, "a module that did not import measured nothing about the named class"
     assert target.read_text(encoding="utf-8") == original
+
+
+def test_the_import_probe_is_not_answered_by_a_stale_pyc(tmp_path, monkeypatch):
+    """A module that no longer imports must not be reported as importing.
+
+    `__pycache__` is validated on `int(st_mtime)` plus size, so a same-size rewrite inside the same
+    second is served from the stale `.pyc`. That turns a `BROKE` — the outcome that says the probe
+    learned nothing — into a `CAUGHT`, which is the harness reporting a result about code it never
+    ran.
+
+    `-B` was shipped for one round as the fix, under a comment reading *"no bytecode written, none
+    trusted"*. It does not close it: `-B` stops bytecode being **written** and never stops a
+    `.pyc` being **read**. Measured on this fixture — plain `python` and `python -B` both import
+    the rewritten module cleanly, and only a cache prefix pointing somewhere empty refuses
+    (CHG-20260901-04, defect and risk seats).
+
+    Written against `_import_fails` rather than a synthetic probe, because the claim under review
+    is about the shipped harness, and the seat that first raised the mechanism could not land the
+    shipped harness inside the window.
+    """
+    where = tmp_path / "tools"
+    where.mkdir()
+    module = where / "probe_stale.py"
+    good, bad = "VALUE = 1", "raise ValueError('the stale pyc was trusted')"
+    width = max(len(good), len(bad))
+    module.write_text(good.ljust(width) + "\n", encoding="utf-8")
+    monkeypatch.setattr(mutation_check, "REPO", tmp_path)
+
+    # Compile it the ordinary way, so a real `__pycache__` sits beside the source.
+    seed = subprocess.run([sys.executable, "-c", "import probe_stale"], capture_output=True,
+                          text=True, env={**os.environ, "PYTHONPATH": str(where)})
+    assert seed.returncode == 0, seed.stderr
+    assert list(where.glob("__pycache__/*.pyc")), "nothing was cached, so nothing is being pinned"
+
+    # Same size, same second: the two things the cache validates.
+    stat = module.stat()
+    module.write_text(bad.ljust(width) + "\n", encoding="utf-8")
+    os.utime(module, (stat.st_atime, stat.st_mtime))
+    assert module.stat().st_size == stat.st_size
+
+    assert mutation_check._import_fails(module), (
+        "the probe imported a module that raises on import, which means it answered from the "
+        "cached bytecode of the version before the rewrite")
 
 
 def test_every_mutated_file_still_imports_before_it_is_mutated():
