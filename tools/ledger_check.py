@@ -423,62 +423,75 @@ def _tests_that_exist(repo: Path) -> set:
 
 
 #: A paragraph break ends the window: an explanation belongs in one paragraph with the name.
-#: A **whitespace-only** line is one — `"\\n\\n"` as a literal missed a line carrying a single space
-#: or a tab, so any editor that leaves trailing whitespace laundered a ghost across a paragraph
-#: break (CHG-20260831-05, defect seat).
-_PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
+#: `\\s`, not `[ \\t]` — a line carrying U+00A0, U+3000 (which is what a Chinese IME emits, in a
+#: ledger written partly in Chinese), a form feed or a zero-width space crossed the break and
+#: laundered a ghost. The same defect the round before had fixed for a plain space, one character
+#: class over (CHG-20260831-06, risk seat).
+_PARAGRAPH_BREAK = re.compile(r"\n\s*?\n")
 
-#: How far from the name the phrase may sit, in **characters**, checked after the match. `{0,200}`
-#: bounds *repetitions* of an alternation whose second branch swallows a whole backticked name, so
-#: the "at most 200 characters" this acceptance disclosed measured 3150 in the round-10
-#: conformance seat's hands — fifteen times the number a reader was given to judge by
-#: (CHG-20260831-05, VETO).
+#: How far from the name the phrase may sit, in **characters**, checked after the match.
 EXCUSE_WINDOW = 400
 
-#: Ordinary raw strings, like the five other regexes in this file. The `chr(92)` spelling that
-#: stood here for one round justified itself as "this file is edited through tooling that eats a
-#: lone backslash" — and `_tests_that_exist`, six lines above, matches `test_\\w+` with a plain
-#: backslash and always has. The tooling that ate them was the author's, not the file's
-#: (CHG-20260831-05, idiom seat).
-TICK_LITERAL = chr(96)
 _QUOTED_TEST = r"`(test_\w+)`"
-#: What counts as saying it is gone. Four verbs, because the refusal says "say in the record
-#: that the test was **since removed** and why" and does not name a phrasing — `deleted in`,
-#: `dropped in` and `renamed in` were all refused, and so was the markdown-link form
-#: `[CHG-…](../changes/CHG-….md)`, in a ledger written in markdown, because `]` is not a digit
-#: (CHG-20260831-05, defect seat).
-_REMOVED_BY = (r"(?:removed|deleted|dropped|renamed)\s+(?:in|by)\s+"
-               r"\[?((?:CHG|ACC)-\d{8}-\d{2})\]?")
 
-#: What the window may cross: anything that is not a backtick, or another backticked test name.
-#: The second branch is what makes "`test_a`, `test_b` and `test_c` were removed in CHG-X" work,
-#: and it is also what leaves the bystander case open — see `_excused`.
-_SPAN = r"(?:[^`]|`test_\w+`)*?"
+#: What counts as saying it is gone, and by what. Three verbs, not four: `renamed` was accepted
+#: for one round and it excuses the case `check_named_tests_exist` exists to catch — a renamed
+#: test still exists, the record still points at a name that resolves to nothing, and the sentence
+#: reads like a pointer. Its own docstring names that case first. A record may still say it, in
+#: the form `renamed to `test_x` in CHG-…`, and then the new name is what the reader follows
+#: (CHG-20260831-06, risk seat).
+#:
+#: The id is captured twice on purpose: link **text** and link **href**. Validating the text alone
+#: let `[CHG-20260901-01](../nowhere/nothing.md)` through — a dead link with a live-looking id, in
+#: the check whose whole subject is pointers that do not resolve (risk seat).
+_CHANGE_ID = r"(?:CHG|ACC)-\d{8}-\d{2}"
+_REMOVED_BY = (r"(?:removed|deleted|dropped)\s+(?:in|by)\s+"
+               r"(?:\[(" + _CHANGE_ID + r")\]\(([^)]*)\)|(" + _CHANGE_ID + r"))")
+
+#: What the window may cross: anything that is not a backtick or a sentence end, or another
+#: backticked test name. **Sentence** and not paragraph, because a paragraph-sized window excused
+#: a name from a sentence about something else entirely — "`test_gone` is the evidence for the
+#: halt rule. The vendored skill was deleted in CHG-…" was accepted, and records here say things
+#: were deleted and dropped constantly (CHG-20260831-06, defect seat). A dot followed by a word
+#: character is not a sentence end, so `CHG-….md` and `1.5` do not close the window.
+_SPAN = r"(?:[^`.!?]|`test_\w+`|\.(?=\w))*?"
 
 
 def _excused(text: str, name: str, ledger_ids) -> bool:
-    """Does this record say, next to the name itself, that this test was removed and by what?
+    """Does this record say, in the same sentence as the name, that this test was removed and by
+    what change?
 
-    The refusal below offers *"say in the record that the test was since removed and why"* as a
-    remedy, and for one round the check did not honour it at all: a record that did exactly that
-    was still refused, because the sentence saying the test is gone contains the name. The first
-    fix honoured it and then over-honoured it — `.*?` from the first backticked name swallowed the
-    span, so a sentence naming two removed tests still failed; a *live* test cited earlier on the
-    same line was excused as a bystander; and `removed in CHG-19700101-99`, an id that has never
-    existed, laundered anything beside it (CHG-20260831-04, defect and risk seats).
+    The refusal offers *"say in the record that the test was since removed and why"* as a remedy,
+    and for two rounds this did not honour what people write. Four bounds, each pinned by a row of
+    `GHOST_EXCUSES`: one **sentence** (not one paragraph), at most `EXCUSE_WINDOW` characters, no
+    backticks crossed except test names, and a change id that names a record that exists — in the
+    link href as well as the link text.
 
-    Three things bound it, and the third is the one that was claimed and not held: the window stays
-    in one paragraph, the change id must be a record that exists, and the whole match must be at
-    most `EXCUSE_WINDOW` characters. Supporting the list form is what leaves the bystander case
-    open — a live test named inside such a run is excused with it — and that is bounded here rather
-    than closed, because a list and a bystander are the same sentence to a regex.
+    Scanned per occurrence of the name rather than by `re.finditer` over the whole text.
+    `finditer` is non-overlapping, so a long match that failed the length check consumed the
+    region and the short valid match inside it was never offered: a record that mentioned a test
+    twice in one paragraph was refused for a reason no operator could reason about, and the
+    refusal it got was one they had already followed (CHG-20260831-06, risk seat).
+
+    The bystander case stays open and bounded: a live test named inside a run of names that ends
+    in a removal note is excused with them, because a list and a bystander are the same sentence
+    to a regex.
     """
-    quoted = TICK_LITERAL + re.escape(name) + TICK_LITERAL
+    quoted = "`" + re.escape(name) + "`"
     for pattern in (quoted + _SPAN + _REMOVED_BY, _REMOVED_BY + _SPAN + quoted):
-        for found in re.finditer(pattern, text):
+        # Anchored at each occurrence in turn, so one over-long match cannot hide a valid one.
+        for at in range(len(text)):
+            found = re.compile(pattern).match(text, at)
+            if found is None:
+                continue
             said = found.group(0)
-            if (len(said) <= EXCUSE_WINDOW and not _PARAGRAPH_BREAK.search(said)
-                    and found.group(1) in ledger_ids):
+            linked, href, bare = found.groups()
+            # A bare id is checked once. A markdown link is checked twice — the text **and** the
+            # href — because a reader clicks the href, and validating the text alone let
+            # `[CHG-20260901-01](../nowhere/nothing.md)` through.
+            names = bare or (linked if linked and href and linked in href else None)
+            if (names in ledger_ids and len(said) <= EXCUSE_WINDOW
+                    and not _PARAGRAPH_BREAK.search(said)):
                 return True
     return False
 

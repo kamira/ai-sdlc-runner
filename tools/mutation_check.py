@@ -913,7 +913,12 @@ MUTATIONS: List[Mutation] = [
         'console', 'a non-loopback Host reaches the router, so DNS rebinding works again',
         SRC / 'server.py',
         '            if not _loopback_host(self.headers.get("Host")):',
-        '            if True:',
+        # `if False:`, which lets the request through — what the description says. `if True:` refuses
+        # **every** request including loopback, so the console is bricked and this reports CAUGHT off
+        # 28 failures about anything else; deleting every rebinding test left the group green. It was
+        # flipped here by a `replace(..., 1)` that matched the wrong occurrence while repointing a
+        # different mutation (CHG-20260831-06, conformance seat VETO and idiom seat).
+        '            if False:',
         'tests/test_server.py'),
 
     Mutation(
@@ -1278,8 +1283,19 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         'closure', 'the excuse stops being bounded, so any removal note launders a ghost',
         TOOLS / 'ledger_check.py',
-        '            if (len(said) <= EXCUSE_WINDOW and not _PARAGRAPH_BREAK.search(said)',
-        '            if False:',
+        # The **whole** condition, both lines. Anchoring the first line alone orphaned the
+        # continuation `and found.group(1) in ledger_ids):`, so the mutated file raised
+        # `SyntaxError: unmatched ')'` and every test in the module died on import — CAUGHT, and
+        # proving only that the file compiles (CHG-20260831-06, idiom seat). `if True:` and not
+        # `if False:`, because over-excusing is what `says` describes; `if False:` excuses nothing,
+        # which is the opposite defect.
+        # The **whole** condition, both lines. Anchoring the first line alone orphaned the
+        # continuation and the file stopped parsing, so this reported CAUGHT while proving
+        # only that `ledger_check.py` compiles — now held by
+        # `test_no_shipped_mutation_makes_its_file_unparsable` (CHG-20260831-06, all four seats).
+        '            if (names in ledger_ids and len(said) <= EXCUSE_WINDOW\n'
+        '                    and not _PARAGRAPH_BREAK.search(said)):',
+        '            if True:',
         'tests/test_ledger_check.py'),
 
     Mutation(
@@ -1862,8 +1878,15 @@ def main() -> int:
         raise SystemExit(str(blocked)) from None
     print()
     if missed:
-        print(f"{len(missed)} of {len(chosen)} NOT caught — a test names a guarantee it does not "
-              f"check:")
+        # "NOT caught" is one of four outcomes `run` returns False for, and the other three are not
+        # a missing test at all: `ANCHOR GONE` means the code moved, `AMBIGUOUS` means the anchor
+        # appears twice, `NO BASELINE` means the file was already red. Saying "a test names a
+        # guarantee it does not check" about those sends a reader to write a test for something
+        # that may already be pinned, while the real fault goes unnamed. The per-mutation lines
+        # above say which is which; this one stops claiming to know (CHG-20260831-06, defect seat).
+        print(f"{len(missed)} of {len(chosen)} did not report CAUGHT. Read the lines above for "
+              f"which: a missing test, a stale anchor, a duplicated anchor, or a red baseline are "
+              f"four different faults and only the first is about coverage:")
         for m in missed:
             print(f"  - {m.says}  ({m.tests})")
         return 1

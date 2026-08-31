@@ -73,6 +73,13 @@ def _alive(pid: Optional[int]) -> bool:
     killed run left mutated. That leaves the tree wrong but says so loudly, and the refusal names the
     way out. It is the direction to fail in, not a direction that is safe.
     """
+    # A pid that is not an integer is not a process. `"owner": "nope"` and `"owner": [1]` —
+    # both reachable by the hand edit the refusal invites — reached `_alive_nt` and came back
+    # as `ctypes.ArgumentError` rather than a refusal (CHG-20260831-06, defect seat). Treated
+    # as **not alive**, which is the safe direction here: an unowned record is refused, not
+    # recovered over.
+    if not isinstance(pid, int) or isinstance(pid, bool):
+        return False
     if pid is None:
         return False
     return _alive_nt(pid) if os.name == "nt" else _alive_posix(pid)
@@ -159,6 +166,12 @@ def _newline_of(path: Path) -> str:
 
 
 def write(path: Path, text: str) -> None:
+    # Checked here as well as by every caller, because opening `"w"` truncates before the
+    # write can fail. Belt and braces on the one line in this module that can destroy
+    # source (CHG-20260831-06, defect seat).
+    if not isinstance(text, str):
+        raise TypeError(f"refusing to write {type(text).__name__} over {path}: opening the "
+                        f"file to write truncates it, so this would destroy it")
     io.open(path, "w", encoding="utf-8", newline=_newline_of(path)).write(text)
 
 
@@ -255,7 +268,16 @@ def recover(quiet: bool = False) -> Optional[str]:
         record = json.loads(io.open(IN_FLIGHT, encoding="utf-8").read())
         path = Path(record["path"])
         original, mutated = record["original"], record["mutated"]
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as unreadable:
+        # **Types, before anything is written.** A record with `"original": null` — a half-finished
+        # hand edit, which the refusal below invites — reached `write(path, None)`, and `write`
+        # opens the file `"w"` *before* the `TypeError`, so the source was truncated to nothing and
+        # the record held no copy of it. Destroyed by the recovery, which is the one thing this
+        # module exists not to do (CHG-20260831-06, defect seat).
+        if not (isinstance(record["path"], str) and record["path"].strip()
+                and isinstance(original, str) and isinstance(mutated, str)):
+            raise ValueError(f"a record field is not the type it must be: "
+                             f"{ {k: type(v).__name__ for k, v in record.items()} }")
+    except (OSError, ValueError, KeyError, TypeError) as unreadable:
         # **Kept, and refused.** This used to `unlink` it and return a line nobody printed, so
         # `--recover` on a truncated record was silent, exited 0, and deleted the file — while the
         # guard that sent the operator here calls that file "the original text, and the only copy"
@@ -299,7 +321,9 @@ def recover(quiet: bool = False) -> Optional[str]:
             print(f"  {said}")
         return said
 
-    now = io.open(path, encoding="utf-8").read() if path.exists() else None
+    # `is_file()`, not `exists()`: `{"path": "."}` exists and opening it is a `PermissionError`
+    # out of an unguarded read, so a record naming a directory tracebacked instead of refusing.
+    now = io.open(path, encoding="utf-8").read() if path.is_file() else None
     if now == mutated:
         write(path, original)
         said = f"restored {path.name}, which a killed run left mutated"

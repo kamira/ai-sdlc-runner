@@ -19,6 +19,7 @@ the tool now, and why this file exists — the tool had no tests at all.
 from __future__ import annotations
 
 import io
+import ast
 import sys
 from pathlib import Path
 
@@ -29,6 +30,9 @@ sys.path.insert(0, str(TOOLS))
 
 import mutation_check  # noqa: E402
 import mutation_recovery  # noqa: E402
+
+
+NEWLINE = chr(10)
 
 
 def _mutation(path: Path, before: str, after: str = "REPLACED", tests: str = "tests/fake.py"):
@@ -160,3 +164,33 @@ def test_every_shipped_mutation_has_a_unique_anchor():
     assert not ambiguous, (
         "these mutations would revert whichever occurrence comes first rather than the one they "
         f"name: {ambiguous}")
+
+
+def test_no_shipped_mutation_makes_its_file_unparsable():
+    """A mutation that breaks the syntax is CAUGHT by every test in the file, for the wrong reason.
+
+    `run()`'s own docstring says the green-first baseline exists to stop exactly this: *"a mutation
+    that merely made a module unimportable would have been 'caught' by every test file in the
+    list."* The baseline cannot catch it, because the baseline runs **unmutated** — so the check
+    has to be here.
+
+    It shipped once. A `closure` mutation anchored on the first physical line of a two-line
+    condition and replaced it with `if False:`, orphaning the continuation; `tools/ledger_check.py`
+    stopped parsing, `--only closure` reported `1 error` — a collection error — and printed
+    `all 9 caught`. The bound that mutation was added to pin was measured by the harness not at all
+    (CHG-20260831-06, conformance, defect, risk and idiom seats).
+    """
+    unparsable = []
+    for mutation in mutation_check.MUTATIONS:
+        source = mutation.path.read_text(encoding="utf-8")
+        if mutation.before not in source:
+            continue                      # a stale anchor is `test_no_shipped_mutation_has_a_stale_anchor`
+        try:
+            ast.parse(source.replace(mutation.before, mutation.after, 1))
+        except SyntaxError as broke:
+            unparsable.append(f"{mutation.group}/{mutation.says}: {broke.msg} at line {broke.lineno}")
+
+    assert not unparsable, (
+        "these mutations leave a file that does not compile, so every test in their module dies on "
+        "import and the harness reports CAUGHT about nothing:" + "".join(NEWLINE + "  - " + u
+                                                                          for u in unparsable))
