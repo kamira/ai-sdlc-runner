@@ -658,7 +658,8 @@ def resolve_verdict(node: graph.Node, risk: str, autonomy: Optional[str] = None,
 
 def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
                seat: Optional[str] = None,
-               carried: Optional[Sequence[Mapping[str, str]]] = None) -> Dict[str, object]:
+               carried: Optional[Sequence[Mapping[str, str]]] = None,
+               sent_back: Optional[Mapping[str, str]] = None) -> Dict[str, object]:
     spec = cfg.node_specs.get(node.id)
     if spec is None:
         raise EngineError(
@@ -689,6 +690,29 @@ def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
         said = [f"last round {row['voice']} said {row['verdict']}" for row in carried]
         said.append("Weigh both sides. Answer for yourself — you have not seen what the others "
                     "say this round.")
+        own = spec.get("instructions") or ()
+        joiner = "\n"
+        spec["instructions"] = (
+            joiner.join([own] + said) if isinstance(own, str) else list(own) + said)
+    if sent_back:
+        # **Why the run came back here.** A person refused a gate and `rejects_to` sent the run to
+        # this node — and until this existed the reason went into `report.rejections` and the
+        # conversation and nowhere else, so the node was handed a work order byte-identical to the
+        # one it answered last time. Eight nodes carry `rejects_to`; every one of those loops asked
+        # the same question and got the same answer, which is not "unbounded" but **non-convergent**:
+        # no path through the loop could change its own input (CHG-20260901-12, design defect seat).
+        #
+        # The same channel as `carried` above, for the same reason it exists: a re-ask that does not
+        # say what changed is not a second opinion, it is the first one again.
+        spec = dict(spec)
+        why = str(sent_back.get("reason") or "").strip()
+        said = ["A person refused {gate} at {frm} and sent the run back here.".format(
+            gate=sent_back.get("gate", "a gate"), frm=sent_back.get("from", "a later node"))]
+        # The reason is quoted or its absence is stated. "They objected" with no reason reads as
+        # information and is not any — and a model told only that it was refused will guess at what
+        # to change, which is worse than being told nobody said.
+        said.append(f"What they said: {why}" if why
+                    else "They gave no reason. Do not guess at one — say what you would need.")
         own = spec.get("instructions") or ()
         joiner = "\n"
         spec["instructions"] = (
@@ -1668,6 +1692,11 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
         unspent_rulings.append(ruling)
 
     unspent_rejections: List[Rejection] = []
+    #: Why the run is at a node, when it is there because a person refused a gate further on.
+    #: Keyed by the node `rejects_to` names, written when the redirect is taken and **spent**
+    #: when that node's work order is built — so a later, ordinary visit is not told about a
+    #: refusal that has already been answered (CHG-20260901-12).
+    sent_back: Dict[str, Dict[str, str]] = {}
     for rejection in cfg.rejections:
         if rejection.gate not in policy.GATES:
             raise EngineError(f"rejection names gate {rejection.gate!r}, which does not exist")
@@ -1751,6 +1780,12 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     + f" — the run goes to {node.rejects_to}")
                 if cfg.conversation is not None:
                     cfg.conversation.decision("rejection", node.id, rejection.reason or "")
+                # The reason travels with the redirect. It used to stop here, in a prose line
+                # of `report.rejections`, and the node the run was sent to was asked the
+                # identical question (CHG-20260901-12).
+                sent_back[node.rejects_to] = {
+                    "from": node.id, "gate": str(node.gate or ""),
+                    "reason": rejection.reason or ""}
                 return _Redirect(node.rejects_to)
 
             # A decision naming this node is spent first: it is the more specific answer, and
@@ -1819,6 +1854,10 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
 
         answers: List[Mapping[str, object]] = []
         panel_outcome: Optional[str] = None
+        # Spent, not read: a node reached again for an ordinary reason must not be told about
+        # a refusal it has already answered. `pop` is what makes this a message rather than a
+        # standing property of the node (CHG-20260901-12).
+        came_back = sent_back.pop(node.id, None)
         if node.role:
             configured = list(cfg.node_models.get(node.id) or ())
 
@@ -1830,7 +1869,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 verdicts: Dict[str, str] = {}
                 for model in configured:
                     ask_id = f"{len(report.asks):03d}-{node.id}-{model}"
-                    result = _ask(factory, _order_for(node, cfg, verdict, carried=carried),
+                    result = _ask(factory, _order_for(node, cfg, verdict, carried=carried, sent_back=came_back),
                                   opened, journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                                   answered=already, model=model, asked_before=asked_before,
                                   conversation=cfg.conversation, role=node.role,
@@ -1902,7 +1941,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     verdicts, answers = {}, []
                     for model in configured:
                         ask_id = f"{len(report.asks):03d}-{node.id}-{model}-r{rounds}"
-                        result = _ask(factory, _order_for(node, cfg, verdict, carried=carried),
+                        result = _ask(factory, _order_for(node, cfg, verdict, carried=carried, sent_back=came_back),
                                       opened, journal=cfg.journal, ask_id=ask_id,
                                       node_id=node.id, answered=already, model=model,
                                       asked_before=asked_before,
@@ -1945,7 +1984,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 for seat in policy.seat_names(seats):
                     ask_id = f"{len(report.asks):03d}-{node.id}-{seat}"
                     result = _ask(
-                        factory, _order_for(node, cfg, verdict, seat), opened, seat=seat,
+                        factory, _order_for(node, cfg, verdict, seat, sent_back=came_back), opened, seat=seat,
                         journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                         answered=already, asked_before=asked_before,
                         conversation=cfg.conversation, role=node.role,
@@ -2007,7 +2046,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 before = len(opened)
                 for seat in policy.seat_names(seats):
                     result = _ask(
-                        factory, _order_for(node, cfg, verdict, seat), opened, seat=seat,
+                        factory, _order_for(node, cfg, verdict, seat, sent_back=came_back), opened, seat=seat,
                         journal=cfg.journal, node_id=node.id, answered=already,
                         ask_id=f"{len(report.asks):03d}-{node.id}-{seat}",
                         asked_before=asked_before,
@@ -2041,7 +2080,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
 
                 ask_id = f"{len(report.asks):03d}-{node.id}"
                 result = _ask(
-                    factory, _order_for(node, cfg, verdict), opened, journal=cfg.journal,
+                    factory, _order_for(node, cfg, verdict, sent_back=came_back), opened,
+                    journal=cfg.journal,
                     ask_id=ask_id, node_id=node.id, answered=already, model=model,
                     asked_before=asked_before,
                     conversation=cfg.conversation, role=node.role,
