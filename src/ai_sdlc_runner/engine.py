@@ -706,8 +706,17 @@ def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
         # say what changed is not a second opinion, it is the first one again.
         spec = dict(spec)
         why = str(sent_back.get("reason") or "").strip()
-        said = ["A person refused {gate} at {frm} and sent the run back here.".format(
-            gate=sent_back.get("gate", "a gate"), frm=sent_back.get("from", "a later node"))]
+        frm = sent_back.get("from", "a later node")
+        # **Who sent it back, truthfully.** Two paths lead here and they are not the same event: a
+        # person refusing a gate, and a panel of models not passing a node. Saying "a person
+        # refused" about an adjudicated verdict would be the runner telling a model something
+        # untrue about who objected — and this repository's whole argument for panels is that who
+        # said what is the information (CHG-20260901-13).
+        if sent_back.get("kind") == "verdict":
+            said = [f"The panel at {frm} did not pass it, and the run came back here."]
+        else:
+            said = ["A person refused {gate} at {frm} and sent the run back here.".format(
+                gate=sent_back.get("gate", "a gate"), frm=frm)]
         # The reason is quoted or its absence is stated. "They objected" with no reason reads as
         # information and is not any — and a model told only that it was refused will guess at what
         # to change, which is worse than being told nobody said.
@@ -855,7 +864,7 @@ def _describe(session) -> Optional[str]:
 
 
 def _send_back(node: graph.Node, report: "RunReport", outcome: Mapping[str, object],
-               verdicts: Mapping[str, str]) -> None:
+               verdicts: Mapping[str, str]) -> Optional[Dict[str, object]]:
     """Record what the rework is told, when a panel does not pass something.
 
     **The brief leads and the originals are appended to the same record.** Not behind a lookup: an
@@ -870,8 +879,8 @@ def _send_back(node: graph.Node, report: "RunReport", outcome: Mapping[str, obje
     """
     against = sorted(who for who, v in verdicts.items() if v != policy.PASS)
     if not against:
-        return
-    report.send_backs.append({
+        return None
+    entry: Dict[str, object] = {
         "node_id": node.id,
         "outcome": str(outcome.get("outcome")),
         # The summary. Short on purpose -- it is the instruction, and an instruction that restates
@@ -881,7 +890,15 @@ def _send_back(node: graph.Node, report: "RunReport", outcome: Mapping[str, obje
         # Appended, in full, attributed. Reference rather than instruction.
         "appendix": [{"voice": who, "verdict": v} for who, v in sorted(verdicts.items())],
         "appendix_is": "reference, not instruction",
-    })
+    }
+    # **Returned, not only recorded.** The `brief` above calls itself the instruction, and for as
+    # long as this function existed it was appended to `report.send_backs`, serialised into the
+    # snapshot, asserted by tests — and read by no work order. So the rework was never told what it
+    # was reworking, and a `fail` that loops back produced the same answer next lap: the same
+    # non-convergence CHG-20260901-12 fixed for a *person's* rejection, on the other of the two
+    # paths back (CHG-20260901-13, design conformance seat).
+    report.send_backs.append(entry)
+    return entry
 
 
 def _dispatch_from(configured: Sequence[str], cfg: "RunConfig", node: graph.Node,
@@ -1784,7 +1801,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 # of `report.rejections`, and the node the run was sent to was asked the
                 # identical question (CHG-20260901-12).
                 sent_back[node.rejects_to] = {
-                    "from": node.id, "gate": str(node.gate or ""),
+                    "from": node.id, "kind": "rejection", "gate": str(node.gate or ""),
                     "reason": rejection.reason or ""}
                 return _Redirect(node.rejects_to)
 
@@ -1854,6 +1871,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
 
         answers: List[Mapping[str, object]] = []
         panel_outcome: Optional[str] = None
+        rework: Optional[Dict[str, object]] = None
         # Spent, not read: a node reached again for an ordinary reason must not be told about
         # a refusal it has already answered. `pop` is what makes this a message rather than a
         # standing property of the node (CHG-20260901-12).
@@ -1957,7 +1975,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                          "round": rounds})
 
                 if outcome["outcome"] != policy.PASS:
-                    _send_back(node, report, outcome, verdicts)
+                    rework = _send_back(node, report, outcome, verdicts)
                 _note_panel_diversity(node, report, opened[before:])
                 # The panel's outcome is what routes. `answer_decides` reads ONE answer, and reading
                 # one of several voices would silently make a panel into whichever model happened to
@@ -2185,6 +2203,18 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 raise EngineError(
                     f"node {node.id!r} has no branch {choice!r}; it offers {sorted(node.branches)}")
             node_id = node.branches[choice]
+            # The brief goes where the rework goes. `_send_back` writes an instruction for a
+            # node that did not pass; until this line it reached `report.send_backs` and
+            # nothing else, so the node it was written for was asked its original question
+            # again and answered it the same way. The other path back — a person refusing a
+            # gate — was wired in CHG-20260901-12; this is the same channel for the other one.
+            #
+            # Only when the branch actually goes somewhere else. A panel that fails onto a
+            # terminal is not being asked to rework anything.
+            if rework is not None and node_id != node.id:
+                sent_back[node_id] = {
+                    "from": node.id, "kind": "verdict",
+                    "reason": str(rework.get("brief") or "")}
         else:
             node_id = node.next
     else:

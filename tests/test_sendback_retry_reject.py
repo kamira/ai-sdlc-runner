@@ -273,3 +273,54 @@ def test_a_rejection_is_spent_once():
                    confirmed=("plan_confirmed", "feasibility_confirmed", "before_dispatch",
                               "merge"))
     assert len(report.rejections) == 1
+
+
+def test_the_rework_brief_reaches_the_node_it_was_written_for():
+    """`_send_back` calls its `brief` "the instruction". Nothing delivered it.
+
+    It was appended to `report.send_backs`, serialised into the report and the server snapshot, and
+    asserted by the tests above — and read by **no work order**. So a panel that did not pass sent
+    the run back to a node that was asked its original question again, and answered it the same
+    way. Measured before the fix: the two orders `pm_plan` received across a `fail` compared equal.
+
+    That is the same non-convergence CHG-20260901-12 closed for a *person's* rejection. There are
+    two paths back into the flow — a person refusing a gate, and a panel not passing a node — and
+    only one of them carried its reason (CHG-20260901-13, design conformance seat).
+    """
+    orders = []
+
+    def factory(seat=None, model=None):
+        class Session(engine.Session):
+            def ask(self, order):
+                if order["node_id"] == "pm_plan":
+                    orders.append(order)
+                if order["node_id"] == "pm_confirm":
+                    # Two voices, both against: the panel adjudicates `fail` and routes to `no`.
+                    return {"verdict": "fail"} if len(orders) < 2 else {"verdict": "pass"}
+                branch = {"pm_signoff": "yes", "lead_task_review": "pass", "re_review": "pass",
+                          "qa_accept": "pass"}.get(order["node_id"])
+                return {"verdict": branch} if branch else {"ok": True}
+
+            def close(self):
+                pass
+        return Session()
+
+    cfg = engine.RunConfig(
+        node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+        decisions=dict(DECISIONS), risk="low", undeclared="allow",
+        node_models={"pm_confirm": ["opus", "codex"]},
+        confirmed=["merge"])
+    try:
+        engine.walk(cfg, factory, enabled=True)
+    except engine.EngineError:
+        pass          # the extra lap outruns the fixture's loop decisions; the orders are collected
+
+    assert len(orders) >= 2, "the panel's `fail` did not send the run back to pm_plan"
+    assert "did not pass" not in str(orders[0].get("instructions")), (
+        "the first order cannot know about a verdict nobody has reached yet")
+    second = str(orders[1].get("instructions"))
+    assert "did not pass" in second, (
+        "the node the panel sent the run back to was not told why — it will produce the same plan "
+        "and be failed again, which is the loop this test exists to close")
+    assert "A person refused" not in second, (
+        "a panel is not a person; saying so tells a model something untrue about who objected")
