@@ -47,6 +47,7 @@ gate_when: str              # "before" | "after"
 next: Optional[str]         # the single successor
 branches: Dict[str, str]    # branch label -> node id
 answer_decides: bool        # the answer picks the branch
+panel_branches: Dict[str, str]  # a PANEL's pass/fail -> this node's own branch words
 permanent: bool            # this terminal is a give-up, not an ending
 grades_risk: bool           # this node's voices answer with a risk grade, not a branch
 settles_risk: bool          # passing this node makes the proposed grade the run's grade

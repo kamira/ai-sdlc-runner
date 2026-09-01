@@ -2073,7 +2073,23 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
 
         if node.branches:
             if panel_outcome is not None:
-                choice = panel_outcome
+                # Through the node's own declaration. The panel answers in `pass`/`fail`; a node
+                # answers in its own words, and `pm_confirm` and `pm_signoff` say `yes`/`no`. Taking
+                # the outcome as the branch name routed those two nowhere at all — every run with
+                # more than one model on either died with `has no branch 'pass'`, and no test
+                # configured a panel there to notice (CHG-20260901-11).
+                #
+                # `.get(outcome, outcome)` and not a lookup that can raise: three nodes name their
+                # branches in the panel's own vocabulary and declare nothing, which is right. What
+                # stops a node declaring *nothing* while offering *neither* is `graph.validate`.
+                #
+                # Which is **not** on this path. `validate` is called by `cli.cmd_flow` and by the
+                # tests, and by nothing on a `run` — so a graph edited to be unroutable is caught by
+                # `runner flow` and by the suite, and a `run` still finds out here, at the node,
+                # with `has no branch`. That is the same shape as the defect being fixed and it is
+                # left alone deliberately: making `run` validate is a behaviour change to every
+                # run's startup and belongs in its own change, not smuggled into this one.
+                choice = node.panel_branches.get(panel_outcome, panel_outcome)
             elif node.mode == graph.SEAT_PANEL:
                 choice = _adjudicate(node, report, seats)
             elif node.answer_decides:
