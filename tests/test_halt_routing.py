@@ -285,11 +285,23 @@ def test_both_ways_to_start_a_run_take_the_same_governance():
         "change_class": "no --change-class flag on the serve subparser",
         "class_by_workstream": "read from the same flag as change_class",
     }
-    missing = built["cmd_run"] - built["cmd_serve"]
-    assert missing == set(only_on_run), (
-        f"`run` passes {sorted(missing)} that `serve` does not. Either wire it into `cmd_serve`, "
-        f"or add it here with the reason the command cannot supply it. Currently exempt: "
-        f"{sorted(only_on_run)}")
+    # Three things the console collects from a browser and a command line cannot: files handed
+    # over, extra instructions typed mid-run, and a refusal with a reason. `intake_history` was a
+    # fourth entry here until CHG-20260901-17 — and it had no reason, because it is not a console
+    # concept but the runner's own counter. `run` reads it from the journal now.
+    only_on_serve = {
+        "artifacts": "no --attach on the run subparser; the console uploads",
+        "instructions": "no --instruction; a run's brief is its plan",
+        "rejections": "no --reject; a refusal with a reason is a console act",
+    }
+    for name, (extra, exempt) in {
+            "cmd_run": (built["cmd_run"] - built["cmd_serve"], only_on_run),
+            "cmd_serve": (built["cmd_serve"] - built["cmd_run"], only_on_serve)}.items():
+        other = "cmd_serve" if name == "cmd_run" else "cmd_run"
+        assert extra == set(exempt), (
+            f"`{name}` passes {sorted(extra)} that `{other}` does not. Either wire it into "
+            f"`{other}`, or add it here with the reason that command cannot supply it. "
+            f"Currently exempt: {sorted(exempt)}")
 
 
 def test_the_console_honours_the_routing_the_console_itself_wrote(tmp_path):

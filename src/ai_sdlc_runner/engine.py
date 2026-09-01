@@ -136,10 +136,47 @@ class AskJournal:
         """Every ask written down but never answered — the re-ask list, in order."""
         return [e for e in self.entries() if e.get("status") == "pending"]
 
+    #: Intake stops live beside the asks, in files this prefix keeps out of `entries()`.
+    _INTAKE = "intake-stop-"
+
+    def record_intake_stop(self, missing: Sequence[str]) -> None:
+        """Write down that this run stopped at intake with these aspects still missing.
+
+        `serve` keeps this count in `RunState`, which is one process: `runner run` had nowhere to
+        keep it at all, so `cfg.intake_history` was `()` on every invocation and `times_asked` was
+        hard-wired to 0. The consequence was not a smaller number — it was that the escalation
+        `intake.py`'s own docstring promises (*"after the third time a given aspect has been asked
+        for and not supplied, the runner stops asking and proposes at least three options"*) could
+        never fire on the command line at any count, and `stop_reason` rendered "asked once" on the
+        fifth re-run (CHG-20260901-17, defect seat).
+
+        The journal, because that is already this command's memory across invocations — the same
+        directory `--ask-journal` names and `--resume` reads. A file per stop rather than one file
+        rewritten, so two runs sharing a journal cannot lose each other's count to a last-writer.
+        """
+        if not missing:
+            return
+        stops = len(self._intake_files())
+        self._write(f"{self._INTAKE}{stops:03d}", {"missing": [str(m) for m in missing]})
+
+    def intake_stops(self) -> List[Dict[str, object]]:
+        """The stops so far, oldest first — what `RunConfig.intake_history` wants."""
+        return [json.loads(paths.read_text(self.dir / name)) for name in self._intake_files()]
+
+    def _intake_files(self) -> List[str]:
+        return sorted(n for n in paths.listdir(self.dir)
+                      if n.startswith(self._INTAKE) and n.endswith(".json"))
+
     def entries(self) -> List[Dict[str, object]]:
-        """Every ask, answered or not, in the order they were asked."""
+        """Every **ask**, answered or not, in the order they were asked.
+
+        Intake stops share this directory and are excluded by name: they carry no `ask_id`, no
+        `status` and no `order`, so a `pending()` or `answers()` that swept them up would report a
+        stop as an unanswered question and re-ask nothing to satisfy it.
+        """
         return [json.loads(paths.read_text(self.dir / name))
-                for name in sorted(n for n in paths.listdir(self.dir) if n.endswith(".json"))]
+                for name in sorted(n for n in paths.listdir(self.dir)
+                                   if n.endswith(".json") and not n.startswith(self._INTAKE))]
 
     def answers(self) -> Dict[str, Mapping[str, object]]:
         """``ask_id -> result`` for everything already answered.

@@ -220,3 +220,53 @@ def test_a_survey_reaches_no_verdict():
     """No adjudication is recorded for the survey node, because none is reached."""
     report = _walk({"conformance": {"problems": ["a nit"]}})
     assert not [a for a in report.adjudications if a["node_id"] == "intake_review"]
+
+
+def test_the_command_line_can_reach_the_escalation_it_documents(tmp_path):
+    """`intake.py` promises options after the third unanswered ask. `runner run` could not get there.
+
+    `cmd_serve` accumulates the count in `RunState`, which is one process. `cmd_run` passed no
+    `intake_history` at all, so `cfg.intake_history` was `()` on every invocation, `times_asked`
+    was hard-wired to 0, and `needs_options` was False at any count — the escalation could not fire
+    on the command line, ever, and `stop_reason` rendered "asked once" on the fifth re-run
+    (CHG-20260901-17, defect seat).
+
+    Driven through `AskJournal`, because the journal is what `cmd_run` now reads and writes.
+    """
+    journal = engine.AskJournal(tmp_path / "asks")
+    reached = []
+    for _ in range(intake.ASK_LIMIT + 1):
+        history = journal.intake_stops()
+        reached.append(intake.needs_options(history, "flow"))
+        journal.record_intake_stop(["flow"])
+
+    assert reached == [False] * intake.ASK_LIMIT + [True], (
+        f"the escalation fires on the {intake.ASK_LIMIT}th unanswered ask and not before; "
+        f"got {reached}")
+    assert intake.times_asked(journal.intake_stops(), "flow") == intake.ASK_LIMIT + 1
+
+
+def test_an_intake_stop_is_not_mistaken_for_an_unanswered_ask(tmp_path):
+    """Stops share the journal directory with asks, and must stay out of the ask ledgers.
+
+    An intake stop carries no `ask_id`, no `status` and no `order`. If `entries()` swept one up,
+    `pending()` would report it as a question nobody answered and a resumed run would try to
+    re-ask something that was never asked.
+    """
+    journal = engine.AskJournal(tmp_path / "asks")
+    journal.record("a1", "pm_plan", None, {"objective": "x"})
+    journal.record_intake_stop(["flow", "ui"])
+    journal.answered("a1", {"ok": True})
+
+    assert [e["ask_id"] for e in journal.entries()] == ["a1"]
+    assert journal.pending() == []
+    assert set(journal.answers()) == {"a1"}
+    assert journal.intake_stops() == [{"missing": ["flow", "ui"]}]
+
+
+def test_a_stop_with_nothing_missing_is_not_recorded(tmp_path):
+    """`times_asked` counts stops that named an aspect. A stop that named none is not one of them,
+    and recording it would inflate every aspect's count by nothing anybody asked for."""
+    journal = engine.AskJournal(tmp_path / "asks")
+    journal.record_intake_stop([])
+    assert journal.intake_stops() == []

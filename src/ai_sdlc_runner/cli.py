@@ -33,6 +33,7 @@ from . import conversations as conv_mod
 from . import paths
 from . import plan as plan_mod
 from . import store as store_mod
+from . import intake as intake_mod
 from . import engine, models as models_mod, graph, policy, settings as settings_mod, ship, tui, workorder
 
 DEFAULT_CONFIG = "config/runner.yaml"
@@ -980,6 +981,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         undeclared=args.undeclared,
         resume=bool(args.resume),
         journal=journal,
+        # How many times this run has already stopped asking for each aspect. `serve` has passed
+        # this since intake shipped; `run` never did, so it was `()` on every invocation and
+        # `intake.times_asked` was hard-wired to 0 — which meant the escalation to options could
+        # not fire on the command line at any count, and `stop_reason` said "asked once" on the
+        # fifth re-run (CHG-20260901-17, defect seat). Read from the journal because that is
+        # already this command's memory across invocations.
+        intake_history=journal.intake_stops() if journal else (),
     )
     seat_models = dict(resolved_assignments.get("seat_models") or {})
     for pair in args.seat_model or ():
@@ -1017,7 +1025,14 @@ def cmd_run(args: argparse.Namespace) -> int:
                                   require_sandbox=bool(getattr(args, "sandbox", False)),
                                   trees=trees)
         report = engine.walk(cfg, factory, enabled=True)
-    except (engine.EngineError, policy.PolicyError, CliError,
+    # `IntakeError` belongs here and was missing (CHG-20260901-17, defect seat). It is raised from
+    # `intake.collect` when a seat names an aspect this runner does not define — a requirement
+    # problem, phrased for a person, and the one thing this block exists to render. Without it the
+    # run left as a traceback on stderr with exit **1**, and the two lines below never ran either:
+    # the pending asks went unreported, and `_close_trees(..., keep=True)` never fired, so a
+    # `--worktree` run leaked its trees on the one path whose comment says the tree is where the
+    # evidence is. `serve` catches `Exception` broadly and rendered it; `run` did not.
+    except (engine.EngineError, policy.PolicyError, CliError, intake_mod.IntakeError,
             sandbox_mod.SandboxError, worktree.WorktreeError) as exc:
         print(f"halted: {exc}")
         _report_pending(journal)
@@ -1028,6 +1043,14 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     _report_pending(journal)
     _close_trees(trees, args, keep=False, report=report)
+
+    # The other half of `intake_history`: reading it is useless without writing it. `serve` appends
+    # to `RunState.intake_history` inside `_walk_once` for exactly this reason; `run` records the
+    # stop here, where the report says whether there was one. Written after the walk rather than
+    # inside it, so the engine still takes its whole world through `RunConfig` and gives it back
+    # through the report (CHG-20260901-17).
+    if journal and report.suspended and report.suspended.get("missing"):
+        journal.record_intake_stop(report.suspended.get("missing") or ())
 
     # Which mechanism bounded this run, or why none (CHG-20260827-23 task 1). Printed always: an
     # operator who cannot see whether the work was bounded has to guess, and the guess is optimistic.
