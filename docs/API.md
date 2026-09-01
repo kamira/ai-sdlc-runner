@@ -55,11 +55,13 @@ The whole graph, so the console can draw it without embedding a copy.
   "modes": [ "runner", "single", "seat_panel", … ] }                    // all 7
 ```
 
-Thirteen of `Node`'s seventeen fields. `answer_decides`, `note`, `grades_risk` and `settles_risk` are **not** sent.
+Thirteen of `Node`'s eighteen fields. `answer_decides`, `note`, `grades_risk`, `settles_risk` and `panel_branches` are **not** sent.
 
 `permanent` (CHG-20260827-22) **is** sent, and the distinction is the one this section keeps making. It says a terminal node is a *give-up* rather than an ending — `halt_second_fail` and `halt_unreconciled` against `done`. Drawing those three the same way is the confusion the field was added to end, and drawing is exactly what the console is for. A field it cannot act on is withheld; this is one it must act on.
 
 `grades_risk` and `settles_risk` (CHG-20260827-17) say which node's voices answer with a **risk grade** and which node's sign-off makes that grade the run's. They are withheld for the same reason as `answer_decides`: the console draws the flow and does not adjudicate it, and a field it cannot act on is a field it should not be handed.
+
+`panel_branches` (CHG-20260901-11) is withheld for that same reason, and it is the sharpest case of it. It translates a panel's `pass`/`fail` into the branch words a node offers — `pm_confirm` says `yes` and `no` — so it exists only for adjudication, which is the one thing the console does not do. What the console draws is `branches`, which it already has.
 
 ### `GET /run`
 The run snapshot — [§3](#3--the-run-snapshot).

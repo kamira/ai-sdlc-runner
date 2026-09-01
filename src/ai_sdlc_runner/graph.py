@@ -102,6 +102,25 @@ class Node:
     #: answer may name. A decision whose branches come from the plan while somebody is being asked
     #: is a question whose answer changes nothing.
     answer_decides: bool = False
+    #: For a node a **panel** routes: which branch each panel outcome names.
+    #:
+    #: A panel answers in `pass` / `fail` / `undecided` — `policy.adjudicate`'s vocabulary, and the
+    #: only thing `engine` has to route on, because reading one of several voices would make a panel
+    #: into whichever model was asked first. A node answers in its own words. Three decision nodes
+    #: happen to name their branches `pass` and `fail` and so need nothing here. Two — `pm_confirm`
+    #: and `pm_signoff` — ask a person-shaped question and offer `yes` and `no`, and **had no route
+    #: at all**: the outcome named no branch of theirs, so any run with more than one model
+    #: configured on either died there with `has no branch 'pass'`. Untested, because the panel
+    #: tests only ever configured the `pass`/`fail` nodes (CHG-20260901-11).
+    #:
+    #: Declared, never inferred. Reading `yes` as the affirmative *because the string says yes* is a
+    #: name standing in for a constraint, which is the defect this whole file is written against —
+    #: and a third node offering `approve`/`reject` tomorrow would silently have no route again.
+    #:
+    #: `undecided` is deliberately unmappable: it is not a branch, it is the absence of one, and it
+    #: has somewhere to go already — the ruling path, where a person decides and it is recorded as
+    #: theirs. `validate` refuses it here.
+    panel_branches: Dict[str, str] = field(default_factory=dict)
     #: How to read the models configured here — see ``MODES``. Declared, never inferred.
     mode: str = SINGLE
     #: This terminal is a **give-up**, not an ending (CHG-20260827-22). `done` is where the flow was
@@ -169,6 +188,7 @@ NODES: Tuple[Node, ...] = (
     Node("pm_confirm", DECISION, "PM confirms the plan", role="pm", gate="plan_confirmed",
          gate_when="after", answer_decides=True, mode=MODEL_PANEL, rejects_to="pm_plan",
          branches={"yes": "lead_assess", "no": "pm_plan"},
+         panel_branches={"pass": "yes", "fail": "no"},
          note="PM is asked, and the answer decides; the gate then stops with that answer in hand"),
     Node("plan_scope", LOOP, "one workstream or several", mode=RUNNER,
          branches={"split": "sub_plan", "single": "pm_confirm"},
@@ -207,6 +227,7 @@ NODES: Tuple[Node, ...] = (
          gate="before_dispatch", gate_when="after", answer_decides=True, mode=MODEL_PANEL,
          rejects_to="pm_plan", settles_risk=True,
          branches={"yes": "next_module", "no": "pm_plan"},
+         panel_branches={"pass": "yes", "fail": "no"},
          note="the grade becomes the run's grade here, not where it was proposed. Before "
               "CHG-20260827-17 this node's own gate was resolved from the grade it is reviewing — "
               "the reviewer stood at a height the reviewed thing chose"),
@@ -400,6 +421,33 @@ def validate() -> None:
         if node.answer_decides and not node.role:
             raise GraphError(
                 f"node {node.id!r} says its answer decides, but nobody is asked at it")
+        # A panel node's branches must be reachable **by a panel**. `pm_confirm` and `pm_signoff`
+        # offered `yes`/`no` while the only thing routing them was `pass`/`fail`, so both were dead
+        # on any multi-model configuration and nothing said so — not `validate`, which never looked,
+        # and not the panel tests, which only ever configured the `pass`/`fail` nodes. A node that
+        # cannot be routed is worse than a node that routes wrongly: it takes the whole run with it,
+        # and it does so at whichever node the operator happened to configure (CHG-20260901-11).
+        if node.mode == MODEL_PANEL and node.branches:
+            for outcome in (policy.PASS, policy.FAIL):
+                landed = node.panel_branches.get(outcome, outcome)
+                if landed not in node.branches:
+                    raise GraphError(
+                        f"node {node.id!r} is routed by a panel, whose {outcome!r} names no branch "
+                        f"of its {sorted(node.branches)}. Declare `panel_branches` on it, or name "
+                        f"its branches in the panel's own words")
+        for outcome, landed in node.panel_branches.items():
+            if landed not in node.branches:
+                raise GraphError(
+                    f"node {node.id!r} routes a panel's {outcome!r} to {landed!r}, which is not "
+                    f"one of its branches {sorted(node.branches)}")
+            if outcome == policy.UNDECIDED:
+                # `undecided` is the absence of a verdict, and it already has somewhere to go: the
+                # ruling path, where a person chooses and the run records the choice as *theirs*.
+                # Mapping it to a branch would let a split panel look like a decision it never
+                # reached, which is the distinction `undecided` exists to draw.
+                raise GraphError(
+                    f"node {node.id!r} maps {policy.UNDECIDED!r} to a branch. A split panel decided "
+                    f"nothing; that goes to a person, not to an edge")
 
         # --- execution mode ------------------------------------------------------------------
         #

@@ -335,3 +335,46 @@ def test_the_seats_are_never_re_run():
         panel_reruns=5), factory, enabled=True)
 
     assert not [r for r in report.panel_rounds if r["node_id"] == "lead_review"],         "the seats were given another round; their independence is not configurable"
+
+
+# --- CHG-20260901-11: a panel must be able to route the node it is configured on ---------------
+
+@pytest.mark.parametrize("node_id", [n.id for n in graph.NODES
+                                     if n.mode == graph.MODEL_PANEL and n.branches])
+def test_a_panel_can_route_every_node_it_may_be_configured_on(node_id):
+    """Configure a panel on each panel-routed decision node and check the run gets past it.
+
+    This file configured several models only on `lead_task_review`, `engineer_build` and
+    `qa_verify` — all of whose branches happen to be named `pass` and `fail`, the same words
+    `policy.adjudicate` answers in. `pm_confirm` and `pm_signoff` offer `yes` and `no`, and the
+    engine took the panel's outcome as the branch name, so both were **unroutable**: any run with
+    more than one model on either died with `has no branch 'pass'`, three or five nodes in.
+
+    Parametrised over the graph rather than over a list, so a node added tomorrow with a third
+    vocabulary is covered by existing code rather than by somebody remembering (CHG-20260901-11).
+    """
+    # A panel's voices answer in the **panel's** vocabulary — `policy.adjudicate` counts `pass`.
+    # The node's own branch words (`yes`, `no`) are what the adjudicated outcome is routed *to*,
+    # which is the distinction this test exists for: answering `yes` here adjudicates to `fail`.
+    models = ["opus", "codex"]
+    answers = {(node_id, model): "pass" for model in models}
+    # `re_review` sits on the fix path — it exists only after `lead_task_review` fails, so a green
+    # walk never reaches it and the panel configured there would never run. Named rather than
+    # skipped: a node this test cannot reach is a node it is not testing, and silently passing on
+    # one is how the gap this test closes stayed open.
+    if node_id == "re_review":
+        answers[("lead_task_review", None)] = "fail"
+    report, asked = _run(node_models={node_id: models}, answers=answers)
+
+    assert len([a for a in asked if a[0] == node_id]) == 2, "the panel did not run"
+    assert "has no branch" not in str(report.halt_reason or ""), (
+        f"{node_id} is unroutable by the panel configured on it: {report.halt_reason}")
+
+    # Routable means the outcome landed on an edge and the run took it. Asserting the *target*
+    # rather than `done`: this walk stops at `merge` on purpose (`merge = confirm` even at low
+    # risk), and a test that demanded the end would be pinning the merge gate instead of this.
+    node = graph.BY_ID[node_id]
+    took = node.branches[node.panel_branches.get("pass", "pass")]
+    assert took in report.visited, (
+        f"{node_id} adjudicated `pass` but the run never reached {took!r} — "
+        f"visited {report.visited}, halted at {report.halted_at}")
