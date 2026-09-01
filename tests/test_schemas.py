@@ -13,6 +13,7 @@ page had no test at all and drifted in three checkable ways within a day of bein
 Every test below is written for one of those, or for a field list a future edit could silently
 diverge from. A catalogue nobody checks is worse than none, because people stop reading the source.
 """
+import dataclasses
 import json
 import re
 import sys
@@ -189,6 +190,25 @@ def test_the_run_report_entry_lists_every_field_the_report_emits():
     emitted = set(engine.RunReport().as_dict())
     missing = sorted(f for f in emitted if f not in body)
     assert not missing, f"entry 13 omits {missing}"
+
+
+def test_the_report_emits_every_field_it_declares():
+    """The other direction, and the one that was missing.
+
+    Checking *emitted ⊆ documented* lets a field pass by never being emitted at all, and six did:
+    `change_class`, `relaxations_by_class`, `risk_proposed`, `risk_settled`, `risk_agreed` and
+    `halts` were declared, written during the walk, and absent from `as_dict()`, this page, and the
+    console — surviving only in `cmd_run`'s stdout footer, which two of their own docstrings say is
+    not a record (CHG-20260901-16, defect seat).
+
+    Every field, with no exemption list. A field the report should deliberately withhold does not
+    exist yet, and when one does it should be argued for here rather than skipped by a name in a
+    set that nothing forces anybody to read.
+    """
+    declared = {f.name for f in dataclasses.fields(engine.RunReport())}
+    emitted = set(engine.RunReport().as_dict())
+    assert not sorted(declared - emitted), \
+        f"declared on RunReport and emitted by nothing: {sorted(declared - emitted)}"
 
 
 def test_the_model_entry_lists_exactly_what_persists():

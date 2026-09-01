@@ -67,13 +67,59 @@ def test_the_snapshot_section_lists_every_key_the_snapshot_carries():
     assert not missing, f"the snapshot section omits {missing}"
 
 
+def _suspension_literals(source):
+    """Every ``report.suspended = {...}`` literal in the engine, brace-matched.
+
+    There are three, and they carry different keys — an ordinary gate, an intake survey, and an
+    undecided panel. This read `split('report.suspended = {')[1]`, which is the **first** one, and
+    then `.split("}")[0]`, which would have truncated the survey literal at its first nested brace
+    (``"safety": {k: list(v) for ...}``) had it ever reached it. So a guard named for enumerating
+    every key a suspension carries enumerated nine of fifteen — and passed, while the page it pins
+    says "Every kind of suspension carries the same keys" directly above a list missing four of
+    them that the shipped console reads (CHG-20260901-16, defect seat).
+
+    Brace-matched rather than split, because the failure was a split that could not see nesting.
+    """
+    marker = "report.suspended = {"
+    blocks, at = [], 0
+    while True:
+        start = source.find(marker, at)
+        if start < 0:
+            assert blocks, "no `report.suspended = {` literal found; this guard has gone blind"
+            return blocks
+        opened = start + len(marker) - 1
+        depth, cursor = 0, opened
+        while cursor < len(source):
+            if source[cursor] == "{":
+                depth += 1
+            elif source[cursor] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            cursor += 1
+        assert depth == 0, "unbalanced braces in a `report.suspended` literal"
+        blocks.append(source[opened:cursor + 1])
+        at = cursor + 1
+
+
 def test_the_suspension_section_lists_every_key_a_suspension_carries():
-    # Read the literal the engine builds, rather than driving a whole walk to reach one.
-    block = inspect.getsource(engine).split('report.suspended = {')[1].split("}")[0]
-    keys = set(re.findall(r'"(\w+)":', block))
+    # Read the literals the engine builds, rather than driving three walks to reach them.
+    blocks = _suspension_literals(inspect.getsource(engine))
+    keys = set().union(*(set(re.findall(r'"(\w+)":', b)) for b in blocks))
     section = PAGE.split("## 4 · The suspension")[1].split("## 5 ·")[0]
     missing = sorted(k for k in keys if f'"{k}"' not in section)
     assert not missing, f"the suspension section omits {missing}"
+
+
+def test_the_guard_over_the_suspension_section_reads_every_literal_there_is():
+    # The defect was the guard, not the page, so this pins the guard. Three literals, and the one
+    # with a nested brace is the one a `split("}")` would have cut in half.
+    blocks = _suspension_literals(inspect.getsource(engine))
+    assert len(blocks) == 3, f"expected three suspension literals, found {len(blocks)}"
+    assert any("{k: list(v)" in b for b in blocks), "the nested-brace literal is not being read"
+    first_only = set(re.findall(r'"(\w+)":', blocks[0]))
+    every = set().union(*(set(re.findall(r'"(\w+)":', b)) for b in blocks))
+    assert every - first_only, "reading only the first literal now misses nothing; drop this guard"
 
 
 def test_the_flow_route_section_names_the_node_fields_it_actually_sends():
