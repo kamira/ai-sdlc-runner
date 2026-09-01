@@ -786,7 +786,8 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
          answered: Optional[Mapping[str, Mapping[str, object]]] = None,
          model: Optional[str] = None,
          asked_before: Optional[Mapping[str, Mapping[str, object]]] = None,
-         conversation=None, role: str = "", workspace: str = ""):
+         conversation=None, role: str = "", workspace: str = "",
+         resumed: Optional[List[str]] = None):
     """Open a session, ask once, close it — the close guaranteed even if the ask raises.
 
     ``seen`` holds the session **objects**, not their ``id()``: an id is not an identity once the
@@ -802,6 +803,14 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
         # brief with words said about the old one.
         previous = (asked_before or {}).get(ask_id)
         if previous is None or dict(previous) == dict(order):
+            # **Recorded here, where the decision is made.** The walk used to append to
+            # `report.resumed` on `ask_id in already` — journal *membership* — while reuse also
+            # requires the order to match. So a resume with a changed brief re-asked everything and
+            # still reported most of it as resumed: 16 claimed against 17 real dispatches, under a
+            # CLI line reading "answered from the journal, not re-asked". A count standing in for
+            # the thing it was meant to identify (CHG-20260901-14).
+            if resumed is not None and ask_id is not None:
+                resumed.append(ask_id)
             return answered[ask_id]
     if journal is not None and ask_id is not None:
         journal.record(ask_id, node_id, seat, order)
@@ -1890,10 +1899,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     result = _ask(factory, _order_for(node, cfg, verdict, carried=carried, sent_back=came_back),
                                   opened, journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                                   answered=already, model=model, asked_before=asked_before,
-                                  conversation=cfg.conversation, role=node.role,
+                                  conversation=cfg.conversation, role=node.role, resumed=report.resumed,
                                   workspace=_workspace(node, build_cycles))
-                    if ask_id in already:
-                        report.resumed.append(ask_id)
                     report.asks.append(Ask(node.id, node.role, None, result, model=model))
                     answers.append(result)
                     # A grading panel answers with a grade, not a branch label (CHG-20260827-17).
@@ -1963,7 +1970,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                                       opened, journal=cfg.journal, ask_id=ask_id,
                                       node_id=node.id, answered=already, model=model,
                                       asked_before=asked_before,
-                                      conversation=cfg.conversation, role=node.role,
+                                      conversation=cfg.conversation, role=node.role, resumed=report.resumed,
                                   workspace=_workspace(node, build_cycles))
                         report.asks.append(Ask(node.id, node.role, None, result, model=model))
                         answers.append(result)
@@ -2005,10 +2012,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                         factory, _order_for(node, cfg, verdict, seat, sent_back=came_back), opened, seat=seat,
                         journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                         answered=already, asked_before=asked_before,
-                        conversation=cfg.conversation, role=node.role,
+                        conversation=cfg.conversation, role=node.role, resumed=report.resumed,
                                   workspace=_workspace(node, build_cycles))
-                    if ask_id in already:
-                        report.resumed.append(ask_id)
                     report.asks.append(Ask(node.id, node.role, seat, result))
                     answers.append(result)
                     said[seat] = result
@@ -2034,7 +2039,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                             workorder.render(node, spec, verdict, seat=None),
                             opened, journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                             answered=already, asked_before=asked_before,
-                            conversation=cfg.conversation, role=node.role,
+                            conversation=cfg.conversation, role=node.role, resumed=report.resumed,
                                   workspace=_workspace(node, build_cycles))
                         report.asks.append(Ask(node.id, node.role, None, answer))
                         report.options[aspect] = intake_mod.read_options(answer, aspect)
@@ -2068,11 +2073,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                         journal=cfg.journal, node_id=node.id, answered=already,
                         ask_id=f"{len(report.asks):03d}-{node.id}-{seat}",
                         asked_before=asked_before,
-                        conversation=cfg.conversation, role=node.role,
+                        conversation=cfg.conversation, role=node.role, resumed=report.resumed,
                                   workspace=_workspace(node, build_cycles))
-                    ask_key = f"{len(report.asks):03d}-{node.id}-{seat}"
-                    if ask_key in already:
-                        report.resumed.append(ask_key)
                     report.asks.append(Ask(node.id, node.role, seat, result))
                     answers.append(result)
                 panel_sessions = opened[before:]
@@ -2102,13 +2104,30 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     journal=cfg.journal,
                     ask_id=ask_id, node_id=node.id, answered=already, model=model,
                     asked_before=asked_before,
-                    conversation=cfg.conversation, role=node.role,
+                    conversation=cfg.conversation, role=node.role, resumed=report.resumed,
                                   workspace=_workspace(node, build_cycles))
-                if ask_id in already:
-                    report.resumed.append(ask_id)
                 report.asks.append(Ask(node.id, node.role, None, result, model=model))
                 answers.append(result)
 
+        # **A gate consulted after the work resolves at what the work revealed.**
+        #
+        # `gate_when="after"` says "do the work, then stop with its result in hand" — and the
+        # verdict was still the one computed at the top of the visit, before the work existed. On
+        # `lead_assess`, whose whole purpose is that a person confirms the lead's assessment, that
+        # meant: plan graded `low`, panel unanimously `high`, `feasibility_confirmed` resolved at
+        # `low` and never fired. The gate standing over the assessment was silent about the
+        # assessment; `before_dispatch` one node later halted at `high` (CHG-20260901-14).
+        #
+        # **Raised only, never lowered.** `strictest` over the old grade and the one now in force,
+        # because `pm_signoff` carries `settles_risk` and re-resolving at a settled grade that is
+        # *lower* would let the thing under review set the height of the gate reviewing it — which
+        # is the circularity CHG-20260827-17 exists to break, arrived at from the other side.
+        if node.gate and node.gate_when == "after":
+            after = policy.strictest([str(verdict.get("risk") or ""),
+                                      _grade_in_force(cfg, report, node)])
+            if after != verdict.get("risk"):
+                verdict = resolve_verdict(node, after, cfg.autonomy, here)
+                report.verdicts[node.id] = dict(verdict)
         stop = _gate("after")
         if isinstance(stop, _Redirect):
             node_id = stop.to

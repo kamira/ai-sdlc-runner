@@ -200,3 +200,55 @@ def test_a_resumed_ask_never_touches_the_factory(tmp_path):
     engine.walk(_cfg(journal, resume=True), _Counting(), enabled=True)
     report = engine.walk(_cfg(journal, resume=True), _Explode(), enabled=True)
     assert report.halted_at == "done"
+
+
+def test_resumed_counts_the_asks_that_were_actually_reused(tmp_path):
+    """`report.resumed` is what the CLI calls "answered from the journal, not re-asked".
+
+    It was appended on `ask_id in already` — journal **membership**. `_ask` reuses an answer only
+    when the order also matches, because "anything else is answering the new brief with words said
+    about the old one". So a resume with a changed brief re-asked everything and still reported most
+    of it as resumed: 16 claimed against 17 real dispatches.
+
+    A count standing in for the thing it was meant to identify — the same class this ledger has
+    logged before. Recorded inside `_ask` now, where the decision is made rather than guessed at by
+    the caller (CHG-20260901-14, design defect seat).
+    """
+    dispatched = []
+
+    def factory(seat=None, model=None):
+        class Session(engine.Session):
+            def ask(self, order):
+                dispatched.append(order["node_id"])
+                branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
+                          "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])
+                return {"verdict": branch} if branch else {"ok": True}
+
+            def close(self):
+                pass
+        return Session()
+
+    # One module then out. `_cfg`'s two-entry default is for the interrupted walks above,
+    # which never reach the second lap; a walk that finishes visits `next_module` once more.
+    loop = {"next_module": ["module", "none", "none"], "feedback": "done"}
+    journal = engine.AskJournal(tmp_path / "asks")
+    first = engine.walk(_cfg(journal, decisions=loop), factory, enabled=True)
+    assert first.resumed == [], "nothing can be resumed on a first walk"
+
+    # Same brief: every ask is reused, and every one is reported.
+    dispatched.clear()
+    same = engine.walk(_cfg(journal, decisions=loop, resume=True), factory, enabled=True)
+    assert len(same.resumed) == len(same.asks), (
+        f"{len(same.resumed)} reported resumed against {len(same.asks)} asks, none dispatched")
+    assert dispatched == [], "an unchanged brief must not re-ask anything"
+
+    # Changed brief: the order differs, so nothing is reused — and nothing may be reported as such.
+    dispatched.clear()
+    changed = engine.walk(
+        _cfg(journal, decisions=loop, resume=True,
+             instructions=["and mind the migration path"]),
+        factory, enabled=True)
+    assert dispatched, "a changed brief must re-ask"
+    assert changed.resumed == [], (
+        f"the run re-asked {len(dispatched)} time(s) and still reported "
+        f"{len(changed.resumed)} as answered from the journal")

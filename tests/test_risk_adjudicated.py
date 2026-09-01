@@ -34,6 +34,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ai_sdlc_runner import engine, graph, policy  # noqa: E402
+from test_flow import DECISIONS, SPEC  # noqa: E402
 
 
 # ── deciding the grade ───────────────────────────────────────────────────────────────────────────
@@ -224,3 +225,50 @@ def test_a_disagreed_grade_is_visible_in_the_report():
     report.risk_agreed = None
     assert report.risk_proposed == {"a": "low", "b": "high"}
     assert report.risk_settled is None, "nothing is settled until somebody signs it off"
+
+
+def test_the_gate_over_an_assessment_resolves_at_the_grade_that_assessment_proposed():
+    """`feasibility_confirmed` stands over `lead_assess`. It must see what `lead_assess` said.
+
+    `gate_when="after"` says "do the work and then stop with its result in hand", and `lead_assess`'s
+    note gives the reason: "the thing a person is being asked to confirm IS the lead's assessment".
+    But the verdict was resolved at the top of the visit, before the assessment existed — so a plan
+    declaring `low` whose panel unanimously graded `high` got:
+
+        lead_assess  feasibility_confirmed  resolved at risk=low   -> auto     (never fired)
+        pm_signoff   before_dispatch        resolved at risk=high  -> halt
+
+    The gate standing over the assessment was silent about the assessment. That is the circularity
+    CHG-20260827-17 broke, reached from the other side: that change stopped the assessment *lowering*
+    the gate reviewing it, and nothing stopped it *raising* one already resolved
+    (CHG-20260901-14, design defect seat).
+
+    Raised only. `pm_signoff` carries `settles_risk`, and re-resolving at a settled grade that is
+    lower would hand the reviewed thing the height of its own reviewer.
+    """
+    def factory(seat=None, model=None):
+        class Session(engine.Session):
+            def ask(self, order):
+                if order["node_id"] == "lead_assess":
+                    return {"risk": "high"}
+                branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
+                          "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])
+                return {"verdict": branch} if branch else {"ok": True}
+
+            def close(self):
+                pass
+        return Session()
+
+    report = engine.walk(engine.RunConfig(
+        node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+        decisions=dict(DECISIONS), risk="low", undeclared="allow",
+        node_models={"lead_assess": ["a", "b", "c"]}), factory, enabled=True)
+
+    assert report.risk_agreed == "high", "the panel did not grade it high"
+    at = report.verdicts["lead_assess"]
+    assert at["risk"] == "high", (
+        f"the gate over the assessment resolved at {at['risk']!r}, which is the grade the "
+        f"assessment replaced")
+    assert at["verdict"] == policy.HALT, at
+    assert report.halted_at == "lead_assess", (
+        f"the run got past the gate that exists to show a person this assessment: {report.halted_at}")
