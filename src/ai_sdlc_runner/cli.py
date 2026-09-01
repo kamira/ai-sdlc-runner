@@ -1279,6 +1279,18 @@ def cmd_serve(args: argparse.Namespace) -> int:
             # Resolved per walk rather than captured once, because a value captured at startup is
             # how the defect happened.
             node_models=current_assignments().get("node_models") or {},
+            # Who each permanent halt reaches, for this project (CHG-20260827-19). `run` has read
+            # this since that change; `serve` never did, so `POST /config/halts` wrote a routing the
+            # console's own runs then ignored — every permanent halt went to `policy.HALT_ROUTING`'s
+            # default no matter what the project had configured through the console's own API
+            # (CHG-20260901-16, defect seat). ACC-20260827-19 recorded the opposite in as many
+            # words: "`serve` reads the routing; the console has no page for it." It has had the
+            # page for a while. It did not have the reading.
+            #
+            # Re-read per walk, for the reason `current_assignments` gives above: this is editable
+            # from the console mid-session, and a value captured at startup is how that defect
+            # happened the first time.
+            halt_routing=store_mod.halt_routing(db),
             artifacts=artifacts,
             instructions=instructions,
             rejections=rejections,

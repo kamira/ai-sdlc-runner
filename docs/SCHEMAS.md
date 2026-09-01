@@ -328,7 +328,14 @@ under pressure here; only the filename is."*
 
 `visited · asks · state · suspended · halted_at · halt_reason · relaxations · verdicts · on_trust ·
 confirmations · adjudications · single_model_panels · effects · resumed · dispatches · survey ·
-options · panel_rounds · send_backs · rejections · rulings · store_errors`
+options · panel_rounds · send_backs · rejections · rulings · store_errors · change_class ·
+relaxations_by_class · risk_proposed · risk_settled · risk_agreed · halts`
+
+The last six were declared on `RunReport`, written during the walk, and emitted by nothing until
+CHG-20260901-16 — so they reached no `--json`, no entry here, and no console, and lived only in
+`cmd_run`'s stdout footer. The guard over this entry checked *emitted ⊆ documented*, which a field
+passes for free by never being emitted;
+`test_the_report_emits_every_field_it_declares` now checks the other direction.
 
 Three states: `finished` (reached a terminal), `suspended` (a decision continues it), `stopped`
 (nothing continues it).

@@ -170,6 +170,50 @@ def test_an_operation_crossing_two_kinds_reaches_both_owners():
     assert reason is not None
 
 
+def test_the_sentence_a_person_reads_names_every_owner_the_list_holds():
+    """The list was right the whole time. The sentence built from it named `told[0]` and the
+    operator, so on a halt crossing two kinds the second owner was dropped (CHG-20260901-16).
+
+    This is the gap between the two tests above and the surfaces people actually read. `cli.py`
+    iterates `report.halts` and was correct; `halt_reason` is what reaches the console's
+    `snapshot()["reason"]` and `conversation.close(why=...)`, which is the durable record — and it
+    named `release` alone for a target both `release` and `security` are answerable for.
+
+    `policy.recipients` says why that matters in its own docstring: `secrets/prod.env` is a
+    credentials file *and* sits in something called production, so **both owners are answerable
+    for it**.
+    """
+    reason, report = _halt_for(
+        {"description": "rotate the key", "kind": "ordinary", "targets": ["secrets/prod.env"]})
+    for owner in report.halts[0]["told"]:
+        if owner == policy.DEFAULT_RECIPIENT:
+            continue
+        assert owner in reason, f"{owner!r} is recorded as told and is not named in: {reason!r}"
+    # Order, not just membership — the list is documented first-named-first, and a sentence that
+    # reorders it misreports who is told first. That is the defect `policy.recipients` itself was
+    # written to close, and it would be reintroduced here by joining a set.
+    assert "for release, security, and the operator." in reason, reason
+
+
+def test_the_owner_sentence_reads_as_a_sentence_at_every_length():
+    """One name, two, three. The join must not leave a stray comma or a dangling "and".
+
+    All six kinds in `policy.HALT_ROUTING` have an owner, so the one-name case is not reachable
+    through a halt — `recipients(())` is `('operator',)`, and that is what an unrouted kind would
+    produce. Exercised directly rather than skipped: this is the branch that renders it, and a
+    branch no test reaches is how the two-owner sentence stayed wrong.
+    """
+    assert engine._named(("operator",)) == "the operator"
+    assert engine._named(("release", "operator")) == "release, and the operator"
+    assert engine._named(("release", "security", "operator")) == \
+        "release, security, and the operator"
+
+    # And through a real halt, so the fragment is checked where it is actually built.
+    reason, report = _halt_for({"description": "wire money", "kind": "money"})
+    assert report.halts[0]["told"] == ["finance", "operator"]
+    assert "This one is for finance, and the operator." in reason, reason
+
+
 def test_the_halt_record_survives_for_an_audit():
     """Recorded, not only printed. "Who was told" is a question asked months later, and a line on
     somebody's terminal is not a record."""
@@ -205,6 +249,77 @@ branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
           "re_review": "pass", "qa_accept": "pass"}.get(node)
 say({"verdict": branch} if branch else {"summary": (node or "?") + " done"})
 """
+
+
+def test_both_ways_to_start_a_run_take_the_same_governance():
+    """`cli.py` builds an `engine.RunConfig` twice — `cmd_run` and `cmd_serve` — and they diverged.
+
+    `serve` never passed `halt_routing`, so `POST /config/halts` wrote a routing the console's own
+    runs then ignored: every permanent halt went to `policy.HALT_ROUTING`'s default no matter what
+    the project had configured through the console's own API. ACC-20260827-19 recorded the opposite
+    — *"`serve` reads the routing; the console has no page for it"* — and the only wiring test is
+    the subprocess one below, whose docstring calls itself "the seam nothing else covers" while
+    driving one of the two callers.
+
+    Compared structurally rather than by naming `halt_routing`, because the defect is the drift and
+    not the field. The exemption list is closed and each entry states why the *command* cannot
+    supply it — not why it was convenient to skip.
+    """
+    import ast
+
+    source = (Path(__file__).resolve().parents[1] / "src" / "ai_sdlc_runner" / "cli.py") \
+        .read_text(encoding="utf-8")
+    built = {}
+    for fn in ast.walk(ast.parse(source)):
+        if isinstance(fn, ast.FunctionDef) and fn.name in ("cmd_run", "cmd_serve"):
+            for call in ast.walk(fn):
+                if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                        and call.func.attr == "RunConfig"):
+                    built[fn.name] = {kw.arg for kw in call.keywords if kw.arg}
+    assert set(built) == {"cmd_run", "cmd_serve"}, f"found RunConfig built in {sorted(built)}"
+
+    # `--change-class` is registered on the `run` subparser only, so `serve` has nothing to pass.
+    # That is a gap in what a console can declare, recorded in CHG-20260901-16 and not closed by
+    # it; it is not this drift.
+    only_on_run = {
+        "change_class": "no --change-class flag on the serve subparser",
+        "class_by_workstream": "read from the same flag as change_class",
+    }
+    missing = built["cmd_run"] - built["cmd_serve"]
+    assert missing == set(only_on_run), (
+        f"`run` passes {sorted(missing)} that `serve` does not. Either wire it into `cmd_serve`, "
+        f"or add it here with the reason the command cannot supply it. Currently exempt: "
+        f"{sorted(only_on_run)}")
+
+
+def test_the_console_honours_the_routing_the_console_itself_wrote(tmp_path):
+    """The seam the AST check cannot see: `store.halt_routing(db)` reaching a walk `serve` starts.
+
+    `cmd_serve` hands `server.Runner` a `make_config` closure, so this drives that closure rather
+    than a subprocess — a real store, a real `POST /config/halts` write through
+    `store.set_halt_recipient`, and a real `_permanent_halt` on the config it produces.
+    """
+    config = tmp_path / "config.sqlite"
+    db = store.connect(config)
+    store.set_halt_recipient(db, "deploy", "sre-oncall")
+
+    # What `make_config` does with the routing, at the moment a walk starts. Re-read rather than
+    # captured, which is the same rule `current_assignments` states for node models.
+    cfg = engine.RunConfig(
+        node_specs={}, decisions={},
+        operations={"engineer_build": [
+            {"description": "ship it to production", "kind": "deploy", "targets": []}]},
+        risk="low", halt_routing=store.halt_routing(db))
+    reason = engine._permanent_halt(graph.BY_ID["engineer_build"], cfg, engine.RunReport())
+    assert reason is not None
+    assert "sre-oncall" in reason, (
+        f"the console configured deploy -> sre-oncall and the halt says: {reason!r}")
+
+    # And the same operation with the routing dropped, which is what `serve` did: the project's own
+    # setting is silently replaced by the built-in default.
+    bare = engine.RunConfig(node_specs={}, decisions={}, operations=cfg.operations, risk="low")
+    unrouted = engine._permanent_halt(graph.BY_ID["engineer_build"], bare, engine.RunReport())
+    assert "sre-oncall" not in unrouted and policy.routed_to("deploy")[0] in unrouted, unrouted
 
 
 def test_a_routed_halt_reaches_the_projects_own_function_through_the_cli(tmp_path):

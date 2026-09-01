@@ -393,6 +393,22 @@ class RunReport:
             "panel_rounds": [dict(r) for r in self.panel_rounds],
             "survey": dict(self.survey) if self.survey else None,
             "options": {k: list(v) for k, v in self.options.items()},
+            # Declared, written, and emitted nowhere until CHG-20260901-16. Six fields lived only in
+            # `cmd_run`'s stdout footer — so they reached no `--json`, no `docs/SCHEMAS.md` entry,
+            # and no console. Two of them say the opposite in their own docstrings above: `halts` is
+            # "recorded rather than only printed, because … a message on somebody's terminal is not
+            # a record", and `relaxations_by_class` is "a relaxation nobody can enumerate afterwards
+            # is a relaxation nobody can audit". Both were exactly a message on somebody's terminal.
+            #
+            # `test_the_report_emits_every_field_it_declares` is what keeps this list honest now;
+            # the existing guard checked emitted ⊆ documented, which a field can pass by never being
+            # emitted at all.
+            "change_class": self.change_class,
+            "relaxations_by_class": list(self.relaxations_by_class),
+            "risk_proposed": dict(self.risk_proposed),
+            "risk_settled": self.risk_settled,
+            "risk_agreed": self.risk_agreed,
+            "halts": [dict(h) for h in self.halts],
         }
 
 
@@ -1387,6 +1403,26 @@ def _spoken_halt(node: graph.Node, cfg: "RunConfig") -> Optional[str]:
     return None
 
 
+def _named(told: Sequence[str]) -> str:
+    """`told` as a sentence fragment, in the order `policy.recipients` returned it.
+
+    Joins; never reorders and never drops. `policy.recipients` documents its order as owners first
+    and the operator last, appended once — so the last name is the operator and the rest are the
+    owners answerable for the kinds this halt crossed. A sentence that names a subset of them is
+    the defect this exists to close, and a sentence that reorders them would misreport who is told
+    first, which is the defect `recipients` itself exists to close.
+    """
+    named = ["the operator" if who == policy.DEFAULT_RECIPIENT else who for who in told]
+    if not named:
+        # `recipients` always appends the operator, so this is unreachable through it. Rendered
+        # rather than raising anyway: a halt that cannot say who it is for must still say it is a
+        # halt, and an empty list would otherwise take the whole sentence down with it.
+        return "the operator"
+    if len(named) == 1:
+        return named[0]
+    return ", ".join(named[:-1]) + ", and " + named[-1]
+
+
 def _permanent_halt(node: graph.Node, cfg: "RunConfig", report: "RunReport") -> Optional[str]:
     """The halt reason if this node's work trips a permanent halt, else ``None``.
 
@@ -1471,10 +1507,21 @@ def _permanent_halt(node: graph.Node, cfg: "RunConfig", report: "RunReport") -> 
             told = list(policy.recipients(kinds, cfg.halt_routing))
             report.halts.append({"node_id": node.id, "kinds": kinds,
                                  "told": list(told), "description": str(what)})
+            # **Every** owner, not the first one. `policy.recipients`' own docstring gives the case
+            # this got wrong: `secrets/prod.env` is a credentials file *and* sits in something
+            # called production, "so it crosses `deploy` and `access` and **both owners are
+            # answerable for it**". The sentence named `told[0]` and the operator, so on a halt
+            # crossing two kinds the second owner was dropped from every surface that carries
+            # `halt_reason` — `RunState.snapshot()["reason"]`, which the console renders, and
+            # `conversation.close(why=...)`, which is the durable record. Only `cli.py`, which
+            # iterates `report.halts` itself, ever named them all (CHG-20260901-16, defect seat).
+            #
+            # `test_halt_routing.py` pinned `told` and never the sentence built from it, which is
+            # how a list that was right the whole time reached people as a name that was wrong.
             return (
                 f"permanent halt at {node.id!r}: {what!r} is {halt}. No risk grade, confirmation, "
-                f"mode or change class relaxes this — a person does it. This one is for {told[0]}"
-                + (f", and the operator" if told[0] != policy.DEFAULT_RECIPIENT else "") + ".")
+                f"mode or change class relaxes this — a person does it. This one is for "
+                f"{_named(told)}.")
     return None
 
 
