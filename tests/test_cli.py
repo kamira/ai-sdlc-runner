@@ -831,3 +831,45 @@ def test_a_stored_model_a_widened_rule_refuses_stops_serve_with_a_remedy(tmp_pat
         assert table in said, (
             f"deleting the row orphans {table} rows pointing at it, and the console then starts "
             f"clean and says nothing. The remedy has to name the table: {said!r}")
+
+
+#: Answers `intake_review` with an aspect this runner does not define. Everything else behaves.
+INTAKE_STRANGER = """
+import json, sys
+order = json.load(sys.stdin)
+if order["node_id"] == "intake_review":
+    print(json.dumps({"missing": ["database"], "seat": order.get("seat")}))
+elif order.get("seat"):
+    print(json.dumps({"verdict": "pass", "seat": order["seat"]}))
+else:
+    print(json.dumps({"ok": True}))
+"""
+
+
+def test_a_requirement_naming_an_undefined_aspect_is_reported_rather_than_raised(
+        tmp_path, py_stub, capsys):
+    """`IntakeError` was not in `cmd_run`'s except tuple, so it left as a traceback.
+
+    A seat saying `"database"` is missing has answered a question this runner did not ask —
+    `intake.collect` refuses it with a sentence written for a person. `cmd_run` caught
+    `EngineError`, `PolicyError`, `CliError`, `SandboxError` and `WorktreeError`, and `IntakeError`
+    is a bare `Exception`, so the run died with a Python stack on stderr and **exit 1**
+    (CHG-20260901-17, defect seat).
+
+    Exit 10 matters beyond tidiness: it is the one halt code this CLI returns, and the skipped
+    branch is also where `_report_pending` and `_close_trees(..., keep=True)` live — so a
+    `--worktree` run leaked its trees on the one path whose own comment says the tree is where the
+    evidence is.
+    """
+    argv = py_stub(INTAKE_STRANGER)
+    config = tmp_path / "runner.yaml"
+    config.write_text(f"agent_command: {json.dumps(argv)}\n", encoding="utf-8")
+    plan = _plan_file(tmp_path)
+
+    code = cli.main(["--config", str(config), "run", "--plan", plan, "--risk", "low",
+                     "--undeclared", "allow", "--ask-journal", str(tmp_path / "asks")])
+
+    out = capsys.readouterr().out
+    assert code == 10, f"expected the halt code, got {code}"
+    assert "halted:" in out, out
+    assert "database" in out, "the message must name the aspect the seat invented"
