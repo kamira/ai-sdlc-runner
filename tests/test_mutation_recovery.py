@@ -935,6 +935,50 @@ def test_recover_destroys_nothing_it_cannot_account_for(tmp_path, monkeypatch, o
         assert said.index("delete") > said.index("back by hand"), (
             f"{shape}: delete comes before restore — {said!r}")
 
+    # A restore offered for a record whose `owner` is unusable must be **conditioned** on no run
+    # being active, the way the pid-reuse branch conditions its own. Unconditioned it is the act
+    # the paragraph above it says it will not perform, handed to the operator instead — and the
+    # same pid spelled `12752` and `"12752"` then gets opposite advice about the same live run,
+    # the second of which writes the original over that run's mutated file and makes it measure
+    # unmutated source (CHG-20260901-05, defect seat).
+    if "owner" in override and "back by hand" in said:
+        assert "no mutation run is active" in said, (
+            f"{shape}: it cannot tell a killed run from a live one — that is why it stopped — and "
+            f"then tells the operator to restore anyway, unconditionally — {said!r}")
+
+
+def test_a_record_without_mutated_does_not_send_the_operator_over_somebody_elses_edit(
+        tmp_path, monkeypatch):
+    """`mutated` is what tells an edited file from a mutated one, so losing it must not offer a
+    restore.
+
+    The automated path forks on it — `now == mutated`, `now == original`, or *"somebody has edited
+    it since"* — and refuses to write in the third case. The shape gate's `recoverable` left
+    `mutated` out of its test, so the message issued when the record loses that very field told the
+    operator to do by hand the write the automated path had just refused, with no "check it first".
+
+    `DESTRUCTIVE_SHAPES` cannot see this: its fixture always writes `victim == mutated`, so the one
+    state where the advice destroys something is the one that table cannot produce
+    (CHG-20260901-05, risk seat).
+    """
+    victim = tmp_path / "target.py"
+    theirs = "SOMEBODY ELSE'S WORK" + NEWLINE
+    victim.write_text(theirs, encoding="utf-8")
+    record = tmp_path / "in-flight.json"
+    record.write_text(json.dumps({"path": str(victim), "original": "ORIGINAL" + NEWLINE,
+                                  "owner": 999999}), encoding="utf-8")
+    monkeypatch.setattr(mutation_recovery, "IN_FLIGHT", record)
+
+    said = mutation_recovery.recover(quiet=True)
+
+    assert said and said.startswith("REFUSING"), said
+    assert "mutated" in said.split(NEWLINE)[0], f"the diagnosis has to name the field — {said!r}"
+    assert "back by hand" not in said, (
+        "without `mutated` this cannot tell a mutated file from an edited one, and this file holds "
+        f"neither text — offering a hand restore here overwrites somebody's work — {said!r}")
+    assert victim.read_text(encoding="utf-8") == theirs
+    assert record.exists()
+
 
 def test_write_refuses_a_non_string_before_it_truncates(tmp_path):
     """`io.open(path, "w")` truncates, then the write fails. The order is the whole defect."""

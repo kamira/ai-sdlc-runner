@@ -1782,6 +1782,18 @@ def _import_fails(path: Path) -> str:
     # same-size, same-mtime rewrite imports clean under `python` and under `python -B` alike, and
     # refuses only when the cache prefix points somewhere with nothing in it (CHG-20260901-04,
     # defect seat, against this comment's own claim of "none trusted").
+    #
+    # It costs. A fresh prefix finds no cache **and leaves none**, so every probe recompiles the
+    # module and everything it imports — 44 files, 1.34 MB, measured. ~0.34s per probe became
+    # ~0.86–1.10s, and this runs once per *mutation*: 197 times in a full run, not 19. About
+    # +100s. Correctness over speed is the right trade for the outcome that says "the probe
+    # learned nothing", but the price is real and two figures elsewhere were left stale by it
+    # (CHG-20260901-05, risk seat).
+    #
+    # A run killed mid-probe leaves one `mutation-probe-*` directory behind, because `with` does
+    # not unwind through a `TerminateProcess`. One per killed run, in the system temp directory,
+    # which the OS clears — and this module's whole premise is that the harness gets killed, so it
+    # is named here rather than left to be found.
     with tempfile.TemporaryDirectory(prefix="mutation-probe-") as cache:
         probe = subprocess.run([sys.executable, "-c", stmt], capture_output=True, text=True,
                                encoding="utf-8", errors="replace", cwd=REPO,
