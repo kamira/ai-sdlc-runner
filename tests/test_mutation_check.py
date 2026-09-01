@@ -287,9 +287,15 @@ def test_every_mutated_file_still_imports_before_it_is_mutated():
     was the one not run (CHG-20260901-03, conformance seat, correcting -02's account).
 
     Unmutated, deliberately: a probe that cannot import the file as it stands cannot say anything
-    about the file with a mutation in it, and this is the cheap half: 19 subprocesses, ~6s. The
-    probe across a full harness run is ~84s of subprocess time, inside a full run the risk seat
-    measured at roughly **54 minutes** — "about a minute" understated that by fifty-fold
+    about the file with a mutation in it.
+
+    This is the cheap half — 19 subprocesses, one per distinct target — and it costs ~~`~6s`~~
+    **16–26s** here. The full-run figure is ~~`~84s`~~ **roughly 200s**, because the probe runs
+    once per *mutation* (197) and not once per target (19), and because a fresh
+    `PYTHONPYCACHEPREFIX` means each probe both finds no cache and leaves none: measured at ~0.34s
+    per probe under the `-B` form it replaced and ~0.86–1.10s now, recompiling the module and
+    everything it imports each time. Both figures were left stale by the change that made them so
+    (CHG-20260901-05, risk seat). Inside a full run of roughly **54 minutes**
     (CHG-20260901-03, risk seat). That half belongs to whoever runs the harness; CI does not.
     """
     broken = {}

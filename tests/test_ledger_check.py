@@ -712,6 +712,38 @@ GHOST_EXCUSES = [
     ("`test_gone` was renamed to" + NEWLINE
      + "`test_this_repos_own_ledger_passes` in CHG-20260901-01.", True,
      "wrapped, and the name resolves"),
+    # The verb's **case**. `_REMOVED_BY` matches its verbs under `(?i:)`; the gate re-matched the
+    # same verb with its own hand-rolled regex and no flag, so a capitalised `Renamed` — the
+    # ordinary spelling at the start of a sentence, and one this table already pins for `Removed
+    # in` — made the whole gate short-circuit and re-admitted ``renamed to `x` ``, closed two
+    # rounds earlier (CHG-20260901-05, defect seat).
+    ("`test_gone` was Renamed to `helper` in CHG-20260901-01.", False,
+     "a capitalised verb, and a name that does not resolve"),
+    ("Renamed to `x` in CHG-20260901-01: `test_gone`.", False,
+     "a capitalised verb, reversed, and a name that does not resolve"),
+    # Attribution is adjacency, not order. Forward order was an ordering test: `_SPAN` crosses any
+    # prose, so putting the ghost *first* walked past it. The row above this pair puts the ghost
+    # after the rename and so pinned the clause order rather than the shape.
+    ("`test_gone` is unaffected; the fixture was renamed to "
+     "`test_this_repos_own_ledger_passes` in CHG-20260901-01.", False,
+     "someone else's rename, with the ghost named first"),
+    ("`test_gone` is one of them, and the helper was renamed to "
+     "`test_this_repos_own_ledger_passes` in CHG-20260901-01.", False,
+     "someone else's rename, joined by a comma"),
+    # The **cost** of that, pinned so it stays visible rather than being rediscovered as a bug: an
+    # aside between the name and the verb is punctuation, so this true sentence is refused. The
+    # remedy the refusal names still works — drop the aside, or write `removed in`.
+    ("`test_gone`, the halt case, was renamed to `test_this_repos_own_ledger_passes` in "
+     "CHG-20260901-01.", False,
+     "this test's own rename, behind a comma aside -- a refused true sentence"),
+    # The last literal space in a rule that writes `\s+` everywhere else. Every record here is
+    # hard-wrapped, and the wrap falls between `renamed` and `to` as readily as after `to` — which
+    # the round before had just fixed, one word to the right.
+    ("`test_gone` was renamed" + NEWLINE
+     + "to `test_this_repos_own_ledger_passes` in CHG-20260901-01.", True,
+     "wrapped between 'renamed' and 'to'"),
+    ("`test_gone` was renamed  to `test_this_repos_own_ledger_passes` in CHG-20260901-01.", True,
+     "two spaces between 'renamed' and 'to'"),
     ("`test_gone` was renamed in CHG-20260901-01.", False, "renamed, with no new name"),
     # Ordinary prose punctuation. Excluding `.!?` outright refused all five of these, every one a
     # remedy the refusal invites (CHG-20260831-07, risk seat).
@@ -728,7 +760,7 @@ GHOST_EXCUSES = [
     # `3a49c57`: 4405 boundaries follow a capital and 4195 do not — 3323 punctuation or a dash, 435
     # a backticked identifier, 370 a digit, 67 a lowercase word. The capital rule saw about half,
     # and the one shape that still worked was the only one pinned. A commit rather than a count,
-    # and the claim itself re-measured by `test_the_capital_rule_would_still_miss_about_half`
+    # and the claim itself re-measured by `test_the_sentence_rule_ends_a_sentence_a_capital_would_not`
     # below, because five statements of this census in a row named a tree that excluded the
     # recording change's own records (CHG-20260901-04, conformance seat).
     ("`test_gone` is the evidence. `test_live` was deleted in CHG-20260901-01.", False,
@@ -829,21 +861,53 @@ def test_the_remedy_the_ghost_refusal_offers_actually_works(tmp_path, sentence, 
         assert "removed and why" in problems[0], "and the refusal has to say what to do"
 
 
-def test_the_capital_rule_would_still_miss_about_half():
-    """The census `_SENTENCE_END`'s comment argues from, re-measured over whatever tree this runs on.
+#: The sentence openings the capital rule refused, one per shape the census counts. Each is a
+#: sentence end that `_SENTENCE_END` must find and a capital-only rule must miss.
+NOT_OPENED_BY_A_CAPITAL = [
+    ("The rule was removed. `test_live` was deleted in CHG-20260901-01.", "a backticked identifier"),
+    ("The rule was removed. the vendored skill went with it.", "a lowercase word"),
+    ("The rule was removed. 3 skills went with it.", "a digit"),
+    ("The rule was removed. (The skill went with it.)", "a paren"),
+    ("The rule was removed. **The skill went with it.**", "bold"),
+]
 
-    Five statements of that census in a row published a denominator that was the tree **before**
-    the recording change's own two records. The ledger calls CHG-20260901-02's the fourth instance
-    and CHG-20260901-03's the fifth, and each of those two was written to correct the one before
-    it — which is what finally made the shape legible: "the current tree" is not something a record
-    can measure about itself, because writing the record changes it. The comment names a commit
-    now, which is checkable in one `git ls-tree` and cannot drift.
 
-    That leaves the *claim* unpinned, and the claim is the part that matters: requiring a capital
-    after the full stop was the third formulation of this bound and it leaked on this repository's
-    own house style. This asserts the claim, not the count — no figure here goes stale when a
-    record is added, and if the house style ever changes enough that a capital really would be a
-    safe proxy for a sentence end, this is what says so (CHG-20260901-04, conformance seat).
+@pytest.mark.parametrize("text,shape", NOT_OPENED_BY_A_CAPITAL,
+                         ids=[c[1] for c in NOT_OPENED_BY_A_CAPITAL])
+def test_the_sentence_rule_ends_a_sentence_a_capital_would_not(text, shape):
+    """Drives `_SENTENCE_END` itself against the rule it replaced.
+
+    Requiring a capital after the full stop was the third formulation of this bound, and it leaked
+    on this repository's own house style — which is what the census in `_SENTENCE_END`'s comment is
+    evidence for.
+
+    The test that stood here asserted a **proportion** over the live ledger and pinned nothing: it
+    compiled its own regex, never touched `_SENTENCE_END`, and reverting that constant to the
+    capital rule left it green while four `GHOST_EXCUSES` rows went red. Its floor was also
+    unreachable — 4195 of 8600 against a floor of 0.33, needing 1357 boundaries to flip — and
+    98.4% of its numerator was punctuation, backticks and digits, so deleting every lowercase
+    follower in the ledger still left it at 0.4798. It measured "this ledger contains a lot of
+    `` `x`. `y` ``", not the claim (CHG-20260901-05, risk seat).
+
+    What is pinned instead is the difference between the two rules, one shape per row. Reverting
+    `_SENTENCE_END` to `[.!?]\\s+(?=[A-Z])` turns every row here red.
+    """
+    capital_only = re.compile(ledger_check._NOT_AN_END + r"[.!?]\s+(?=[A-Z])", re.MULTILINE)
+
+    assert ledger_check._SENTENCE_END.search(text), (
+        f"{shape}: this is a sentence end and the rule has to find it")
+    assert not capital_only.search(text), (
+        f"{shape}: the capital rule finds this, so the row is not testing the difference")
+
+
+def test_the_ledger_writes_the_openings_the_capital_rule_would_have_missed():
+    """And that those shapes are real here, not hypothetical.
+
+    The bound above is worth having only because this repository writes sentences that open with a
+    backticked identifier, a lowercase word or a digit. This counts them over whatever tree it runs
+    on. No published figure is asserted — the floors are what makes the *shape* non-hypothetical,
+    and they are reachable: a tree that stopped writing any one of these turns this red
+    (CHG-20260901-05, risk seat).
     """
     boundary = re.compile(r"[.!?]\s+(.)")
     records = sorted((REPO / "docs" / "changes").glob("*.md"))
@@ -852,16 +916,14 @@ def test_the_capital_rule_would_still_miss_about_half():
 
     followers = [f for path in records
                  for f in boundary.findall(path.read_text(encoding="utf-8"))]
-    not_capital = [f for f in followers if not f.isupper()]
+    counted = {"a backticked identifier": [f for f in followers if f == "`"],
+               "a digit": [f for f in followers if f.isdigit()],
+               "a lowercase word": [f for f in followers if f.islower()]}
 
-    assert len(followers) > 5000, "too few boundaries for the proportion to mean anything"
-    # A third would still be a leak worth the bound; the measured figure at `3a49c57` is 4195 of
-    # 8600, a little under half. The assertion is loose on purpose — it is the direction that is
-    # being pinned, and a tight bound here would be one more figure to correct every round.
-    assert len(not_capital) / len(followers) > 0.33, (
-        "a capital after the full stop would now be a fair proxy for a sentence end here — "
-        "%d of %d boundaries are followed by one" % (len(followers) - len(not_capital),
-                                                     len(followers)))
+    thin = {shape: len(hits) for shape, hits in counted.items() if len(hits) < 20}
+    assert not thin, (
+        "these openings are what the capital rule would refuse, and the ledger has nearly stopped "
+        f"writing them — the bound may no longer be earning its place: {thin}")
 
 
 #: Every spelling of "this acceptance's finding was never true". Each must reopen its change.

@@ -305,10 +305,17 @@ def recover(quiet: bool = False) -> Optional[str]:
     # Only these four. Iterating everything present refused a record carrying a spare key of any
     # other type, with recovery unreachable until the operator guessed which unread field it was.
     READS = ("path", "original", "mutated", "owner")
-    # `sorted` on both arms, so the one message cannot name the same four fields in two different
-    # orders — which it did for a JSON array: READS order in the diagnosis, alphabetical in the
-    # remedy (CHG-20260901-04).
-    missing = sorted(k for k in READS if k not in record) if isinstance(record, dict) else sorted(READS)
+    # `sorted` on both arms, so the diagnosis and the remedy below cannot name the same fields in
+    # two different orders.
+    #
+    # The comment that stood here said the shipped code *had* done that — READS order in the
+    # diagnosis, alphabetical in the remedy. It had not: at `3a49c57` the remedy's list was
+    # `missing + wrong`, READS order too, and for a JSON array the branch that prints it never ran
+    # at all. The divergence arrived with this module's own `broken = sorted(...)` one round later,
+    # and was then recorded as a defect the change had found rather than one it had made
+    # (CHG-20260901-05, idiom seat).
+    missing = (sorted(k for k in READS if k not in record) if isinstance(record, dict)
+               else sorted(READS))
     wrong = sorted(k for k in READS if isinstance(record, dict) and k in record
                    and (not isinstance(record[k], str if k != "owner" else int)
                         or isinstance(record[k], bool)))
@@ -338,10 +345,26 @@ def recover(quiet: bool = False) -> Optional[str]:
         # 4. It does not promise a repair that cannot work. A record whose `original` is missing
         #    cannot be repaired from itself, so "repair it and re-run" returns the same refusal
         #    forever. Git is where that text is, and the record is kept either way.
+        # 5. It **never tells the operator to restore over a possibly-live run**. Rule 3's fix
+        #    deleted the clause that carried this — *"putting the `original` back by hand may
+        #    overwrite a live run's source"* — and with it the condition *"if you know no run is
+        #    active"*, leaving a paragraph that says the tool cannot tell a killed run from a live
+        #    one and then hands that same act to the operator unconditionally. The pid-reuse
+        #    refusal below still conditions its own on "if no such run exists"; this one does
+        #    again (CHG-20260901-05, defect and idiom seats).
         blank_path = (isinstance(record, dict) and "path" not in missing and "path" not in wrong
                       and not record["path"].strip())
         broken = sorted(set(missing) | set(wrong) | ({"path"} if blank_path else set()))
-        recoverable = "original" not in broken and "path" not in broken
+        # `mutated` belongs in this test, and its absence is the reason it is spelled out.
+        # `recoverable` decides whether the message offers a hand restore, and `mutated` is the
+        # only field that can answer *"has somebody edited this file since?"* — it is the whole
+        # basis of the `now == mutated` / `now == original` / else fork below. Without it, the
+        # automated path refuses ("it matches neither … so somebody has edited it since"), and the
+        # message issued in its place told the operator to perform that same write unconditionally.
+        # Measured on a file holding an unrelated edit: complete record → refused and untouched;
+        # the same record with `mutated` removed → "put the `original` back by hand", which
+        # destroys that edit and then deletes the record (CHG-20260901-05, risk seat).
+        recoverable = not {"original", "path", "mutated"} & set(broken)
         said = (f"REFUSING to act on {IN_FLIGHT.name}: it reads as JSON, and "
                 + (f"the field(s) {missing} are not there. " if missing else "")
                 + (f"the field(s) {wrong} are not the type they must be. " if wrong else "")
@@ -355,12 +378,41 @@ def recover(quiet: bool = False) -> Optional[str]:
                 # record whose `path` is present and **empty** does hold the field. What is true
                 # of every branch here is that those fields are unusable, so the record cannot
                 # lead you back (CHG-20260901-04).
-                + (f"Put the `original` this record names back by hand, then delete it."
+                #
+                # And when `owner` is what is broken, the restore is **conditioned**, the way the
+                # pid-reuse branch below conditions its own on "if no such run exists". The two
+                # halves of this message contradicted each other in one breath: *"it will not act"*
+                # — because it cannot tell a killed run from a live one — followed by *"put the
+                # original back by hand"*, which is that act, performed by the operator instead.
+                # Measured with a real live child and the same pid spelled two ways: `owner: 12752`
+                # refuses and says to wait; `owner: "12752"` — the hand edit "do not invent a pid"
+                # assumes people make — advises writing the original over a live run's mutated
+                # file. That is the CHG-20260830-06 corruption this field exists to prevent, and
+                # the run then measures unmutated source and reports NOT CAUGHT
+                # (CHG-20260901-05, defect seat).
+                + (f"Once you have confirmed no mutation run is active — which is the thing this "
+                   f"cannot confirm, and why it stopped — put the `original` this record names "
+                   f"back by hand and delete it. If a run **is** active, leave both alone: "
+                   f"writing the original over a live run's file corrupts that run silently."
+                   if recoverable and "owner" in broken else
+                   f"Put the `original` this record names back by hand, then delete it."
                    if recoverable else
-                   f"With {broken} unusable this record cannot lead you back to the original, so "
-                   f"`git status` and `git diff` on `src/` and `tools/` are what show you what a "
-                   f"killed run left. Check staged changes too: a staged mutation shows in "
-                   f"neither."))
+                   # `git status`, and **then** `git diff`, in that order and with the difference
+                   # stated. "A staged mutation shows in neither" was written into the operator's
+                   # message while the same change's own record printed `git status: M  x.py` two
+                   # pages away: `git status` does show it, only `git diff` is silent. Telling an
+                   # operator the one command that would find the file is worthless is the worst
+                   # place to be wrong — this is the branch reached when the record is most
+                   # useless (CHG-20260901-05, risk seat).
+                   #
+                   # And it names the way out. Every sibling refusal does; this one ended at the
+                   # diagnosis, and `begin()` opens the record with `"x"`, so the harness stays
+                   # locked out until somebody removes it.
+                   f"With {broken} unusable this record cannot lead you back to the original. "
+                   f"`git status` on `src/` and `tools/` shows what a killed run left, staged or "
+                   f"not; `git diff` shows the text, but is **silent on a staged change**, so "
+                   f"check `git diff --cached` as well. Delete this record once the tree is "
+                   f"reconciled, and not before — until it is gone the harness refuses to run."))
         return _refuse(said, quiet)
 
     path = Path(record["path"])
