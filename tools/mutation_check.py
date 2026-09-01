@@ -1784,16 +1784,31 @@ def _import_fails(path: Path) -> str:
     # defect seat, against this comment's own claim of "none trusted").
     #
     # It costs. A fresh prefix finds no cache **and leaves none**, so every probe recompiles the
-    # module and everything it imports — 44 files, 1.34 MB, measured. ~0.34s per probe became
-    # ~0.86–1.10s, and this runs once per *mutation*: 197 times in a full run, not 19. About
-    # +100s. Correctness over speed is the right trade for the outcome that says "the probe
+    # module and everything it imports: median 65 files / 2.48 MB, up to 137 / 5.29 MB for
+    # `server`. (`44 files, 1.34 MB` stood here and is the *smallest* of the 19 targets, quoted as
+    # if it were typical.) ~0.34s per probe became ~0.89s warm and ~1.59s cold; over 197 mutations
+    # a full run measures 175–313s, mean 261s.
+    #
+    # Roughly half of that is avoidable and is not being taken: of the 71 `.pyc` files one probe
+    # writes, **61 are standard library**. The property being defended is "do not trust a stale
+    # `.pyc` for the file under mutation" — invalidating the stdlib's cache 197 times is not part
+    # of it. A prefix shared across probes and warmed once, with only the target's own `.pyc`
+    # removed each time, measures 0.628s per probe, about 124s per run. That is a real change with
+    # a real failure mode (a shared cache is a shared cache) and it is not this one; it is named
+    # here so the next reader does not have to rediscover it (CHG-20260901-06, risk seat).
+    #
+    # The probe also runs **inside** the mutated window, so this adds roughly a second per mutation
+    # to the time the tree spends holding a mutation — the exposure `mutation_recovery` exists for.
+    # Small against a 54-minute run; not nothing. Correctness over speed is the right trade for the outcome that says "the probe
     # learned nothing", but the price is real and two figures elsewhere were left stale by it
     # (CHG-20260901-05, risk seat).
     #
     # A run killed mid-probe leaves one `mutation-probe-*` directory behind, because `with` does
-    # not unwind through a `TerminateProcess`. One per killed run, in the system temp directory,
-    # which the OS clears — and this module's whole premise is that the harness gets killed, so it
-    # is named here rather than left to be found.
+    # not unwind through a `TerminateProcess`. One per killed run, in the system temp directory —
+    # `%LOCALAPPDATA%\Temp` here, which **nothing sweeps by default**; the clause claiming the OS
+    # clears it was written about POSIX in a module that is four paragraphs of Windows divergence
+    # (CHG-20260901-06, idiom seat). This module's whole premise is that the harness gets killed,
+    # so it is named here rather than left to be found.
     with tempfile.TemporaryDirectory(prefix="mutation-probe-") as cache:
         probe = subprocess.run([sys.executable, "-c", stmt], capture_output=True, text=True,
                                encoding="utf-8", errors="replace", cwd=REPO,

@@ -28,6 +28,10 @@ def _repo(tmp_path, chg_body, acc=None):
 #: this is for the cases where a literal would be unreadable.
 NEWLINE = chr(10)
 CRLF = chr(13) + chr(10)
+#: The aside marker this repository's prose uses constantly, and the one spelling of "another
+#: clause starts here" that carries no ASCII punctuation at all — which is why it belongs in the
+#: table rather than in a comment about it (CHG-20260901-06).
+EM_DASH = chr(8212)
 
 HEADER = "- Project: x\n- Branch: b\n- Date: 2026-09-01\n- Risk: low\n"
 
@@ -675,76 +679,60 @@ GHOST_EXCUSES = [
      "an inline link"),
     ("`test_gone` was removed in [CHG-20260901-01][1].", True, "a reference-style link"),
     ("`test_gone` was removed in [CHG-20260901-01](#chg-20260901-01).", True, "a GitHub anchor"),
-    # The phrasing the comment above `_REMOVED_BY` tells people to write. Dropping `renamed`
-    # without making this work left no rename phrasing the check accepts at all (risk seat).
-    # The new name has to be a test that exists, or the rename gives the reader nowhere to go —
-    # which is the whole argument for accepting the phrasing (CHG-20260901-03, risk seat).
-    ("`test_gone` was renamed to `test_this_repos_own_ledger_passes` in CHG-20260901-01.", True,
+    # ------------------------------------------------------------------------------------
+    # Renames. **Every one of these is refused**, and that is the point of CHG-20260901-06.
+    #
+    # `renamed to X in CHG-…` was accepted for four rounds because it gives the reader somewhere
+    # to go. It then produced the largest finding in each of the five rounds that touched it — a
+    # widening that excused any new name, a resolution check that vouched for someone else's
+    # rename, a scoping rule that measured clause order, a verb whose case turned the whole gate
+    # off, and a punctuation blacklist that a conjunction walked through. Every fix lived inside
+    # the previous fix.
+    #
+    # What settled it is what it bought: **nothing**. Removing the alternative leaves
+    # `check_named_tests_exist` reporting 0 problems over the real repository, unchanged — no
+    # record relies on a rename excuse. A rename is a removal of the old name, so `removed in
+    # CHG-…` says it truthfully, and the record may still say what it became.
+    #
+    # These rows stay, as refusals, because they are the shapes people write and because a table
+    # that only shows what is accepted cannot show a rule being narrowed.
+    ("`test_gone` was renamed to `test_this_repos_own_ledger_passes` in CHG-20260901-01.", False,
      "renamed, with a new name that resolves"),
     ("`test_gone` was renamed to `test_never_written` in CHG-20260901-01.", False,
      "renamed, with a new name that does not"),
     ("`test_gone` was renamed to `helper` in CHG-20260901-01.", False,
      "renamed to something that is not a test"),
-    # A rename of something else entirely, in a sentence that says outright the ghost is unaffected.
-    # The widening that let `renamed to `<any>`` through excused this (CHG-20260901-03, defect seat).
+    ("`test_gone` was renamed in CHG-20260901-01.", False, "renamed, with no new name"),
+    ("`test_gone` was renamed to" + NEWLINE
+     + "`test_this_repos_own_ledger_passes` in CHG-20260901-01.", False,
+     "renamed, wrapped after 'to'"),
+    ("`test_gone` was renamed" + NEWLINE
+     + "to `test_this_repos_own_ledger_passes` in CHG-20260901-01.", False,
+     "renamed, wrapped between 'renamed' and 'to'"),
+    ("`test_gone` was Renamed to `helper` in CHG-20260901-01.", False,
+     "renamed, with a capitalised verb"),
+    # The shapes that took five rounds to refuse, kept because each one was live at some point and
+    # a reader tracing the history needs to see them answered:
     ("The helper was renamed to `some_helper` in CHG-20260901-01; `test_gone` is unaffected.", False,
-     "a helper rename that says the ghost is unaffected"),
-    # The gate was written with a literal single space where `_REMOVED_BY` uses `\s+`, so two spaces
-    # or a line wrap walked past it — in a ledger where every record is hard-wrapped, and where the
-    # wrapped row above was green because the gate never fired rather than because the name resolved
-    # (CHG-20260901-04, defect seat).
-    ("`test_gone` was renamed to  `helper` in CHG-20260901-01.", False,
-     "two spaces before a name that does not resolve"),
-    # The scoping half, which the rows above cannot separate from the must-resolve half: here the
-    # renamed name **does** resolve, so only "is this rename about this test?" can refuse it.
+     "someone else's rename, to a name that is not a test"),
     ("The fixture was renamed to `test_this_repos_own_ledger_passes` in CHG-20260901-01; "
      "`test_gone` is unaffected.", False,
      "someone else's rename, to a name that resolves"),
-    # A foreign rename inside an otherwise valid removal note. The rename check used to `continue`
-    # off the whole offset, so the longer match ending at the plain `removed in CHG-…` further
-    # along the sentence was never offered — the shape `_excused`'s docstring records
-    # CHG-20260831-06 as fixing, with the rename check as the new consumer (CHG-20260901-04, risk).
-    ("`test_gone` was, like `test_old` which was renamed to `test_never_written` in "
-     "CHG-20260901-01, removed in CHG-20260901-01.", True,
-     "a foreign rename beside a valid removal note"),
-    ("`test_gone` was renamed to" + NEWLINE + "`test_never_written` in CHG-20260901-01.", False,
-     "wrapped, and the name does not resolve"),
-    ("`test_gone` was renamed to" + NEWLINE
-     + "`test_this_repos_own_ledger_passes` in CHG-20260901-01.", True,
-     "wrapped, and the name resolves"),
-    # The verb's **case**. `_REMOVED_BY` matches its verbs under `(?i:)`; the gate re-matched the
-    # same verb with its own hand-rolled regex and no flag, so a capitalised `Renamed` — the
-    # ordinary spelling at the start of a sentence, and one this table already pins for `Removed
-    # in` — made the whole gate short-circuit and re-admitted ``renamed to `x` ``, closed two
-    # rounds earlier (CHG-20260901-05, defect seat).
-    ("`test_gone` was Renamed to `helper` in CHG-20260901-01.", False,
-     "a capitalised verb, and a name that does not resolve"),
-    ("Renamed to `x` in CHG-20260901-01: `test_gone`.", False,
-     "a capitalised verb, reversed, and a name that does not resolve"),
-    # Attribution is adjacency, not order. Forward order was an ordering test: `_SPAN` crosses any
-    # prose, so putting the ghost *first* walked past it. The row above this pair puts the ghost
-    # after the rename and so pinned the clause order rather than the shape.
-    ("`test_gone` is unaffected; the fixture was renamed to "
+    ("`test_gone` is unaffected but the fixture was renamed to "
      "`test_this_repos_own_ledger_passes` in CHG-20260901-01.", False,
-     "someone else's rename, with the ghost named first"),
-    ("`test_gone` is one of them, and the helper was renamed to "
+     "someone else's rename, joined by 'but'"),
+    ("`test_gone` " + EM_DASH + " untouched " + EM_DASH + " while the fixture was renamed to "
      "`test_this_repos_own_ledger_passes` in CHG-20260901-01.", False,
-     "someone else's rename, joined by a comma"),
-    # The **cost** of that, pinned so it stays visible rather than being rediscovered as a bug: an
-    # aside between the name and the verb is punctuation, so this true sentence is refused. The
-    # remedy the refusal names still works — drop the aside, or write `removed in`.
-    ("`test_gone`, the halt case, was renamed to `test_this_repos_own_ledger_passes` in "
-     "CHG-20260901-01.", False,
-     "this test's own rename, behind a comma aside -- a refused true sentence"),
-    # The last literal space in a rule that writes `\s+` everywhere else. Every record here is
-    # hard-wrapped, and the wrap falls between `renamed` and `to` as readily as after `to` — which
-    # the round before had just fixed, one word to the right.
-    ("`test_gone` was renamed" + NEWLINE
-     + "to `test_this_repos_own_ledger_passes` in CHG-20260901-01.", True,
-     "wrapped between 'renamed' and 'to'"),
-    ("`test_gone` was renamed  to `test_this_repos_own_ledger_passes` in CHG-20260901-01.", True,
-     "two spaces between 'renamed' and 'to'"),
-    ("`test_gone` was renamed in CHG-20260901-01.", False, "renamed, with no new name"),
+     "someone else's rename, behind an em-dash aside"),
+    ("Renamed to `test_this_repos_own_ledger_passes` in CHG-20260901-01 was `test_gone` itself.",
+     False, "this test's own rename, written in reverse"),
+    # And the sentence that makes the trade legible. A rename **and** a removal note in one
+    # sentence is excused — by the removal note. That is the remedy the refusal offers, it costs
+    # the author four words, and it is what the ten true sentences the previous rule refused
+    # should be rewritten as (CHG-20260901-06, risk seat).
+    ("`test_gone`, the halt case, was renamed to `test_this_repos_own_ledger_passes` and removed "
+     "in CHG-20260901-01.", True,
+     "a rename that also says removed -- the remedy the refusal names"),
     # Ordinary prose punctuation. Excluding `.!?` outright refused all five of these, every one a
     # remedy the refusal invites (CHG-20260831-07, risk seat).
     ("`test_gone`, i.e. the halt case, was removed in CHG-20260901-01.", True, "i.e."),
@@ -772,11 +760,11 @@ GHOST_EXCUSES = [
     ("`test_gone` is the evidence. 3 skills were deleted in CHG-20260901-01.", False,
      "a next sentence opening with a digit"),
     ("`test_gone` etc. was removed in CHG-20260901-01.", True, "etc., which is not a sentence end"),
-    # Every record here is hard-wrapped, and the rename phrase was spelled with hard spaces, so a
-    # wrap inside it refused the phrasing the comment above `_REMOVED_BY` recommends (risk seat).
-    ("`test_gone` was renamed to" + NEWLINE
-     + "  `test_this_repos_own_ledger_passes` in CHG-20260901-01.", True,
-     "the rename phrase, wrapped"),
+    # Every record here is hard-wrapped, so the removal phrase has to survive a wrap. It is the
+    # rename that is gone, not the wrapping (CHG-20260901-06).
+    ("`test_gone` was removed" + NEWLINE
+     + "  in CHG-20260901-01.", True,
+     "the removal phrase, wrapped"),
     # A continuation that does not start with a capital. The whole one-sentence bound rests on
     # `_SENTENCE_END` now that `_SPAN` no longer excludes `.!?`, and only its capital-letter
     # alternative was measured — dropping the `\s*$` half left 120 green while these two came back
@@ -890,7 +878,8 @@ def test_the_sentence_rule_ends_a_sentence_a_capital_would_not(text, shape):
     `` `x`. `y` ``", not the claim (CHG-20260901-05, risk seat).
 
     What is pinned instead is the difference between the two rules, one shape per row. Reverting
-    `_SENTENCE_END` to `[.!?]\\s+(?=[A-Z])` turns every row here red.
+    `_SENTENCE_END` to `_NOT_AN_END + r"[.!?]\\s+(?=[A-Z])"` — the capital rule as this
+    module would have spelled it, abbreviation lookbehinds and all — turns every row here red.
     """
     capital_only = re.compile(ledger_check._NOT_AN_END + r"[.!?]\s+(?=[A-Z])", re.MULTILINE)
 
@@ -900,30 +889,50 @@ def test_the_sentence_rule_ends_a_sentence_a_capital_would_not(text, shape):
         f"{shape}: the capital rule finds this, so the row is not testing the difference")
 
 
-def test_the_ledger_writes_the_openings_the_capital_rule_would_have_missed():
-    """And that those shapes are real here, not hypothetical.
+#: How many of the newest records the corpus check looks at. Small enough that a change in house
+#: style shows up within a few rounds, large enough not to swing on one record.
+RECENT_RECORDS = 30
 
-    The bound above is worth having only because this repository writes sentences that open with a
-    backticked identifier, a lowercase word or a digit. This counts them over whatever tree it runs
-    on. No published figure is asserted — the floors are what makes the *shape* non-hypothetical,
-    and they are reachable: a tree that stopped writing any one of these turns this red
-    (CHG-20260901-05, risk seat).
+
+def test_the_ledger_still_writes_the_openings_the_capital_rule_would_have_missed():
+    """And that those shapes are still being written — over the **newest** records, not all of them.
+
+    The bound above is worth having only because this repository writes sentences that open with
+    something other than a capital. The version of this test that measured the *whole* ledger could
+    not fail: it is append-only, this project's own policy forbids rewriting history, so 311
+    backticked openers stay 311 however the house style changes. Its floor was unreachable in
+    exactly the way the ratio it replaced was — a decoration one layer down (CHG-20260901-06, risk
+    seat).
+
+    Over the newest records it is reachable, and it already says something. Measured at
+    `575d5cb`, newest 30 against all 275:
+
+        backticked identifier   84  /  450
+        digit                  103  /  386
+        lowercase word           3  /   68
+
+    The lowercase opener has nearly stopped being written; the leak the bound exists for is now
+    carried almost entirely by backticks and digits. That is worth seeing, and it is why the floor
+    is on the **combined** count with the breakdown in the message: a per-shape floor would be red
+    today for a drift in style rather than for the bound ceasing to earn its place.
     """
     boundary = re.compile(r"[.!?]\s+(.)")
     records = sorted((REPO / "docs" / "changes").glob("*.md"))
     records += sorted((REPO / "docs" / "acceptance").glob("*.md"))
     assert len(records) > 200, "the ledger is not where this expects it"
+    records.sort(key=lambda path: path.stem.split("-")[1:3])
 
-    followers = [f for path in records
+    followers = [f for path in records[-RECENT_RECORDS:]
                  for f in boundary.findall(path.read_text(encoding="utf-8"))]
-    counted = {"a backticked identifier": [f for f in followers if f == "`"],
-               "a digit": [f for f in followers if f.isdigit()],
-               "a lowercase word": [f for f in followers if f.islower()]}
+    counted = {"a backticked identifier": sum(1 for f in followers if f == "`"),
+               "a digit": sum(1 for f in followers if f.isdigit()),
+               "a lowercase word": sum(1 for f in followers if f.islower())}
 
-    thin = {shape: len(hits) for shape, hits in counted.items() if len(hits) < 20}
-    assert not thin, (
-        "these openings are what the capital rule would refuse, and the ledger has nearly stopped "
-        f"writing them — the bound may no longer be earning its place: {thin}")
+    assert len(followers) > 200, f"too few boundaries in the newest {RECENT_RECORDS} records"
+    assert sum(counted.values()) > 30, (
+        f"the newest {RECENT_RECORDS} records have nearly stopped opening sentences with anything "
+        f"but a capital, so the bound `_SENTENCE_END` carries may no longer be earning its place "
+        f"here — {counted} of {len(followers)} boundaries")
 
 
 #: Every spelling of "this acceptance's finding was never true". Each must reopen its change.

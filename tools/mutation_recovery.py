@@ -102,6 +102,19 @@ def _alive_posix(pid: int) -> bool:
         return False
     except PermissionError:
         return True                                    # alive, and owned by somebody else
+    except (OverflowError, ValueError):
+        # A number this platform cannot express as a pid. `os.kill` raises `OverflowError` for
+        # anything outside `pid_t`, and the type gate above only checks that `owner` is an int —
+        # so `{"owner": 4294967296}` reaches here and, uncaught, tracebacks straight out of
+        # `recover()`. A traceback out of `recover` is the shape this module has fixed three times.
+        #
+        # **Alive**, because that is the answer that refuses. This branch cannot tell whether a run
+        # is mutating the tree, and every other "cannot tell" in this module stops rather than
+        # acts. Windows takes the opposite answer by accident, and that is finding 7 of
+        # CHG-20260901-06's risk seat: `_alive_nt` hands the value to `c_ulong`, which truncates it
+        # mod 2**32 without complaint, so the same record reads dead there and acts
+        # (CHG-20260901-06, risk seat).
+        return True
     return True
 
 
@@ -364,7 +377,29 @@ def recover(quiet: bool = False) -> Optional[str]:
         # Measured on a file holding an unrelated edit: complete record → refused and untouched;
         # the same record with `mutated` removed → "put the `original` back by hand", which
         # destroys that edit and then deletes the record (CHG-20260901-05, risk seat).
-        recoverable = not {"original", "path", "mutated"} & set(broken)
+        # Three states, not two: the record can lead you back, the record can lead you back but the
+        # **file** has moved on, or the record cannot lead you back at all.
+        #
+        # Having every field is not enough, and `recoverable` never looked at the file. A record
+        # whose only fault was `owner` — the exact hand edit this message invites with "do not
+        # invent a pid" — got a restore instruction over a file that no longer held the mutated
+        # text. The complete record refuses that write ("it matches neither … so somebody has
+        # edited it since"); dropping `owner` returned from this gate before the file was ever
+        # read, and advised it. Everything needed to decide was on the record and was not consulted
+        # (CHG-20260901-06, defect seat).
+        #
+        # Read the way the fork below reads it, so the two cannot disagree: UTF-8, and a non-file
+        # or an unreadable one counts as "cannot say" rather than "safe to overwrite".
+        record_leads_back = not {"original", "path", "mutated"} & set(broken)
+        edited_since = False
+        if record_leads_back:
+            victim = Path(record["path"])
+            try:
+                now = io.open(victim, encoding="utf-8").read() if victim.is_file() else None
+            except (OSError, UnicodeDecodeError):
+                now = None
+            edited_since = now != record["mutated"]
+        recoverable = record_leads_back and not edited_since
         said = (f"REFUSING to act on {IN_FLIGHT.name}: it reads as JSON, and "
                 + (f"the field(s) {missing} are not there. " if missing else "")
                 + (f"the field(s) {wrong} are not the type they must be. " if wrong else "")
@@ -379,24 +414,39 @@ def recover(quiet: bool = False) -> Optional[str]:
                 # of every branch here is that those fields are unusable, so the record cannot
                 # lead you back (CHG-20260901-04).
                 #
-                # And when `owner` is what is broken, the restore is **conditioned**, the way the
-                # pid-reuse branch below conditions its own on "if no such run exists". The two
-                # halves of this message contradicted each other in one breath: *"it will not act"*
-                # — because it cannot tell a killed run from a live one — followed by *"put the
-                # original back by hand"*, which is that act, performed by the operator instead.
-                # Measured with a real live child and the same pid spelled two ways: `owner: 12752`
-                # refuses and says to wait; `owner: "12752"` — the hand edit "do not invent a pid"
-                # assumes people make — advises writing the original over a live run's mutated
-                # file. That is the CHG-20260830-06 corruption this field exists to prevent, and
-                # the run then measures unmutated source and reports NOT CAUGHT
-                # (CHG-20260901-05, defect seat).
+                # A restore is always **conditioned**, the way the pid-reuse branch below conditions
+                # its own on "if no such run exists". The two halves of this message once
+                # contradicted each other in one breath: *"it will not act"* — because it cannot
+                # tell a killed run from a live one — followed by *"put the original back by
+                # hand"*, which is that act, performed by the operator instead. Measured with a
+                # real live child and the same pid spelled two ways: `owner: 12752` refuses and
+                # says to wait; `owner: "12752"` — the hand edit "do not invent a pid" assumes
+                # people make — advised writing the original over a live run's mutated file. That
+                # is the CHG-20260830-06 corruption this field exists to prevent, after which the
+                # run measures unmutated source and reports NOT CAUGHT (CHG-20260901-05, defect).
+                #
+                # There is no unconditioned sibling, and the `and "owner" in broken` that used to
+                # guard this arm was a conjunct that could never be false when the first half was
+                # true. `recoverable` requires `path`, `original` and `mutated` all sound, and the
+                # gate only fires when some `READS` field is broken — so `recoverable` **implies**
+                # `broken == {"owner"}`. Enumerated over all 15 non-empty subsets: the conditioned
+                # arm is reached by one, the unconditioned arm by none. The dead arm and the dead
+                # conjunct are both gone; if a fifth field is ever read, this is where they return
+                # (CHG-20260901-06, defect and idiom seats).
                 + (f"Once you have confirmed no mutation run is active — which is the thing this "
                    f"cannot confirm, and why it stopped — put the `original` this record names "
                    f"back by hand and delete it. If a run **is** active, leave both alone: "
                    f"writing the original over a live run's file corrupts that run silently."
-                   if recoverable and "owner" in broken else
-                   f"Put the `original` this record names back by hand, then delete it."
                    if recoverable else
+                   # The file has moved on. Naming `{broken}` here would be true and useless: the
+                   # record does lead back, and what stops the restore is that the file no longer
+                   # holds what a run left. Saying "this record cannot lead you back" instead is
+                   # the wrong-field defect three rounds have been closing, one state over.
+                   f"But the file no longer holds the text this record says a run left, so "
+                   f"somebody has edited it since — restoring the `original` over it would "
+                   f"destroy that work. Compare the three by hand before touching anything. The "
+                   f"record is kept."
+                   if record_leads_back and edited_since else
                    # `git status`, and **then** `git diff`, in that order and with the difference
                    # stated. "A staged mutation shows in neither" was written into the operator's
                    # message while the same change's own record printed `git status: M  x.py` two

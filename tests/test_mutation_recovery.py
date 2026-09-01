@@ -584,6 +584,20 @@ def test_the_posix_branch_reads_a_process_it_may_not_signal_as_alive(monkeypatch
     monkeypatch.setattr(mutation_recovery.os, "kill", lambda pid, sig: None)
     assert mutation_recovery._alive_posix(4321) is True
 
+    # A number too large to be a pid. `os.kill` raises `OverflowError` outside `pid_t`, and the
+    # record's type gate only checks that `owner` is an int — so `{"owner": 4294967296}` reaches
+    # here. Uncaught it tracebacks out of `recover()`, which is the shape this module has fixed
+    # three times; and the answer has to be **alive**, because that is the one that refuses.
+    # Windows takes the opposite answer by accident: `_alive_nt` passes the value to `c_ulong`,
+    # which truncates it mod 2**32 silently, so the same record reads dead there and acts
+    # (CHG-20260901-06, risk seat).
+    def too_big(pid, sig):
+        raise OverflowError("Python int too large to convert to C int")
+
+    monkeypatch.setattr(mutation_recovery.os, "kill", too_big)
+    assert mutation_recovery._alive_posix(2 ** 32) is True, (
+        "a pid this platform cannot express was read as dead, or tracebacked out of recovery")
+
 
 def test_a_second_run_does_not_recover_over_a_live_run(sentinel, holder):
     """The sequence every real second run takes, which no test reached before.
@@ -928,12 +942,41 @@ def test_recover_destroys_nothing_it_cannot_account_for(tmp_path, monkeypatch, o
     # **empty**, the file is still mutated and the record is gone. That was the advice this gate
     # gave for a missing `owner`, twelve lines above the rule it breaks — *"a refusal that also
     # throws away the original strands the file for good"* (CHG-20260901-04, risk seat).
-    if "delete" in said:
-        assert "back by hand" in said, (
-            f"{shape}: it says to delete the record and never says to put the original back "
-            f"first — {said!r}")
-        assert said.index("delete") > said.index("back by hand"), (
-            f"{shape}: delete comes before restore — {said!r}")
+    #
+    # `.lower()`, because a **capital `D`** turned this guard off. The round that rewrote the
+    # non-recoverable branch began its last sentence with "Delete this record once the tree is
+    # reconciled", and `"delete" in said` is `False` for it — so three shapes stopped being checked
+    # by a rule whose whole subject is a message that says delete. In the change titled *a capital
+    # R turned the gate off* (CHG-20260901-06, idiom seat).
+    #
+    # And the exemption is stated rather than lexical. A branch may say delete with no restore
+    # **only** when it has said there is nothing to restore from; otherwise the order rule holds.
+    lowered = said.lower()
+    if "delete" in lowered:
+        if "back by hand" in said:
+            assert lowered.index("delete") > said.index("back by hand"), (
+                f"{shape}: delete comes before restore — {said!r}")
+        else:
+            assert "cannot lead you back" in said or "no longer holds" in said, (
+                f"{shape}: it says to delete the record, never says to put the original back, and "
+                f"never says why a restore is impossible — {said!r}")
+
+    # The branch that cannot lead the operator back has to point at commands that **work**, and
+    # name a way out. Both properties shipped unpinned: reverting the whole message to the wording
+    # that claimed *"a staged mutation shows in neither"* — false, `git status` shows it — and that
+    # ended at the diagnosis, left every row green. The change that fixed them enforced exactly
+    # this disclosure rule on the previous record and applied it to none of its own
+    # (CHG-20260901-06, conformance seat).
+    if "cannot lead you back" in said:
+        assert "shows what a killed run left" in said, (
+            f"{shape}: the branch reached when the record is most useless has to point at a "
+            f"command that finds the file — {said!r}")
+        assert "in neither" not in said, (
+            f"{shape}: `git status` does show a staged mutation; only `git diff` is silent — "
+            f"{said!r}")
+        assert "delete this record" in lowered, (
+            f"{shape}: `begin()` opens the record with 'x', so the harness refuses to run until it "
+            f"is gone — a refusal that does not say so locks the operator out — {said!r}")
 
     # A restore offered for a record whose `owner` is unusable must be **conditioned** on no run
     # being active, the way the pid-reuse branch conditions its own. Unconditioned it is the act
