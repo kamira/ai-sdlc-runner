@@ -986,3 +986,58 @@ def test_the_backstop_is_weak_and_the_number_is_written_down():
         f"written. Moving the number is fine — updating it without reading KN-10 is not. The "
         f"backstop is not the guarantee: `policy.classify`'s declaration is.")
     assert len(caught) < len(VERIFIER_CORPUS), "if this ever passes 18/18, do not start trusting it"
+
+
+def test_a_rejection_reason_reaches_the_node_the_run_is_sent_back_to():
+    """A person refusing a gate must change what the node they send the run back to is asked.
+
+    Eight nodes carry `rejects_to`. The reason a person gives went into `report.rejections` and the
+    conversation and **nowhere else**, so `_order_for` built a work order for the target that was
+    byte-identical to the one it had already answered. Measured before the fix: `pm_plan`'s two
+    orders compared equal, so the second lap asked the same question, got the same plan, and
+    `pm_confirm` refused it again.
+
+    That is not "unbounded" — it is **non-convergent**: no path through the loop could change its
+    own input. `max_steps` was the only thing standing at the end of it, and what an operator got
+    was `walk exceeded 200 steps` (CHG-20260901-12, found by the design panel's defect seat).
+
+    The channel is the one `carried` already uses to put a split panel's reasons back to the panel.
+    """
+    reason = "the auth flow is not in the plan at all"
+    orders = []
+
+    def factory(seat=None, model=None):
+        class Session(engine.Session):
+            def ask(self, order):
+                if order["node_id"] == "pm_plan":
+                    orders.append(order)
+                branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
+                          "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])
+                return {"verdict": branch} if branch else {"ok": True}
+
+            def close(self):
+                pass
+        return Session()
+
+    cfg = engine.RunConfig(
+        node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+        # `high`: at `low` the gate is `auto`, so it never stops, the rejection is never
+        # spent, and the test would pass by never exercising anything.
+        decisions=dict(DECISIONS), risk="high", undeclared="allow",
+        confirmed=["plan_confirmed", "feasibility_confirmed", "before_dispatch",
+                   "lead_review", "qa_verify", "acceptance", "pr", "merge"],
+        rejections=[engine.Rejection(gate="plan_confirmed", reason=reason)])
+    try:
+        engine.walk(cfg, factory, enabled=True)
+    except engine.EngineError:
+        # The extra lap the rejection causes outruns the fixture's loop decisions. Irrelevant here:
+        # both of `pm_plan`'s orders are collected before that.
+        pass
+
+    assert len(orders) >= 2, "the rejection did not send the run back to pm_plan"
+    assert reason not in str(orders[0].get("instructions")), (
+        "the first order cannot know a reason nobody has given yet")
+    assert reason in str(orders[1].get("instructions")), (
+        "the node the run was sent back to was not told why — it will produce the same plan and be "
+        "refused again, which is the loop this test exists to close")
+    assert orders[0] != orders[1], "the same question, asked twice"
