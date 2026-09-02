@@ -244,14 +244,16 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "examples", "a --seat-model command is relocated into the config's directory again",
         SRC / "cli.py",
-        # Re-anchored three times now: by CHG-20260828-02 after CHG-20260827-23 added
+        # Re-anchored four times now: by CHG-20260828-02 after CHG-20260827-23 added
         # `risk`/`can_write`, again after CHG-20260827-21 moved the directory decision into
-        # `_cwd_for`, and again by CHG-20260901-18, which made the sandbox grade the grade **in
-        # force** rather than the plan's proposal — so `risk=risk` became `risk=grade or risk`.
+        # `_cwd_for`, again by CHG-20260901-18, which made the sandbox grade the grade **in force**
+        # rather than the plan's proposal, and again by CHG-20260903-23, which named the process so
+        # its sandbox tally could be handed over — `return _Process(` became `process = _Process(`
+        # and the continuation lines shifted three columns.
         # Each time the staleness check added by CHG-20260828-02 caught it the same day, which is
         # the argument for that check rather than for remembering.
-        '''                        timeout, retries, cwd=_cwd_for(workspace, from_config),
-                        risk=grade or risk, can_write=_may_write(seat, role),''',
+        '''                           timeout, retries, cwd=_cwd_for(workspace, from_config),
+                           risk=grade or risk, can_write=_may_write(seat, role),''',
         '''                        timeout, retries, cwd=config_cwd,
                         risk=risk, can_write=_may_write(seat, role),''',
         "tests/test_examples_run_from_anywhere.py"),

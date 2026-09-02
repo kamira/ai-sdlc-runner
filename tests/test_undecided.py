@@ -23,6 +23,7 @@ A model panel has no per-voice subject: every voice answers the *same* question.
 a veto to be about, and handing one model a veto would be granting it authority for being itself —
 the ranking nobody wrote down that this design refuses everywhere else.
 """
+import re
 import inspect
 
 import pytest
@@ -167,7 +168,12 @@ def test_the_undecided_stop_is_a_return_like_every_other_halt():
     source = inspect.getsource(engine.walk)
     marker = source.index("will not pick a")
     after = source[marker:marker + 500]
-    assert "return _finish(report, confirmations, cfg.conversation)" in after
+    # The claim is that this exit **returns** rather than yielding — not what `_finish`
+    # takes. CHG-20260903-23 gave it two more arguments and both of these turned red on
+    # the argument list, which is a test pinned to a signature while its name is about
+    # control flow.
+    assert re.search(r"return _finish\(report, confirmations, cfg\.conversation",
+                     after), "this exit must return, not yield"
 
 
 def test_lead_review_has_no_undecided_branch_which_is_why_it_stops():

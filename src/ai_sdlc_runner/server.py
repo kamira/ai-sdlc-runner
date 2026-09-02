@@ -391,7 +391,24 @@ class Runner:
         if self.state.state != engine.SUSPENDED or report is None or report.suspended is None:
             raise ServerError(
                 f"this run is {self.state.state}; there is nothing waiting for an answer.")
+        # **Three shapes, not two** (CHG-20260903-23, defect seat L-25). The engine emits a gate
+        # (`incomplete` and `undecided` both false), an **incomplete requirement**
+        # (`incomplete: True`), and a tie (`undecided: True`). This read `undecided` alone, so an
+        # incomplete stop was accepted on the approve path — and `intake_review` has no gate, so
+        # `approve()` stored `Approval(gate=None, …)`, which `walk`'s up-front check then refuses on
+        # **every** subsequent walk. `RunState.approvals` is only ever appended to and read; there
+        # is no removal route, so the run was unrecoverable short of `POST /run`.
+        #
+        # The refusal text was wrong too: at an incomplete stop it said *"waiting for a gate to
+        # approve"*. It is waiting for a requirement somebody has to finish.
         is_tie = bool(report.suspended.get("undecided"))
+        is_incomplete = bool(report.suspended.get("incomplete"))
+        if is_incomplete:
+            missing = ", ".join(str(a) for a in report.suspended.get("missing") or ())
+            raise ServerError(
+                f"this run is waiting for a requirement that is not complete"
+                f"{' — ' + missing if missing else ''}, and that is not what you sent. "
+                f"Answer it with POST /run/instruct.")
         if is_tie != undecided:
             # A gate asks whether the run may proceed; a tie asks which way. Accepting one for the
             # other would record an answer to a question nobody was asked.

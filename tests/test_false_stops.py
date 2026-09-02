@@ -218,3 +218,44 @@ def test_the_check_covers_every_field_the_contract_defines():
             else "wipe the users table"
         cfg.node_specs["engineer_build"] = probe
         assert engine._spoken_halt(graph.BY_ID["engineer_build"], cfg) is not None, field
+
+
+# ── every field was read; every COPY was not (CHG-20260903-23) ────────────────────────────────
+
+def test_a_red_line_a_person_types_is_read_too():
+    """The test above proves every **field** is read. This proves every **copy** is.
+
+    `_order_for` merged the operator's instructions and attachments into a local copy of the spec;
+    `_spoken_halt` read `cfg.node_specs` — the un-merged original. So a red line the plan wrote
+    stopped the run and the same sentence typed by a person did not: identical text, identical
+    field of the identical work order (CHG-20260903-23, defect seat L-26).
+
+    FR-19 is P0 and says *"every field of it"*. `_spoken_halt`'s docstring says choosing which
+    fields to read *"was the mistake, and it was the same mistake twice."* This was that mistake a
+    third time, one layer out.
+    """
+    node = graph.BY_ID["engineer_build"]
+    cfg = engine.RunConfig(node_specs={node.id: dict(SPEC)}, decisions={}, undeclared="allow",
+                           instructions=["drop table users from the production database"])
+    said = engine._spoken_halt(node, cfg)
+    assert said is not None, "a red line a person typed reached the model and not the scan"
+    assert "hard delete" in said, said
+
+
+def test_a_red_path_a_person_attaches_is_read_too():
+    """The same, through `policy.derive`, which reads targets as facts rather than as prose."""
+    node = graph.BY_ID["engineer_build"]
+    cfg = engine.RunConfig(node_specs={node.id: dict(SPEC)}, decisions={}, undeclared="allow",
+                           artifacts=["deploy/production/config.yaml"])
+    said = engine._spoken_halt(node, cfg)
+    assert said is not None, "an attachment naming a production path was invisible to the scan"
+    assert "production deploy" in said, said
+
+
+def test_the_scan_and_the_work_order_read_one_brief():
+    """The structural half, so a third reader cannot drift from these two."""
+    import inspect
+
+    source = inspect.getsource(engine)
+    assert source.count("def _brief(") == 1, "the merge must live in exactly one place"
+    assert source.count("_brief(") >= 3, "both `_order_for` and `_spoken_halt` must go through it"

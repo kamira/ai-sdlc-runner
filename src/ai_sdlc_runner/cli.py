@@ -187,6 +187,9 @@ class _Process(engine.Session):
         #: How this process was actually bounded, filled in on the first ask. `None` until then,
         #: because the answer depends on the machine and is worth recording rather than assumed.
         self.sandbox: Optional[Dict[str, object]] = None
+        #: Where to tally that answer, so it survives this process (CHG-20260903-23). It was
+        #: recorded on the instance and read nowhere, against `sandbox.py`'s stated contract.
+        self.tally: Optional[Dict[str, int]] = None
         #: Every attempt that failed, so a run that took four tries does not read like one that
         #: took one. An unrecorded retry turns a flaky backend into a mystery.
         self.attempts: List[str] = []
@@ -214,6 +217,8 @@ class _Process(engine.Session):
                     self.argv, risk=self.risk, can_write=self.can_write,
                     workspace=self.cwd, required=self.require_sandbox)
                 self.sandbox = bounded
+                if self.tally is not None:
+                    self.tally["enforced" if bounded.get("enforced") else "unenforced"] += 1
                 # The work order goes out as UTF-8 and the reply is read back as UTF-8, so the
                 # agent is told to use it (CHG-20260828-16). Without this the parent names a codec
                 # and the child picks its own: on a machine whose locale is cp950 a Python agent
@@ -338,6 +343,17 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
     #: rather than assumed, because "isolation was switched on" and "this ask was isolated" are
     #: different claims and only the second is worth reporting.
     isolated: Dict[str, int] = {"in_tree": 0, "shared": 0}
+    # How the asks were actually bounded (CHG-20260903-23, defect seat L-28). `sandbox.py` says in
+    # three places — twice in its own text and once in the `--sandbox` help an operator reads —
+    # that *"a run this machine cannot bound returns `enforced: False`, and the caller records an
+    # unsandboxed run in the report and the export."* No caller did: `_Process.sandbox` is touched
+    # on exactly two lines in this file, its declaration and its assignment, and there is no
+    # `sandbox` field on `RunReport`. The only surface was `print(f"sandbox: {describe()}")`, which
+    # reports what the **machine** can do, not what the **run** was granted, and vanishes with the
+    # terminal.
+    #
+    # Counted here, the way `isolated` is, because only the factory sees more than one ask.
+    bounded: Dict[str, int] = {"enforced": 0, "unenforced": 0}
 
     def _cwd_for(workspace: str, from_config: bool) -> Optional[str]:
         """Where this ask runs: its module's tree when there is one, else the usual directory.
@@ -430,12 +446,15 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
         # Passed the ask-if-you-want-it way, exactly as `role` and `workspace` were, so a factory
         # written before this change is unaffected. Falls back to the bound `risk` when the engine
         # does not offer one, which is every caller that builds its own dispatcher.
-        return _Process(list(argv) if isinstance(argv, list) else str(argv).split(),
-                        timeout, retries, cwd=_cwd_for(workspace, from_config),
-                        risk=grade or risk, can_write=_may_write(seat, role),
-                        require_sandbox=require_sandbox)
+        process = _Process(list(argv) if isinstance(argv, list) else str(argv).split(),
+                           timeout, retries, cwd=_cwd_for(workspace, from_config),
+                           risk=grade or risk, can_write=_may_write(seat, role),
+                           require_sandbox=require_sandbox)
+        process.tally = bounded
+        return process
 
     factory.isolated = isolated      # read by `cmd_run` for the report line
+    factory.bounded = bounded        # and the same for the sandbox
     return factory
 
 
@@ -1097,6 +1116,15 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"worktree:      {counted.get('in_tree', 0)} module ask(s) isolated, "
               f"{counted.get('shared', 0)} in the shared tree "
               f"— {worktree.describe(config.get('agent_cwd'))}")
+    # **An unsandboxed run, recorded** (CHG-20260903-23, defect seat L-28). `sandbox.py` promises
+    # this in three places — twice in its own text and once in the `--sandbox` help an operator
+    # reads: *"a run this machine cannot bound returns `enforced: False`, and the caller records an
+    # unsandboxed run in the report and the export."* No caller did.
+    #
+    # Into `report.relaxations`, which reaches the durable conversation through `_finish`, because
+    # "this run was not bounded" is a statement about what the run was permitted to do — the same
+    # kind of fact as `undeclared="allow"`, and it belongs in the same ledger rather than in a line
+    # that vanishes with the terminal.
     for relaxation in report.relaxations:
         print(f"relaxation:    {relaxation}")
     for line in report.on_trust:

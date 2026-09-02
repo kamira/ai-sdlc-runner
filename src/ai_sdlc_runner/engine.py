@@ -717,6 +717,44 @@ def resolve_verdict(node: graph.Node, risk: str, autonomy: Optional[str] = None,
     return policy.verdict(node.gate, risk, autonomy, change_class)
 
 
+def _brief(spec: Mapping[str, object], cfg: "RunConfig") -> Mapping[str, object]:
+    """The node's brief **as the answerer will receive it** — the plan's spec plus whatever a person
+    handed over at runtime.
+
+    One function, two readers, and that is the whole fix (CHG-20260903-23). `_order_for` merged this
+    inline into a local copy while `_spoken_halt` read `cfg.node_specs` — the un-merged original. So
+    a red line the **plan** wrote in `instructions` stopped the run, and the **same sentence typed
+    by the operator** did not: measured, identical text in the identical field of the identical work
+    order, halted when the plan wrote it and passed when a person typed it.
+
+    FR-19 is P0 — *"A node's own brief, **every field of it**, is read against the red lines before
+    anything else"* — and `_spoken_halt`'s own docstring says choosing which fields to read *"was
+    the mistake, and it was the same mistake twice."* This was that mistake a third time, one layer
+    out: not which **fields** are read, but which **copy** of them.
+
+    The console's instruction box and its attachments are the most likely runtime source of a red
+    line, and they were the one path the scan could not see.
+    """
+    if not (cfg.artifacts or cfg.instructions):
+        return spec
+    spec = dict(spec)
+    # Appended, never replacing: a node's own inputs are what the plan said it needs, and the
+    # attachments are what everyone was additionally given. Dropping either would make one of
+    # the two invisible to whoever answers.
+    spec["input_artifacts"] = list(spec.get("input_artifacts") or ()) + list(cfg.artifacts)
+    if cfg.instructions:
+        asked = [f"instruction {i + 1} of {len(cfg.instructions)}: {text}"
+                 for i, text in enumerate(cfg.instructions)]
+        own = spec.get("instructions") or ()
+        # A node spec's `instructions` is a string in some plans and a list in others, and both
+        # are in use. Appending to whichever it is keeps the node's own wording intact --
+        # `list("do the work")` would have handed the model thirteen single letters.
+        joiner = "\n"
+        spec["instructions"] = (
+            joiner.join([own] + asked) if isinstance(own, str) else list(own) + asked)
+    return spec
+
+
 def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
                seat: Optional[str] = None,
                carried: Optional[Sequence[Mapping[str, str]]] = None,
@@ -727,22 +765,7 @@ def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
             f"node {node.id!r} has no work order: no node spec was supplied for it. A node the "
             f"engine cannot template is a hard error naming the node — never a fall back to a "
             f"generic prompt.")
-    if cfg.artifacts or cfg.instructions:
-        spec = dict(spec)
-        # Appended, never replacing: a node's own inputs are what the plan said it needs, and the
-        # attachments are what everyone was additionally given. Dropping either would make one of
-        # the two invisible to whoever answers.
-        spec["input_artifacts"] = list(spec.get("input_artifacts") or ()) + list(cfg.artifacts)
-        if cfg.instructions:
-            asked = [f"instruction {i + 1} of {len(cfg.instructions)}: {text}"
-                     for i, text in enumerate(cfg.instructions)]
-            own = spec.get("instructions") or ()
-            # A node spec's `instructions` is a string in some plans and a list in others, and both
-            # are in use. Appending to whichever it is keeps the node's own wording intact --
-            # `list("do the work")` would have handed the model thirteen single letters.
-            joiner = "\n"
-            spec["instructions"] = (
-                joiner.join([own] + asked) if isinstance(own, str) else list(own) + asked)
+    spec = _brief(spec, cfg)
     if carried:
         # Both sides, named. "Somebody objected" is not something a reviewer can weigh, and naming
         # only the objectors would be sending half the room's reasoning — a thumb on the scale
@@ -1434,7 +1457,10 @@ def _spoken_halt(node: graph.Node, cfg: "RunConfig") -> Optional[str]:
     cost is false stops, and it is named in the change record and pinned by a corpus of ordinary
     engineering briefs.
     """
-    spec = cfg.node_specs.get(node.id) or {}
+    # The brief the answerer will actually **receive**, not the plan's copy of it — see `_brief`.
+    # Reading `cfg.node_specs` here meant a red line a person typed into the console reached the
+    # model and never reached this scan (CHG-20260903-23, defect seat L-26).
+    spec = _brief(cfg.node_specs.get(node.id) or {}, cfg)
 
     targets = []
     for field_name in _TARGET_FIELDS:
@@ -1689,7 +1715,8 @@ def _adjudicate(node: graph.Node, report: "RunReport",
 
 
 def _finish(report: "RunReport", confirmations: Dict[str, int],
-            conversation=None) -> "RunReport":
+            conversation=None, held: Optional[Mapping[str, Sequence[object]]] = None,
+            before_close=None) -> "RunReport":
     """Close out a walk, however it ended.
 
     A confirmation the run never spent is **not** an error: a run can legitimately finish without
@@ -1704,6 +1731,33 @@ def _finish(report: "RunReport", confirmations: Dict[str, int],
     report.confirmations.extend(
         f"{gate} was confirmed {n} more time(s) than the run stopped at it"
         for gate, n in sorted(unspent.items()))
+
+    # **The other three ledgers** (CHG-20260903-23, defect seat L-24). The rule above was applied to
+    # the blanket count and to nothing else, while `walk` holds three more — targeted approvals,
+    # rulings and rejections — as locals it never handed over. So of the four ways an operator can
+    # decide something in advance, one said when it went unused and three vanished.
+    #
+    # `walk` states the rule twenty lines above the ledger it describes: *"an answer that cannot be
+    # applied anywhere must say so now, **not be held and silently never spent**."* It was held and
+    # silently never spent. And `engine.py`'s **"One ledger."** comment is about `confirmed` and
+    # `targeted` being one thing; `_finish` read half of it.
+    # Into `relaxations`, not `confirmations` — and `test_the_engine_records_the_decisions_the_
+    # report_records` is what said so, the same hour. Its rule is *"every place the report gains an
+    # operator **decision**, the conversation gains a turn"*, and it is enforced by requiring a
+    # `conversation.decision(` beside every `confirmations.append`. These three are not decisions:
+    # they are the run reporting that a decision it was handed was **never reached**, which is a
+    # fact about the run and not an act of the operator's. `relaxations` is where those live, and
+    # `_finish` carries them to the durable record a few lines below.
+    for kind, entries in sorted((held or {}).items()):
+        for entry in entries:
+            report.relaxations.append(
+                f"{kind} was supplied and the run never reached where it applies: {entry}")
+
+    # Last thing added to the report before it is read out, so anything the walk could only learn
+    # from its dispatcher — how the asks were actually bounded — is a turn of the run rather than an
+    # annotation after the closing one.
+    if before_close is not None:
+        before_close()
 
     # Every exit passes through here, so this is the one place that can promise the caller a report
     # says what it is. A state outside the closed set would leave "is this waiting for me?"
@@ -1902,6 +1956,40 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 f"{cfg.run_id or 'un-identified (no journal)'}")
         unspent_rejections.append(rejection)
 
+    def _unsandboxed() -> None:
+        """Record an unsandboxed run, which `sandbox.py` says three times the caller does.
+
+        Twice in its own text and once in the `--sandbox` help an operator reads: *"a run this
+        machine cannot bound returns `enforced: False`, and the caller records an unsandboxed run
+        in the report and the export."* No caller did — `cli._Process.sandbox` was assigned and read
+        nowhere, and there is no `sandbox` field on `RunReport`. The only surface was a printed line
+        reporting what the **machine** can do rather than what the **run** was granted, and it
+        vanished with the terminal (CHG-20260903-23, defect seat L-28).
+
+        Into `report.relaxations`, because *"this run was not bounded"* is a statement about what
+        the run was permitted to do — the same kind of fact as `undeclared="allow"`, and it reaches
+        the durable conversation through `_finish` for the same reason. Recorded **before** the
+        close, so it is a turn of the run rather than an annotation after it.
+        """
+        tally = getattr(dispatch, "bounded", None) or {}
+        if tally.get("unenforced"):
+            report.relaxations.append(
+                f"{tally['unenforced']} ask(s) ran unsandboxed — this machine could not bound them. "
+                f"Pass --sandbox to refuse instead of recording it.")
+
+    def _held() -> Dict[str, Sequence[object]]:
+        """The decisions still in hand at whatever exit the walk takes (CHG-20260903-23).
+
+        `_finish` reported one of the four ledgers — the blanket `confirmations` count — and the
+        other three are locals here that were never handed over. Read at each exit rather than
+        captured once, because a walk can return from seven places and each of them has spent a
+        different amount.
+        """
+        return {kind: list(entries) for kind, entries in (
+            ("a targeted approval", targeted),
+            ("a ruling", unspent_rulings),
+            ("a refusal", unspent_rejections)) if entries}
+
     node_id: Optional[str] = "intake"
     #: How many modules have started building (CHG-20260827-21). Counted on `engineer_build`
     #: because that is where a module's work begins; `fix_pass` re-asks the engineer about the
@@ -1923,7 +2011,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             report.state = STOPPED
             report.halted_at = node.id
             report.halt_reason = tripped
-            return _finish(report, confirmations, cfg.conversation)
+            return _finish(report, confirmations, cfg.conversation, _held(), _unsandboxed)
 
         here, _ = _class_in_force(cfg, node, today)
         verdict = resolve_verdict(node, _grade_in_force(cfg, report, node), cfg.autonomy, here)
@@ -2022,7 +2110,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             report.halt_reason = (
                 f"{verdict['gate']} = {verdict['verdict']} at risk {verdict['risk']} "
                 f"(per {verdict['source']}) — confirm it to continue")
-            return _finish(report, confirmations, cfg.conversation)
+            return _finish(report, confirmations, cfg.conversation, _held(), _unsandboxed)
 
         stop = _gate("before")
         if isinstance(stop, _Redirect):
@@ -2101,7 +2189,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                         report.state = STOPPED
                         report.halted_at = node.id
                         report.halt_reason = str(outcome["reason"])
-                        return _finish(report, confirmations, cfg.conversation)
+                        return _finish(report, confirmations, cfg.conversation, _held(), _unsandboxed)
                     report.risk_agreed = str(outcome["grade"])
                     # Not settled here. The grade this panel agreed becomes the run's grade only
                     # once `pm_signoff` has passed on it — until then `_grade_in_force` protects at
@@ -2222,7 +2310,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     }
                     report.halted_at = node.id
                     report.halt_reason = intake_mod.stop_reason(survey, cfg.intake_history)
-                    return _finish(report, confirmations, cfg.conversation)
+                    return _finish(report, confirmations, cfg.conversation, _held(), _unsandboxed)
 
             elif node.mode == graph.SEAT_PANEL:
                 panel_sessions: List[object] = []
@@ -2306,7 +2394,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             report.state = STOPPED if node.permanent else FINISHED
             report.halted_at = node.id
             report.halt_reason = node.note or node.label
-            return _finish(report, confirmations, cfg.conversation)
+            return _finish(report, confirmations, cfg.conversation, _held(), _unsandboxed)
 
         if node.branches:
             if panel_outcome is not None:
@@ -2406,7 +2494,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                         f"{node.id} reached no decision — "
                         f"{last.get('reason', 'the panel was split')}. The runner will not pick a "
                         f"side; choose {' or '.join(sorted(node.branches))}")
-                    return _finish(report, confirmations, cfg.conversation)
+                    return _finish(report, confirmations, cfg.conversation, _held(), _unsandboxed)
             if choice is None:
                 raise EngineError(
                     f"node {node.id!r} branches on {sorted(node.branches)} but the run supplied no "
@@ -2488,4 +2576,4 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             f"something that answer contains."
             + (f" Also spun: {also}." if also else ""))
 
-    return _finish(report, confirmations, cfg.conversation)
+    return _finish(report, confirmations, cfg.conversation, _held(), _unsandboxed)
