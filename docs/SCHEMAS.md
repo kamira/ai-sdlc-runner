@@ -329,7 +329,8 @@ under pressure here; only the filename is."*
 `visited · asks · state · suspended · halted_at · halt_reason · relaxations · verdicts · on_trust ·
 confirmations · adjudications · single_model_panels · effects · resumed · dispatches · survey ·
 options · panel_rounds · send_backs · rejections · rulings · store_errors · change_class ·
-relaxations_by_class · risk_proposed · risk_settled · risk_agreed · halts`
+relaxations_by_class · risk_proposed · risk_settled · risk_agreed · halts ·
+class_authorised_by`
 
 The last six were declared on `RunReport`, written during the walk, and emitted by nothing until
 CHG-20260901-16 — so they reached no `--json`, no entry here, and no console, and lived only in

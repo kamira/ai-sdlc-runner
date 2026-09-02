@@ -62,7 +62,36 @@ def _run(argv: Sequence[str], cwd: Optional[str | Path] = None,
 # --------------------------------------------------------------------------------------
 
 def branch_exists_locally(repo: str | Path, branch: str) -> bool:
-    proc = _run(["git", "rev-parse", "--verify", f"refs/heads/{branch}"], cwd=repo)
+    """Does this repository have this branch? The branch postcondition.
+
+    **Exit 1 is an answer; anything else is not.** `git rev-parse --verify` exits 1 for "no such
+    ref" and 128 for "not a git repository", an unreadable git directory, or a corrupt index — and
+    `return proc.returncode == 0` read all of them as *"the branch is not there"*. This module's own
+    rule, stated twice: *"An unanswerable probe is **never** read as 'not done': that would re-run
+    an effect that may have succeeded"*, and `ProbeError`'s *"collapsing them makes the engine
+    re-run an effect that may already have landed."*
+
+    It is the `branch` effect's probe in `ship.effects_for`, so a false `False` re-runs
+    `git checkout -b <branch>`. Its three sibling git probes all raise; this one did not, and had
+    no test (CHG-20260902-21, defect seat L-21).
+
+    **`show-ref`, not `rev-parse --verify`, and that is the fix.** Measured, `rev-parse --verify`
+    exits **128 for both** "no such branch" and "not a git repository" — so the two cannot be told
+    apart at all, and the first version of this fix, which raised on anything but 0 and 1, refused
+    to answer a question it could answer. `show-ref --verify` gives three codes for three states:
+
+    ```
+    0    the branch is there
+    1    the branch is not there            <- an answer
+    128  git could not be asked             <- not an answer
+    ```
+    """
+    proc = _run(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=repo)
+    if proc.returncode not in (0, 1):
+        raise ProbeError(
+            f"git show-ref failed in {repo}: {proc.stderr.strip() or f'exit {proc.returncode}'}. "
+            f"That is not an answer about {branch!r} — it is git being unable to answer, and "
+            f"reading it as 'the branch is not there' would create the branch again.")
     return proc.returncode == 0
 
 

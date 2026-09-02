@@ -324,3 +324,65 @@ def test_the_rework_brief_reaches_the_node_it_was_written_for():
         "and be failed again, which is the loop this test exists to close")
     assert "A person refused" not in second, (
         "a panel is not a person; saying so tells a model something untrue about who objected")
+
+
+# ── a reason must reach somebody who can be told (CHG-20260902-21) ────────────────────────────
+
+def test_every_rejects_to_edge_lands_where_a_reason_can_be_read():
+    """Three of the eight `rejects_to` edges point at a node with no `role`.
+
+    `sent_back` is keyed by node id and consumed where a node is asked, so a message delivered to
+    `review_failed`, `next_module` or `acceptance_failed` — all `runner` mode, all asked nothing —
+    was popped and dropped at the first hop. Those three are exactly the **whole-change** refusals,
+    the most expensive loops in the flow: measured, a refusal at `qa_verify` reached 0 of the 5 work
+    orders on the lap that followed (CHG-20260902-21, defect seat L-20).
+
+    This checks the property rather than the three names, so an edge added later is covered.
+    """
+    for node in graph.NODES:
+        if not node.rejects_to:
+            continue
+        target = graph.BY_ID[node.rejects_to]
+        if target.role:
+            continue
+        # A roleless target is allowed — but the message must be able to keep travelling from it.
+        onward = target.next or (sorted(target.branches.values())[0] if target.branches else None)
+        assert onward, (
+            f"{node.id} rejects to {target.id}, which is asked nothing and goes nowhere — a reason "
+            f"delivered there can never be read")
+
+
+def test_a_reason_travels_past_a_node_that_cannot_be_told():
+    """The forwarding rule, exercised at the hop it exists for."""
+    sent = {"review_failed": {"from": "lead_review", "kind": "verdict",
+                              "reason": "the API contract was never checked"}}
+    node = graph.BY_ID["review_failed"]
+    assert not node.role, "this test is about a node that is asked nothing"
+
+    onward = node.next or sorted(node.branches.values())[0]
+    if not node.role and node.id in sent and onward and onward != node.id:
+        sent[onward] = sent.pop(node.id)
+
+    assert list(sent) == [onward], f"the message did not move on: {sent}"
+    assert sent[onward]["reason"] == "the API contract was never checked"
+
+
+def test_a_seat_panels_objections_are_returned_not_only_recorded():
+    """`_adjudicate` called `_send_back` and discarded the result, while `walk`'s model-panel branch
+    kept it — the same function, two callers, one dropping what `_send_back`'s own comment calls
+    out: *"Returned, not only recorded."*
+
+    So `graph.review_failed`'s note — *"the panel's reasons travel with the run"* — was false for
+    every seat panel, and a rework lap's work orders came back byte-identical.
+    """
+    node = graph.BY_ID["lead_review"]
+    report = engine.RunReport()
+    for seat, verdict in (("conformance", "fail"), ("defect", "fail"), ("idiom", "pass")):
+        report.asks.append(engine.Ask(node.id, node.role, seat, {"verdict": verdict}))
+
+    branch, rework = engine._adjudicate(node, report, seats=3)
+
+    assert branch == policy.FAIL
+    assert rework is not None, "the objections were recorded and not returned"
+    assert str(rework.get("brief") or ""), "the rework carries no brief to hand the next lap"
+    assert report.send_backs, "and it is still recorded, as it was before"

@@ -496,3 +496,55 @@ def test_autonomy_honours_every_tightening_and_reports_every_request_it_does_not
         v = policy.verdict(gate, grade, autonomy=want)
         assert v["verdict"] == graded, (graded, want, v)
         assert "does not rank them" in v["source"], (graded, want, v["source"])
+
+
+def test_the_gates_a_class_dissolved_reach_the_durable_record(tmp_path):
+    """`relaxations_by_class` reached `as_dict()` and stdout and nothing durable.
+
+    Its own field comment is the requirement — *"Gates this run passed **because** of the class,
+    each named. A relaxation nobody can enumerate afterwards is a relaxation nobody can audit."* —
+    and `conversations.relaxation`'s docstring is the placement: *"Recorded **in the document**, not
+    only in the run report."* `_finish` iterated `report.relaxations` alone.
+
+    Measured by the seat, the gate a `standard` class dissolved was `merge`, the one-way door: the
+    durable record said a class governed the run and never which gate it opened, while carrying
+    fourteen turns of `--undeclared` noise beside it (CHG-20260902-21, defect seat L-22).
+    """
+    from ai_sdlc_runner import conversations as conv
+
+    conversation = conv.Conversation(conv.FileBackend(tmp_path / "store"), "P").open()
+    report = engine.RunReport(state=engine.FINISHED)
+    report.relaxations.append("a node ran undeclared")
+    report.relaxations_by_class.append(
+        "merge: merge at risk low would have been 'confirm' and passed on the 'standard' class")
+
+    engine._finish(report, {}, conversation)
+
+    turns = conversation.store.read(conversation.project["id"], conversation.id)["turns"]
+    written = [t for t in turns if t.get("kind") == "relaxation"]
+    said = " ".join(str(t) for t in written)
+    assert "a node ran undeclared" in said, "the half that already worked must keep working"
+    assert "would have been 'confirm'" in said, (
+        f"the gate the class dissolved is not in the durable record: {written}")
+
+
+def test_a_model_panel_is_not_told_to_use_a_flag_that_cannot_reach_it():
+    """`_note_panel_diversity` is called from four sites and named `--seat-model` at all of them.
+
+    A `MODEL_PANEL` node opens no seats — `cli.session_factory` resolves a seat command through
+    `seat_models.get(seat)` and the model-panel path passes `seat=None` — so FR-24's
+    false-assurance detector was telling an operator to use a flag that does not go there
+    (CHG-20260902-21, defect seat L-23).
+    """
+    class Same:
+        def describe(self):
+            return "one-model"
+
+    for node_id, expect, forbid in (("lead_review", "--seat-model", "node_models"),
+                                    ("qa_accept", "node_models", "--seat-model")):
+        report = engine.RunReport()
+        engine._note_panel_diversity(graph.BY_ID[node_id], report, [Same(), Same()])
+        assert report.single_model_panels, node_id
+        said = report.single_model_panels[0]
+        assert expect in said, f"{node_id} should name {expect}: {said}"
+        assert forbid not in said, f"{node_id} must not name {forbid}: {said}"
