@@ -1298,6 +1298,22 @@ def cmd_serve(args: argparse.Namespace) -> int:
                                       run={"journal": str(journal.dir.resolve()),
                                            "plan": _where(args.plan)})
 
+    # The same parse and the same operator turn `cmd_run` writes (CHG-20260903-22). Declared once
+    # at startup and governing every walk this console runs — a console cannot invent a class,
+    # because a class relaxes a gate and only a person may declare one, which is the argument
+    # `plan.check` already makes for refusing a plan that classes itself.
+    try:
+        declared_class, class_by_workstream = _change_classes(
+            getattr(args, "change_class", None), plan.get("workstreams") or {})
+    except CliError as exc:
+        print(f"error: {exc}")
+        return 2
+    if declared_class and conversation is not None:
+        conversation.relaxation(
+            f"change class {declared_class['class']!r} declared by "
+            f"{declared_class['authorised_by']}, due for review on {declared_class['review_by']}",
+            by=str(declared_class["authorised_by"]))
+
     def make_config(instructions, approvals, rulings, artifacts=(), rejections=(),
                     intake_history=()):
         return engine.RunConfig(
@@ -1346,6 +1362,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
             instructions=instructions,
             rejections=rejections,
             intake_history=intake_history,
+            change_class=declared_class,
+            class_by_workstream=class_by_workstream,
             effects=effects_provider(plan),
             ordinary_commands=saved.ordinary_commands,
             undeclared=args.undeclared,
@@ -1541,6 +1559,17 @@ def build_parser() -> argparse.ArgumentParser:
     # serve` — the dashboard, in its plainest form — died with a raw TypeError.
     pv.add_argument("--settings", default=settings_mod.DEFAULT_PATH,
                     help=f"path to the settings file (default {settings_mod.DEFAULT_PATH})")
+    # `serve` already takes `--risk`, `--sandbox` and `--undeclared`; this was the one governance
+    # flag it did not (CHG-20260903-22). The consequence was not that a console operator had a
+    # smaller vocabulary — it was that `report.change_class` could not be anything but "nothing was
+    # declared" on the console, so one of the five permission ledgers could not exist there at all.
+    # Recorded as a gap by CHG-20260901-16 and named in that change's own drift-guard exemption
+    # list; this closes it and removes the exemption.
+    pv.add_argument("--change-class", action="append", default=None,
+                    metavar="[WORKSTREAM=]CLASS:WHO:REVIEW_BY",
+        help="declare the change class a PERSON assessed, exactly as `run` takes it. A console "
+             "cannot invent one — a class relaxes a gate and only a person may declare one — so it "
+             "is passed at startup and governs every walk this console runs.")
     _store_flags(pv)
     pv.set_defaults(func=cmd_serve)
 

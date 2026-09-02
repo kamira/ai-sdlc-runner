@@ -548,3 +548,40 @@ def test_a_model_panel_is_not_told_to_use_a_flag_that_cannot_reach_it():
         said = report.single_model_panels[0]
         assert expect in said, f"{node_id} should name {expect}: {said}"
         assert forbid not in said, f"{node_id} must not name {forbid}: {said}"
+
+
+def test_the_console_can_declare_a_change_class(tmp_path):
+    """`--change-class` was on the `run` subparser only.
+
+    The consequence was not a smaller vocabulary for a console operator — it was that
+    `report.change_class` could only ever read *"nothing was declared"* on the console, so one of
+    the five permission ledgers could not exist there at all. `CHG-20260901-16` recorded that as a
+    gap it did not close, and named it in that change's own drift-guard exemption list
+    (CHG-20260903-22).
+
+    A console cannot *invent* a class — a class relaxes a gate and only a person may declare one,
+    which is the argument `plan.check` already makes for refusing a plan that classes itself. So it
+    is declared at startup, exactly as `run` takes it, and governs every walk that console runs.
+    """
+    parser = cli.build_parser()
+    parsed = parser.parse_args(["serve", "--change-class", "standard:alex:2099-01-01"])
+    assert parsed.change_class == ["standard:alex:2099-01-01"]
+    assert parsed.func is cli.cmd_serve
+
+    # And it parses to the same shape `run` builds, or the wiring would be two vocabularies.
+    declared, by_workstream = cli._change_classes(parsed.change_class, {})
+    assert declared["class"] == "standard"
+    assert declared["authorised_by"] == "alex"
+    assert declared["review_by"] == "2099-01-01"
+    assert by_workstream == {}
+
+
+def test_both_commands_parse_a_change_class_the_same_way():
+    """One parser, one shape. A console that accepted a class the command line refused — or the
+    reverse — would be two governance vocabularies wearing one flag name."""
+    parser = cli.build_parser()
+    raw = ["standard:alex:2099-01-01"]
+    for command in ("run", "serve"):
+        parsed = parser.parse_args([command, "--change-class", raw[0]])
+        assert parsed.change_class == raw, command
+        assert cli._change_classes(parsed.change_class, {})[0]["class"] == "standard", command
