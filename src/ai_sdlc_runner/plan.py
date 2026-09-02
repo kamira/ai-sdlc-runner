@@ -49,7 +49,7 @@ import json
 from pathlib import Path
 from typing import Dict, Mapping, Tuple
 
-from . import policy, workorder
+from . import graph, policy, workorder
 
 #: Every key this runner reads from a plan. Anything else is refused.
 #:
@@ -179,6 +179,7 @@ def check(payload: Mapping[str, object], where: str = "the plan") -> Dict[str, o
                 f"{where} grades workstream {name!r} as {grade!r}; the grades are "
                 f"{list(policy.RISKS)}.")
 
+    module_cycle = graph.module_cycle()
     for node_id, name in (payload.get("node_workstream") or {}).items():
         if name not in workstreams:
             raise PlanError(
@@ -186,6 +187,32 @@ def check(payload: Mapping[str, object], where: str = "the plan") -> Dict[str, o
                 f"A node in an undeclared workstream would fall back to the strictest grade — safe, "
                 f"and silently not what the plan meant. Declare it in `workstreams` or remove the "
                 f"assignment.")
+        # The node id was never checked at all — not against the flow, and not against the region
+        # a workstream grade is *about* (CHG-20260902-19).
+        if node_id not in graph.BY_ID:
+            raise PlanError(
+                f"{where} puts node {node_id!r} in workstream {name!r}, and this flow has no such "
+                f"node. A misspelt id is silently ignored by the engine, so the workstream this "
+                f"plan meant to grade would run at the strictest grade instead.")
+        if node_id not in module_cycle:
+            # `_grade_in_force` says which nodes a workstream grade may speak for: "a node in a
+            # workstream reads that workstream's grade. A node in none — `pr`, `merge`, `close_out`,
+            # and everything before the split — reads the **strictest** of them: a programme is as
+            # risky as its riskiest part **at the point where all of it merges**."
+            #
+            # Nothing enforced it. A plan could put `qa_accept` in a `low` workstream on a run
+            # settled at `high`, and `acceptance` — the one `halt_independent` cell in the whole
+            # table — resolved `auto`. `README.md` says that grade "always stops for a person".
+            #
+            # Membership comes from `graph.module_cycle()` rather than a list here, for the reason
+            # `engine._workspace` gives for reading the same function: a node added to the loop
+            # later is inside the rule instead of quietly outside it.
+            raise PlanError(
+                f"{where} puts node {node_id!r} in workstream {name!r}, and {node_id!r} is not part "
+                f"of a module's work — it is one of the nodes the whole change passes through, "
+                f"which read the strictest grade of every workstream. A workstream grade there "
+                f"would let one part of the change set the height of a gate standing over all of "
+                f"it. Assign one of {sorted(module_cycle)}, or remove the assignment.")
 
     # ── declared interfaces (CHG-20260827-22) ────────────────────────────────────────────────
     #
