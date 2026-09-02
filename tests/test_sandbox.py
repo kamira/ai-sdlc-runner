@@ -240,3 +240,37 @@ def test_a_role_this_policy_does_not_define_is_not_guessed_at():
         {"agent_command": ["python3", "-c", "pass"], "agent_cwd": "."}, risk="low")
     assert factory(role="archaeologist").can_write is True
     assert factory().can_write is True
+
+
+def test_the_dispatched_process_is_bounded_at_the_grade_in_force_not_the_plans_proposal():
+    """The other half of the sibling above, and it was missing for the same reason.
+
+    `can_write` is a property of the role and was wired per ask. `risk` was bound **once**, when the
+    factory was built, from `cfg.risk` — which `cmd_run` documents in as many words as *"the plan's
+    proposal"*. `_Process.risk`'s own docstring says the opposite: *"Derived from the grade in force
+    and narrowed by the role's `can_write`."*
+
+    So a run whose grading panel answered `high` over a plan proposing `low` dispatched every later
+    ask with `policy_verdict.risk = "high"` in its work order, into a `low` sandbox. Every shipped
+    example plan declares `risk: low`, so this is the default case, not a corner
+    (CHG-20260901-18, defect seat D-1).
+
+    The grade arrives the ask-if-you-want-it way, exactly as `role` and `workspace` do.
+    """
+    from ai_sdlc_runner import cli
+
+    factory = cli.session_factory(
+        {"agent_command": ["python3", "-c", "pass"], "agent_cwd": "."}, risk="low")
+
+    assert factory(role="engineer").risk == "low", "with no grade offered, the bound one stands"
+    assert factory(role="engineer", grade="high").risk == "high", (
+        "the grade in force must win over the grade the plan proposed")
+    assert factory(role="engineer", grade="").risk == "low", (
+        "an empty grade is 'the engine did not offer one', not 'the grade is empty'")
+
+    # And the bound value is genuinely reachable, so the fallback above is not vacuous.
+    strict = cli.session_factory(
+        {"agent_command": ["python3", "-c", "pass"], "agent_cwd": "."}, risk="high")
+    assert strict(role="engineer").risk == "high"
+    assert strict(role="engineer", grade="low").risk == "low", (
+        "the grade in force wins in both directions — a settled `low` is a decision, not a relaxation")

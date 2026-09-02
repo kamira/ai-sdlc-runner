@@ -272,3 +272,76 @@ def test_the_gate_over_an_assessment_resolves_at_the_grade_that_assessment_propo
     assert at["verdict"] == policy.HALT, at
     assert report.halted_at == "lead_assess", (
         f"the run got past the gate that exists to show a person this assessment: {report.halted_at}")
+
+
+# ── the grade in force has to reach the things that name it (CHG-20260901-18) ─────────────────
+
+def _walk(risk="low", node_models=None, seen=None):
+    """A full walk on a stub factory, returning the report. `seen` collects (node, grade, order)."""
+    def factory(seat=None, model=None, role="", workspace="", grade=""):
+        class Session(engine.Session):
+            def ask(self, order):
+                if seen is not None:
+                    seen.append((order["node_id"], grade,
+                                 (order.get("policy_verdict") or {}).get("risk")))
+                branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
+                          "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])
+                return {"verdict": branch} if branch else {"ok": True}
+
+            def close(self):
+                pass
+        return Session()
+
+    decisions = dict(DECISIONS)
+    decisions["next_module"] = ["none", "none", "none"]
+    cfg = engine.RunConfig(
+        node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+        decisions=decisions, risk=risk, undeclared="allow",
+        confirmed=[gate for gate in policy.GATES],
+        node_models=dict(node_models or {}))
+    return engine.walk(cfg, factory, enabled=True)
+
+
+def test_the_grade_is_settled_on_a_run_that_configures_no_models():
+    """`report.risk_settled` was written only inside `mode == MODEL_PANEL and len(configured) > 1`.
+
+    A default install has `node_models = {}` — every shipped example plan is one — so `pm_signoff`
+    took the single-ask path and the grade was never settled at all. `_grade_in_force`'s whole
+    per-workstream branch is guarded on `if not settled`, which made CHG-20260827-18 dead code by
+    default, and the conversation's closing turn dropped its `risk` key because
+    `conversations.close` drops falsy values.
+    """
+    report = _walk(risk="low", node_models={})
+    assert "pm_signoff" in report.visited, "this test proves nothing if the ratifier never ran"
+    assert report.risk_settled == "low", (
+        f"a run that configures no models still ratifies its grade; got {report.risk_settled!r}")
+
+
+def test_the_ratifying_branch_is_read_off_the_node_rather_than_named():
+    """`pm_signoff` offers `yes`/`no`; a panel answers `pass`. `panel_branches` is the translation.
+
+    Written because the first version of this fix compared the taken branch against `policy.PASS`,
+    which is never a branch `pm_signoff` offers — and a literal `"yes"` here would be a branch name
+    standing in for a constraint, the defect class `graph.py` names.
+    """
+    node = graph.BY_ID["pm_signoff"]
+    assert node.settles_risk
+    assert node.panel_branches.get(policy.PASS) in node.branches, (
+        "the branch a pass lands on must be one this node actually offers")
+    assert policy.PASS not in node.branches, (
+        "if `pass` became a branch of pm_signoff this test is measuring nothing")
+
+
+def test_a_process_is_bounded_at_the_grade_its_own_work_order_states():
+    """`cli.session_factory` bound the sandbox grade once, from `cfg.risk` — the plan's *proposal* —
+    while `_Process.risk` documents itself as "derived from the grade in force".
+
+    So the same ask could carry `policy_verdict.risk = "high"` in its work order and run in a `low`
+    sandbox. The two values are now the same value, and this checks every ask in a whole walk.
+    """
+    seen = []
+    _walk(risk="high", seen=seen)
+    assert seen, "no asks were made, so this proves nothing"
+    mismatched = [(node, grade, stated) for node, grade, stated in seen if grade != stated]
+    assert not mismatched, (
+        f"{len(mismatched)} ask(s) ran at a grade their own order does not state: {mismatched[:3]}")
