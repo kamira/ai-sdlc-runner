@@ -278,13 +278,12 @@ def test_both_ways_to_start_a_run_take_the_same_governance():
                     built[fn.name] = {kw.arg for kw in call.keywords if kw.arg}
     assert set(built) == {"cmd_run", "cmd_serve"}, f"found RunConfig built in {sorted(built)}"
 
-    # `--change-class` is registered on the `run` subparser only, so `serve` has nothing to pass.
-    # That is a gap in what a console can declare, recorded in CHG-20260901-16 and not closed by
-    # it; it is not this drift.
-    only_on_run = {
-        "change_class": "no --change-class flag on the serve subparser",
-        "class_by_workstream": "read from the same flag as change_class",
-    }
+    # **Empty, and that is the point.** This carried two entries — `change_class` and
+    # `class_by_workstream` — because `--change-class` was registered on the `run` subparser only.
+    # CHG-20260901-16 recorded that as a gap it did not close, and CHG-20260903-22 closed it, so the
+    # exemptions came out with the flag going in. An exemption that outlives its reason is a
+    # permission nobody re-reads.
+    only_on_run = {}
     # Three things the console collects from a browser and a command line cannot: files handed
     # over, extra instructions typed mid-run, and a refusal with a reason. `intake_history` was a
     # fourth entry here until CHG-20260901-17 — and it had no reason, because it is not a console

@@ -1504,8 +1504,15 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         'voice', 'the declaration stops recording who made it',
         SRC / 'cli.py',
-        '            by=str(declared_class["authorised_by"]))',
-        '            by=None)',
+        # Anchored through `cmd_run`'s own comment, because CHG-20260903-22 gave `serve` the same
+        # flag and the same operator turn — so the one-line anchor matched twice and the staleness
+        # guard's sibling, `test_every_shipped_mutation_has_a_unique_anchor`, caught it the same
+        # day. Two identical acts in two commands is right; a mutation that cannot say which one it
+        # reverts is not.
+        '''            # dimension this document exists to keep straight.
+            by=str(declared_class["authorised_by"]))''',
+        '''            # dimension this document exists to keep straight.
+            by=None)''',
         'tests/test_export_voice.py'),
 
     Mutation(
