@@ -259,3 +259,51 @@ def test_a_workstreamed_plan_reaches_the_run_through_the_cli(tmp_path):
     assert "at risk high" in graded, (
         "the run stopped, but not at a gate resolved from `high` — so the workstream is not what "
         "stopped it:\n" + graded[-900:])
+
+
+# ── a workstream may only grade the work it is a workstream of (CHG-20260902-19) ──────────────
+
+def test_a_workstream_cannot_be_assigned_to_a_node_the_whole_change_passes_through():
+    """`_grade_in_force` states the rule and nothing enforced it.
+
+    > a node in a workstream reads that workstream's grade. A node in none — `pr`, `merge`,
+    > `close_out`, and everything before the split — reads the **strictest** of them: a programme is
+    > as risky as its riskiest part **at the point where all of it merges**.
+
+    `plan.check` validated only that the workstream *name* was declared; the node id was never
+    checked at all. So a plan could put `qa_accept` in a `low` workstream on a run settled at
+    `high`, and `acceptance` — the one `halt_independent` cell in the entire table — resolved
+    `auto`, on the grade `README.md` says "always stops for a person".
+    """
+    from ai_sdlc_runner import plan as plan_mod
+
+    base = {"risk": "high", "workstreams": {"w1": "low"}, "decisions": {}}
+    for node_id in ("qa_accept", "merge", "pr", "lead_review", "qa_verify"):
+        with pytest.raises(plan_mod.PlanError) as caught:
+            plan_mod.check(dict(base, node_workstream={node_id: "w1"}))
+        assert "not part of a module's work" in str(caught.value), node_id
+
+    # The nodes a workstream IS about are still assignable, or this refusal has eaten the feature.
+    for node_id in sorted(graph.module_cycle()):
+        plan_mod.check(dict(base, node_workstream={node_id: "w1"}))
+
+
+def test_a_workstream_assignment_naming_no_node_is_refused():
+    """The id was never checked against the flow either. A misspelt one is silently ignored by the
+    engine, so the workstream the plan meant to grade runs at the strictest grade instead — safe,
+    and not what the plan said."""
+    from ai_sdlc_runner import plan as plan_mod
+
+    with pytest.raises(plan_mod.PlanError) as caught:
+        plan_mod.check({"risk": "high", "workstreams": {"w1": "low"}, "decisions": {},
+                        "node_workstream": {"enginer_build": "w1"}})
+    assert "no such node" in str(caught.value)
+
+
+def test_the_assignable_set_is_read_from_the_graph_rather_than_listed():
+    """`engine._workspace` reads `graph.module_cycle()` for the same reason: a node added to the
+    loop later is inside the rule instead of quietly outside it. If this ever becomes a literal
+    list, this test is what should stop it."""
+    assert graph.module_cycle(), "an empty module cycle would refuse every assignment"
+    assert "engineer_build" in graph.module_cycle()
+    assert "qa_accept" not in graph.module_cycle()

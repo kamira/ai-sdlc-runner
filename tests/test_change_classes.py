@@ -419,3 +419,80 @@ def test_each_workstream_can_be_classed_separately():
     assert per["copy"]["class"] == "standard"
     assert per["schema"]["class"] == "emergency"
     assert per["schema"]["authorised_by"] == "sam", "each names its own signer"
+
+
+# ── a class may not undo what the change said about itself (CHG-20260902-19) ───────────────────
+
+def test_a_class_cannot_undo_a_tightening_to_the_one_rung_it_could_reach():
+    """The guarantee above already had a test. It picked the cell where the defect cannot show.
+
+    `test_a_class_cannot_undo_a_tightening_the_change_asked_for_itself` uses `self_verify` at `low`
+    — graded `auto` — with `autonomy=halt`. `relax` only ever turns `confirm` into `auto`, so it
+    could not have touched a `halt` whatever the code did: the test was green while the guarantee
+    it is named for was false. **This is the cell with teeth**: a tightening to `confirm`, which is
+    exactly the rung `relax` can reach.
+
+    `relax` was applied to `result["verdict"]` — the value `autonomy` had *just tightened to* — so a
+    change declaring `confirm` at a gate graded `auto` became `confirm` and then `auto` again under
+    a relaxing class. A change that said it was more dangerous than its grade was handed back its
+    grade, in the function whose comment says a class "cannot undo a tightening the change asked
+    for itself". `source` printed both halves, so the report was honest while the verdict was not.
+    """
+    for klass in ("standard", "emergency"):
+        tightened = policy.verdict("plan_confirmed", "low", autonomy="confirm", change_class=klass)
+        assert tightened["tightened"] is True
+        assert tightened["verdict"] == "confirm", (
+            f"the {klass!r} class undid the change's own tightening: {tightened}")
+
+    # And an untightened gate still relaxes, or this test would pass by breaking the feature.
+    assert policy.verdict("plan_confirmed", "medium")["verdict"] == "confirm"
+    assert policy.verdict("plan_confirmed", "medium", change_class="standard")["verdict"] == "auto"
+
+
+def test_a_class_that_would_have_relaxed_and_did_not_says_so():
+    """A relaxation that did not happen is as worth seeing as one that did — the argument
+    `policy.verdict` already makes for reporting a refused loosening through `source`."""
+    v = policy.verdict("plan_confirmed", "medium", autonomy="halt", change_class="standard")
+    assert v["verdict"] == "halt"
+    assert "would have relaxed this and did not" in v["source"], v["source"]
+
+
+def test_autonomy_honours_every_tightening_and_reports_every_request_it_does_not():
+    """`autonomy` recognised exactly one tightening — `auto` to a stop — and reported exactly one
+    loosening — a stop to `auto`. Everything else was silently dropped.
+
+    A change declaring `halt` at a gate graded `confirm` got `confirm`, its own word discarded with
+    nothing said, in a function whose docstring promises both that a change may declare itself more
+    dangerous and that a request to loosen "is not honoured and is reported".
+
+    The order read here is `relax`'s, not a new one: `relax` allows `confirm -> auto` and nothing
+    else, so `auto` is looser than `confirm` and `confirm` is looser than either halt. `halt` and
+    `halt_independent` stay unranked against each other, because `engine.py` says no ordering
+    between them is needed anywhere.
+    """
+    cell = {}
+    for gate in policy.GATES:
+        for grade in ("low", "medium", "high"):
+            cell.setdefault(policy.GATES[gate][grade], (gate, grade))
+
+    # every tightening is honoured
+    for graded, want in (("auto", "confirm"), ("auto", "halt"), ("auto", "halt_independent"),
+                         ("confirm", "halt"), ("confirm", "halt_independent")):
+        gate, grade = cell[graded]
+        v = policy.verdict(gate, grade, autonomy=want)
+        assert (v["verdict"], v["tightened"]) == (want, True), (graded, want, v)
+
+    # every loosening is refused AND reported
+    for graded, want in (("confirm", "auto"), ("halt", "auto"), ("halt", "confirm"),
+                         ("halt_independent", "auto"), ("halt_independent", "confirm")):
+        gate, grade = cell[graded]
+        v = policy.verdict(gate, grade, autonomy=want)
+        assert v["verdict"] == graded, (graded, want, v)
+        assert "was refused — tighten-only" in v["source"], (graded, want, v["source"])
+
+    # the unranked pair is not honoured, and is not silent either
+    for graded, want in (("halt", "halt_independent"), ("halt_independent", "halt")):
+        gate, grade = cell[graded]
+        v = policy.verdict(gate, grade, autonomy=want)
+        assert v["verdict"] == graded, (graded, want, v)
+        assert "does not rank them" in v["source"], (graded, want, v["source"])

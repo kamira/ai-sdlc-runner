@@ -973,21 +973,58 @@ def verdict(gate: str, risk: str, autonomy: Optional[str] = None,
         want = autonomy.lower()
         if want not in (AUTO, *STOPPING):
             raise PolicyError(f"autonomy {autonomy!r} is not one of {[AUTO, *STOPPING]}")
-        if graded == AUTO and want in STOPPING:
+        # The partial order this reads by is **`relax`'s**, not a new one: `relax` allows
+        # `confirm -> auto` and nothing else, which says `auto` is looser than `confirm`, and
+        # `confirm` looser than either halt — because `confirm` can be pre-authorised with
+        # `--confirm` and a halt cannot. `halt` and `halt_independent` are left **unranked against
+        # each other**, because `engine.py` states that no ordering between them is needed anywhere
+        # and inventing one here would be a design change wearing a bug fix's clothes.
+        #
+        # Before CHG-20260902-19 this branch recognised exactly one tightening — `auto` to a stop —
+        # and reported exactly one loosening — a stop to `auto`. Every other request was **silently
+        # dropped**: a change declaring `halt` at a gate graded `confirm` got `confirm`, its own
+        # word discarded with nothing said, in a function whose docstring promises that a change
+        # may declare itself more dangerous and that a refusal is reported.
+        looser = {AUTO: 0, CONFIRM: 1, HALT: 2, HALT_INDEPENDENT: 2}
+        rank_graded, rank_want = looser[graded], looser[want]
+        if rank_want > rank_graded:
             result.update(verdict=want, tightened=True,
                           source="policy.GATES tightened by the change's Autonomy field")
-        elif want == AUTO and graded in STOPPING:
+        elif rank_want < rank_graded:
             # Reported through `source` rather than as an extra key: the verdict's shape is fixed so
             # a work order's closed schema can carry it, and a refusal the node never sees is a
             # refusal that may as well not have happened.
             result["source"] += (
-                f"; the change asked for {AUTO} here and was refused — tighten-only")
+                f"; the change asked for {want} here and was refused — tighten-only")
+        elif want != graded:
+            # Same rank, different word: `halt` and `halt_independent`, in either direction. Not
+            # honoured, because nothing here ranks them; not silent, because a change that asked
+            # for something and got something else is the case this whole branch exists to report.
+            result["source"] += (
+                f"; the change asked for {want} where the table says {graded} — both stop, and "
+                f"this runner does not rank them, so the table's word stands")
     # LAST, and after `autonomy` on purpose (CHG-20260827-20). A change that declared itself more
     # dangerous than its grade has said something about *this* instance; a class says something
-    # about the *type*. The instance's own word is the more specific of the two, so relaxing is
-    # applied to what is left standing rather than to the table — a `standard` class cannot undo a
-    # tightening the change asked for itself.
-    relaxed, why = relax(str(result["verdict"]), change_class)
+    # about the *type*. The instance's own word is the more specific of the two, so a class cannot
+    # undo a tightening the change asked for itself.
+    #
+    # **That is what this said and not what it did** (CHG-20260902-19). `relax` was applied to
+    # `result["verdict"]` — the value the change had *just tightened to* — so `autonomy="confirm"`
+    # over a graded `auto` became `confirm` and then `auto` again under a `standard` class. A change
+    # that declared itself more dangerous than its grade was returned to its grade, in the function
+    # whose comment says that cannot happen, and `source` printed both halves so the report was
+    # honest while the verdict was not.
+    #
+    # A tightening is skipped rather than re-relaxed, and the skip is reported: a class that would
+    # have relaxed and did not is exactly as worth seeing as one that did.
+    if result["tightened"]:
+        if relax(graded, change_class)[1]:
+            result["source"] += (
+                f"; the {str(change_class).strip().lower()!r} class would have relaxed this and did "
+                f"not — the change tightened it first, and an instance outranks its type")
+        relaxed, why = str(result["verdict"]), ""
+    else:
+        relaxed, why = relax(str(result["verdict"]), change_class)
     if why:
         result["source"] += why
     # The verdict, and NOTHING else. The `autonomy` branch above says why in as many words — "the
