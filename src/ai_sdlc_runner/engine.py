@@ -2254,12 +2254,15 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 # branches in the panel's own vocabulary and declare nothing, which is right. What
                 # stops a node declaring *nothing* while offering *neither* is `graph.validate`.
                 #
-                # Which is **not** on this path. `validate` is called by `cli.cmd_flow` and by the
-                # tests, and by nothing on a `run` — so a graph edited to be unroutable is caught by
-                # `runner flow` and by the suite, and a `run` still finds out here, at the node,
-                # with `has no branch`. That is the same shape as the defect being fixed and it is
-                # left alone deliberately: making `run` validate is a behaviour change to every
-                # run's startup and belongs in its own change, not smuggled into this one.
+                # `validate` runs at the top of `walk`, before the loop — so a graph edited to be
+                # unroutable is caught at startup, on every run.
+                #
+                # **This comment said the opposite until CHG-20260902-20**: "`validate` is called by
+                # `cli.cmd_flow` and by the tests, and by nothing on a `run`". It was false when it
+                # was written, and it was believed: a later design record cited it and built a task
+                # on the claim, and a seat found the error one `grep` away. A comment that is wrong
+                # about where a check runs is worse than none, because it is the thing a reader
+                # consults instead of looking.
                 choice = node.panel_branches.get(panel_outcome, panel_outcome)
             elif node.mode == graph.SEAT_PANEL:
                 choice = _adjudicate(node, report, seats)

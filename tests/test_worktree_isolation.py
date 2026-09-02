@@ -498,3 +498,68 @@ def test_removing_trees_normally_also_leaves_no_registration(tmp_path):
     trees.path_for(worktree.key_for(1))
     trees.close(keep=False)
     assert _registrations(root) == before
+
+
+# ── --worktree says "require", and required nothing here (CHG-20260902-20) ────────────────────
+
+def _bare_repo(tmp_path):
+    """A real git working tree, so `Trees.top()` is not None and the machine-level refusal is out
+    of the way — this test is about the other one."""
+    import subprocess
+    root = tmp_path / "repo"
+    root.mkdir()
+    for argv in (["git", "init", "-q"], ["git", "config", "user.email", "t@t"],
+                 ["git", "config", "user.name", "t"]):
+        subprocess.run(argv, cwd=root, capture_output=True)
+    (root / "a.txt").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "x"], cwd=root, capture_output=True)
+    return root
+
+
+def _factory(root, *, required):
+    from ai_sdlc_runner import cli, models, worktree as wt
+    registry = models.Registry([models.Model(
+        id="m1", vendor="v", name="n", transport="cli", command=("python3", "-c", "pass"))])
+    return cli.session_factory(
+        {"agent_command": ["python3", "-c", "pass"], "agent_cwd": str(root)},
+        risk="low", registry=registry, trees=wt.Trees(root=str(root), required=required))
+
+
+def test_worktree_refuses_a_module_ask_it_cannot_isolate(tmp_path):
+    """`--worktree`'s help: *"require each module to build in its own git worktree … a machine that
+    cannot make a tree refuses to run instead."*
+
+    `Trees.path_for` keeps the second half — it raises when the machine cannot. `_cwd_for` returned
+    before reaching it whenever the argv came from the model registry rather than `agent_command`,
+    so the first half was silently not kept for any module node a project had configured with
+    `node_models` — which is the whole subject of the design review that found this.
+
+    A refusal rather than a relocation: this runner does not own a command named in the operator's
+    shell, and moving it would change how its own relative path resolves. What it can do is stop,
+    which is what the flag says it does — `--sandbox` already takes that posture with its own
+    require flag.
+    """
+    from ai_sdlc_runner import worktree as wt
+
+    root = _bare_repo(tmp_path)
+    strict = _factory(root, required=True)
+
+    # The node this runner does own is isolated, so the refusal below is about the other case.
+    assert "worktrees" in str(strict(workspace="m0").cwd or "")
+
+    with pytest.raises(wt.WorktreeError) as caught:
+        strict(workspace="m0", model="m1")
+    assert "comes from the model registry" in str(caught.value)
+    assert wt.REQUIRE_FLAG in str(caught.value)
+
+
+def test_without_the_flag_the_same_ask_is_recorded_rather_than_refused(tmp_path):
+    """The half that already worked, and must keep working: *"Without it a run isolates where it can
+    and RECORDS where it could not."* Pinned so the refusal above cannot grow into the default."""
+    root = _bare_repo(tmp_path)
+    relaxed = _factory(root, required=False)
+
+    assert "worktrees" in str(relaxed(workspace="m0").cwd or "")
+    assert "worktrees" not in str(relaxed(workspace="m0", model="m1").cwd or "")
+    assert relaxed.isolated["shared"] >= 1, "the ask that could not be isolated must be counted"

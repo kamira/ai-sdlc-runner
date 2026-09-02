@@ -109,13 +109,19 @@ because it is the only one that is a fact rather than a claim.
 
 ### config/settings.json
 
-What the user set, and the only file this runner writes on their behalf. Two fields, both about the
-seat floor — settings cannot reach a gate verdict, a permanent halt or the adjudication rule.
+What the user set, and the only file this runner writes on their behalf. **Three fields** — settings
+cannot reach a gate verdict, a permanent halt or the adjudication rule.
 
 | Field | Type | Constraint | Description |
 |-------|------|------------|-------------|
 | `review_seats` | int \| null | ≥ 1, or absent | How many seats open. `null` means the floor |
 | `high_risk_mode` | bool | required-ish (defaults false) | Whether the floor may be crossed at all |
+| `ordinary_commands` | list[str] | absent → the defaults | Commands a node may run without the description being read against the permanent halts |
+
+This said *"Two fields, both about the seat floor"* over a table of two until CHG-20260902-20.
+`settings.FIELDS` has had three since `ordinary_commands` shipped, and it is not about the seat
+floor — it is about what a permanent-halt check reads, which is a different subject in the same
+file.
 
 Missing or empty → the defaults. **Malformed → an error**, not the defaults: a typo must not be
 indistinguishable from a deliberate choice when one of the two settings is a safety bypass. An
