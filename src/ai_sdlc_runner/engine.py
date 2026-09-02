@@ -799,7 +799,7 @@ def _workspace(node: graph.Node, cycle: int) -> str:
 
 
 def _open(factory: SessionFactory, seat: Optional[str], model: Optional[str] = None,
-          role: str = "", workspace: str = ""):
+          role: str = "", workspace: str = "", grade: str = ""):
     """Open a session, letting a factory route by seat or by model if it accepts one.
 
     Routing — which model answers — lives in the factory and never in the order, which is what makes
@@ -830,6 +830,15 @@ def _open(factory: SessionFactory, seat: Optional[str], model: Optional[str] = N
         # factory owns the trees because only it sees more than one ask, and this is the same
         # ask-if-you-want-it contract: a factory written before this change never sees the field.
         kwargs["workspace"] = workspace
+    if "grade" in params:
+        # CHG-20260901-18. The grade **in force** for this ask, which is not always the grade the
+        # plan proposed. `cli.session_factory` bound the sandbox grade once from `cfg.risk` — the
+        # plan's proposal — while `_Process.risk` documented itself as "derived from the grade in
+        # force". A run whose grading panel answered `high` over a plan proposing `low` therefore
+        # carried `policy_verdict.risk = "high"` in the order and ran in a `low` sandbox.
+        #
+        # Same ask-if-you-want-it contract as `role` and `workspace`.
+        kwargs["grade"] = grade
     return factory(**kwargs) if kwargs else factory()
 
 
@@ -881,8 +890,15 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
         if conversation is not None:
             conversation.unanswered(ask_id or "", f"{type(exc).__name__}: {exc}")
 
+    # Read off the order rather than threaded through six call sites, because the order **already
+    # carries it**: `workorder.render` puts the resolved verdict in `policy_verdict`, and that
+    # verdict was resolved at `_grade_in_force`. So the grade the process is bounded at is now the
+    # same value the process is told about, which is exactly the discrepancy this closes — an ask
+    # carried `policy_verdict.risk = "high"` and ran in a `low` sandbox (CHG-20260901-18).
+    verdict_here = order.get("policy_verdict") or {}
+    grade = str(verdict_here.get("risk") or "") if isinstance(verdict_here, Mapping) else ""
     try:
-        session = _open(factory, seat, model, role, workspace)
+        session = _open(factory, seat, model, role, workspace, grade)
     except Exception as exc:
         _failed(exc)
         raise
@@ -2072,16 +2088,10 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 # one of several voices would silently make a panel into whichever model happened to
                 # be asked first -- a vote held and then ignored.
                 panel_outcome = str(outcome["outcome"])
-                if node.settles_risk and outcome["outcome"] == policy.PASS:
-                    # Ratified. From here the run is graded at what the panel agreed, including
-                    # where that is *lower* than the strictest candidate `_grade_in_force` has been
-                    # protecting at — being signed off is what makes it the answer rather than one
-                    # of several proposals.
-                    #
-                    # Falls back to `cfg.risk` when no grading node ran, which is the resumed-run
-                    # and no-models case: settling on nothing would leave every later gate reading
-                    # `None`.
-                    report.risk_settled = report.risk_agreed or cfg.risk
+                # Settling moved out of this branch — see `_settle_risk` at the branch-taking site.
+                # It lived here, inside `node.mode == MODEL_PANEL and len(configured) > 1`, so a
+                # default install (`node_models = {}`) never settled the grade at all
+                # (CHG-20260901-18).
 
             elif node.mode == graph.SURVEY:
                 # Every seat is asked, and EVERY answer is kept. This is the one place in the runner
@@ -2257,6 +2267,36 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 choice = _answered_branch(node, answers)
             else:
                 choice = _choose(cfg, node, taken, report)
+
+            # **Ratified — whichever path produced the answer.**
+            #
+            # This lived inside the model-panel branch, so on a default install (`node_models` is
+            # `{}`, which every shipped example plan is) `pm_signoff` took the single-ask path and
+            # `report.risk_settled` stayed `None` for the whole run. `_grade_in_force`'s entire
+            # per-workstream branch is guarded on `if not settled`, so CHG-20260827-18 — a node
+            # graded at its own workstream rather than at the strictest candidate — was dead code
+            # by default, and the conversation's closing turn dropped its `risk` key because
+            # `conversations.close` drops falsy values (CHG-20260901-18, defect seat D-2 and D-3).
+            #
+            # Placed here because this is where the two paths meet: `choice` is the node's answer
+            # however it was reached. Keyed on the answer, never on the mode — the mode is how the
+            # answer was produced and the settling is about what it says.
+            #
+            # `choice` is a **branch word**, not an outcome word: `pm_signoff` offers `yes`/`no`,
+            # and `panel_branches` is what translates a panel's `pass` into `yes`. So the branch
+            # that means ratified is read off the node's own declaration rather than written here
+            # as the literal `"yes"` — a node id or a branch name in a condition is a name standing
+            # in for a constraint, which `graph.py` names as a defect class.
+            ratified = node.panel_branches.get(policy.PASS, policy.PASS)
+            if node.settles_risk and choice == ratified:
+                # From here the run is graded at what the panel agreed, including where that is
+                # *lower* than the strictest candidate `_grade_in_force` has been protecting at —
+                # being signed off is what makes it the answer rather than one of several proposals.
+                #
+                # Falls back to `cfg.risk` when no grading node ran, which is the resumed-run and
+                # no-models case: settling on nothing would leave every later gate reading `None`.
+                report.risk_settled = report.risk_agreed or cfg.risk
+
             if choice == policy.UNDECIDED:
                 last = report.adjudications[-1] if report.adjudications else {}
                 ruled = next((r for r in unspent_rulings if r.node_id == node.id), None)

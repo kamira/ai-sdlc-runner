@@ -369,7 +369,7 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
         return where
 
     def factory(seat: Optional[str] = None, model: Optional[str] = None, role: str = "",
-                workspace: str = ""):
+                workspace: str = "", grade: str = ""):
         argv = None
         # A seat may name a registry model, exactly as a node does. Resolved first, because a plain
         # string that happens to be a model id meaning "run this program called claude" would be a
@@ -402,9 +402,18 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
             from_config = not seat_argv and argv is default
         if not argv:
             return _Stub()
+        # The grade **in force**, not the plan's proposal (CHG-20260901-18). `risk` is bound once,
+        # here, from `cfg.risk` — which `cmd_run` documents as "the plan's proposal" — while
+        # `_Process.risk`'s own docstring says it is "derived from the grade in force". Those were
+        # two different values whenever a grading panel disagreed with the plan: an ask carried
+        # `policy_verdict.risk = "high"` in its work order and ran in a `low` sandbox.
+        #
+        # Passed the ask-if-you-want-it way, exactly as `role` and `workspace` were, so a factory
+        # written before this change is unaffected. Falls back to the bound `risk` when the engine
+        # does not offer one, which is every caller that builds its own dispatcher.
         return _Process(list(argv) if isinstance(argv, list) else str(argv).split(),
                         timeout, retries, cwd=_cwd_for(workspace, from_config),
-                        risk=risk, can_write=_may_write(seat, role),
+                        risk=grade or risk, can_write=_may_write(seat, role),
                         require_sandbox=require_sandbox)
 
     factory.isolated = isolated      # read by `cmd_run` for the report line
