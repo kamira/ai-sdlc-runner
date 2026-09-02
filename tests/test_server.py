@@ -1047,3 +1047,57 @@ def test_a_body_that_is_not_json_is_refused_in_words(live):
 
     assert status != 500, "a malformed body reached the operator as a server error"
     assert "not JSON" in payload["error"]
+
+
+# ── three stop shapes, three answers (CHG-20260903-23) ────────────────────────────────────────
+
+def test_an_incomplete_stop_is_not_a_gate_to_approve():
+    """`_require_suspension`'s own comment: *"A gate asks whether the run may proceed; a tie asks
+    which way. Accepting one for the other would record an answer to a question nobody was asked."*
+
+    The engine emits **three** shapes — a gate, an incomplete requirement, and a tie — and the check
+    read `undecided` alone. So an incomplete stop was accepted on the approve path, and
+    `intake_review` has no gate, so `approve()` stored `Approval(gate=None, …)` — which `walk`'s
+    up-front check then refuses on **every** subsequent walk. `RunState.approvals` is only appended
+    to and read; there is no removal route, so the run was unrecoverable short of `POST /run`
+    (CHG-20260903-23, defect seat L-25).
+    """
+    runner = server.Runner.__new__(server.Runner)
+    runner.state = server.RunState(state=engine.SUSPENDED)
+    runner.state.report = engine.RunReport(state=engine.SUSPENDED)
+
+    shapes = {
+        "gate":       {"incomplete": False, "undecided": False, "gate": "merge"},
+        "incomplete": {"incomplete": True, "undecided": False, "gate": None, "missing": ["flow"]},
+        "tie":        {"incomplete": False, "undecided": True, "gate": None},
+    }
+
+    def try_it(shape, undecided):
+        runner.state.report.suspended = dict(shapes[shape])
+        try:
+            server.Runner._require_suspension(runner, undecided)
+            return "accepted"
+        except server.ServerError as exc:
+            return str(exc)
+
+    assert try_it("gate", False) == "accepted"
+    assert try_it("tie", True) == "accepted"
+    assert "not complete" in try_it("incomplete", False), "an incomplete stop is not a gate"
+    assert "not complete" in try_it("incomplete", True), "and it is not a tie either"
+    assert "POST /run/instruct" in try_it("incomplete", False), (
+        "the refusal must name the route that does answer it")
+    assert "flow" in try_it("incomplete", False), "and say what is missing"
+
+
+def test_the_refusal_names_what_the_run_is_actually_waiting_for():
+    """The text was wrong as well as the check: at an incomplete stop it said *"waiting for a gate
+    to approve"*. It is waiting for a requirement somebody has to finish."""
+    runner = server.Runner.__new__(server.Runner)
+    runner.state = server.RunState(state=engine.SUSPENDED)
+    runner.state.report = engine.RunReport(state=engine.SUSPENDED)
+    runner.state.report.suspended = {"incomplete": True, "undecided": False, "gate": None}
+    try:
+        server.Runner._require_suspension(runner, False)
+        raise AssertionError("an incomplete stop must not be approvable")
+    except server.ServerError as exc:
+        assert "a gate to approve" not in str(exc), str(exc)

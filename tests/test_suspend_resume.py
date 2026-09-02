@@ -19,6 +19,7 @@ opening on an approval one ledger spent and the other never saw, unreconstructab
 independent seat named it as the highest-cost thing to get wrong, over the alternatives, precisely
 because every other candidate fails loudly.
 """
+import re
 import inspect
 
 import pytest
@@ -209,7 +210,12 @@ def test_nothing_waits_inside_the_walk():
 def test_the_suspended_report_is_returned_not_yielded():
     source = inspect.getsource(engine.walk)
     marker = source.index("report.state = SUSPENDED")
-    assert "return _finish(report, confirmations, cfg.conversation)" in source[marker:marker + 1400]
+    # The claim is that this exit **returns** rather than yielding — not what `_finish`
+    # takes. CHG-20260903-23 gave it two more arguments and both of these turned red on
+    # the argument list, which is a test pinned to a signature while its name is about
+    # control flow.
+    assert re.search(r"return _finish\(report, confirmations, cfg\.conversation",
+                     source[marker:marker + 1400]), "this exit must return, not yield"
 
 
 def test_a_report_cannot_claim_a_state_the_engine_does_not_know():

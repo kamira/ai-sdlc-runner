@@ -119,10 +119,28 @@ def test_a_declared_class_is_exported_as_the_operators_act(tmp_path):
                 "--conversation", cid, "--format", "html"]).stdout or ""
     relaxations = [line for line in page.split("<article") if 'class="verb">relaxed' in line]
     assert relaxations, "the export carries no relaxation at all, so nothing below is meaningful"
-    assert all('class="who">operator' in line for line in relaxations), (
+
+    # **The class's relaxation**, not every relaxation. `conversations.relaxation`'s own docstring
+    # draws the line this assertion used to cross: *"Two different acts share this kind:
+    # `--store-remote allow` is the runner recording its own configuration, and a change class is a
+    # person pre-authorising a type. The first is the runner's voice; the second is not."*
+    #
+    # It asserted `all(...)` and so said every relaxation is a person's. CHG-20260903-23 added one
+    # that is not — an unsandboxed run, which is the runner recording what this machine could do —
+    # and this turned red on a correct change. The test is named for the class's act; it now checks
+    # the class's act (CHG-20260903-23).
+    declared = [line for line in relaxations if "alex@example.com" in line]
+    assert declared, f"the class's own relaxation is not in the export: {[l[:120] for l in relaxations]}"
+    assert all('class="who">operator' in line for line in declared), (
         "the export attributes a person's pre-authorisation to the runner: "
-        f"{[l[:120] for l in relaxations]}")
+        f"{[l[:120] for l in declared]}")
     assert "alex@example.com" in page, "and it must still name who"
+
+    # And the runner's own relaxations stay the runner's, or the distinction above is decoration.
+    machine = [line for line in relaxations if "alex@example.com" not in line]
+    assert all('class="who">runner' in line for line in machine), (
+        f"a relaxation the runner recorded about itself is attributed to a person: "
+        f"{[l[:120] for l in machine]}")
 
 
 def test_no_renderer_reads_the_voice_table_directly():
