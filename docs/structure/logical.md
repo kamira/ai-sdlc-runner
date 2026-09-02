@@ -41,8 +41,11 @@ The one flow the runner drives, and the loop the whole design is about:
    consults `plan_confirmed`. Two nodes, because planning and confirming are two kinds of work, and
    the second is the cheapest place a person can still say no.
 3. **The lead judges feasibility and risk** — before anyone is dispatched, which is why the lead is
-   asked first. Its gate is consulted **before** the work: at high risk the lead is never asked,
-   because that is the point of stopping there.
+   asked first. Its gate is consulted **after** the work, because the thing a person is being asked
+   to confirm *is* the lead's assessment, and stopping in front of it hands them an empty page.
+   (This said "before" until CHG-20260902-20; CHG-20260901-14 moved it, and moved the resolution
+   with it, so the gate now fires at the grade the assessment proposed rather than the one the plan
+   did. `docs/structure/design.md` has said the corrected version all along.)
 4. **PM signs off**, and the module loop opens.
 5. **Per module**: an engineer builds one small module → verifies its own work → the lead reviews
    work it did not write. Pass records the module and returns to the loop; fail takes **one** fix

@@ -41,13 +41,48 @@ def test_an_unknown_top_level_key_is_refused(typo):
 
 
 def test_every_key_the_code_reads_is_one_the_plan_may_carry():
-    """The two lists must not drift: a key `cli.py` reads and `FIELDS` lacks would be refused on a
-    plan that is correct, which is the failure mode of a closed schema built from memory."""
+    """The two lists must not drift, **in either direction**.
+
+    A key `cli.py` reads and `FIELDS` lacks would be refused on a plan that is correct — the failure
+    mode of a closed schema built from memory. A key in `FIELDS` that `cli.py` never reads is the
+    mirror image and the one `plan.check`'s own refusal is about: *"Ignoring them would let a
+    setting look configured and do nothing."* A plan could carry it, the door would accept it, and
+    nobody would read it.
+
+    This checked one direction until CHG-20260902-20. `FIELDS`' own comment claims both — *"each of
+    these appears as a `plan.get(...)` in `cli.py`, and a test walks the source to prove the two
+    lists have not drifted apart"* — and the unchecked half is exactly what CHG-20260901-17 M-3
+    found in a different file: a guard reporting "no drift" for the half it never looked at.
+    """
     import re
     source = (ROOT / "src" / "ai_sdlc_runner" / "cli.py").read_text(encoding="utf-8")
     read = set(re.findall(r'plan\.get\("(\w+)"', source))
     assert read, "cli.py no longer reads the plan by key"
     assert read <= set(plan.FIELDS), f"cli.py reads {sorted(read - set(plan.FIELDS))}, not in FIELDS"
+    assert set(plan.FIELDS) <= read, (
+        f"FIELDS carries {sorted(set(plan.FIELDS) - read)}, which `cli.py` never reads. A plan may "
+        f"set it, the door accepts it, and nothing acts on it — a setting that looks configured and "
+        f"does nothing, which is what this schema was closed to prevent.")
+
+
+def test_the_ship_block_does_not_drift_in_either_direction_either():
+    """`SHIP_FIELDS` carries the same claim and had the same one-way guard.
+
+    `effects_provider` reads the ship block by key; a name in `SHIP_FIELDS` it never reads is a key
+    a plan may set that changes nothing, which is the exact case `plan.py`'s module docstring calls
+    the repository's doctrine failing at its front door.
+    """
+    import re
+    source = (ROOT / "src" / "ai_sdlc_runner" / "cli.py").read_text(encoding="utf-8")
+    block = source.split("def effects_provider")[1].split("\ndef ")[0]
+    read = set(re.findall(r'settings\.get\("(\w+)"', block)) | set(
+        re.findall(r'settings\["(\w+)"\]', block))
+    assert read, "effects_provider no longer reads the ship block by key"
+    assert read <= set(plan.SHIP_FIELDS), (
+        f"effects_provider reads {sorted(read - set(plan.SHIP_FIELDS))}, not in SHIP_FIELDS")
+    assert set(plan.SHIP_FIELDS) <= read, (
+        f"SHIP_FIELDS carries {sorted(set(plan.SHIP_FIELDS) - read)}, which `effects_provider` "
+        f"never reads.")
 
 
 def test_a_plan_that_is_not_an_object_is_refused():

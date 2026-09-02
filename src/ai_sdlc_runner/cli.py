@@ -350,6 +350,25 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
         """
         usual = config_cwd if from_config else None
         if not workspace or trees is None or not from_config:
+            if workspace and trees is not None and not from_config and trees.required:
+                # `--worktree` says "**require** each module to build in its own git worktree …
+                # a machine that cannot make a tree refuses to run instead". `path_for` keeps the
+                # second half — it raises when the machine cannot — and this branch returned before
+                # reaching it, so the first half was silently not kept for any module node run by a
+                # registry command. That is exactly `node_models`, which is what a project
+                # configures (CHG-20260902-20, defect seat D-4).
+                #
+                # A refusal rather than a relocation. The paragraph above stands: this runner does
+                # not own a command named in the operator's shell and moving it would change how its
+                # own relative path resolves. What it can do is stop, which is what the flag says it
+                # does — the posture `--sandbox` already takes with its own require flag.
+                raise worktree.WorktreeError(
+                    f"{worktree.REQUIRE_FLAG} was passed, so every module must build in its own "
+                    f"tree, and this ask cannot: its command comes from the model registry, not "
+                    f"from `agent_command`, so it was named in your shell and this runner does not "
+                    f"own its directory. Point that node at `agent_command`, or drop "
+                    f"{worktree.REQUIRE_FLAG} to record the run as partly unisolated instead of "
+                    f"stopping it.")
             if workspace:
                 isolated["shared"] += 1
             return usual
