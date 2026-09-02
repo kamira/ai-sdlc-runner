@@ -363,6 +363,13 @@ class RunReport:
     #: Gates this run passed **because** of the class, each named. A relaxation nobody can enumerate
     #: afterwards is a relaxation nobody can audit.
     relaxations_by_class: List[str] = field(default_factory=list)
+    #: Who declared the class, as a name rather than as prose (CHG-20260902-21). `change_class`
+    #: above is a sentence for a person to read — *"the 'standard' class, authorised by alex, due
+    #: for review on 2099-01-01"* — and the durable record needs the name on its own, because a
+    #: relaxation a class caused is **the person's act and not the runner's** and the export says
+    #: so by attribution. Parsing the name back out of the sentence would be a name standing in for
+    #: a fact.
+    class_authorised_by: str = ""
     #: What each voice graded the change, by model (CHG-20260827-17). Kept even when they agree, so
     #: "three voices said low" is distinguishable in the record from "one voice said low".
     risk_proposed: Dict[str, str] = field(default_factory=dict)
@@ -446,6 +453,7 @@ class RunReport:
             "risk_settled": self.risk_settled,
             "risk_agreed": self.risk_agreed,
             "halts": [dict(h) for h in self.halts],
+            "class_authorised_by": self.class_authorised_by,
         }
 
 
@@ -1604,9 +1612,16 @@ def _note_panel_diversity(node: graph.Node, report: "RunReport", opened_for_pane
     """Record whether the seats were actually answered by different things.
 
     Asks each session what it is — `describe()` if it offers one, else its class. Identical
-    descriptions across every seat means one backend answered the whole panel: independent sessions,
-    one set of blind spots. Not refused; **stated**, because a report that reads like a cross-model
-    panel while one model answered it is the assurance this design is against.
+    descriptions across every voice means one backend answered the whole panel: independent
+    sessions, one set of blind spots. Not refused; **stated**, because a report that reads like a
+    cross-model panel while one model answered it is the assurance this design is against.
+
+    **The remedy is named per mode** (CHG-20260902-21, defect seat L-23). This is called from four
+    sites — the model-panel branch twice, the survey, and the seat panel — and said `--seat-model`
+    at all of them. A `MODEL_PANEL` node opens **no seats**: `cli.session_factory` resolves a seat
+    command through `seat_models.get(seat)`, and that path passes `seat=None`, so the flag it named
+    could not reach the voices it had just flagged. FR-24's false-assurance detector was telling an
+    operator to use a flag that does not go there.
     """
     if len(opened_for_panel) < 2:
         return
@@ -1615,18 +1630,32 @@ def _note_panel_diversity(node: graph.Node, report: "RunReport", opened_for_pane
         describe = getattr(session, "describe", None)
         kinds.add(describe() if callable(describe) else type(session).__name__)
     if len(kinds) == 1:
+        # A seat panel and a survey route by seat; a model panel routes by the node's model list,
+        # which is configured in the plan or the store and has no flag on `run` at all. Naming the
+        # wrong one is what this fixes, so it is read off the mode rather than written once.
+        remedy = (f"Configure more than one model on {node.id!r} — `node_models` in the plan, or "
+                  f"the console's per-node assignment — to make the panel cross-model."
+                  if node.mode == graph.MODEL_PANEL else
+                  "Use --seat-model SEAT=COMMAND to make the review cross-model.")
         report.single_model_panels.append(
-            f"{node.id}: every seat was answered by the same backend ({kinds.pop()}). The sessions "
-            f"were independent; the model was not, so the seats share whatever it cannot see. Use "
-            f"--seat-model SEAT=COMMAND to make the review cross-model.")
+            f"{node.id}: every voice was answered by the same backend ({kinds.pop()}). The "
+            f"sessions were independent; the model was not, so they share whatever it cannot see. "
+            f"{remedy}")
 
 
-def _adjudicate(node: graph.Node, report: "RunReport", seats: int) -> str:
-    """Turn the seats' verdicts into one branch, through `policy.adjudicate`.
+def _adjudicate(node: graph.Node, report: "RunReport",
+                seats: int) -> Tuple[str, Optional[Dict[str, object]]]:
+    """The branch the seats' verdicts reach, and the rework to carry, through `policy.adjudicate`.
 
     This is the requirement's own sentence made operational — *多數決才允許放行* — and it is what both
     verifiers found missing: the seats were asked, and their answers routed nothing.
+
+    **Returns the rework as well as the branch** (CHG-20260902-21). It called `_send_back` and threw
+    the result away, while `walk`'s model-panel branch kept it — so a seat panel's objections were
+    recorded and never delivered, and `graph.review_failed`'s note that *"the panel's reasons travel
+    with the run"* was false for every seat panel in the flow.
     """
+    rework: Optional[Dict[str, object]] = None
     verdicts = {}
     for ask in report.asks:
         if ask.node_id == node.id and ask.seat:
@@ -1642,13 +1671,21 @@ def _adjudicate(node: graph.Node, report: "RunReport", seats: int) -> str:
         # The seats send work back too, and their objections are the ones most worth keeping whole:
         # each seat answered a different question, so flattening four of them into one sentence
         # loses which question failed.
-        _send_back(node, report, outcome, verdicts)
+        #
+        # **The return was discarded here**, while `walk`'s model-panel branch captured it —
+        # the same function, two callers, one of them dropping what `_send_back`'s own comment
+        # calls out: *"Returned, not only recorded … the rework was never told what it was
+        # reworking, and a `fail` that loops back produced the same answer next lap."* So
+        # `graph.review_failed`'s note — *"the panel's reasons travel with the run"* — was false
+        # for every seat panel. Measured: the rework lap's work orders came back byte-identical
+        # (CHG-20260902-21, defect seat L-20, second arm).
+        rework = _send_back(node, report, outcome, verdicts)
     reached = str(outcome["outcome"])
     if reached not in policy.OUTCOMES:
         raise EngineError(
             f"{node.id!r} adjudicated to {reached!r}, which is not an outcome this engine knows how "
             f"to route. An unrecognised outcome is not a failure and must not be treated as one.")
-    return reached
+    return reached, rework
 
 
 def _finish(report: "RunReport", confirmations: Dict[str, int],
@@ -1688,6 +1725,26 @@ def _finish(report: "RunReport", confirmations: Dict[str, int],
         # own docstring was written for.
         for relaxed in report.relaxations:
             conversation.relaxation(relaxed)
+        # **And the gates a change class dissolved** (CHG-20260902-21, defect seat L-22). This
+        # iterated `report.relaxations` alone, so `relaxations_by_class` reached `as_dict()` and
+        # `cmd_run`'s stdout footer and **nothing durable** — while the same loop wrote fourteen
+        # turns of `--undeclared` noise beside it.
+        #
+        # Its own field comment is the requirement: *"Gates this run passed **because** of the
+        # class, each named. A relaxation nobody can enumerate afterwards is a relaxation nobody
+        # can audit."* And `conversations.relaxation`'s is the placement: *"Recorded **in the
+        # document**, not only in the run report."* Measured, the gate a `standard` class dissolved
+        # was `merge` — the one-way door — and the durable record said a class governed the run and
+        # never which gate it opened.
+        #
+        # **Attributed to the person, not the runner.** `relaxation`'s own docstring draws the line
+        # this fix crossed on its first attempt: *"`--store-remote allow` is the runner recording
+        # its own configuration, and a change class is a person pre-authorising a type. The first
+        # is the runner's voice; the second is not."* A gate opened by a class was opened on a
+        # person's standing authority, and `test_a_declared_class_is_exported_as_the_operators_act`
+        # caught it filed under `runner` the same day.
+        for relaxed in report.relaxations_by_class:
+            conversation.relaxation(relaxed, by=report.class_authorised_by or None)
         # The governance facts of the run, into the durable record rather than only into stdout
         # (CHG-20260828-09). `report.halt_reason` is where a permanent halt names the rule and the
         # recipient, and it was reaching the terminal and nothing else.
@@ -1734,6 +1791,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
     # is what a change-level gate sees and what an operator asks about first.
     klass, why = _class_in_force(cfg, None, today)
     report.change_class = why
+    report.class_authorised_by = str((cfg.change_class or {}).get("authorised_by") or "").strip()
 
     seats = policy.resolve_seats(cfg.review_seats, cfg.high_risk_mode)
     if cfg.review_seats is not None and cfg.review_seats < policy.SEAT_FLOOR:
@@ -1984,7 +2042,15 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
         # Spent, not read: a node reached again for an ordinary reason must not be told about
         # a refusal it has already answered. `pop` is what makes this a message rather than a
         # standing property of the node (CHG-20260901-12).
-        came_back = sent_back.pop(node.id, None)
+        #
+        # **Spent only by a node that can be told.** `rejects_to` points at a node with no `role`
+        # three times out of eight — `review_failed`, `next_module`, `acceptance_failed` — and
+        # those three are exactly the whole-change refusals, the most expensive loops in the flow.
+        # A node with no role is asked nothing, so popping the message there dropped it: measured,
+        # a refusal at `qa_verify` reached **0 of the 5** work orders on the lap that followed
+        # (CHG-20260902-21, defect seat L-20). It is forwarded below instead, at the point the run
+        # decides where it is going, so it lands on the first node that is actually asked.
+        came_back = sent_back.pop(node.id, None) if node.role else None
         if node.role:
             configured = list(cfg.node_models.get(node.id) or ())
 
@@ -2265,7 +2331,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 # consults instead of looking.
                 choice = node.panel_branches.get(panel_outcome, panel_outcome)
             elif node.mode == graph.SEAT_PANEL:
-                choice = _adjudicate(node, report, seats)
+                choice, rework = _adjudicate(node, report, seats)
             elif node.answer_decides:
                 choice = _answered_branch(node, answers)
             else:
@@ -2363,6 +2429,16 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     "reason": str(rework.get("brief") or "")}
         else:
             node_id = node.next
+
+        # **Forward a message a node could not be told.** Three of the eight `rejects_to` edges
+        # land on a node with no `role`, which is asked nothing — so the reason a person or a panel
+        # gave for sending the run back had nowhere to be read and evaporated at the first hop.
+        #
+        # Re-keyed rather than broadcast: it stays one message for one node, and it keeps moving
+        # only while nothing can consume it. A node WITH a role popped it above, so this cannot
+        # re-deliver something already read (CHG-20260902-21).
+        if not node.role and node.id in sent_back and node_id and node_id != node.id:
+            sent_back[node_id] = sent_back.pop(node.id)
     else:
         # "the flow is cycling without progress" told an operator only that something looped. The
         # loop it was written for turned out to be `next_module` asking `engineer_build` the same

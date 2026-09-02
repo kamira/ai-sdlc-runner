@@ -251,3 +251,45 @@ def test_a_probe_that_times_out_says_so_rather_than_answering(repo, py_stub):
     with pytest.raises(probes.ProbeError) as caught:
         probes._run([*slow, "--head", "feature"], cwd=repo, timeout=1)
     assert "timed out after 1s" in str(caught.value)
+
+
+# ── an unanswerable probe is never read as "not done" (CHG-20260902-21) ───────────────────────
+
+def test_the_branch_probe_refuses_to_answer_when_git_cannot(tmp_path):
+    """This module's rule, stated twice, and the one probe that did not keep it.
+
+    `DEFAULT_TIMEOUT`: *"An unanswerable probe is **never** read as 'not done': that would re-run an
+    effect that may have succeeded."* `ProbeError`: *"collapsing them makes the engine re-run an
+    effect that may already have landed."*
+
+    `branch_exists_locally` was `return proc.returncode == 0`, so "not a git repository" read as
+    "the branch is not there" — and it is the `branch` effect's probe in `ship.effects_for`, so a
+    false `False` re-runs `git checkout -b <branch>`. Its three sibling git probes all raise; this
+    one had no test at all (CHG-20260902-21, defect seat L-21).
+    """
+    with pytest.raises(probes.ProbeError) as caught:
+        probes.branch_exists_locally(tmp_path, "feature")
+    assert "not an answer" in str(caught.value)
+
+
+def test_the_branch_probe_still_answers_when_git_can(tmp_path):
+    """The other half, or the refusal above would have eaten the probe.
+
+    `rev-parse --verify` exits **128 for both** "no such branch" and "not a repository" — measured —
+    so the two cannot be told apart by its exit code at all. `show-ref --verify` gives three codes
+    for three states: 0 present, 1 absent, 128 unanswerable. That substitution is the fix.
+    """
+    import subprocess
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for argv in (["git", "init", "-q"], ["git", "config", "user.email", "t@t"],
+                 ["git", "config", "user.name", "t"]):
+        subprocess.run(argv, cwd=repo, capture_output=True)
+    (repo / "a.txt").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "x"], cwd=repo, capture_output=True)
+    here = subprocess.run(["git", "branch", "--show-current"], cwd=repo,
+                          capture_output=True, text=True).stdout.strip()
+
+    assert probes.branch_exists_locally(repo, here) is True
+    assert probes.branch_exists_locally(repo, "no-such-branch") is False
