@@ -533,3 +533,27 @@ def resolve(plan: Mapping[str, object], stored: Mapping[str, object]
         for key in combined:
             source[f"{half}.{key}"] = FROM_PLAN if key in from_plan else FROM_STORE
     return merged, source
+
+
+def overrides(plan: Mapping[str, object], stored: Mapping[str, object]) -> Dict[str, str]:
+    """The assignments the plan **displaced** — not the ones it merely named.
+
+    `resolve`'s map answers *which source put an assignment there*, and for that question
+    ``FROM_PLAN`` is right on both of these rows:
+
+        plan says X, store says X    FROM_PLAN    the plan overrode the store
+        plan says X, store silent    FROM_PLAN    the plan overrode NOTHING
+
+    `cmd_serve` counted every ``FROM_PLAN`` and printed it as *"N assignment(s) from the plan
+    override it"*, so an **empty** store was reported as three overrides (CHG-20260903-40). The two
+    questions are different and only one of them can be answered from `resolve`'s output, which is
+    why this reads the two inputs instead. Returns ``key -> what the store had``, so a caller can
+    say what was displaced and not only how many.
+    """
+    displaced: Dict[str, str] = {}
+    for half in ("node_models", "seat_models"):
+        from_plan = dict(plan.get(half) or {})
+        from_store = dict(stored.get(half) or {})
+        for key in sorted(set(from_plan) & set(from_store)):
+            displaced[f"{half}.{key}"] = from_store[key]
+    return displaced
