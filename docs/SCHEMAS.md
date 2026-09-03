@@ -330,7 +330,15 @@ under pressure here; only the filename is."*
 confirmations · adjudications · single_model_panels · effects · resumed · dispatches · survey ·
 options · panel_rounds · send_backs · rejections · rulings · store_errors · change_class ·
 relaxations_by_class · risk_proposed · risk_settled · risk_agreed · halts ·
-class_authorised_by`
+class_authorised_by ·
+relaxation_authorisers`
+
+`relaxation_authorisers` maps each note in `relaxations_by_class` to **who pre-authorised that
+gate** (CHG-20260903-41). `class_authorised_by` beside it is one name for the whole run, read from
+the run-level `--change-class` — which the CLI *refuses* over a split programme, so on the one
+shape the per-workstream form exists for it is always empty. A gate belonging to no workstream
+carries every authoriser, comma-separated, because it relaxed only if every workstream was
+pre-authorised.
 
 The last six were declared on `RunReport`, written during the walk, and emitted by nothing until
 CHG-20260901-16 — so they reached no `--json`, no entry here, and no console, and lived only in

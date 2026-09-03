@@ -1515,15 +1515,26 @@ MUTATIONS: List[Mutation] = [
         'tests/test_export_voice.py'),
 
     Mutation(
+        "voice", "a split programme's gates are filed under the runner again",
+        SRC / 'engine.py',
+        # **The one that survived** (CHG-20260903-41). Reverting this exact line — the whole point of
+        # that change — left the entire suite green at 2066 tests, because every guard written for
+        # the change tested the pieces around it: the helper it called, the CLI that fed it, the AST
+        # beside it. Registered here so the line itself stays checked rather than its neighbours.
+        '''                by=(report.relaxation_authorisers.get(relaxed)
+                    or report.class_authorised_by or None))''',
+        '                by=(report.class_authorised_by or None))',
+        'tests/test_change_classes.py'),
+
+    Mutation(
         'voice', 'the declaration stops recording who made it',
         SRC / 'cli.py',
-        # Anchored through `cmd_run`'s own comment, because CHG-20260903-22 gave `serve` the same
-        # flag and the same operator turn — so the one-line anchor matched twice and the staleness
-        # guard's sibling, `test_every_shipped_mutation_has_a_unique_anchor`, caught it the same
-        # day. Two identical acts in two commands is right; a mutation that cannot say which one it
-        # reverts is not.
-        '''            # dimension this document exists to keep straight.
-            by=str(declared_class["authorised_by"]))''',
+        # **One line again** (CHG-20260903-41). This was anchored through `cmd_run`'s own comment
+        # because CHG-20260903-22 gave `serve` the same flag and the same operator turn, so a
+        # one-line anchor matched twice. That duplication is what `_declare_classes` removed — both
+        # commands had also dropped the per-workstream form, identically — so the reason for the
+        # two-line anchor is gone with it and the guarantee now lives in one place.
+        '            by=str(entry["authorised_by"]))',
         '''            # dimension this document exists to keep straight.
             by=None)''',
         'tests/test_export_voice.py'),

@@ -370,6 +370,13 @@ class RunReport:
     #: so by attribution. Parsing the name back out of the sentence would be a name standing in for
     #: a fact.
     class_authorised_by: str = ""
+    #: The authoriser of **each** relaxation, by its note (CHG-20260903-41). `class_authorised_by`
+    #: above is one name for the whole run, and it is read from `cfg.change_class` — which
+    #: `cli.py` **refuses** to accept over a split programme, so on the one shape the
+    #: per-workstream form exists for it is always empty and every gate a person pre-authorised
+    #: was filed as the runner's own act. A split programme can also have a different person per
+    #: workstream, so one string per run cannot answer this even when it is populated.
+    relaxation_authorisers: Dict[str, str] = field(default_factory=dict)
     #: What each voice graded the change, by model (CHG-20260827-17). Kept even when they agree, so
     #: "three voices said low" is distinguishable in the record from "one voice said low".
     risk_proposed: Dict[str, str] = field(default_factory=dict)
@@ -454,6 +461,7 @@ class RunReport:
             "risk_agreed": self.risk_agreed,
             "halts": [dict(h) for h in self.halts],
             "class_authorised_by": self.class_authorised_by,
+            "relaxation_authorisers": dict(self.relaxation_authorisers),
         }
 
 
@@ -667,6 +675,32 @@ def _grade_in_force(cfg: "RunConfig", report: "RunReport",
         # In no workstream: the change-level gates, and everything before the split.
         return policy.strictest(list(cfg.workstreams.values()) + [settled])
     return settled
+
+
+def _class_authoriser(cfg: "RunConfig", node: Optional[graph.Node]) -> str:
+    """**Who** pre-authorised the class `_class_in_force` just chose for this node.
+
+    Reads the same three branches, because an authoriser taken from a different branch than the
+    class it authorises is a name standing beside somebody else's decision.
+
+    A gate that belongs to no workstream — `merge`, the one-way door — passes only if **every**
+    workstream was pre-authorised (`policy.combined_class`), so naming every authoriser is the
+    truthful answer there and not a hedge: the door opened on all of their authority at once.
+    That is the opposite of folding them into one run-level string, which would put several
+    names against a gate only one of them assessed.
+    """
+    def who(entry):
+        return str((entry or {}).get("authorised_by") or "").strip()
+
+    per = dict(cfg.class_by_workstream or {})
+    if not per:
+        return who(cfg.change_class)
+
+    mine = cfg.node_workstream.get(node.id) if node is not None else None
+    if mine is not None:
+        return who(per.get(mine))
+
+    return ", ".join(sorted({who(per.get(name)) for name in (cfg.workstreams or per)} - {""}))
 
 
 def _class_in_force(cfg: "RunConfig", node: Optional[graph.Node], today: str) -> Tuple[str, str]:
@@ -1846,7 +1880,17 @@ def _finish(report: "RunReport", confirmations: Dict[str, int],
         # person's standing authority, and `test_a_declared_class_is_exported_as_the_operators_act`
         # caught it filed under `runner` the same day.
         for relaxed in report.relaxations_by_class:
-            conversation.relaxation(relaxed, by=report.class_authorised_by or None)
+            # Per note, not per run (CHG-20260903-41). `class_authorised_by` is read from
+            # `cfg.change_class`, which `cli.py:1228` refuses over a split programme — so on
+            # every split programme this was `None` and the export filed a person's
+            # pre-authorisation under `runner`, which `conversations.relaxation`'s own
+            # docstring calls a misattribution "in the one dimension the document exists to
+            # record". It falls back to the run-level name so the single-class path is
+            # untouched.
+            conversation.relaxation(
+                relaxed,
+                by=(report.relaxation_authorisers.get(relaxed)
+                    or report.class_authorised_by or None))
         # The governance facts of the run, into the durable record rather than only into stdout
         # (CHG-20260828-09). `report.halt_reason` is where a permanent halt names the rule and the
         # recipient, and it was reaching the terminal and nothing else.
@@ -2075,6 +2119,11 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                         f"{strict['verdict']!r} and passed on the {here!r} class")
                 if note not in report.relaxations_by_class:
                     report.relaxations_by_class.append(note)
+                # **Whose authority opened this one** (CHG-20260903-41). `node` is in hand here
+                # and `_class_in_force` has already chosen which class applies, so the person
+                # is reachable exactly where the note is written — rather than being looked up
+                # later from a run-level field that a split programme never fills.
+                report.relaxation_authorisers[note] = _class_authoriser(cfg, node)
         report.verdicts[node.id] = dict(verdict)
 
         def _gate(phase: str):

@@ -994,14 +994,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     # declared an expired class and a run that never had one must not read the same afterwards.
     declared_class, class_by_workstream = _change_classes(
         getattr(args, "change_class", None), plan.get("workstreams") or {})
-    if declared_class and conversation is not None:
-        conversation.relaxation(
-            f"change class {declared_class['class']!r} declared by "
-            f"{declared_class['authorised_by']}, due for review on {declared_class['review_by']}",
-            # Who, so the export says `operator` rather than `runner` (CHG-20260828-03). A person's
-            # pre-authorisation filed under the machine's voice is a misattribution in the one
-            # dimension this document exists to keep straight.
-            by=str(declared_class["authorised_by"]))
+    _declare_classes(conversation, declared_class, class_by_workstream)
 
     cfg = engine.RunConfig(
         conversation=conversation,
@@ -1199,6 +1192,36 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _declare_classes(conversation, declared_class, class_by_workstream) -> None:
+    """Every declared class into the document — run-level **and** per workstream.
+
+    `cmd_run` and `cmd_serve` held the identical `if declared_class and conversation is not None:`
+    and both dropped the per-workstream form entirely. `_change_classes` **refuses** a run-level
+    class over a split programme, so that form is the only one a split programme can use — which
+    made this not a case that slips through but the only case there is: a split programme's
+    document carried no declaration at all (CHG-20260903-41).
+
+    One function rather than two swept blocks, because CHG-20260903-36 was *"two fixes shipped into
+    one module and never swept into their siblings"* and a third caller should not be able to
+    diverge in the first place.
+
+    Who, so the export says `operator` rather than `runner` (CHG-20260828-03): a person's
+    pre-authorisation filed under the machine's voice is a misattribution in the one dimension this
+    document exists to keep straight.
+    """
+    if conversation is None:
+        return
+    for scope, entry in [(None, declared_class)] + sorted((class_by_workstream or {}).items()):
+        if not entry:
+            continue
+        # Empty for the run-level one, so its sentence is unchanged to the byte.
+        where = "" if scope is None else f" for workstream {scope!r}"
+        conversation.relaxation(
+            f"change class {entry['class']!r} declared by "
+            f"{entry['authorised_by']}{where}, due for review on {entry['review_by']}",
+            by=str(entry["authorised_by"]))
+
+
 def _change_classes(raw, workstreams):
     """Parse every `--change-class`, and refuse a run-level one over a split programme.
 
@@ -1344,11 +1367,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     except CliError as exc:
         print(f"error: {exc}")
         return 2
-    if declared_class and conversation is not None:
-        conversation.relaxation(
-            f"change class {declared_class['class']!r} declared by "
-            f"{declared_class['authorised_by']}, due for review on {declared_class['review_by']}",
-            by=str(declared_class["authorised_by"]))
+    _declare_classes(conversation, declared_class, class_by_workstream)
 
     def make_config(instructions, approvals, rulings, artifacts=(), rejections=(),
                     intake_history=()):

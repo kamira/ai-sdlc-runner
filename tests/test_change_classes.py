@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import subprocess
 import sys
 from pathlib import Path
@@ -585,3 +586,161 @@ def test_both_commands_parse_a_change_class_the_same_way():
         parsed = parser.parse_args([command, "--change-class", raw[0]])
         assert parsed.change_class == raw, command
         assert cli._change_classes(parsed.change_class, {})[0]["class"] == "standard", command
+
+
+# ── whose authority opened the gate, on a split programme (CHG-20260903-41) ──────────────────────
+
+def _two_owners():
+    return {"copy": {"class": "standard", "authorised_by": "copy-owner@example.com",
+                     "review_by": "2026-12-31"},
+            "schema": {"class": "standard", "authorised_by": "db-owner@example.com",
+                       "review_by": "2026-12-31"}}
+
+
+def test_each_relaxation_names_the_person_who_authorised_its_own_workstream():
+    """**One name per run cannot answer this.** A split programme can have a different person per
+    part, which is the whole reason the per-workstream form exists (CHG-20260903-41)."""
+    cfg = _split_cfg(class_by_workstream=_two_owners())
+    assert engine._class_authoriser(cfg, graph.BY_ID["engineer_build"]) == "copy-owner@example.com"
+    assert engine._class_authoriser(cfg, graph.BY_ID["lead_review"]) == "db-owner@example.com"
+
+
+def test_a_gate_belonging_to_no_workstream_names_every_authority_it_passed_on():
+    """`merge` — the one-way door — relaxes only if **every** workstream was pre-authorised, so
+    every authoriser is the truthful answer and not a hedge: it opened on all of them at once."""
+    cfg = _split_cfg(class_by_workstream=_two_owners())
+    assert engine._class_in_force(cfg, graph.BY_ID["merge"], TODAY)[0] == "standard"
+    assert engine._class_authoriser(cfg, graph.BY_ID["merge"]) == (
+        "copy-owner@example.com, db-owner@example.com")
+
+
+def test_the_run_level_path_still_answers_one_name():
+    """CHG-20260902-21 closed this path; it must read exactly as it did."""
+    cfg = engine.RunConfig(node_specs={}, decisions={}, today=TODAY,
+                           change_class=_signed("standard"))
+    assert engine._class_authoriser(cfg, graph.BY_ID["merge"]) == "alex@example.com"
+
+
+def test_a_workstream_nobody_classed_names_nobody():
+    """No class, no authority — not the runner's, and not the neighbouring workstream's owner."""
+    cfg = _split_cfg(class_by_workstream={"copy": _signed("standard")})
+    assert engine._class_authoriser(cfg, graph.BY_ID["lead_review"]) == ""
+
+
+def test_every_class_relaxation_carries_an_authoriser():
+    """**The rule, over the report rather than over one arrangement** (CHG-20260903-41).
+
+    A note recorded without an authoriser reaches the document as the runner's own act, which is
+    what this whole record is about. The two lists are written at the same place for exactly that
+    reason, and this refuses a future append site that writes only one of them.
+    """
+    import ast
+
+    fn = next(n for n in ast.walk(ast.parse(pathlib.Path(engine.__file__).read_text(
+        encoding="utf-8"))) if isinstance(n, ast.FunctionDef) and n.name == "walk")
+
+    appends = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+               and getattr(n.func, "attr", None) == "append"
+               and getattr(getattr(n.func, "value", None), "attr", None) == "relaxations_by_class"]
+    records = [n for n in ast.walk(fn) if isinstance(n, ast.Subscript)
+               and getattr(n.value, "attr", None) == "relaxation_authorisers"]
+    assert appends, "`walk` no longer records the gates a class dissolved"
+    assert len(records) >= len(appends), (
+        f"{len(appends)} place(s) append a class relaxation and only {len(records)} record who "
+        f"authorised it — a note with no authoriser is filed as the runner's own act")
+
+
+def test_both_commands_declare_classes_through_the_one_function():
+    """`cmd_run` and `cmd_serve` held the identical block and both dropped the per-workstream form.
+
+    Structure, not wording: a guard pinning the source text would go red on a rename and green on
+    the defect, which CHG-20260903-39 had to undo twice in one change.
+    """
+    import ast
+
+    tree = ast.parse(pathlib.Path(cli.__file__).read_text(encoding="utf-8"))
+    for name in ("cmd_run", "cmd_serve"):
+        fn = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == name)
+        assert any(isinstance(n, ast.Call) and getattr(n.func, "id", None) == "_declare_classes"
+                   for n in ast.walk(fn)), f"{name} does not declare its classes through the one "            "function, so the two can diverge again"
+
+
+def test_a_split_programme_declares_every_class_in_the_document():
+    """The half that reached nothing: `_change_classes` refuses a run-level class over a split
+    programme, so `declared_class` is necessarily None there — and both call sites tested it."""
+    said = []
+
+    class _Conversation:
+        def relaxation(self, text, by=None):
+            said.append((text, by))
+
+    cli._declare_classes(_Conversation(), None, _two_owners())
+    assert [by for _, by in said] == ["copy-owner@example.com", "db-owner@example.com"]
+    assert all("workstream" in text for text, _ in said), said
+
+    # And the run-level sentence is unchanged to the byte, or `test_a_declared_class_is_exported_
+    # as_the_operators_act` is asserting on prose this rewrote.
+    said.clear()
+    cli._declare_classes(_Conversation(), _signed("standard"), {})
+    assert said == [("change class 'standard' declared by alex@example.com, due for review on "
+                     "2026-12-31", "alex@example.com")]
+
+
+def test_the_document_gets_the_authoriser_of_each_gate_not_one_name_for_the_run():
+    """**The line this whole record is about, driven where it actually runs** (CHG-20260903-41).
+
+    Every other guard here checks `_class_authoriser` or the CLI. Measured, reverting the
+    attribution itself — back to `by=report.class_authorised_by or None` — left **the entire suite
+    green**, 2066 tests, so the fix shipped with nothing watching the one line that carries it. This
+    calls `_finish` with a report whose two relaxations were authorised by two different people and
+    reads the turns that reach the document.
+    """
+    seen = []
+
+    class _Conversation:
+        write_errors = ()
+
+        def relaxation(self, text, by=None):
+            seen.append((text, by))
+
+        def close(self, *a, **kw):
+            pass
+
+    report = engine.RunReport(state=engine.FINISHED)
+    report.relaxations_by_class = ["engineer_build: gate would have been 'confirm'",
+                                   "lead_review: gate would have been 'confirm'"]
+    report.relaxation_authorisers = {
+        report.relaxations_by_class[0]: "copy-owner@example.com",
+        report.relaxations_by_class[1]: "db-owner@example.com"}
+    report.class_authorised_by = ""          # what a split programme always has
+
+    engine._finish(report, {}, conversation=_Conversation())
+
+    assert dict((t, b) for t, b in seen) == {
+        report.relaxations_by_class[0]: "copy-owner@example.com",
+        report.relaxations_by_class[1]: "db-owner@example.com"}, seen
+    assert None not in [b for _, b in seen], (
+        "a gate a person pre-authorised reached the document as the runner's own act")
+
+
+def test_the_run_level_name_is_still_the_fallback():
+    """One class, one authority: `relaxation_authorisers` is empty and the run-level name carries
+    it, so CHG-20260902-21's path behaves exactly as it did."""
+    seen = []
+
+    class _Conversation:
+        write_errors = ()
+
+        def relaxation(self, text, by=None):
+            seen.append((text, by))
+
+        def close(self, *a, **kw):
+            pass
+
+    report = engine.RunReport(state=engine.FINISHED)
+    report.relaxations_by_class = ["merge: gate would have been 'confirm'"]
+    report.class_authorised_by = "alex@example.com"
+
+    engine._finish(report, {}, conversation=_Conversation())
+    assert seen == [("merge: gate would have been 'confirm'", "alex@example.com")]
