@@ -1480,9 +1480,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
     # The plan wins where it says something, and `resolve` says which source each one came from.
     plan_assignments = {"node_models": plan.get("node_models") or {},
                         "seat_models": plan.get("seat_models") or {}}
-    assignments, assignment_source = store_mod.resolve(
-        plan_assignments,
-        {"node_models": store_mod.node_models(db), "seat_models": store_mod.seat_models(db)})
+    # Bound rather than inlined, because the footer below has to answer a question `resolve`'s
+    # output cannot: what the plan *displaced*, as against what it merely named (CHG-20260903-40).
+    stored_assignments = {"node_models": store_mod.node_models(db),
+                          "seat_models": store_mod.seat_models(db)}
+    assignments, assignment_source = store_mod.resolve(plan_assignments, stored_assignments)
 
     config = load_config(args.config)
 
@@ -1519,7 +1521,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
     host, port = httpd.server_address[0], httpd.server_address[1]
     print(f"journal        {journal.dir} — the run's identity, and what a resume reads")
     print(f"attachments    {store.dir} — content-addressed; the filename never becomes a path")
-    overridden = sum(1 for v in assignment_source.values() if v == store_mod.FROM_PLAN)
+    # **What the plan displaced, not what it named** (CHG-20260903-40). This counted every
+    # `FROM_PLAN`, and `FROM_PLAN` means "the plan put it there" — true of a key the store never
+    # mentioned. An empty store was reported as three assignments overriding it.
+    overridden = len(store_mod.overrides(plan_assignments, stored_assignments))
     print(f"model config   {args.assignment_store or (Path(args.token_dir) / 'config.sqlite')} — "
           f"registry and assignments; {overridden} assignment(s) from the plan override it")
     print(f"listening on   http://{host}:{port} — this machine only, no external connections")

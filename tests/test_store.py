@@ -9,6 +9,7 @@ thread that opened it raises on the first console edit. Every refusal that fires
 the database returned `409` correctly; everything that reached it returned `500`.
 """
 import json
+import pathlib
 import sys
 import tempfile
 import threading
@@ -270,6 +271,87 @@ def test_an_override_is_never_silent():
     """A merged dict alone cannot say which source put an assignment there."""
     _, source = store.resolve({"seat_models": {"defect": "a"}}, {"seat_models": {"defect": "b"}})
     assert source["seat_models.defect"] == store.FROM_PLAN
+def test_resolve_says_plan_for_a_key_the_store_never_named():
+    """**The row no test covered** (CHG-20260903-40).
+
+    Both existing tests of `FROM_PLAN` use a key the store *also* named, so every exercise of the
+    value was the override case and the reading “plan means override” was never put in front of a
+    case that refutes it. `resolve` is right here — it answers *which source put it there* — and
+    that is exactly why a second reader must not take it for *what did it displace*.
+    """
+    _, source = store.resolve({"node_models": {"only_in_plan": "a"}}, {"node_models": {}})
+    assert source["node_models.only_in_plan"] == store.FROM_PLAN
+
+
+def test_an_empty_store_is_overridden_by_nothing():
+    """The reproduction: a footer said three, and the store had said nothing at all."""
+    plan = {"node_models": {"draft": "a", "review": "b"}, "seat_models": {"risk": "c"}}
+    empty = {"node_models": {}, "seat_models": {}}
+
+    named = sum(1 for v in store.resolve(plan, empty)[1].values() if v == store.FROM_PLAN)
+    assert named == 3, "the plan named three, and that is what the old footer counted"
+    assert store.overrides(plan, empty) == {}, "nothing was displaced, so nothing was overridden"
+
+
+def test_overrides_names_what_it_displaced():
+    """A count alone cannot be checked by the person reading it; the displaced value can."""
+    displaced = store.overrides(
+        {"node_models": {"draft": "new", "only_in_plan": "x"}, "seat_models": {"risk": "new"}},
+        {"node_models": {"draft": "old", "only_in_store": "y"}, "seat_models": {}})
+    assert displaced == {"node_models.draft": "old"}
+
+
+def test_the_two_questions_are_different_and_only_one_is_resolves():
+    """**The invariant, not the instance.** A future reader that conflates them fails this.
+
+    `resolve` answers *who put it there*; `overrides` answers *what did it displace*. The second is
+    always a subset of the plan half of the first, they agree only when the store named everything
+    the plan did, and no arrangement makes the first a correct answer to the second.
+    """
+    cases = [
+        ({"node_models": {"a": 1}}, {"node_models": {}}),
+        ({"node_models": {"a": 1}}, {"node_models": {"a": 2}}),
+        ({"node_models": {"a": 1}}, {"node_models": {"b": 2}}),
+        ({"seat_models": {"risk": 1}}, {"seat_models": {"risk": 2, "defect": 3}}),
+        ({}, {"node_models": {"a": 1}}),
+    ]
+    ever_differed = False
+    for plan, stored in cases:
+        merged, source = store.resolve(plan, stored)
+        displaced = store.overrides(plan, stored)
+        named = {k for k, v in source.items() if v == store.FROM_PLAN}
+
+        assert set(displaced) <= named, (
+            f"a displaced assignment must also be one the plan put there: {plan} over {stored}")
+        assert len(displaced) <= len(named)
+        assert set(source) == {f"{half}.{key}" for half, keys in merged.items() for key in keys}
+        ever_differed = ever_differed or set(displaced) != named
+
+    assert ever_differed, (
+        "if the two never differed on any of these, this test is not holding the distinction apart")
+
+
+def test_the_serve_footer_counts_displacement_not_naming():
+    """**Read as structure, not as text** (CHG-20260903-40).
+
+    A guard that pinned the wording here would go red on a rename and green on the defect — that is
+    the trap CHG-20260903-39 had to undo twice in one change. The claim is that the number beside
+    the word *override* comes from `store.overrides`, and that no `FROM_PLAN` tally survives in
+    `cmd_serve` to be printed as one.
+    """
+    import ast
+
+    from ai_sdlc_runner import cli
+
+    fn = next(n for n in ast.walk(ast.parse(pathlib.Path(cli.__file__).read_text(encoding="utf-8")))
+              if isinstance(n, ast.FunctionDef) and n.name == "cmd_serve")
+
+    counted = [n for n in ast.walk(fn) if isinstance(n, ast.Attribute) and n.attr == "FROM_PLAN"]
+    assert counted == [], (
+        "`cmd_serve` tallies FROM_PLAN again — which means 'the plan put it there', not 'the plan "
+        "displaced something'")
+    assert any(isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "overrides"
+               for n in ast.walk(fn)), "`cmd_serve` no longer asks what the plan displaced"
 
 
 # ── the routes, driven over real HTTP ─────────────────────────────────────────────────────────
