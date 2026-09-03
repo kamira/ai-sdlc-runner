@@ -1194,6 +1194,24 @@ def cmd_run(args: argparse.Namespace) -> int:
                 print(f"               {voice}: {verdict}")
             print(f"continue with: --resume --rule {stop['node_id']}="
                   f"{'|'.join(stop.get('branches') or [])}")
+        elif stop.get("incomplete"):
+            # **Three shapes, not two** (CHG-20260904-02, defect seat L-17). A gate, a tie, and a
+            # requirement nobody has finished. This branch read the first two and printed the
+            # gate sentence for everything else — and `intake_review.gate` is `None`, so the
+            # terminal said `--resume --confirm None` and the engine answered
+            # *"confirmed gate 'None' does not exist"*. The tie branch above carries the objection
+            # in as many words: *"Offering `--confirm` here would be offering a control that
+            # cannot answer what is being asked."* It was being offered at the other wrong shape.
+            #
+            # `server._require_suspension` was swept for this by CHG-20260903-23 and
+            # `console/index.html` renders all three; the terminal is the surface that was not.
+            missing = ", ".join(stop.get("missing") or ()) or "something the brief does not say"
+            print(f"waiting for:   the requirement to say {missing}")
+            print(f"               {stop.get('reason', 'nobody has finished it')}")
+            for aspect, options in sorted((report.options or {}).items()):
+                print(f"               {aspect}: {' | '.join(options)}")
+            print("continue with: --resume, after adding it to the brief — "
+                  "there is no gate here to confirm")
         else:
             print(f"waiting for:   a decision on {stop['gate']} at {stop['node_id']}")
             print(f"continue with: --resume --confirm {stop['gate']}"
