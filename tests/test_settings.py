@@ -346,14 +346,77 @@ def test_turning_the_bypass_off_asks_nothing():
 # what settings may not do
 # --------------------------------------------------------------------------------------
 
-def test_settings_cannot_reach_a_gate_verdict_or_a_permanent_halt():
-    """Asserted by enumerating the surface rather than promising it in prose.
+def test_settings_cannot_change_what_a_verdict_or_a_halt_or_the_rule_IS():
+    """**The property, not the surface** (CHG-20260903-47, defect seat L-13).
 
-    Three fields now: the seat floor, its bypass, and the operator's vouched command list. The third
-    can only ever move a target from `unrecognised` to `ordinary`, and `policy._SUSPECT` still
-    overrides it — vouching for `npm` does not vouch for `npm run release`. None of the three can
-    reach a gate verdict, a permanent halt kind, or the adjudication rule.
+    This asserted `FIELDS == (...)` and an `as_dict` key set, under a name claiming settings cannot
+    reach a gate verdict, a permanent halt or the adjudication rule. It went **green on the defect
+    and red on a rename** — the class this ledger has now corrected four times.
+
+    What is actually true is narrower: settings cannot change the **definitions**. What they can
+    change is whether a stop happens, and the two places that occurs are pinned below rather than
+    denied here.
     """
+    before = {"gates": {g: dict(v) for g, v in policy.GATES.items()},
+              "halt_kinds": tuple(policy.PERMANENT_HALT_KINDS)}
+
+    settings_mod.Settings(review_seats=1, high_risk_mode=True,
+                          ordinary_commands=("pnpm", "npm")).as_dict()
+
+    assert {g: dict(v) for g, v in policy.GATES.items()} == before["gates"], (
+        "a settings object changed what a gate verdict is")
+    assert tuple(policy.PERMANENT_HALT_KINDS) == before["halt_kinds"], (
+        "a settings object changed which kinds are permanent halts")
+    two = [seat.name for seat in policy.SEATS][:2]
+    assert policy.adjudicate({two[0]: "pass", two[1]: "fail"})["outcome"] == "undecided", (
+        "the adjudication rule itself must not move: a split panel is undecided")
+
+
+def test_one_seat_makes_undecided_unreachable_and_that_is_disclosed():
+    """**A settings field decides whether a person is asked to break a tie.**
+
+    `undecided` is the outcome that means nobody could settle it and a person must. At one seat
+    there is nothing to split, so the outcome cannot arise — the rule is untouched and the input
+    that produces it is gone. `resolve_seats`' own docstring records this; the paragraph in
+    `settings.py` denied it until CHG-20260903-47.
+    """
+    def outcome(seats, high_risk_mode):
+        names = [s.name for s in policy.SEATS][:policy.resolve_seats(seats, high_risk_mode)]
+        said = {name: ("pass" if i % 2 == 0 else "fail") for i, name in enumerate(names)}
+        return policy.adjudicate(said)["outcome"], len(names)
+
+    assert outcome(None, False) == ("pass", 3)
+    assert outcome(2, True) == ("undecided", 2), "two seats can still disagree"
+    assert outcome(1, True) == ("pass", 1), (
+        "at one seat `undecided` is unreachable — if this ever returns `undecided`, the "
+        "disclosure in `settings.py` is the thing to update")
+
+
+def test_vouching_a_command_decides_whether_a_permanent_halt_trips():
+    """The other disclosed consequence. `settings.py` said this in a bullet three lines under a
+    sentence denying it, from CHG-20260903-28 until CHG-20260903-47."""
+    node = graph.BY_ID["engineer_build"]
+    operation = {"kind": "ordinary", "description": "build",
+                 "targets": ["pnpm exec turbo run build"]}
+
+    def stops(vouched):
+        cfg = engine.RunConfig(node_specs={node.id: {"operations": [operation]}}, decisions={},
+                               operations={node.id: [operation]}, ordinary_commands=vouched)
+        return engine._permanent_halt(node, cfg, engine.RunReport())
+
+    refused = stops(())
+    assert refused and "does not recognise" in str(refused), refused
+    assert stops(("pnpm",)) is None, (
+        "vouching the command no longer lets the run past the unrecognised-target halt; if that "
+        "is deliberate, `settings.py`'s disclosure is the thing to update")
+
+    # And the direction it must never work in stays shut — vouching is not a red-line override.
+    assert policy.recognise("rm -rf /srv", ("rm",)) == "red"
+
+
+def test_the_surface_is_still_three_fields():
+    """Kept from the old body, as what it actually was: an enumeration of the surface. It is a
+    useful check and it was never the claim its name made."""
     assert settings_mod.FIELDS == ("review_seats", "high_risk_mode", "ordinary_commands")
     assert set(settings_mod.Settings().as_dict()) == set(settings_mod.FIELDS)
 
