@@ -239,6 +239,11 @@ caller never has to know which of the three it is holding.
   "send_backs":    [ {…} ],
   "dispatches":    [ "…" ],         // which model a pool chose, and which a follows reused
   "adjudications": [ {…} ],         // every panel decision, with the seats' verdicts
+  "adjudication_here": {…} | null,  // the one belonging to the stop, or null when the node
+                                    // being decided has no panel. NOT `adjudications[-1]`,
+                                    // which is whichever happened last: at `merge` on a
+                                    // default install that is `lead_review`'s verdict on
+                                    // built work (CHG-20260904-11)
 
   "log": [ { "node_id", "role", "seat", "model" } ]   // one per ask
 }

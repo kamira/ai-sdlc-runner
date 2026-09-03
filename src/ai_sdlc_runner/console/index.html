@@ -100,6 +100,9 @@
   ul.log li.seat .who{color:var(--accent)}
   .err{color:var(--stop);font-family:var(--mono);font-size:12px;white-space:pre-wrap}
   .muted{color:var(--faint)}
+  /* What a panel already said about the node being decided. Quieter than the question,
+     because it is evidence rather than the ask (CHG-20260904-11). */
+  .adj{color:var(--faint);font-size:.92em;margin:.2em 0 .6em}
   .legend{font-size:10.5px;color:var(--faint);line-height:1.9;margin:10px 2px 0}
   .legend b{font-weight:600}
   .mdl{border:1px solid var(--line);border-radius:6px;background:var(--card);margin:0 0 8px;overflow:hidden}
@@ -604,6 +607,24 @@ function drawAsk() {
   } else {
     el.innerHTML = "<h3>Waiting for you</h3><p></p><div class='row'></div>";
     el.querySelector("p").textContent = state.reason;
+
+    // What a panel already said about THIS node, next to the button (CHG-20260904-11).
+    // `drawDecisions` two blocks below renders every adjudication the run made; this box, the one
+    // being read when the decision is taken, rendered none. The server picks which one belongs
+    // here — `adjudication_here`, bound to the stopping node — because `adjudications[-1]` is
+    // whichever happened last and at `merge` is another node's judgement entirely.
+    var here = state.adjudication_here;
+    if (here) {
+      var said = here.grade || here.outcome || "?";
+      var voices = here.verdicts ? Object.keys(here.verdicts).sort().join(", ") : "";
+      var line = document.createElement("p");
+      line.className = "adj";
+      line.textContent = "a panel already said " + said +
+                         (here.reason ? " — " + here.reason : "") +
+                         (voices ? " [" + voices + "]" : "");
+      el.insertBefore(line, el.querySelector(".row"));
+    }
+
     var ok = document.createElement("button");
     ok.className = "p";
     ok.textContent = "approve " + s.gate;
