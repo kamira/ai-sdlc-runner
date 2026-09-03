@@ -21,9 +21,23 @@ a file rather than a habit nobody wrote down.
 
 ## What settings may not do
 
-**Settings cannot touch a gate verdict, a permanent halt, or the adjudication rule** —
-`policy.py` owns those and takes no input, and `test_settings.py` asserts the absence rather
-than trusting this paragraph.
+**Settings cannot change what a gate verdict is, which kinds are permanent halts, or the
+adjudication rule** — `policy.GATES`, `policy.PERMANENT_HALT_KINDS` and `policy.adjudicate` own
+those and take no input from here.
+
+**Two of the three fields do change whether a stop happens**, and this paragraph used to deny it
+(CHG-20260903-47, defect seat L-13). Measured:
+
+- `review_seats=1` makes `undecided` **unreachable**: one seat cannot split, and `undecided` is the
+  outcome that means a person must break the tie. The rule is unchanged; the input that could
+  produce that output is gone.
+- `ordinary_commands` decides whether the `unrecognised-target` halt trips at all — which the third
+  bullet below has said in as many words since CHG-20260903-28, three lines under a sentence
+  denying it.
+
+`test_settings.py` asserts both of those by **measurement** now. It previously asserted
+`FIELDS == (...)` and an `as_dict` key set under this claim's name — green on the defect, red on a
+rename.
 
 What they *can* do is three things, not one. This paragraph said *"lower the seat floor and
 can do nothing else"* while `FIELDS` held three names, and the third is not decorative
