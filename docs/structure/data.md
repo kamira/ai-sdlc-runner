@@ -132,5 +132,14 @@ that works.
 
 `config/runner.yaml` is dispatch settings only — `agent_command`, `agent_timeout`. There is no skill
 path, no contract version and no lock, because there is nothing to lock against. Everything about
-*this change* travels in the plan file `runner run --plan` names, and everything about the governance
-is in `policy.py`.
+*this change* travels in the plan file `runner run --plan` names, and the **rules** of the
+governance — gates, permanent halts, the adjudication rule, the class contract — are in
+`policy.py` and take no input.
+
+**One piece of governance is project data, and this paragraph used to deny it.** Halt routing —
+who a stop is sent to — lives in a `halt_routing` table created and written in `store.py`, read
+by `store.halt_routing(db)`, carried on `RunConfig`, and passed into
+`policy.routed_to(kind, routing)` as an argument. `policy.py` owns the **shape** of that answer
+and the fallback when a project names nobody; the project owns the names. Anything else that
+later reaches `policy` from a project table belongs in this paragraph too
+(CHG-20260903-33).

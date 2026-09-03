@@ -619,3 +619,48 @@ def test_kn17_and_the_check_that_implements_it_name_each_other():
         f"KN-17 no longer names {check}, so a reader of the rule cannot find the mechanism")
     assert "KN-17" in source, (
         f"the skip in {check} no longer names KN-17, so a reader of the code cannot find the rule")
+
+
+# ── two claims about the governance that the code contradicts (CHG-20260903-33) ────────────────
+
+
+def test_no_live_text_claims_the_verifier_is_checked_against_the_builder():
+    """`halt_independent` stops for a person and **does not** check independence.
+
+    There is one operator identity and nothing compares who confirmed against who built.
+    `README.md`'s Known gaps has always said so; `docs/ARCHITECTURE.md` was corrected by
+    CHG-20260903-27 and `policy.py` was the third copy. The ledger is history and keeps its
+    sentences; what a reader consults must not carry the claim unqualified.
+    """
+    root = Path(__file__).resolve().parents[1]
+    live = [root / "README.md", root / "docs" / "ARCHITECTURE.md",
+            root / "docs" / "API.md", *(root / "src").rglob("*.py"),
+            *(root / "docs" / "structure").glob("*.md")]
+
+    offenders = []
+    for path in live:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for phrase in ("verifier must not be the builder", "forbids the implementer from verifying"):
+            if phrase in text and "does **not**" not in text and "does not check" not in text:
+                offenders.append(f"{path.relative_to(root)}: {phrase!r}")
+
+    assert offenders == [], (
+        "these say `halt_independent` enforces independence, and it does not: " + repr(offenders))
+
+
+def test_the_governance_paragraph_names_the_one_piece_that_is_project_data():
+    """`docs/structure/data.md` said *"everything about the governance is in `policy.py`"*.
+
+    Halt routing is governance — who a stop is sent to — and it lives in a `halt_routing` table
+    created and written in `store.py`, read by `store.halt_routing(db)`, carried on `RunConfig` and
+    passed into `policy.routed_to(kind, routing)` as an argument. The sentence was already false on
+    `main`, for a reason that has nothing to do with the design records that were reviewing it.
+    """
+    root = Path(__file__).resolve().parents[1]
+    said = (root / "docs" / "structure" / "data.md").read_text(encoding="utf-8")
+
+    assert "everything about the governance\nis in `policy.py`" not in said
+    assert "halt_routing" in said, (
+        "the paragraph that says where governance lives must name the piece that is project data")
+    # And the claim it makes instead has to still be true of `policy.routed_to`'s signature.
+    assert "routed_to" in said

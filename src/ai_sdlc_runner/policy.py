@@ -189,7 +189,11 @@ GATES: Dict[str, Dict[str, str]] = {
     "lead_review":           {"low": AUTO, "medium": AUTO, "high": HALT},
     # QA running it for real. Same.
     "qa_verify":             {"low": AUTO, "medium": AUTO, "high": HALT},
-    # Acceptance. On a high-risk change the verifier must not be the builder.
+    # Acceptance. On a high-risk change this stops for a person and a confirmation does not
+    # open it (CHG-20260903-27). It does **not** check that the verifier is not the builder:
+    # there is one operator identity and nothing compares who confirmed against who built.
+    # `README.md`'s Known gaps has always said so; `docs/ARCHITECTURE.md` was corrected by
+    # CHG-20260903-27, and this was the third copy (CHG-20260903-33).
     "acceptance":            {"low": AUTO, "medium": AUTO, "high": HALT_INDEPENDENT},
     # Opening a PR is reversible and closing one costs nothing, so low and medium proceed. High
     # asks: a high-risk change becoming visible to reviewers and to CI is the last cheap moment to
