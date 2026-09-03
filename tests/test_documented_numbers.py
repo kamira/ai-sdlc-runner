@@ -370,11 +370,44 @@ def test_the_readme_says_how_many_nodes_a_run_actually_visits():
     visited, total = int(said.group(1)), int(said.group(2))
     assert total == len(graph_mod.NODES)
     assert visited < total, "a run that visits every node would never take a failure path"
-    assert visited == 22, (
-        f"the README says a run visits {visited} nodes; the example run visits 22. Re-run "
-        f"`runner --config examples/minimal/runner.yaml run --plan examples/minimal/plan.json "
-        f"--risk low "
-        f"--confirm merge` and read the `visited:` line.")
+    # Derived, not typed. This used to assert `visited == 22` — a literal, beside a docstring
+    # convicting the previous check of "a check on the right number against the wrong referent",
+    # which is exactly what a hard-coded number is. It ran no walk. And 22 was the wrong referent
+    # twice over: `len(report.visited)` counts **steps**, `next_module` is entered twice, and a
+    # green run touches **21 distinct nodes**. The failure message even sent the reader to the
+    # `visited:` line, which prints the step count (CHG-20260903-31, found by the defect seat).
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_flow import ALL_GATES, Recorder, _cfg
+    from ai_sdlc_runner import engine
+
+    report = engine.walk(_cfg(risk="low", confirmed=ALL_GATES), Recorder(), enabled=True)
+    distinct = len(set(report.visited))
+
+    assert visited == distinct, (
+        f"the README says a run visits {visited} of {total} nodes; a green run visits "
+        f"{distinct} distinct nodes in {len(report.visited)} steps. The two differ because "
+        f"`next_module` is entered twice — `len(report.visited)` is a step count and the "
+        f"sentence is about nodes.")
+
+    # The sentence carries an accounting, so the accounting is checked: what a green run never
+    # reaches must be exactly what the sentence says it skips. It read `22 + 5 + 2 = 29` of 31,
+    # and two nodes went unnamed.
+    never = {node.id for node in graph_mod.NODES} - set(report.visited)
+    tiers = {"sub_plan", "reconcile"}
+    said_failures = re.search(r"— (\w+) are failure paths", readme)
+    assert said_failures, "the README no longer says how many nodes are failure paths"
+    words = {"two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+             "nine": 9, "ten": 10}
+    claimed = words.get(said_failures.group(1))
+    assert claimed is not None, f"unrecognised number word {said_failures.group(1)!r}"
+    assert claimed == len(never - tiers), (
+        f"the README says {claimed} failure paths; a green run never reaches "
+        f"{len(never - tiers)} nodes that are not the second planning tier: "
+        f"{sorted(never - tiers)}")
+    assert distinct + claimed + len(tiers) == total, (
+        f"the sentence's own arithmetic does not reach {total}: "
+        f"{distinct} + {claimed} + {len(tiers)} = {distinct + claimed + len(tiers)}")
 
 
 def test_a_knowledge_entry_marked_superseded_in_the_index_says_so_in_its_body():

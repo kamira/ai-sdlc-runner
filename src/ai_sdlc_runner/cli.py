@@ -471,6 +471,14 @@ def cmd_flow(args: argparse.Namespace) -> int:
         print(f"{node.id:22s} {who:11s} {node.label}{gate}")
         for label, target in sorted(node.branches.items()):
             print(f"{'':22s} {'':11s}   {label} → {target}")
+        # `node.next` was never printed, so 15 of the graph's 40 edges were invisible here and
+        # a node with no branches had to be read from the **listing order** — which disagrees
+        # with the graph at `pm_plan` (reads as `pm_confirm`, goes to `plan_scope`),
+        # `record_module` (reads as `fix_pass`, goes to `next_module`) and `review_failed`
+        # (reads as `qa_verify`, goes to `change_retry`). This command is documented as the
+        # fastest way to see what the runner will actually do (CHG-20260903-31).
+        if getattr(node, "next", None):
+            print(f"{'':22s} {'':11s}   then → {node.next}")
     print(f"\n{len(graph.NODES)} nodes, {len(graph.asking_nodes())} of them ask someone; "
           f"{len(set(graph.gates_used()))} gates; "
           f"roles: {', '.join(graph.roles_used())}")
