@@ -2147,6 +2147,21 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             # preferring the blanket one would let a targeted approval survive its own stop and open
             # some later gate nobody meant it for.
             for i, approval in enumerate(targeted):
+                # **An approval that names no node is blanket, whichever ledger it arrived in**
+                # (CHG-20260903-34, risk seat L-47). CHG-20260903-27 ruled that a blanket
+                # `--confirm` cannot open this rung and a person answering the stop they were
+                # shown can, and implemented it on the counter path alone — reasoning that an
+                # `Approval` object *is* the person-at-the-stop path. It is not: `node_id` is
+                # optional, `server.approve` passes whatever the client sent, and
+                # `Approval(gate="acceptance")` with no node named is exactly what -27's own
+                # text defines as blanket — *"naming no node, for a stop nobody has seen
+                # yet"*. Measured, it opened the rung and the report then contradicted itself
+                # two lines apart, with the reassuring line being the false one.
+                #
+                # So the test is what the answer NAMES, not which ledger holds it. An approval
+                # that names this node is a person who saw this stop.
+                if independent and approval.node_id is None:
+                    continue
                 if approval.gate != node.gate:
                     continue
                 if approval.node_id is not None and approval.node_id != node.id:

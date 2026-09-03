@@ -319,8 +319,32 @@ class Runner:
         with self._lock:
             self._require_version(version)
             self._require_suspension(undecided=False)
+            # **The answer must name the stop it is answering** (CHG-20260903-34, risk seat
+            # L-47). `_require_suspension` checks *that* the run is waiting, never *which*
+            # gate it is waiting at — so a client could approve `acceptance` while the run was
+            # suspended at `plan_confirmed`, and `state.approvals` is append-only with no
+            # removal route, so that pre-authorisation waited indefinitely for a rung the
+            # person would never be shown. Driven end to end: it opened `halt_independent` at
+            # `qa_accept` on a high-risk run whose operator answered only the seven stops the
+            # console put in front of them.
+            #
+            # `Approval`'s own docstring says why this matters: `node_id` and `run_id` are
+            # *"what make refusing a stale or misdirected answer possible"*, and `None` is
+            # *"the wrong one for an answer typed into a console after a stop"*. This is that
+            # console, and it was passing the wrong one.
+            waiting = self.state.report.suspended or {}
+            if gate and waiting.get("gate") and gate != waiting["gate"]:
+                raise ServerError(
+                    f"this run is waiting at {waiting['gate']!r}, not {gate!r}. An approval "
+                    f"names the stop it answers — one that names a different gate would wait "
+                    f"for a stop nobody has been shown.")
+            if node_id and waiting.get("node_id") and node_id != waiting["node_id"]:
+                raise ServerError(
+                    f"this run is waiting at node {waiting['node_id']!r}, not {node_id!r}.")
             self.state.approvals.append(
-                engine.Approval(gate=gate, node_id=node_id))
+                engine.Approval(gate=gate,
+                                node_id=node_id or waiting.get("node_id"),
+                                run_id=waiting.get("run_id")))
             self.state.state = "running"
             self.state.version += 1
             self._publish()
@@ -512,6 +536,17 @@ class Runner:
                 self._publish()
                 return self.state.snapshot()
         with self._lock:
+            # **The walk succeeded, so the previous walk's failure is no longer true**
+            # (CHG-20260903-34, conformance seat L-48). `state.error` was assigned at exactly
+            # one site and cleared at none. `instruct` and `attach` reach `_advance` without
+            # guarding on suspension, so an operator who added a line to the brief after a
+            # failure got a **finished** run still carrying the error — and CHG-20260903-29,
+            # which reported this defect as not reproducing, is what made the field reach the
+            # page.
+            #
+            # Cleared on the success path only. Clearing it in `_advance` would erase the
+            # message while the operator was still looking at it.
+            self.state.error = ""
             # A stop for an incomplete requirement is counted here and nowhere else, so "asked three
             # times" is arithmetic over what happened rather than a feeling about it.
             stop = report.suspended or {}
