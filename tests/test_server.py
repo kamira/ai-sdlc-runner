@@ -1392,9 +1392,20 @@ def test_no_operator_decision_reaches_state_without_naming_its_stop():
         # `run_id=None` satisfied it while checking nothing — measured, and it passed.
         calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
                  and getattr(n.func, "attr", None) == "_answering"]
-        given = {kw.arg for call in calls for kw in call.keywords}
-        params = {a.arg for a in fn.args.args} - {"self", "version"}
-        asked = bool(calls) and given >= (params & {"gate", "node_id"})
+        # **The values, not the parameter names** (CHG-20260904-06, defect seat L-24). This
+        # collected `kw.arg` — so `self._answering(gate=None, node_id=None)` read as compliant,
+        # which is worse than the original defect because it looks like it passes them. And it
+        # read `fn.args.args`, which misses keyword-only parameters, so declaring the method
+        # `def veto(self, version, *, gate, node_id)` emptied `params` and the comparison was
+        # vacuously true. Both are one-token edits.
+        #
+        # The property is that the helper is handed the same names the method took. Compared as
+        # the **argument expressions**, so a literal or an alias is not the method's parameter.
+        taken = ({a.arg for a in fn.args.args} | {a.arg for a in fn.args.kwonlyargs}) - {
+            "self", "version"}
+        handed = {kw.value.id for call in calls for kw in call.keywords
+                  if isinstance(kw.value, ast.Name)}
+        asked = bool(calls) and handed >= (taken & {"gate", "node_id"})
 
         # And `run_id` must come from what the helper returned, not from any expression: the
         # literal `None` is what `Approval`'s docstring calls "the wrong one for an answer typed

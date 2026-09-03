@@ -985,11 +985,27 @@ def test_no_comment_in_the_source_cites_a_line_number():
     sha. This is about comments in code, which are read at whatever the file says today.
     """
     offenders = []
-    pattern = re.compile(r"([a-z_]+\.py):(\d+)")
+    # **Two spellings, not one** (CHG-20260904-06, defect seat L-23). The first version
+    # required `.py:` immediately before the digits, and `plan.py` says *"`engine.py` joins
+    # any `--instruction` text onto the node spec's own, and **line 515** reads …"* — a
+    # citation rotten for twelve days that the rule walked past. `ACC-20260904-04`
+    # reservation 1 said *"the rule bans a pattern that now appears nowhere"*; measured, it
+    # appeared, in a spelling the rule could not see.
+    # **Two patterns, no window** (CHG-20260904-06, defect seat L-23). The first version
+    # required `.py:` immediately before the digits; the second allowed 60 characters of
+    # gap. The live case — `plan.py` saying *"`engine.py` joins … and **line 515** reads"*,
+    # rotten for twelve days — sits 62 characters apart and **across two lines**. Tuning the
+    # window is the wrong move: what makes a citation a citation is the number, not its
+    # distance from a filename. `ACC-20260904-04` reservation 1 said the banned pattern
+    # *"appears nowhere"*; it appeared, in a spelling the rule could not see.
+    patterns = (re.compile(r"[a-z_]+\.py:(\d+)"), re.compile(r"\bline (\d+)\b"))
     for path in sorted((ROOT / "src" / "ai_sdlc_runner").glob("*.py")):
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            for name, cited in pattern.findall(line):
-                offenders.append(f"{path.name}:{number} cites {name}:{cited}")
+            if not line.lstrip().startswith("#") and '"""' not in line:
+                continue
+            for pattern in patterns:
+                for cited in pattern.findall(line):
+                    offenders.append(f"{path.name}:{number} cites line {cited}")
 
     assert offenders == [], (
         "these name a line number, which the next insertion above it makes wrong — name the "

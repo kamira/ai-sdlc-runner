@@ -951,8 +951,14 @@ def test_both_resolutions_record_through_one_function():
     # floor does not help: it fires only if an existing positional call is removed. Measured — a
     # third class-carrying resolution in keyword form recorded nothing and this rule stayed green.
     def _carries_the_class(call):
-        named = list(call.args) + [kw.value for kw in call.keywords]
-        return any(isinstance(a, ast.Name) and a.id == "here" for a in named)
+        # **The position, not the spelling** (CHG-20260904-06, defect seat L-22).
+        # CHG-20260904-04 widened this from `n.args` to args + keywords and left the match on
+        # the identifier `here`, so `_aliased = here; resolve_verdict(..., _aliased)` was not
+        # counted. `resolve_verdict(node, grade, autonomy, change_class)` takes the class as its
+        # fourth parameter, so the question is whether a fourth argument is **given at all** —
+        # which no renaming can dodge.
+        by_keyword = [kw for kw in call.keywords if kw.arg == "change_class"]
+        return len(call.args) >= 4 or bool(by_keyword)
 
     with_class = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
                   and getattr(n.func, "id", None) == "resolve_verdict"
