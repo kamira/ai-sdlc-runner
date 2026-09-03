@@ -517,6 +517,10 @@ class Runner:
             raise ServerError(
                 f"this run is waiting for {wanted}, and that is not what you sent.")
 
+    #: How many instructions had been given when the last intake ask was
+    #: counted. `0` before the first walk, so the first incomplete stop always counts
+    #: (CHG-20260904-05).
+    _instructions_when_last_asked = 0
     def _advance(self) -> Dict[str, object]:
         """Run the walk to its next return — **one at a time**, and never dropping what arrived.
 
@@ -626,8 +630,22 @@ class Runner:
             self.state.error = ""
             # A stop for an incomplete requirement is counted here and nowhere else, so "asked three
             # times" is arithmetic over what happened rather than a feeling about it.
+            #
+            # **A walk is not an ask** (CHG-20260904-05, defect seat L-25). Measured, exactly
+            # three methods can walk from an incomplete stop — `start`, `instruct` and `attach`;
+            # `approve`, `reject` and `rule` are refused by `_require_suspension`, which
+            # CHG-20260903-23 gave that shape. So the one wrong path is **`attach`**: attaching an
+            # unrelated file read as *"asked twice"*, and a third crossed `intake.ASK_LIMIT` — at
+            # which point `needs_options` leaves the ask-again path and the runner offers options
+            # to somebody nobody asked again. A **behaviour** change, not a label.
+            #
+            # An ask is counted when the **requirement itself grew**, because that is what
+            # `intake_review` reads and what "asked for and not supplied" is about. An attachment
+            # reaches work orders as an artifact; it is not somebody supplying the aspect.
             stop = report.suspended or {}
-            if stop.get("incomplete"):
+            told = len(self.state.instructions)
+            if stop.get("incomplete") and told > self._instructions_when_last_asked:
+                self._instructions_when_last_asked = told
                 self.state.intake_history.append({"missing": list(stop.get("missing") or ())})
             self.state.report = report
             self.state.state = report.state

@@ -33,7 +33,7 @@ import urllib.request
 
 import pytest
 
-from ai_sdlc_runner import cli, engine, graph, policy, server, store
+from ai_sdlc_runner import attachments as attach_mod, cli, engine, graph, policy, server, store
 from test_flow import DECISIONS, SPEC
 
 
@@ -1691,3 +1691,83 @@ def test_the_count_is_the_tally_because_the_stop_is_already_recorded():
     assert "asks_including_this_one" not in called, (
         "the snapshot counts the ask in flight twice — it is already in the history by the time "
         "this is read")
+
+
+def _intake_only_runner(tmp_path=None):
+    """A runner whose intake seat always reports the same aspect missing."""
+    from test_flow import DECISIONS, SPEC
+
+    def factory(seat=None, model=None, **_):
+        class Session(engine.Session):
+            def ask(self, order):
+                if order["node_id"] == "intake_review":
+                    return {"missing": ["architecture"], "problems": []}
+                return {"verdict": "pass"} if seat else {"ok": True}
+
+            def close(self):
+                pass
+        return Session()
+
+    def make_config(instructions, approvals, rulings, artifacts=(), rejections=(),
+                    intake_history=()):
+        return engine.RunConfig(node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+                                decisions=dict(DECISIONS), risk="low", undeclared="allow",
+                                instructions=tuple(instructions), confirmed=tuple(approvals),
+                                rulings=tuple(rulings), rejections=tuple(rejections),
+                                intake_history=tuple(intake_history))
+
+    store = attach_mod.Store(tmp_path) if tmp_path is not None else None
+    return server.Runner(walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
+                         make_config=make_config, store=store)
+
+
+# ── a walk is not an ask (CHG-20260904-05) ────────────────────────────────────────────────────
+
+def test_a_walk_that_nobody_asked_for_is_not_counted_as_an_ask(tmp_path):
+    """**`attach` is the one path that walks without anybody being asked** (defect seat L-25).
+
+    Measured: `start`, `instruct` and `attach` can walk from an incomplete stop; `approve`,
+    `reject` and `rule` are refused there by `_require_suspension` (CHG-20260903-23). So the count
+    moved on attachments, and a third one crossed `intake.ASK_LIMIT` — at which point
+    `needs_options` leaves the ask-again path and the runner offers options to somebody nobody
+    asked again. A **behaviour** change, not a label.
+    """
+    runner = _intake_only_runner(tmp_path)
+    runner.start("do it", runner.state.version)
+    assert len(runner.state.intake_history) == 1, "the first stop is an ask"
+
+    before = len(runner.state.intake_history)
+    runner.attach(runner.state.version, "notes.md", b"an unrelated file")
+    assert len(runner.state.intake_history) == before, (
+        f"attaching a file was counted as asking the operator for the requirement again: "
+        f"{runner.state.intake_history}")
+
+    runner.instruct(runner.state.version, "and the architecture is three services")
+    assert len(runner.state.intake_history) == before + 1, (
+        "a new instruction that still leaves the aspect missing is an ask, and was not counted")
+
+
+def test_the_runner_does_not_give_up_on_somebody_it_never_asked_again(tmp_path):
+    """The consequence, at the limit: `ASK_LIMIT` attachments used to reach the options path."""
+    from ai_sdlc_runner import intake as intake_mod
+
+    runner = _intake_only_runner(tmp_path)
+    runner.start("do it", runner.state.version)
+    for n in range(intake_mod.ASK_LIMIT + 1):
+        runner.attach(runner.state.version, "f%d.md" % n, b"unrelated")
+
+    assert not intake_mod.needs_options(runner.state.intake_history, "architecture"), (
+        f"the runner stopped asking after {len(runner.state.intake_history)} recorded asks, "
+        f"having asked once and been answered by nobody")
+
+
+def test_a_gate_decision_cannot_walk_from_an_incomplete_stop():
+    """The floor for the finding above: the other three methods are already refused there, so the
+    fix does not need to cover them and the comment must not claim it does."""
+    runner = _intake_only_runner()
+    runner.start("do it", runner.state.version)
+    for call in (lambda: runner.rule(runner.state.version, "intake_review", "yes"),
+                 lambda: runner.approve(runner.state.version, "plan_confirmed", "pm_confirm"),
+                 lambda: runner.reject(runner.state.version, "plan_confirmed", "pm_confirm", "no")):
+        with pytest.raises(server.ServerError, match="not complete"):
+            call()
