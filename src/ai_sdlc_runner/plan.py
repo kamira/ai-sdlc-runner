@@ -137,6 +137,24 @@ def check(payload: Mapping[str, object], where: str = "the plan") -> Dict[str, o
                 raise PlanError(
                     f"{where} assigns {owner!r} a single {type(value).__name__}; `node_models` "
                     f"holds a **list** of model ids, and the order is load-bearing.")
+            # **The whole body above was guarded by `node_models`, so iterating `seat_models`
+            # checked nothing** (CHG-20260903-35, defect seat L-55). The guard is right —
+            # `store.seat_models(db)` is `Dict[str, str]` and `engine` reads it as a single
+            # value — but `seat_models` then got **no shape check at all** where `node_models`
+            # gets one, and the failure is silent rather than merely unchecked:
+            #
+            #     seat_models {"defect": ""}    ACCEPTED   node_models same value  REFUSED
+            #     seat_models {"defect": null}  ACCEPTED   node_models same value  REFUSED
+            #
+            # `cli.py` then does `argv = seat_argv or default`, so an operator who configured
+            # the defect seat and mistyped the value gets the **default backend** with nothing
+            # said — which is the class `cli.py`'s own comment names: *"configuration that
+            # looks connected and does not govern execution"*.
+            if key == "seat_models" and not (isinstance(value, str) and value.strip()):
+                raise PlanError(
+                    f"{where} assigns seat {owner!r} {value!r}; `seat_models` holds one model "
+                    f"id per seat, as a non-empty string. An empty one reads as configured and "
+                    f"dispatches that seat to the default backend.")
 
     # A node spec whose fields are present but blank (CHG-20260823-34). Checked here as well as at
     # render time so it costs no asks: a blank `engineer_build` refused only at dispatch surfaces
