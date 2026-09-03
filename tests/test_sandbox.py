@@ -274,3 +274,86 @@ def test_the_dispatched_process_is_bounded_at_the_grade_in_force_not_the_plans_p
     assert strict(role="engineer").risk == "high"
     assert strict(role="engineer", grade="low").risk == "low", (
         "the grade in force wins in both directions — a settled `low` is a decision, not a relaxation")
+
+
+# ── a filename could rewrite the policy (CHG-20260903-30, adopting CHG-20260828-25) ────────────
+#
+# `_seatbelt` interpolated `root` into `(allow file-write* (subpath "..."))` with no escaping and
+# handed the profile to `sandbox-exec -p`. macOS paths may contain `"`, and sbpl has no escape for
+# it inside a string literal — so a path that contains one makes the policy broken, and a path
+# chosen to contain one makes it **different**.
+
+INJECTING = '/tmp/x") (allow network*) (allow file-write* (subpath "/'
+
+DENY_WRITE_DENY_NET = {"write": "workspace", "network": False}
+
+
+def test_a_path_that_would_end_the_profile_string_is_refused_by_name():
+    with pytest.raises(sandbox.SandboxError) as caught:
+        sandbox._seatbelt(["echo"], "sandbox-exec", INJECTING, DENY_WRITE_DENY_NET)
+
+    said = str(caught.value)
+    assert "\'\"\'" in said or '\'"\'' in said, said
+    assert "no escape" in said, said
+
+
+def test_the_crafted_path_never_becomes_a_wider_profile():
+    """The failure the refusal exists to prevent, asserted as an outcome rather than a mechanism.
+
+    Without the check the assembled profile carries `(allow network*)` on a run whose policy denies
+    the network — the grade's own answer, overwritten by a filename.
+    """
+    try:
+        argv = sandbox._seatbelt(["echo"], "sandbox-exec", INJECTING, DENY_WRITE_DENY_NET)
+    except sandbox.SandboxError:
+        return
+    profile = " ".join(argv)
+    assert "allow network*" not in profile, profile
+
+
+@pytest.mark.parametrize("root", [
+    "/tmp/a b/c",            # a space
+    "/tmp/\u4e2d\u6587/\u5c08\u6848",      # CJK
+    "/tmp/o'brien",          # an apostrophe, which sbpl does not care about
+    "/tmp/x(y)",             # parentheses, which look like sbpl and are not
+])
+def test_ordinary_paths_are_not_refused(root):
+    """The false-stop guard, and the half of this fix that can go wrong.
+
+    Refusing a path with a space or a CJK component would trade one direction of a safety check for
+    the other, which this repository has done before and has a record about.
+    """
+    argv = sandbox._seatbelt(["echo"], "sandbox-exec", root, DENY_WRITE_DENY_NET)
+
+    assert root in " ".join(argv)
+
+
+def test_bwrap_takes_the_same_path_that_seatbelt_refuses():
+    """The asymmetry nothing said: the two mechanisms differ in which inputs they can *represent*.
+
+    `_bwrap` passes `root` as an argv element, where quoting does not arise, so a path that is a
+    refusal on macOS is ordinary on Linux. Both mechanisms claim to enforce the same policy table;
+    this is the one place where what they accept is not the same set.
+    """
+    argv = sandbox._bwrap(["echo"], "bwrap", INJECTING, DENY_WRITE_DENY_NET)
+
+    assert INJECTING in argv
+    with pytest.raises(sandbox.SandboxError):
+        sandbox._seatbelt(["echo"], "sandbox-exec", INJECTING, DENY_WRITE_DENY_NET)
+
+
+def test_each_wrappers_docstring_says_what_it_does_about_tmp():
+    """L-36. Both wrappers write `/tmp` unconditionally, including at `write: none` — and they do
+    **not** do the same thing.
+
+    `_bwrap`'s `--tmpfs` gives the sandbox a private `/tmp` and hides the host's; `_seatbelt` grants
+    the host's, shared with everything else on the machine. The docstrings said *"Read-only
+    everywhere"* and *"no second document to drift"*, and neither was true.
+    """
+    bwrap_doc = sandbox._bwrap.__doc__ or ""
+    seatbelt_doc = sandbox._seatbelt.__doc__ or ""
+
+    assert "Read-only everywhere" not in bwrap_doc
+    assert "tmpfs" in bwrap_doc and "private" in bwrap_doc.lower()
+    assert "/tmp" in seatbelt_doc, "the one unconditional grant must be named where it is made"
+    assert "unconditional" in seatbelt_doc
