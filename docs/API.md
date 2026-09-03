@@ -233,7 +233,9 @@ caller never has to know which of the three it is holding.
   "rejections":    [ "…" ],         // gates refused, and where the run went
   "survey":        null | { "problems": {"<seat>": […]}, "missing": […],
                             "safety": {"<seat>": […]}, "complete": false },
-  "intake_asks":   0,               // how many times the requirement was asked for
+  "intake_asks_by_aspect": {},      // per aspect, how many times it has been asked for
+                                    // — counted after this stop was recorded, so it matches
+                                    // the sentence `reason` carries (CHG-20260904-03)
   "send_backs":    [ {…} ],
   "dispatches":    [ "…" ],         // which model a pool chose, and which a follows reused
   "adjudications": [ {…} ],         // every panel decision, with the seats' verdicts

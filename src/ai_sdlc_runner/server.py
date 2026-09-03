@@ -49,7 +49,7 @@ from typing import Callable, Dict, List, Mapping, Optional
 
 from . import attachments as attach_mod
 from . import paths
-from . import engine, graph, models as models_mod, policy, store as store_mod
+from . import engine, graph, intake as intake_mod, models as models_mod, policy, store as store_mod
 
 #: The only addresses this server will bind. Not a default — a rule. A runner that can merge
 #: branches has no business listening where anything but this machine can reach it, and making that
@@ -201,7 +201,26 @@ class RunState:
             "rulings": list(report.rulings) if report else [],
             "rejections": list(report.rejections) if report else [],
             "survey": dict(report.survey) if report and report.survey else None,
-            "intake_asks": len(self.intake_history),
+            # **Per aspect, like the sentence above it in the page** (CHG-20260904-03, defect
+            # seat L-16). This sent `len(self.intake_history)` — every intake stop, whatever
+            # was missing — while the `<p>` beside it renders `report.halt_reason`, which
+            # `intake.stop_reason` writes **per aspect**. From the second aspect onward the
+            # console showed two different answers to one question in one box:
+            #
+            #     missing        the <p> says     the counter said
+            #     flow           asked once       1
+            #     architecture   asked once       2
+            #     architecture   asked twice      3
+            #
+            # CHG-20260903-42 gave the two engine-side readers one name and did not reach
+            # here. **The tally, not `asks_including_this_one`**: this is read *after* the
+            # walk has recorded the current stop, so the ask in flight is already counted —
+            # the same question has two correct answers at two moments, which is exactly why
+            # one shared function would give the wrong one here.
+            "intake_asks_by_aspect": {
+                aspect: intake_mod.times_asked(self.intake_history, aspect)
+                for stop in self.intake_history
+                for aspect in (stop.get("missing") or ())},
             "send_backs": [dict(b) for b in report.send_backs] if report else [],
             # Where a pool sent the work, and which model a follows reused. The console has to be
             # able to show this or "chosen at random" is a claim nobody can check.
