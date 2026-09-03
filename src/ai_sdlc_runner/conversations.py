@@ -1289,6 +1289,38 @@ def _inline(value: object) -> str:
     return f"{ticks}{text}{ticks}" if text else "``"
 
 
+def _damage(document: Mapping[str, object]) -> List[str]:
+    """What the importer found wrong with the store, as sentences a reader will see.
+
+    **Three of the five exports rendered a damaged store as a clean document**, and the
+    fourth carried two of the three flags (CHG-20260903-38, defect seat). Measured:
+
+    ::
+
+        renderer     duplicate_seqs  incomplete_lines  write_errors
+        markdown          -                Y                Y
+        html              -                -                -
+        playback          -                -                -
+        csv               -                -                -
+
+    ``duplicate_seqs`` reached **no** renderer at all, while `import_jsonl` computes it and
+    lists it first among the damage it refuses to import silently. A flag that is computed,
+    named as damage, and then shown to nobody is the shape this ledger keeps finding.
+
+    One reader, so a fourth flag arrives everywhere or nowhere rather than in one place.
+    """
+    said: List[str] = []
+    if document.get("duplicate_seqs"):
+        said.append(f"duplicate seq {document['duplicate_seqs']} — two turns claim one "
+                    f"position; the store was written twice or merged")
+    if document.get("incomplete_lines"):
+        said.append(f"incomplete line(s) at {document['incomplete_lines']} — a write was "
+                    f"interrupted. Reported rather than dropped")
+    if document.get("write_errors"):
+        said.append(f"store write errors: {len(document['write_errors'])}")
+    return said
+
+
 def _markdown(document: Mapping[str, object]) -> str:
     project = (document.get("project") or {})
     out = [f"# Conversation {_inline(document.get('conversation_id', '?'))}", "",
@@ -1297,11 +1329,8 @@ def _markdown(document: Mapping[str, object]) -> str:
     run = document.get("run") or {}
     if run:
         out.append(f"- Run: {_inline(json.dumps(run, ensure_ascii=False, sort_keys=True))}")
-    if document.get("incomplete_lines"):
-        out.append(f"- **Incomplete lines in the store:** {document['incomplete_lines']} — a write "
-                   f"was interrupted. Reported rather than dropped.")
-    if document.get("write_errors"):
-        out.append(f"- **Store write errors:** {len(document['write_errors'])}")
+    for said in _damage(document):
+        out.append(f"- **Store damage:** {said}.")
     out.append("")
     for turn in document.get("turns") or []:
         body = {k: v for k, v in turn.items() if k not in ("seq", "kind", "at")}
@@ -1331,6 +1360,13 @@ def _defuse(cell: str) -> str:
 def _csv(document: Mapping[str, object]) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf, lineterminator="\n")
+    # **A comment row, not a column** (CHG-20260903-38). CSV has nowhere structural to put a
+    # document-level fact, and a spreadsheet shows a leading `#` line as a row of text —
+    # visible, which is the whole point. A strict reader will parse it as data; that is the
+    # cost, and it is smaller than handing someone a clean-looking sheet cut from a store
+    # whose write was interrupted.
+    for said in _damage(document):
+        writer.writerow([f"# STORE DAMAGE: {said}"])
     writer.writerow(CSV_COLUMNS)
     for turn in document.get("turns") or []:
         body = {k: v for k, v in turn.items()
@@ -1573,7 +1609,10 @@ def _playback(document: Mapping[str, object]) -> str:
             .replace("__TOTAL__", f"{(play[-1]['t'] if play else 0):.1f}")
             .replace("__NTURNS__", str(len(turns)))
             .replace("__NSTOPS__", str(len(stops)))
-            .replace("__REAL__", f"{real / 60:.1f}"))
+            .replace("__REAL__", f"{real / 60:.1f}")
+            .replace("__DAMAGE__", "".join(
+                f'<p class="meta"><b>store damage</b> {_escape(said)}</p>'
+                for said in _damage(document))))
 
 
 def _stops(turns: Sequence[Mapping[str, object]]):
@@ -1628,7 +1667,11 @@ def _html(document: Mapping[str, object]) -> str:
         label = _escape(node or "—")
         nth = (f'<span class="nth">visit {stop["visit"]}</span>'
                if visits[node] > 1 and node else "")
-        at = _escape((stop["turns"][0].get("at") or "").replace("T", " ")[:19])
+        # `str(...)`, because a turn's `at` is not guaranteed to be one. `_playback` reads
+        # the same field through `_seconds`, which returns `None` for a non-string; this
+        # called `.replace` on it and raised `AttributeError` — so the one renderer that
+        # crashed on a damaged store was the one with no damage banner (CHG-20260903-38).
+        at = _escape(str(stop["turns"][0].get("at") or "").replace("T", " ")[:19])
         first, last = stop["turns"][0]["seq"], stop["turns"][-1]["seq"]
         span = f"{first}" if first == last else f"{first}–{last}"
 
@@ -1656,6 +1699,10 @@ def _html(document: Mapping[str, object]) -> str:
     for turn in turns:
         counts[turn.get("kind")] = counts.get(turn.get("kind"), 0) + 1
     stats = " · ".join(f"<b>{n}</b> {k}" for k, n in sorted(counts.items()) if k)
+    # The status line is where a page says what it is; damage belongs there rather than
+    # nowhere (CHG-20260903-38).
+    for said in _damage(document):
+        stats += f" · <b>store damage</b> {_escape(said)}"
 
     return _PAGE.format(
         title=_escape(project.get("name", "conversation")),
@@ -1811,7 +1858,7 @@ font-variant-numeric:tabular-nums;min-width:6.5rem;text-align:right}
 </style></head><body>
 <div class="wrap">
 <header class="top">
-  <h1>__TITLE__</h1>
+  <h1>__TITLE__</h1>__DAMAGE__
   <p class="meta">conversation __CID__ · <b>__NTURNS__</b> turns · <b>__NSTOPS__</b> stops on the
     flow · <b>__TOTAL__</b>s of playback from <b>__REAL__</b> min of real time
     <span class="dim">(every turn is listed below with the time it happened and the gap since the
