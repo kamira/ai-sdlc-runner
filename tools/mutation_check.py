@@ -1700,6 +1700,35 @@ MUTATIONS: List[Mutation] = [
         'tests/test_sub_planning.py'),
 
     Mutation(
+        'supersession', 'a back-pointer the named record denies goes unreported again',
+        TOOLS / 'ledger_check.py',
+        '            if claimed >= SUPERSESSION_REQUIRED_FROM and chg_id not in _supersedes(texts[claimed]):',
+        '            if False:',
+        'tests/test_ledger_check.py'),
+
+    Mutation(
+        'supersession', 'the gate moves to the pointer, silencing every pre-threshold record',
+        TOOLS / 'ledger_check.py',
+        '            if claimed >= SUPERSESSION_REQUIRED_FROM and chg_id not in _supersedes(texts[claimed]):',
+        '            if chg_id >= SUPERSESSION_REQUIRED_FROM and chg_id not in '
+        '_supersedes(texts[claimed]):',
+        'tests/test_ledger_check.py'),
+
+    Mutation(
+        'supersession', 'a back-pointer naming a record that is not there goes unreported',
+        TOOLS / 'ledger_check.py',
+        '        for claimed in _superseded_by(texts[chg_id]):\n            if claimed not in texts:',
+        '        for claimed in _superseded_by(texts[chg_id]):\n            if False:',
+        'tests/test_ledger_check.py'),
+
+    Mutation(
+        'supersession', 'the field is read past its own line, so a linked sibling becomes an edge',
+        TOOLS / 'ledger_check.py',
+        'r"^[-*]\\s*(?:\\*\\*)?Supersedes(?:\\*\\*)?\\s*:(.*)$"',
+        'r"^[-*]\\s*(?:\\*\\*)?Supersedes(?:\\*\\*)?\\s*:(.*(?:\\n  +.*)*)$"',
+        'tests/test_ledger_check.py'),
+
+    Mutation(
         'modules', 'a module is recorded on the lap the engineer said there was nothing',
         SRC / 'graph.py',
         '         branches={"yes": "record_module", "no": "next_module"},',

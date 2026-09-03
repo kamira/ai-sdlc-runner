@@ -398,6 +398,29 @@ def check(repo: Path) -> List[str]:
                 problems.append(
                     f"{chg_id}: says {claimed} superseded it, and docs/changes/ does not have "
                     f"{claimed} — a replaced record whose replacement is missing leads nowhere")
+                continue
+            # And the reciprocal, which the four checks above still did not walk: the named record
+            # exists and does not claim it. Every one of the three checks at the top begins at a
+            # `Supersedes:` — the comment there says so — so **deleting that field skips all of
+            # them**, and the check just above only asks whether the file is on disk. A record can
+            # therefore drop the edge while the record it replaced goes on pointing at it, and the
+            # lint stays green.
+            #
+            # Found live, by the change that created it: withdrawing CHG-20260903-24 dropped its
+            # `Supersedes: … CHG-20260901-15`, -15 went on saying `Superseded by: CHG-20260903-24`,
+            # and `ledger check passed (186 changes)`. Same asymmetry as CHG-20260828-02, -26 and
+            # -30, one direction further in each time.
+            #
+            # The gate is on `claimed`, not on `chg_id`: this asks the **newer** record to answer,
+            # and the record doing the pointing is routinely older than the field itself. Gating on
+            # the pointer would have silenced the case that found this — CHG-20260901-15 predates
+            # SUPERSESSION_REQUIRED_FROM and both records it names come after it.
+            if claimed >= SUPERSESSION_REQUIRED_FROM and chg_id not in _supersedes(texts[claimed]):
+                problems.append(
+                    f"{chg_id}: says {claimed} superseded it, and {claimed} does not say so "
+                    f"forward. Add `- Supersedes: {chg_id}` to docs/changes/{claimed}.md, or drop "
+                    f"the `Superseded by:` here — a record that produced nothing can still be "
+                    f"where a superseded one's content went, but one of the two has to be true")
 
     # ── the other direction, which nothing walked (CHG-20260828-02) ─────────────────────────────
     #
