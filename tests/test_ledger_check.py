@@ -960,3 +960,119 @@ def test_every_never_true_spelling_reopens_its_change(tmp_path, conclusion):
 
     assert any("never true" in p for p in problems), (
         f"{conclusion!r} did not reopen its change: {problems}")
+
+
+# ── the third edge: CHG -> CHG (CHG-20260903-26) ───────────────────────────────────────────────
+#
+# `Supersedes:` was invented by CHG-20260903-24 and -25 and walked by nothing, which is how
+# CHG-20260901-15 went on reporting `under review, fifth draft` after this session withdrew it.
+# Same discipline as the two checks above: the failure is reproduced, not assumed.
+
+SUPERSEDING = (
+    "# CHG-20260903-24" + NEWLINE
+    + "- Project: p" + NEWLINE
+    + "- Date: 2026-09-03" + NEWLINE
+    + "- Risk: low" + NEWLINE
+    + "- Branch: b" + NEWLINE
+    + "- Supersedes: CHG-20260903-90, re-issued as this record" + NEWLINE
+    + NEWLINE + "## Status" + NEWLINE + NEWLINE + "in progress" + NEWLINE
+)
+
+
+def _pair(tmp_path, superseded_body, superseding_body=SUPERSEDING):
+    """Two records, the second claiming to replace the first. Ids are past the prospective gate."""
+    (tmp_path / "docs" / "changes").mkdir(parents=True)
+    (tmp_path / "docs" / "acceptance").mkdir(parents=True)
+    changes = tmp_path / "docs" / "changes"
+    changes.joinpath("CHG-20260903-24.md").write_text(superseding_body, encoding="utf-8")
+    if superseded_body is not None:
+        changes.joinpath("CHG-20260903-90.md").write_text(superseded_body, encoding="utf-8")
+    return tmp_path
+
+
+def _superseded(status, extra=""):
+    return (
+        "# CHG-20260903-90" + NEWLINE
+        + "- Project: p" + NEWLINE
+        + "- Date: 2026-09-03" + NEWLINE
+        + "- Risk: low" + NEWLINE
+        + "- Branch: b" + NEWLINE
+        + extra
+        + NEWLINE + "## Status" + NEWLINE + NEWLINE + status + NEWLINE
+    )
+
+
+BACK = "- **Superseded by: CHG-20260903-24**" + NEWLINE
+
+
+def test_a_supersedes_naming_a_change_that_does_not_exist_is_reported(tmp_path):
+    repo = _pair(tmp_path, superseded_body=None)
+
+    problems = ledger_check.check(repo)
+
+    assert any("supersedes CHG-20260903-90" in p and "does not have" in p for p in problems), (
+        "a record replaced one that is not there and the ledger said nothing: " + repr(problems))
+
+
+def test_a_superseded_record_with_no_back_pointer_is_reported(tmp_path):
+    repo = _pair(tmp_path, _superseded("withdrawn"))
+
+    problems = ledger_check.check(repo)
+
+    assert any("does not say so back" in p for p in problems), (
+        "the forward edge was walkable and the return path was not: " + repr(problems))
+
+
+def test_a_superseded_record_still_under_review_is_reported(tmp_path):
+    """The live failure this check was written for, reproduced.
+
+    `CHG-20260901-15` was withdrawn by this session, claimed by two successors, and went on
+    reporting `under review, fifth draft` because nothing compared the two.
+    """
+    repo = _pair(tmp_path, _superseded("**Under review, fifth draft** - design only.", extra=BACK))
+
+    problems = ledger_check.check(repo)
+
+    assert any("Status still says 'under review'" in p for p in problems), (
+        "a superseded record was also under review and the ledger passed: " + repr(problems))
+
+
+def test_saying_it_in_prose_above_the_status_section_does_not_clear_it(tmp_path):
+    r"""The exact shape of the original defect: a heading that reads like the field, and is not.
+
+    `_status_line`'s regex is `^##\s+Status\s*$`, so `## Status: **withdrawn**, and ...` cannot
+    match it. That narrowness is deliberate and stays — the record writes the field, and this test
+    pins that writing the prose instead is still a failure.
+    """
+    prose = (
+        "## Status: **withdrawn**, and re-issued as two records" + NEWLINE
+        + NEWLINE + "Five drafts, four seats, five vetoes." + NEWLINE
+    )
+    repo = _pair(tmp_path, _superseded("under review", extra=BACK + prose))
+
+    problems = ledger_check.check(repo)
+
+    assert any("Status still says" in p for p in problems), (
+        "prose shaped like the field cleared the check the field exists for: " + repr(problems))
+
+
+def test_a_properly_withdrawn_pair_passes(tmp_path):
+    """So the three checks above are pinned to the defect and not to the field's presence."""
+    repo = _pair(tmp_path, _superseded("**Withdrawn** - superseded by CHG-20260903-24.", extra=BACK))
+
+    problems = ledger_check.check(repo)
+
+    assert not any("supersede" in p.lower() for p in problems), repr(problems)
+
+
+def test_this_repos_own_withdrawn_design_record_says_so_where_the_lint_reads(tmp_path):
+    """Not a fixture — the real record, which is what was actually broken.
+
+    Both halves are asserted because either alone was green while the ledger lied: the successors
+    named a target, and the target's Status section said it was a fifth draft under review.
+    """
+    del tmp_path
+    withdrawn = (REPO / "docs" / "changes" / "CHG-20260901-15.md").read_text(encoding="utf-8")
+
+    assert "withdrawn" in ledger_check._status_word(ledger_check._status_line(withdrawn))
+    assert ledger_check._superseded_by(withdrawn) == ["CHG-20260903-24", "CHG-20260903-25"]
