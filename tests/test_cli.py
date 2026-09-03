@@ -17,6 +17,8 @@ import ast
 import contextlib
 import io
 import json
+import pathlib
+import inspect
 import re
 import sys
 from pathlib import Path
@@ -980,3 +982,96 @@ def test_every_export_format_is_named_in_the_help():
     missing = [name for name in conv_mod.FORMATS if name not in printed]
 
     assert missing == [], f"these formats work and `runner --help` does not name them: {missing}"
+
+
+# ── the grade a panel decides reaches the terminal (CHG-20260903-48) ─────────────────────
+
+def test_two_panels_that_graded_differently_do_not_print_the_same_line():
+    """**The defect, as a person at the terminal met it** (CHG-20260903-48, defect seat L-14).
+
+    `adjudicate_grade` returns `outcome="pass"` for **every** grade it settles, and the footer
+    printed `outcome` alone — so a run whose panel graded the change `high` and one graded `low`
+    produced byte-identical output. CHG-20260901-18's own title is *"the grade a panel decides
+    reached nothing that names it"*; the console was fixed and the terminal was not.
+
+    Asserting the two lines **differ** rather than pinning either wording: the claim is that the
+    grade is distinguishable, not that it is spelled any particular way.
+    """
+    from ai_sdlc_runner import policy
+
+    high = policy.adjudicate_grade({"m1": "high", "m2": "high"})
+    low = policy.adjudicate_grade({"m1": "low", "m2": "low"})
+    assert high["outcome"] == low["outcome"] == "pass", (
+        "this test exists because the outcomes are identical; if they differ now, the footer "
+        "could print `outcome` again and this test would stop meaning anything")
+
+    def line(decision):
+        said = decision.get("grade") or decision.get("outcome") or "?"
+        return f"panel:         lead_assess → {said}"
+
+    assert line(high) != line(low), (
+        "a panel that graded the change high and one that graded it low print the same line")
+    assert "high" in line(high) and "low" in line(low)
+
+
+def test_the_terminal_and_the_console_name_the_same_thing():
+    """**One adjudication, two surfaces, one answer.**
+
+    The console has read `a.grade || a.outcome` since CHG-20260901-18. The terminal read `outcome`
+    alone until this record. They are different languages, so the guard is that both carry the same
+    precedence rather than that both call one function.
+    """
+    page = (pathlib.Path(cli.__file__).parent / "console" / "index.html").read_text(
+        encoding="utf-8")
+    assert "a.grade || a.outcome" in page, (
+        "the console stopped preferring the grade; if that is deliberate the terminal is the other "
+        "half to change")
+
+    source = inspect.getsource(cli)
+    assert 'decision.get("grade") or decision.get("outcome")' in source, (
+        "the terminal no longer prefers the grade the way the console does")
+
+
+def test_the_settled_grade_reaches_a_terminal_line():
+    """`risk_settled` reached `--json` and the console and no terminal line at all — `cli.py` named
+    `risk_agreed`, `risk_settled` and `risk_proposed` zero times (CHG-20260903-48).
+
+    **Checked as the condition, not as the text.** The first version of this asserted
+    `"risk_settled" in inspect.getsource(cli)`, and the mutation that replaced the guarding `if`
+    with `if False` left it **green**: the string was still there and could never be reached. That
+    is the wording-instead-of-property trap, written ten minutes after ACC-20260903-47 recorded the
+    fourth instance of it. A behavioural version needs a grading panel driven through the CLI with
+    a model registry; this asserts the weaker but honest thing — the line is conditioned on the
+    value it reports, so a constant condition fails.
+    """
+    import ast
+
+    fn = next(n for n in ast.walk(ast.parse(pathlib.Path(cli.__file__).read_text(
+        encoding="utf-8"))) if isinstance(n, ast.FunctionDef) and n.name == "cmd_run")
+
+    guarded = []
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.If):
+            continue
+        prints = any(isinstance(c, ast.Call) and getattr(c.func, "id", None) == "print"
+                     and "risk_settled" in ast.dump(c) for c in ast.walk(node))
+        if prints:
+            guarded.append(any(isinstance(a, ast.Attribute) and a.attr == "risk_settled"
+                               for a in ast.walk(node.test)))
+
+    assert guarded, "no terminal line reports the grade the run ended up governed by"
+    assert all(guarded), (
+        "the line reporting the settled grade is behind a condition that does not mention it — a "
+        "constant condition prints never or always, and neither is reporting")
+
+
+def test_the_old_guards_could_not_have_caught_this():
+    """Recorded as a measurement rather than a claim: the two tests that pin the footer's panel line
+    both use `lead_review`, a **seat** panel, whose adjudication carries no `grade` — so they were
+    green either way. A guard over the shape a defect cannot reach is not a guard against it."""
+    from ai_sdlc_runner import policy
+
+    seat_panel = policy.adjudicate({s.name: "pass" for s in policy.SEATS[:2]})
+    assert "grade" not in seat_panel, (
+        "a seat panel now carries a grade, so the existing footer tests do exercise this path and "
+        "this note should be revisited")
