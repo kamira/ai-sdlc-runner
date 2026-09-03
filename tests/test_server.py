@@ -1322,3 +1322,99 @@ def test_cmd_serve_hands_over_the_provenance_it_computed():
     assert handed, "`cmd_serve` computes the provenance and does not hand it to `serve`"
     assert set(handed) <= set(bound), (
         f"`serve` is given {handed}, which is not what `store.resolve` returned ({bound})")
+
+
+# --- an operator decision names the stop it answers (CHG-20260903-44) -------------------------
+
+def test_a_refusal_that_names_a_different_gate_is_refused(live):
+    """**The reproduction.** A refusal aimed at a stop nobody has been shown routed the run past
+    `acceptance@high` — the only `halt_independent` cell in `GATES` — recorded as the operator's
+    act. `approve` was hardened against this by CHG-20260903-34; `reject`, three methods below in
+    the same class, was not."""
+    call, _, _ = live
+    _, started = call("POST", "/run", {"instruction": "do it", "version": 0})
+    stop = started["suspended"]
+    assert stop["gate"] != "acceptance", "this test needs a stop that is not the one it names"
+
+    code, body = call("POST", "/run/reject",
+                      {"version": started["version"], "gate": "acceptance",
+                       "node_id": "qa_accept", "reason": "planted"})
+
+    assert code >= 400, (
+        f"a refusal naming 'acceptance' was accepted while the run waited at {stop['gate']!r} — "
+        f"it routes the run past the only halt_independent cell in GATES, as the operator's act")
+    assert "waiting at" in json.dumps(body), body
+
+
+def test_every_operator_decision_carries_the_run_it_answers(live):
+    """`run_id=None` left the engine's staleness guards — `if rejection.run_id is not None and
+    rejection.run_id != cfg.run_id` and the same for rulings — unreachable through the only human
+    interface. `Approval`'s own docstring calls `None` *"the wrong one for an answer typed into a
+    console after a stop"*."""
+    call, runner, _ = live
+    _, started = call("POST", "/run", {"instruction": "do it", "version": 0})
+    stop = started["suspended"]
+
+    call("POST", "/run/gate", {"version": started["version"], "gate": stop["gate"],
+                               "node_id": stop["node_id"]})
+    assert runner.state.approvals, "no approval was recorded"
+    assert runner.state.approvals[-1].run_id == stop.get("run_id"), (
+        "an approval typed into the console does not say which run it answers, so the engine's "
+        "staleness guard cannot refuse it")
+
+
+def test_no_operator_decision_reaches_state_without_naming_its_stop():
+    """**The rule** (CHG-20260903-44): over the class, not over three method names.
+
+    The check lived in `approve` alone and its two siblings never got it. A fourth decision method
+    would have been written the same way, so this asks the question of every method that appends an
+    operator decision — including ones nobody has written yet.
+    """
+    import ast
+
+    tree = ast.parse(pathlib.Path(server.__file__).read_text(encoding="utf-8"))
+    runner = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.ClassDef) and n.name == "Runner")
+
+    DECISIONS = {"approvals", "rejections", "rulings"}
+    missing = []
+    for fn in runner.body:
+        if not isinstance(fn, ast.FunctionDef):
+            continue
+        appends = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                   and getattr(n.func, "attr", None) == "append"
+                   and getattr(getattr(n.func, "value", None), "attr", None) in DECISIONS]
+        if not appends:
+            continue
+        asked = any(isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "_answering"
+                    for n in ast.walk(fn))
+        stamped = any(kw.arg == "run_id" for call in appends
+                      for inner in ast.walk(call) if isinstance(inner, ast.Call)
+                      for kw in inner.keywords)
+        if not asked or not stamped:
+            missing.append(f"{fn.name}: {'no _answering' if not asked else ''}"
+                           f"{' and ' if not asked and not stamped else ''}"
+                           f"{'no run_id' if not stamped else ''}")
+
+    assert missing == [], (
+        f"these append an operator decision without naming the stop it answers or the run it "
+        f"belongs to: {missing}")
+
+
+def test_the_rule_looks_at_the_three_methods_that_exist():
+    """**The floor.** Without it the rule passes by finding no decision methods at all, which is
+    exactly how the defect it guards would come back."""
+    import ast
+
+    tree = ast.parse(pathlib.Path(server.__file__).read_text(encoding="utf-8"))
+    runner = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.ClassDef) and n.name == "Runner")
+
+    DECISIONS = {"approvals", "rejections", "rulings"}
+    found = {fn.name for fn in runner.body if isinstance(fn, ast.FunctionDef)
+             and any(isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "append"
+                     and getattr(getattr(n.func, "value", None), "attr", None) in DECISIONS
+                     for n in ast.walk(fn))}
+    assert found == {"approve", "reject", "rule"}, (
+        f"the rule above scans {sorted(found)}; if a decision method was added or renamed, this "
+        f"floor is the place to say so rather than letting the rule quietly cover less")

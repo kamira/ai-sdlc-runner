@@ -315,6 +315,41 @@ class Runner:
         self.state.attachments = self._store.all()
         self.state.missing = self._store.missing()
 
+    def _answering(self, *, gate: Optional[str] = None,
+                   node_id: Optional[str] = None) -> Dict[str, object]:
+        """The stop this decision answers — refusing one that names a different stop.
+
+        **The answer must name the stop it is answering** (CHG-20260903-34, risk seat L-47).
+        `_require_suspension` checks *that* the run is waiting, never *which* gate it is waiting at,
+        so a client could approve `acceptance` while the run was suspended at `plan_confirmed`, and
+        `state.approvals` is append-only with no removal route — that pre-authorisation waited
+        indefinitely for a rung the person would never be shown. Driven end to end, it opened
+        `halt_independent` at `qa_accept` on a high-risk run whose operator answered only the seven
+        stops the console put in front of them.
+
+        **One helper rather than the check copied into each caller** (CHG-20260903-44). It was
+        written into `approve` alone, and `reject` and `rule` — three and five methods below, in
+        this same class — never got it: a refusal naming a gate the run was not at was accepted and
+        routed the run past that same `halt_independent` cell, recorded as the operator's act.
+        CHG-20260903-36 was *"two fixes shipped into one module and never swept into their
+        siblings"*; this is that, inside the module that record was about. A fourth decision method
+        cannot now be written without asking the question.
+
+        Returns the suspension, so the caller can stamp `node_id` and `run_id` from it —
+        `Approval`'s docstring calls `None` *"the wrong one for an answer typed into a console after
+        a stop"*, and it was the one `reject` and `rule` passed.
+        """
+        waiting = self.state.report.suspended or {} if self.state.report else {}
+        if gate and waiting.get("gate") and gate != waiting["gate"]:
+            raise ServerError(
+                f"this run is waiting at {waiting['gate']!r}, not {gate!r}. A decision names the "
+                f"stop it answers — one that names a different gate would wait for a stop nobody "
+                f"has been shown.")
+        if node_id and waiting.get("node_id") and node_id != waiting["node_id"]:
+            raise ServerError(
+                f"this run is waiting at node {waiting['node_id']!r}, not {node_id!r}.")
+        return waiting
+
     def approve(self, version: int, gate: str, node_id: Optional[str]) -> Dict[str, object]:
         with self._lock:
             self._require_version(version)
@@ -332,15 +367,7 @@ class Runner:
             # *"what make refusing a stale or misdirected answer possible"*, and `None` is
             # *"the wrong one for an answer typed into a console after a stop"*. This is that
             # console, and it was passing the wrong one.
-            waiting = self.state.report.suspended or {}
-            if gate and waiting.get("gate") and gate != waiting["gate"]:
-                raise ServerError(
-                    f"this run is waiting at {waiting['gate']!r}, not {gate!r}. An approval "
-                    f"names the stop it answers — one that names a different gate would wait "
-                    f"for a stop nobody has been shown.")
-            if node_id and waiting.get("node_id") and node_id != waiting["node_id"]:
-                raise ServerError(
-                    f"this run is waiting at node {waiting['node_id']!r}, not {node_id!r}.")
+            waiting = self._answering(gate=gate, node_id=node_id)
             self.state.approvals.append(
                 engine.Approval(gate=gate,
                                 node_id=node_id or waiting.get("node_id"),
@@ -361,8 +388,14 @@ class Runner:
                 raise ServerError(
                     f"{node_id!r} has nowhere to send a refusal. This gate can be approved or left "
                     f"waiting — leaving the run stopped IS the refusal.")
+            # Named and stamped, like `approve` (CHG-20260903-44). This appended whatever it was
+            # given: a refusal aimed at a stop nobody had been shown redirected the run past
+            # `acceptance@high`, the only `halt_independent` cell in `GATES`, under the operator's
+            # name — and `run_id=None` left the engine's staleness guard dead for console traffic.
+            waiting = self._answering(gate=gate, node_id=node_id)
             self.state.rejections.append(
-                engine.Rejection(gate=gate, node_id=node_id, reason=reason))
+                engine.Rejection(gate=gate, node_id=node_id or waiting.get("node_id"),
+                                 run_id=waiting.get("run_id"), reason=reason))
             self.state.state = "running"
             self.state.version += 1
             self._publish()
@@ -372,7 +405,11 @@ class Runner:
         with self._lock:
             self._require_version(version)
             self._require_suspension(undecided=True)
-            self.state.rulings.append(engine.Ruling(node_id=node_id, branch=branch))
+            # A tie-break names the node it breaks (CHG-20260903-44). `_require_suspension`
+            # confirms the run is undecided; it does not confirm it is undecided *here*.
+            waiting = self._answering(node_id=node_id)
+            self.state.rulings.append(
+                engine.Ruling(node_id=node_id, branch=branch, run_id=waiting.get("run_id")))
             self.state.state = "running"
             self.state.version += 1
             self._publish()
