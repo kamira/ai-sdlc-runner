@@ -1003,3 +1003,89 @@ def test_the_retired_store_refusal_does_not_send_the_operator_to_a_superseded_st
 
     assert "conversations in the file store" not in said
     assert "CHG-20260823-41" in said, "the message must name what actually replaced it"
+
+
+# ── a damaged store must not render as a clean document (CHG-20260903-38) ───────────────────────
+
+
+DAMAGED = {
+    "conversation_id": "c1",
+    "project": {"id": "p1", "name": "p"},
+    "schema": 1,
+    "duplicate_seqs": [3],
+    "incomplete_lines": [7],
+    "write_errors": ["disk full"],
+    "turns": [{"seq": 1, "kind": "ask", "at": "2026-09-03T10:00:00", "text": "hi"}],
+}
+
+
+@pytest.mark.parametrize("fmt", ["markdown", "html", "playback", "csv"])
+def test_every_renderer_shows_that_the_store_is_damaged(fmt):
+    """Three of the five rendered a damaged store as a clean document; the fourth carried two of
+    the three flags.
+
+        renderer     duplicate_seqs  incomplete_lines  write_errors
+        markdown          -                Y                Y
+        html              -                -                -
+        playback          -                -                -
+        csv               -                -                -
+
+    `duplicate_seqs` reached **no** renderer at all, while `import_jsonl` computes it and lists it
+    first among the damage it refuses to import silently (defect seat L-47, L-48).
+    """
+    rendered = getattr(conv, "_" + fmt)(DAMAGED)
+
+    assert "3" in rendered, "the duplicate seq must be visible"
+    assert "7" in rendered, "the incomplete line must be visible"
+    assert "damage" in rendered.lower() or "DAMAGE" in rendered
+
+
+def test_every_renderer_reads_the_damage_through_one_function():
+    """**The rule.** A fourth flag must arrive everywhere or nowhere, not in one renderer.
+
+    The three flags were read inline in `_markdown` and nowhere else, so adding a fourth meant
+    remembering four places — and the three that existed were already in one place out of four.
+    """
+    import inspect
+
+    for name in ("_markdown", "_html", "_playback", "_csv"):
+        source = inspect.getsource(getattr(conv, name))
+        assert "_damage(" in source, f"{name} does not read the damage through `_damage`"
+
+
+def test_the_damage_reader_names_every_flag_the_importer_calls_damage():
+    """**The other half of the rule**, from the importer's side.
+
+    `import_jsonl` builds a `damage` list; whatever it names there, a reader of the exported
+    document must be able to see. Deriving this from the importer's own source is what makes a
+    fourth flag impossible to add on one side only.
+    """
+    import inspect
+    import re
+
+    #  is the one that builds the damage list. Named, not discovered, and
+    # NOT skipped: a rule that skips is a rule that does nothing (CHG-20260903-38).
+    importer = inspect.getsource(conv.import_file_store)
+
+    named = set(re.findall(r'document\[.(duplicate_seqs|incomplete_lines|write_errors).\]', importer))
+    reader = inspect.getsource(conv._damage)
+
+    missing = sorted(flag for flag in named if flag not in reader)
+    assert missing == [], f"the importer calls these damage and `_damage` does not read them: {missing}"
+
+
+def test_html_survives_a_turn_whose_timestamp_is_not_a_string():
+    """`_html` called `.replace` on `at`; `_playback` reads the same field through `_seconds`.
+
+        _seconds(1234)                 -> None            playback survives
+        (1234 or "").replace("T"," ")  -> AttributeError   html crashed
+
+    The importer explicitly enumerates malformed turns as damage it expects to find — so the one
+    renderer that crashed on a damaged store was the one with no damage banner (defect seat L-49).
+    """
+    document = dict(DAMAGED)
+    document["turns"] = [{"seq": 1, "kind": "ask", "at": 1234, "text": "hi"}]
+
+    rendered = conv._html(document)
+
+    assert "1234" in rendered
