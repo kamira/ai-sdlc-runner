@@ -105,7 +105,7 @@ def test_a_list_holding_only_blanks_is_blank():
 def test_the_three_that_may_be_empty_stay_empty():
     """A blanket rule would refuse this repository's own example.
 
-    `expected_outputs` is `[]` on fourteen of the fifteen nodes in `examples/plan.json` — review and
+    `expected_outputs` is `[]` on fourteen of the fifteen nodes in `examples/minimal/plan.json` — review and
     gate nodes genuinely produce nothing — and a refusal that scolded there would invite padding
     `idempotence_probes` with a fake probe, manufacturing the defect the rule exists to stop.
     """

@@ -178,7 +178,14 @@ def test_the_page_says_which_tables_are_built_and_which_are_not():
              live.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     live.close()
 
-    designed = set(re.findall(r"CREATE TABLE (\w+)", PAGE))
+    # **The page SHOWS its schema; it also TALKS about it, and only the first is the design**
+    # (CHG-20260903-37). The pattern was `CREATE TABLE (\w+)` over the whole page, so it
+    # captured `IF` from the real DDL form the moment a paragraph quoted `store.py` verbatim —
+    # and then reported a seventh, unbuilt table called `IF` and demanded the page say so.
+    #
+    # Anchored to the start of a line: DDL is, prose about DDL is not. The guard was right about
+    # the property and wrong about where to look for it.
+    designed = set(re.findall(r"^CREATE TABLE (?:IF NOT EXISTS )?(\w+)", PAGE, re.M))
     assert built <= designed, f"code creates tables the page does not design: {built - designed}"
 
     flat = " ".join(PAGE.split())
@@ -200,3 +207,25 @@ def test_the_page_says_which_tables_are_built_and_which_are_not():
     assert any(s in flat.lower() for s in spellings), (
         f"the page must say how many of the {len(designed)} tables exist; {len(built)} do. "
         f"Accepted spellings: {sorted(spellings)}")
+
+
+def test_the_page_may_quote_the_ddl_it_documents():
+    """The guard reads the schema the page **shows**, not prose about it (CHG-20260903-37).
+
+    Its pattern was `CREATE TABLE (\\w+)` over the whole page. The real DDL form is
+    `CREATE TABLE IF NOT EXISTS <name>`, so the moment a paragraph quoted `store.py` verbatim the
+    guard captured `IF` as a seventh table, called it designed-and-unbuilt, and demanded the page
+    say so.
+
+    A documentation page that cannot mention the syntax it documents is a guard's defect, not the
+    page's. Anchored to the start of a line now: DDL is, prose about DDL is not.
+    """
+    import re
+
+    prose = "the store carries six `CREATE TABLE IF NOT EXISTS` statements\n"
+    ddl = "CREATE TABLE IF NOT EXISTS models (\n    id TEXT\n);\n"
+
+    found = set(re.findall(r"^CREATE TABLE (?:IF NOT EXISTS )?(\w+)", prose + ddl, re.M))
+
+    assert found == {"models"}, found
+    assert "IF" not in found

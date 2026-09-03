@@ -83,7 +83,13 @@ class Node:
 
     ``role`` names who does it — ``None`` means the runner does it itself and asks no model, which is
     what keeps "every asking node is its own session" a statement about the nodes that ask. ``gate``
-    names the policy gate consulted before the work, where the flow puts one.
+    names the policy gate this node is answerable to, where the flow puts one.
+
+    **When** it is consulted is ``gate_when``'s job, ten lines below, and the two disagreed.
+    This said *consulted before the work* as if that were the rule; measured, **seven of the
+    ten gated nodes are ``after``** — only ``engineer_selfverify``, ``pr`` and ``merge`` are
+    ``before`` (CHG-20260903-37). Two sentences in one class body, and the one a reader meets
+    first was false about most of what it described.
     """
 
     id: str

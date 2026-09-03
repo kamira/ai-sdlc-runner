@@ -134,7 +134,7 @@ def project_id(name: str) -> str:
     """A directory name that cannot be anything else.
 
     The first design defaulted the project to the plan file's parent directory, and both seats named
-    it: that files every ``examples/plan.json`` run under a project called *"examples"*, and `serve`
+    it: that files every ``examples/minimal/plan.json`` run under a project called *"examples"*, and `serve`
     may have no plan at all. A location is not an identity — so the name is required, and it is
     stored as **data** while a hash of it is what touches the filesystem.
     """

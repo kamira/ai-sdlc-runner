@@ -220,7 +220,8 @@ caller never has to know which of the three it is holding.
   "instructions": [ "…", … ],       // in the order they were given
   "attachments": [ {…manifest…} ],
   "attachments_missing": [ "<id>" ],
-  "error": null | "…",
+  "error": "" | "…",          // never null: `RunState.error` is `str = ""`,
+                              // and `snapshot()` returns it verbatim (CHG-20260903-37)
 
   "at": "<node id>" | null,         // where it stopped
   "reason": "…",                    // why, in words
@@ -230,7 +231,8 @@ caller never has to know which of the three it is holding.
   "confirmations": [ "…" ],         // gates approved, as recorded sentences
   "rulings":       [ "…" ],         // ties a person broke
   "rejections":    [ "…" ],         // gates refused, and where the run went
-  "survey":        null | { "problems": {"<seat>": […]}, "missing": […], "safety": […] },
+  "survey":        null | { "problems": {"<seat>": […]}, "missing": […],
+                            "safety": {"<seat>": […]}, "complete": false },
   "intake_asks":   0,               // how many times the requirement was asked for
   "send_backs":    [ {…} ],
   "dispatches":    [ "…" ],         // which model a pool chose, and which a follows reused
@@ -277,7 +279,11 @@ the ones it never looked at.
   "missing":    [ "<aspect>", … ],
   "options":    { "<aspect>": [ …≥3… ] },
   "problems":   [ "<problem>", … ],    // what the seats found wrong with the requirement
-  "safety":     { "<aspect>": [ … ] }, // what they found that is a safety question
+  "safety":     { "<seat>": [ … ] },   // what they found that is a safety question.
+                                       // Keyed by SEAT, not aspect: `intake.collect`
+                                       // writes `survey.safety[seat] = unsafe`, and a
+                                       // caller keying by aspect matched nothing, ever
+                                       // (CHG-20260903-37)
 
   // only when `undecided` — the tie
   "reason":     "<why this is being asked>",
