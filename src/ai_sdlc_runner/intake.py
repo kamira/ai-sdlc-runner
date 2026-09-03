@@ -166,12 +166,30 @@ def times_asked(history: Sequence[Mapping[str, object]], aspect: str) -> int:
     return sum(1 for stop in history if aspect in (stop.get("missing") or ()))
 
 
+def asks_including_this_one(history: Sequence[Mapping[str, object]], aspect: str) -> int:
+    """How many times this has been asked, **counting the ask being made right now**.
+
+    `times_asked` is the raw tally over *recorded* stops, and the engine checks both of the
+    questions below **before** the current stop is written: `server.py` walks with a snapshot of
+    `intake_history` and appends this run's stop only after the walk returns. So a reader that wants
+    "how many times has this person been asked" — which is what both questions are actually about —
+    is one lap behind unless it adds the ask in flight.
+
+    `stop_reason` added it and `needs_options` did not, twelve lines apart in this module, and the
+    result was that on the third ask the operator read *"(asked 3 times)"* while the decision beside
+    it counted two and asked again — against three declarations in this file that say the third
+    (CHG-20260903-42). One name both of them read, so they cannot drift apart again.
+    """
+    return times_asked(history, aspect) + 1
+
+
 def needs_options(history: Sequence[Mapping[str, object]], aspect: str) -> bool:
     """Has asking for this aspect failed often enough to stop asking?
 
     ``>=`` rather than ``>``: the third unanswered ask is the one that has failed, not the fourth.
+    The lap was never lost here — it was lost in what the history held at the moment of the check.
     """
-    return times_asked(history, aspect) >= ASK_LIMIT
+    return asks_including_this_one(history, aspect) >= ASK_LIMIT
 
 
 def option_request(aspect: str, instructions: Sequence[str]) -> Dict[str, object]:
@@ -213,7 +231,7 @@ def stop_reason(survey: Survey, history: Sequence[Mapping[str, object]]) -> str:
     """One plain sentence for a person, naming what is missing and how often it has been asked."""
     parts = []
     for aspect in survey.missing:
-        seen = times_asked(history, aspect) + 1
+        seen = asks_including_this_one(history, aspect)
         nth = {1: "asked once", 2: "asked twice"}.get(seen, f"asked {seen} times")
         parts.append(f"{BY_ASPECT[aspect]} ({nth})")
     joined = "; ".join(parts)

@@ -14,6 +14,8 @@ options on the table. Not because three is magic, but because a third unanswered
 about the question rather than about the person — and at that point continuing to ask is a way of
 not deciding while looking diligent.
 """
+import pathlib
+
 import pytest
 
 from ai_sdlc_runner import engine, graph, intake, policy
@@ -99,13 +101,27 @@ def test_asking_is_counted_per_aspect():
 
 
 def test_options_are_offered_only_after_the_third_time():
-    """`>=` and not `>`: the third unanswered ask is the one that has failed, not the fourth."""
-    history = []
-    assert not intake.needs_options(history, "ui")
-    history = [{"missing": ["ui"]}, {"missing": ["ui"]}]
-    assert not intake.needs_options(history, "ui")
-    history.append({"missing": ["ui"]})
-    assert intake.needs_options(history, "ui")
+    """**Counted in asks, not in recorded stops** (CHG-20260903-42).
+
+    This test asserted the defect. It read `history` as "how many times this has been asked", but a
+    history of two recorded stops means the ask **in flight is the third** — the engine checks
+    before writing the current stop — and the old body asserted that the runner must *not* offer
+    options there. Named for the third, measuring the fourth.
+
+    `>=` and not `>` was never the question: the third unanswered ask is the one that has failed,
+    and `asks_including_this_one` is what makes the history say so.
+    """
+    def asking_now(recorded):
+        """`recorded` stops are behind us; this call is the next ask."""
+        return intake.needs_options([{"missing": ["ui"]}] * recorded, "ui")
+
+    assert intake.asks_including_this_one([], "ui") == 1, "an empty history means this is the first"
+    assert not asking_now(0), "the first ask does not offer options"
+    assert not asking_now(1), "nor the second"
+    assert asking_now(2), (
+        "two stops are recorded and this is the third ask — the one three declarations in "
+        "`intake.py` say offers options")
+    assert asking_now(3), "and it does not go back to asking afterwards"
 
 
 def test_the_option_request_asks_a_model_and_does_not_answer_itself():
@@ -240,7 +256,12 @@ def test_the_command_line_can_reach_the_escalation_it_documents(tmp_path):
         reached.append(intake.needs_options(history, "flow"))
         journal.record_intake_stop(["flow"])
 
-    assert reached == [False] * intake.ASK_LIMIT + [True], (
+    # **The message and the assertion disagreed** (CHG-20260903-42). The message below is the rule
+    # and always was; the list was `[False] * ASK_LIMIT + [True]`, which fires on the *fourth*. Two
+    # tests in this file were named and documented for the third and asserted the fourth — the same
+    # confusion between "stops recorded" and "times asked" that caused the defect, which is why
+    # neither of them ever caught it.
+    assert reached == [False] * (intake.ASK_LIMIT - 1) + [True, True], (
         f"the escalation fires on the {intake.ASK_LIMIT}th unanswered ask and not before; "
         f"got {reached}")
     assert intake.times_asked(journal.intake_stops(), "flow") == intake.ASK_LIMIT + 1
@@ -302,3 +323,65 @@ def test_a_seat_that_says_no_problems_raises_none():
     survey = intake.collect({"defect": {"problems": False, "missing": []}})
 
     assert survey.problems.get("defect", []) == []
+
+
+def test_nothing_reads_the_raw_tally_where_the_ask_in_flight_counts():
+    """**The rule** (CHG-20260903-42): one name, so the two readers cannot drift apart again.
+
+    `stop_reason` wrote `times_asked(...) + 1` and `needs_options` wrote `times_asked(...)`, twelve
+    lines apart in one module, over the same history — and the operator read *"(asked 3 times)"*
+    beside a decision that had counted two. Both now go through `asks_including_this_one`, and this
+    refuses a third reader that re-derives the `+ 1` or forgets it.
+
+    Read as structure rather than as text: a guard pinning the wording would go red on a rename and
+    green on the defect, which CHG-20260903-39 had to undo twice in one change.
+    """
+    import ast
+
+    tree = ast.parse(pathlib.Path(intake.__file__).read_text(encoding="utf-8"))
+    allowed = {"times_asked", "asks_including_this_one"}
+    offenders = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.FunctionDef) or fn.name in allowed:
+            continue
+        for call in ast.walk(fn):
+            if isinstance(call, ast.Call) and getattr(call.func, "id", None) == "times_asked":
+                offenders.append(fn.name)
+
+    assert offenders == [], (
+        f"{sorted(set(offenders))} read the raw tally directly. `times_asked` counts stops already "
+        f"recorded; every question about how many times a person has been asked is asked before "
+        f"this run's stop is written, so it must go through `asks_including_this_one`")
+
+    # And the floor: the rule must be capable of flagging something, or it passes by examining
+    # nothing. `asks_including_this_one` is the one function allowed to call `times_asked`, and it
+    # must actually do so.
+    named = next(fn for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef)
+                 and fn.name == "asks_including_this_one")
+    assert any(isinstance(c, ast.Call) and getattr(c.func, "id", None) == "times_asked"
+               for c in ast.walk(named)), "the one name no longer reads the tally it exists to adjust"
+
+
+def test_the_sentence_and_the_decision_agree_on_the_same_run():
+    """What the defect looked like from the operator's chair, pinned as a property.
+
+    Neither half is checked here for its own sake: the claim is that the number a person is shown
+    and the number the runner acts on are **one number** (CHG-20260903-42).
+    """
+    aspect = sorted(intake.BY_ASPECT)[0]
+
+    class _Survey:
+        missing = (aspect,)
+        complete = False
+
+    history = []
+    for expected in range(1, intake.ASK_LIMIT + 3):
+        shown = intake.stop_reason(_Survey(), history)
+        offering = intake.needs_options(history, aspect)
+
+        word = {1: "asked once", 2: "asked twice"}.get(expected, f"asked {expected} times")
+        assert word in shown, f"ask {expected} is described as something else: {shown}"
+        assert offering == (expected >= intake.ASK_LIMIT), (
+            f"the person is told {word!r} and the decision beside it "
+            f"{'offers options' if offering else 'asks again'}")
+        history.append({"missing": [aspect]})
