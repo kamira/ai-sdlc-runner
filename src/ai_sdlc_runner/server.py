@@ -565,13 +565,19 @@ def make_handler(runner: Runner, operator: Operator,
                  registry: Optional["models_mod.Registry"] = None,
                  registry_path: Optional[Path] = None,
                  assignments: Optional[Mapping[str, object]] = None,
-                 db=None, plan_assignments: Optional[Mapping[str, object]] = None):
+                 db=None, plan_assignments: Optional[Mapping[str, object]] = None,
+                 assignment_source: Optional[Mapping[str, str]] = None):
     """The HTTP surface. Refuses before it reads, in the order the threat model requires."""
 
     held = {"registry": registry if registry is not None else models_mod.Registry(),
             "assignments": dict(assignments or {}),
             "plan": dict(plan_assignments or {}),
-            "source": {}}
+            # **Seeded, not empty** (CHG-20260903-39, defect seat L-51). `cmd_serve`
+            # computes this map with `store.resolve` and dropped it, so `held["source"]`
+            # stayed `{}` until the first config *write* — and `GET /config/nodes` on a
+            # freshly started server answered `"source": {}` against `docs/API.md`'s own
+            # *"an override nobody can see is worse than no override"*.
+            "source": dict(assignment_source or {})}
     #: `held` is read-modify-written from request threads, and `ThreadingHTTPServer` gives each
     #: request its own. `held["registry"] = held["registry"].add(model)` is exactly the shape that
     #: loses a write: two concurrent `POST /models` both read the same base registry, both add, the
@@ -956,7 +962,8 @@ def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
           port: int = 8765, registry: Optional["models_mod.Registry"] = None,
           registry_path: Optional[Path] = None,
           assignments: Optional[Mapping[str, object]] = None,
-          db=None, plan_assignments: Optional[Mapping[str, object]] = None
+          db=None, plan_assignments: Optional[Mapping[str, object]] = None,
+          assignment_source: Optional[Mapping[str, str]] = None
           ) -> ThreadingHTTPServer:
     """Build the server, refusing any host that is not this machine.
 
@@ -987,7 +994,8 @@ def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
     try:
         return _OneRunner((host, port),
                           make_handler(runner, operator, registry, registry_path, assignments,
-                                       db=db, plan_assignments=plan_assignments))
+                                       db=db, plan_assignments=plan_assignments,
+                                       assignment_source=assignment_source))
     except OSError as exc:
         raise ServerError(
             f"cannot listen on {host}:{port} — {paths.plain_in(str(exc))}. Something is already "

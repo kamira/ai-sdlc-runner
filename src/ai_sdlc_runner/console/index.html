@@ -330,6 +330,16 @@ function drawModels() {
       reach.title = m.leaves_this_machine
         ? "work orders sent to this model leave this machine"
         : "runs on this machine; nothing leaves it";
+      // **A guessed reach says so** (CHG-20260903-39). `internal` from a dotless host is a
+      // judgement, and what it buys is the exemption from the refusal that an external endpoint
+      // must name a key variable. `internal_by_guess`'s docstring says the console names these;
+      // measured, its only caller was a stdout footer and this page rendered `reach` as a fact.
+      if (m.reach_guessed) {
+        reach.textContent = m.reach + "?";
+        reach.title = "guessed from a host name with no dot in it, not measured. " +
+          "If this host resolves publicly the grade is wrong, and it is what exempts " +
+          "this model from having to name a key variable. " + reach.title;
+      }
       h.appendChild(reach);
     } else {
       var gone = document.createElement("span");

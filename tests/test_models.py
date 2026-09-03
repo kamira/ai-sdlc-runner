@@ -9,6 +9,7 @@ a model *labelled* `internal` while pointing at a public host is a configuration
 and is not — and this repository has already had to stop itself treating a name as evidence once.
 """
 import json
+import pathlib
 
 import pytest
 
@@ -451,3 +452,94 @@ def test_the_guess_and_the_grade_cannot_disagree_about_the_rule(endpoint, guesse
     else:
         assert not models.graded_by_guess(endpoint), (
             f"{why}: whatever the grade is, the guess is not what produced it")
+
+
+# ── a guessed reach says it is a guess, where the person who can judge it looks ──────────────────
+
+
+def test_a_guessed_reach_says_so_on_the_wire():
+    """`internal_by_guess`'s docstring: *"The console names these, so the guess is visible to the
+    person who can tell whether it is right."*
+
+    Measured before this: its only caller was `runner models`' stdout footer; `Model.as_dict`
+    carried `reach` and `leaves_this_machine` and nothing saying the reach was inferred; and
+    `console/index.html` rendered `m.reach` as a fact with **zero** mentions of the guess.
+
+    What the guess buys is the exemption at `graded_by_guess` from the refusal that an external
+    endpoint must name a key variable. **A disclosure that makes an exemption acceptable has to
+    reach the surface, or the exemption is unaccompanied** (idiom seat L-47).
+    """
+    guessed = models.Model(id="gpu", vendor="v", name="n", transport="api",
+                           endpoint="http://gpu-box/v1")
+    measured = models.Model(id="api", vendor="v", name="n", transport="api",
+                            endpoint="https://api.example.com/v1", key_env="API_KEY")
+
+    assert guessed.as_dict()["reach"] == models.INTERNAL
+    assert guessed.as_dict()["reach_guessed"] is True
+    assert measured.as_dict()["reach_guessed"] is False
+
+
+def test_the_console_names_the_guess():
+    """The surface the docstring promises. It had zero mentions of it."""
+    page = (pathlib.Path(models.__file__).parent / "console" / "index.html").read_text(
+        encoding="utf-8")
+
+    assert "reach_guessed" in page
+    assert "no dot in it" in page, "the page must say what the guess was made from"
+
+
+def test_no_computed_field_is_written_to_disk():
+    """**The rule.** `save` excluded computed fields with a literal tuple, so a third one meant
+    remembering a second place — and this record added a third.
+
+    Derived from `models.COMPUTED` now, so a fourth cannot reach disk by being forgotten.
+    """
+    import json
+    import tempfile
+
+    path = pathlib.Path(tempfile.mkdtemp()) / "models.json"
+    models.save(models.Registry(models=(models.Model(
+        id="gpu", vendor="v", name="n", transport="api", endpoint="http://gpu-box/v1"),)), path)
+
+    stored = json.loads(path.read_text(encoding="utf-8"))["models"][0]
+
+    leaked = sorted(name for name in models.COMPUTED if name in stored)
+    assert leaked == [], f"these are computed and were written to disk: {leaked}"
+    assert set(models.COMPUTED) <= set(
+        models.Model(id="g", vendor="v", name="n", transport="api",
+                     endpoint="http://b/v1").as_dict()), (
+        "COMPUTED names a field `as_dict` does not produce")
+
+
+def test_nothing_hand_writes_the_computed_field_set():
+    """**The rule that the fifth copy earned.**
+
+    Adding one computed field turned five guards red, and each held its own hand-written version
+    of the same fact: the exclusion literal inside `models.save`, two in `test_models_schema.py`
+    (one of them asserting the literal SOURCE TEXT of the first), one in `test_schemas.py`, and
+    one in `test_database_schema.py`. A sixth would have been found the same way — by breaking.
+    `models.COMPUTED` is the one name, and this refuses a second spelling of it.
+
+    **This docstring names those five without reproducing any of them**, because the first draft
+    of it did reproduce them, and the rule flagged its own explanation. The exemption that would
+    have hidden that — skip the file the rule lives in — is the shape CHG-20260903-33 got wrong,
+    so the prose was changed instead of the scope (CHG-20260903-39).
+    """
+    # **A set literal, not the two words.** The first version matched any line naming both,
+    # and flagged five: four prose explanations (including this docstring) and a test function
+    # whose *name* contains one of them. None was a copy. A rule that fires on prose about the
+    # thing rather than on the thing is the rule's defect — the fourth time this session that
+    # distinction has had to be drawn, and the fourth time the answer was to narrow the rule
+    # rather than reword the code (CHG-20260903-39).
+    import re
+
+    root = pathlib.Path(models.__file__).resolve().parents[2]
+    literal = re.compile(r"[({]\s*\"reach\"\s*,\s*\"leaves_this_machine\"\s*[)}]")
+    copies = []
+    for path in list((root / "src").rglob("*.py")) + list((root / "tests").glob("*.py")):
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if literal.search(line) and "COMPUTED" not in line:
+                copies.append(f"{path.relative_to(root).as_posix()}: {line.strip()[:64]}")
+
+    assert copies == [], (
+        f"these spell out the computed-field set instead of reading `models.COMPUTED`: {copies}")
