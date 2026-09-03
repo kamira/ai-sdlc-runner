@@ -1700,6 +1700,34 @@ MUTATIONS: List[Mutation] = [
         'tests/test_sub_planning.py'),
 
     Mutation(
+        'contract', 'the page goes back to calling six of the fifteen conditional',
+        REPO / 'docs' / 'API.md',
+        '**All 15 keys are on every suspension**',
+        '**Nine keys are on every suspension**',
+        'tests/test_api_schema.py'),
+
+    Mutation(
+        'contract', 'the block goes back to a divider that says only-when',
+        REPO / 'docs' / 'API.md',
+        '  // meaningful when `incomplete` — the intake survey.',
+        '  // only when `incomplete` — the intake survey.',
+        'tests/test_api_schema.py'),
+
+    Mutation(
+        'contract', 'a docstring is read as its first line again, so its body is unscanned',
+        REPO / 'tests' / 'test_documented_numbers.py',
+        '    for node in ast.walk(ast.parse(source)):\n        if isinstance(node, _HOLDERS):\n            text = ast.get_docstring(node, clean=False)\n            if text:',
+        '    for node in ast.walk(ast.parse(source)):\n        if isinstance(node, _HOLDERS):\n            text = (ast.get_docstring(node, clean=False) or "").split("\\n")[0]\n            if text:',
+        'tests/test_documented_numbers.py'),
+
+    Mutation(
+        'contract', "a parser's position report is read as a citation into this source",
+        REPO / 'tests' / 'test_documented_numbers.py',
+        'CITATIONS = (re.compile(r"[a-z_]+\\.py:(\\d+)"), re.compile(r"\\bline (\\d+)\\b(?! column)"))',
+        'CITATIONS = (re.compile(r"[a-z_]+\\.py:(\\d+)"), re.compile(r"\\bline (\\d+)\\b"))',
+        'tests/test_documented_numbers.py'),
+
+    Mutation(
         'decisions', 'the two names are handed over swapped, so every valid refusal dies',
         SRC / 'server.py',
         '            waiting = self._answering(gate=gate, node_id=node_id)\n            self.state.rejections.append(\n                engine.Rejection(gate=gate, node_id=node_id or waiting.get("node_id"),',
@@ -1833,6 +1861,14 @@ def _import_fails(path: Path) -> str:
     after it. `-c` rather than a test run: the question is about the module, and pytest can only
     answer it when the test file happens to import it at its own module scope.
     """
+    # **Only a module can fail to import** (CHG-20260904-10). A mutation may target a file that is
+    # not Python at all — `docs/API.md` is the contract three surfaces are written against, and a
+    # page that says the wrong thing about the data is the same defect class as code that does.
+    # Asking the interpreter to import a markdown file reported `ModuleNotFoundError: No module
+    # named 'API'` and called an honest mutation BROKE.
+    if path.suffix != ".py":
+        return ""
+
     # By its **package path**, not by bare name. `src/ai_sdlc_runner/models.py` imported standalone
     # raises `ImportError: attempted relative import with no known parent package` — which is a
     # property of how it was loaded, not of the mutation, and reported BROKE for four honest

@@ -168,6 +168,31 @@ def test_every_shipped_mutation_has_a_unique_anchor():
         f"name: {ambiguous}")
 
 
+def test_a_mutation_may_target_a_file_that_is_not_python(tmp_path):
+    """**The boundary two guards now carry, stated once** (CHG-20260904-10).
+
+    `docs/API.md` is the contract the console, the CLI and every client are written against, and a
+    page that says the wrong thing about the data is the same defect class as code that does — so
+    the registry holds mutations against it. Two guards assumed otherwise and said so loudly:
+    `_import_fails` reported `ModuleNotFoundError: No module named 'API'`, and the parse check
+    above reported `unterminated string literal`. Both called an honest mutation broken.
+
+    Asserted rather than left to the `contract` group passing, because the group passing is
+    evidence about today's registry and this is about the boundary.
+    """
+    page = tmp_path / "PAGE.md"
+    page.write_text("# A page" + NEWLINE + NEWLINE + "It says nine." + NEWLINE, encoding="utf-8")
+
+    assert mutation_check._import_fails(page) == "", (
+        "asking the interpreter to import a file that is not a module reported a failure about "
+        "the loader rather than about the mutation")
+
+    targets = {m.path.suffix for m in mutation_check.MUTATIONS}
+    assert targets - {".py"}, (
+        f"no shipped mutation targets anything but Python ({sorted(targets)}), so the two "
+        f"boundaries above are unexercised and the next person to tighten them will not know")
+
+
 def test_no_shipped_mutation_makes_its_file_unparsable():
     """A mutation that breaks the syntax is CAUGHT by every test in the file, for the wrong reason.
 
@@ -184,6 +209,14 @@ def test_no_shipped_mutation_makes_its_file_unparsable():
     """
     unparsable = []
     for mutation in mutation_check.MUTATIONS:
+        # **Only a module can be unparsable** (CHG-20260904-10). A mutation may target a file that
+        # is not Python: `docs/API.md` is the contract three surfaces are written against, and a
+        # page that says the wrong thing about the data is the same defect class as code that does.
+        # Parsing markdown as Python reports `unterminated string literal` for an honest mutation,
+        # which is this guard's own failure mode aimed at itself. `_import_fails` carries the same
+        # boundary, for the same reason.
+        if mutation.path.suffix != ".py":
+            continue
         source = mutation.path.read_text(encoding="utf-8")
         if mutation.before not in source:
             continue                      # a stale anchor is `test_no_shipped_mutation_has_a_stale_anchor`
