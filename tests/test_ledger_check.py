@@ -1065,6 +1065,134 @@ def test_a_properly_withdrawn_pair_passes(tmp_path):
     assert not any("supersede" in p.lower() for p in problems), repr(problems)
 
 
+# -- the back-pointer's own reciprocal (CHG-20260904-08) ----------------------------------------
+#
+# The three checks above all begin at a `Supersedes:`, so deleting that field skips every one of
+# them, and the dangling-back-pointer check below only asks whether the named file exists. Found
+# live: withdrawing CHG-20260903-24 dropped its `Supersedes:` line, CHG-20260901-15 went on saying
+# `Superseded by: CHG-20260903-24`, and the lint printed `ledger check passed (186 changes)`.
+
+SUPERSEDING_WITHOUT_THE_FIELD = SUPERSEDING.replace(
+    "- Supersedes: CHG-20260903-90, re-issued as this record" + NEWLINE, "")
+
+
+def test_a_back_pointer_the_named_record_does_not_answer_is_reported(tmp_path):
+    """The half-trail the other four checks cannot see, because none of them starts here."""
+    repo = _pair(tmp_path, _superseded("withdrawn", extra=BACK),
+                 superseding_body=SUPERSEDING_WITHOUT_THE_FIELD)
+
+    problems = ledger_check.check(repo)
+
+    assert any("does not say so forward" in p for p in problems), (
+        "the old record pointed forward, the new one denied it, and the ledger passed: "
+        + repr(problems))
+
+
+def test_the_reciprocal_check_names_the_line_and_the_file_to_add_it_to(tmp_path):
+    """A lint that says only *something is wrong* makes the reader re-derive the fix.
+
+    Both halves are asserted because the message has to be actionable from the terminal alone: the
+    field to write and the file to write it in.
+    """
+    repo = _pair(tmp_path, _superseded("withdrawn", extra=BACK),
+                 superseding_body=SUPERSEDING_WITHOUT_THE_FIELD)
+
+    said = [p for p in ledger_check.check(repo) if "does not say so forward" in p]
+
+    assert said, "nothing was reported"
+    assert "- Supersedes: CHG-20260903-90" in said[0], said[0]
+    assert "docs/changes/CHG-20260903-24.md" in said[0], said[0]
+
+
+def test_a_back_pointer_naming_a_record_that_is_not_there_is_reported(tmp_path):
+    """CHG-20260903-30's check, which shipped with no test of its own.
+
+    `grep -rn "leads nowhere" tests/` returned nothing until this. A check nothing mutates is a
+    check nobody knows still works, which is the same argument the reciprocal above rests on.
+    """
+    repo = _pair(tmp_path, None)
+    (repo / "docs" / "changes" / "CHG-20260903-24.md").write_text(
+        SUPERSEDING_WITHOUT_THE_FIELD.replace(
+            "## Status", "- **Superseded by: CHG-20260903-91**" + NEWLINE + NEWLINE + "## Status"),
+        encoding="utf-8")
+
+    problems = ledger_check.check(repo)
+
+    assert any("leads nowhere" in p for p in problems), (
+        "a back-pointer named a record that does not exist and the ledger passed: "
+        + repr(problems))
+
+
+def test_the_gate_is_on_the_record_being_asked_not_on_the_one_pointing(tmp_path):
+    """**The mutation that survived the first time this shipped.**
+
+    Checks 1-3 skip a record older than `SUPERSESSION_REQUIRED_FROM`, because the field did not
+    exist before it. This check reads the *old* record's back-pointer and asks the *new* one to
+    answer, so the gate belongs on the record being asked. Swapping it to the pointer passed all
+    157 tests -- and would have silenced the live case exactly: CHG-20260901-15 predates the
+    threshold and both records it names come after it.
+
+    So the fixture here is that shape and not `_pair`'s: the pointer is older than the gate.
+    """
+    (tmp_path / "docs" / "changes").mkdir(parents=True)
+    (tmp_path / "docs" / "acceptance").mkdir(parents=True)
+    changes = tmp_path / "docs" / "changes"
+    changes.joinpath("CHG-20260901-15.md").write_text(
+        "# CHG-20260901-15" + NEWLINE
+        + "- Project: p" + NEWLINE + "- Date: 2026-09-01" + NEWLINE
+        + "- Risk: low" + NEWLINE + "- Branch: b" + NEWLINE
+        + "- **Superseded by: CHG-20260903-24**" + NEWLINE
+        + NEWLINE + "## Status" + NEWLINE + NEWLINE + "withdrawn" + NEWLINE, encoding="utf-8")
+    changes.joinpath("CHG-20260903-24.md").write_text(
+        SUPERSEDING_WITHOUT_THE_FIELD, encoding="utf-8")
+
+    assert "CHG-20260901-15" < ledger_check.SUPERSESSION_REQUIRED_FROM, (
+        "the fixture stopped testing the gate -- the pointer is no longer older than it")
+
+    problems = ledger_check.check(tmp_path)
+
+    assert any("does not say so forward" in p for p in problems), (
+        "the pointer predates the gate, so gating on it skipped the live case: " + repr(problems))
+
+
+def test_a_sibling_named_on_the_continuation_line_is_not_an_edge(tmp_path):
+    """**`_supersedes` reads one line, and that narrowness is the fix, not the defect.**
+
+    Both real records wrap the field, and what the continuation line carries is a link to the
+    *sibling* record, not to a superseded one::
+
+        - Supersedes: the second half of CHG-20260901-15, which is withdrawn and re-issued as
+          this record and [CHG-20260903-24](CHG-20260903-24.md)
+
+    A seat reported the one-line read as luck rather than design and proposed widening it.
+    Re-measured, widening invents the edges -25 -> -24 and -24 -> -25 and then demands each say
+    the other back. This pins the narrowness so the next reader does not helpfully remove it.
+    """
+    wrapped = SUPERSEDING.replace(
+        "- Supersedes: CHG-20260903-90, re-issued as this record" + NEWLINE,
+        "- Supersedes: CHG-20260903-90, re-issued as this record" + NEWLINE
+        + "  and [CHG-20260903-91](CHG-20260903-91.md)" + NEWLINE)
+    repo = _pair(tmp_path, _superseded("withdrawn", extra=BACK), superseding_body=wrapped)
+
+    assert ledger_check._supersedes(wrapped) == ["CHG-20260903-90"], (
+        "the sibling on the continuation line became a superseded record")
+    assert not any("CHG-20260903-91" in p for p in ledger_check.check(repo)), (
+        "the ledger demanded a return path from a record that was only linked to")
+
+
+def test_this_repos_own_supersession_edges_are_walkable_in_both_directions(tmp_path):
+    """Not a fixture -- the real ledger, which is what the withdrawal actually broke."""
+    del tmp_path
+    changes = {q.stem: q.read_text(encoding="utf-8")
+               for q in (REPO / "docs" / "changes").glob("CHG-*.md")}
+
+    half = [(cid, claimed) for cid, text in changes.items()
+            for claimed in ledger_check._superseded_by(text)
+            if claimed in changes and cid not in ledger_check._supersedes(changes[claimed])]
+
+    assert not half, f"these back-pointers are not answered forward: {half}"
+
+
 def test_this_repos_own_withdrawn_design_record_says_so_where_the_lint_reads(tmp_path):
     """Not a fixture — the real record, which is what was actually broken.
 
