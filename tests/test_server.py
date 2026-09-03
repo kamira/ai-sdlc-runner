@@ -21,6 +21,8 @@ a name it typed into a body — which was the "button captioned Accept (as verif
 down and called enforcement" that an independent seat refused.
 """
 import json
+import pathlib
+import re
 import threading
 import time
 import urllib.error
@@ -1101,3 +1103,52 @@ def test_the_refusal_names_what_the_run_is_actually_waiting_for():
         raise AssertionError("an incomplete stop must not be approvable")
     except server.ServerError as exc:
         assert "a gate to approve" not in str(exc), str(exc)
+
+
+# ── the console showed less than the server sent, and one card lied about being an ask ──────────
+#
+# Rules, not instances. The six keys that reached no front end and the one class token with a dot
+# in it were both found by reading; a test naming the six and the one would go green the moment a
+# seventh key or a second typo arrived. These read the shapes instead (CHG-20260903-29).
+
+
+def _console():
+    return (pathlib.Path(server.__file__).parent / "console" / "index.html").read_text(
+        encoding="utf-8")
+
+
+def test_every_key_the_server_sends_reaches_the_console():
+    """`confirmations`, `rulings`, `rejections`, `survey`, `send_backs` and `adjudications` were
+    computed on every poll, shipped to the browser, and rendered by nothing — which between them
+    are the whole record of what the run decided and why.
+
+    This was CHG-20260901-15 task 24. `ACC-20260903-23` — an **accepted** record — deferred it to
+    that task, and that record was later withdrawn, so an accepted reservation pointed at nothing
+    until CHG-20260903-29 gave it an owner.
+    """
+    page = _console()
+    snapshot = server.RunState().snapshot()
+
+    unreached = [key for key in snapshot
+                 if not re.search(r"\b%s\b" % re.escape(key), page)]
+
+    assert unreached == [], f"the server sends these and the console renders nothing for them: {unreached}"
+
+
+def test_no_class_attribute_carries_a_token_that_starts_with_a_dot():
+    """`class="ask .row"` is two tokens, the second named `.row`.
+
+    Selecting it needs `.\\.row`, which the file did not contain, so `.ask .row{display:flex}` —
+    a *descendant* selector — never matched. What did match was `.ask`, the amber card the
+    stylesheet reserves for *"the run is waiting for you"*: the start controls were permanently
+    dressed as a pending question, and at a real gate the page showed two amber cards, one of which
+    was not an ask.
+
+    A CSS selector written into a class attribute is silent in every direction — no parse error, no
+    console warning, and a plausible-looking page.
+    """
+    page = _console()
+
+    dotted = re.findall(r"class=\"[^\"]*(?<![\w-])\.[\w-]+", page)
+
+    assert dotted == [], f"class attributes carrying a selector rather than a name: {dotted}"

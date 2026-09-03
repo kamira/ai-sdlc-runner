@@ -71,7 +71,18 @@
   .ask{border:1px solid var(--wait);border-radius:8px;padding:12px 14px;margin:0 0 16px;background:var(--card)}
   .ask h3{margin:0 0 6px;font-size:14px;color:var(--wait)}
   .ask p{margin:0 0 10px;color:var(--dim)}
-  .ask .row{display:flex;gap:8px;flex-wrap:wrap}
+  /* Standalone, not `.ask .row`: its one user is a sibling of the ask card, not a child
+     of one, and it carried `.row` as a class token (CHG-20260903-29). */
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  /* Not `.ask`: a record of what happened is not a question being asked, and borrowing
+     the amber card would put a second pending-looking panel on a page that has one. */
+  .dec{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:0 0 10px;
+       background:var(--card)}
+  .dec h3{margin:0 0 6px;font-size:12px;letter-spacing:.04em;text-transform:uppercase;
+          color:var(--faint)}
+  .dec ul{margin:0;padding-left:18px}
+  .dec li{margin:2px 0;font-family:var(--mono);font-size:11px;color:var(--dim);
+          word-break:break-word}
   .voices{font-family:var(--mono);font-size:11.5px;color:var(--dim);margin:0 0 10px}
   .voices .no{color:var(--stop)} .voices .yes{color:var(--go)}
   .carry{border:1px solid var(--line);border-radius:6px;margin:0 0 18px;overflow:hidden;background:var(--card)}
@@ -133,13 +144,15 @@
     <div id="ask"></div>
     <h2>your instruction</h2>
     <textarea id="instruction" rows="3" placeholder="what should this runner build?"></textarea>
-    <div style="margin:8px 0 20px" class="ask .row">
+    <div style="margin:8px 0 20px" class="row">
       <button class="p" id="start">start the run</button>
       <button id="more">add to the brief</button>
       <label class="filebtn">attach a file<input type="file" id="file" hidden></label></div>
     <div id="brief"></div>
     <h2>the log</h2>
     <ul class="log" id="log"></ul>
+    <h2>what was decided</h2>
+    <div id="decisions"></div>
     <p class="err" id="err"></p>
   </section>
 </main>
@@ -395,6 +408,60 @@ function drawLog() {
   });
 }
 
+function drawDecisions() {
+  // Six snapshot keys reached no front end: `confirmations`, `rulings`, `rejections`, `survey`,
+  // `send_backs` and `adjudications` — which between them are the whole record of what the run
+  // decided and why. The server computed all six and shipped them to the browser on every poll,
+  // and the page rendered none of them (CHG-20260903-29; CHG-20260901-15 task 24, which
+  // ACC-20260903-23 deferred into a record that was later withdrawn).
+  //
+  // `textContent` for every value, never `innerHTML` — these strings carry model output and a
+  // seat's own words.
+  var box = $("#decisions");
+  box.innerHTML = "";
+  if (!state) return;
+
+  function block(title, lines) {
+    if (!lines.length) return;
+    var d = document.createElement("div");
+    d.className = "dec";
+    var h = document.createElement("h3");
+    h.textContent = title;
+    d.appendChild(h);
+    var ul = document.createElement("ul");
+    lines.forEach(function (line) {
+      var li = document.createElement("li");
+      li.textContent = line;
+      ul.appendChild(li);
+    });
+    d.appendChild(ul);
+    box.appendChild(d);
+  }
+
+  block("approved", (state.confirmations || []));
+  block("ruled", (state.rulings || []).map(String));
+  block("refused", (state.rejections || []).map(String));
+  block("sent back", (state.send_backs || []).map(function (b) {
+    return (b.from || "?") + " -> " + (b.kind || "?") +
+           (b.reason ? ": " + b.reason : "");
+  }));
+  block("adjudicated", (state.adjudications || []).map(function (a) {
+    // A grading panel returns `grade`, a binary one returns `outcome`; enumerating a shared subset
+    // is what CHG-20260901-18 was filed for, so this reads whichever the adjudicator actually
+    // wrote and names the seats that were counted.
+    var said = a.grade || a.outcome || "?";
+    var who = a.verdicts ? Object.keys(a.verdicts).sort().join(", ") : "";
+    return (a.node_id || "?") + " -> " + said +
+           (a.reason ? " (" + a.reason + ")" : "") +
+           (who ? " [" + who + "]" : "");
+  }));
+  if (state.survey) {
+    block("surveyed", Object.keys(state.survey).sort().map(function (k) {
+      return k + ": " + String(state.survey[k]);
+    }));
+  }
+}
+
 function drawBrief() {
   var box = $("#brief"); box.innerHTML = "";
   var asked = (state && state.instructions) || [];
@@ -565,7 +632,7 @@ function apply(s) {
   $("#more").disabled = (s.state === "running");
   drawBrief();
   $("#err").textContent = s.error || "";
-  drawFlow(); drawLog(); drawAsk();
+  drawFlow(); drawLog(); drawDecisions(); drawAsk();
 }
 
 function fail(e) { $("#err").textContent = e.message; }
