@@ -311,10 +311,92 @@ def test_confirming_one_gate_does_not_confirm_the_next():
     assert report.halted_at == "lead_assess"
 
 
-def test_a_high_risk_run_that_is_confirmed_all_the_way_still_reaches_every_gate():
+def test_a_high_risk_run_confirmed_all_the_way_still_stops_at_the_independent_rung():
+    """The gate-matrix reachability this was written for, and the one gate it cannot get past.
+
+    It used to assert `halted_at == "done"`, because `--confirm` opened every rung including
+    `halt_independent` — `_gate` had no rung check at all. That is the behaviour CHG-20260903-27
+    removed, so this test was pinning the defect. What it was *written* for — that a high-risk run
+    reaches every gate in the matrix rather than dying early and leaving most of it unexercised —
+    is unchanged and still asserted.
+    """
     report = engine.walk(_cfg(risk="high", confirmed=ALL_GATES), Recorder(), enabled=True)
-    assert report.halted_at == "done"
-    assert set(graph.gates_used()) <= {v["gate"] for v in report.verdicts.values() if v["gate"]}
+    assert report.halted_at == "qa_accept"
+
+    # And the boundary, measured rather than assumed: `acceptance` is `auto` at low and medium and
+    # `halt_independent` only at high, so a confirmed run reaches the whole matrix below that grade
+    # and stops one gate short of `pr` and `merge` at it. Naming both sides is what keeps this from
+    # passing if confirmations broke outright.
+    for grade in ("low", "medium"):
+        below = engine.walk(_cfg(risk=grade, confirmed=ALL_GATES), Recorder(), enabled=True)
+        assert below.halted_at == "done", grade
+        assert set(graph.gates_used()) <= {v["gate"] for v in below.verdicts.values() if v["gate"]}
+
+    reached = {v["gate"] for v in report.verdicts.values() if v["gate"]}
+    assert set(graph.gates_used()) - reached == {"pr", "merge"}
+
+
+def test_a_confirmation_does_not_open_the_independent_rung():
+    """`--confirm acceptance` opened the one `halt_independent` cell in `GATES` and the report said
+    *"confirmed by the operator"* (CHG-20260903-27, L-31).
+
+    `policy.verdict` rests the shipped rank order on the opposite already being true: *"because
+    `confirm` can be pre-authorised with `--confirm` and a halt cannot."*
+    """
+    report = engine.walk(_cfg(risk="high", confirmed=ALL_GATES), Recorder(), enabled=True)
+
+    assert report.verdicts["qa_accept"]["verdict"] == policy.HALT_INDEPENDENT
+    assert "does not open this rung" in report.halt_reason, report.halt_reason
+
+    # Not spent — and the report says which of the two reasons it went unspent for. The old
+    # sentence, "confirmed 1 more time(s) than the run stopped at it", is false here: the run
+    # stopped there. `pr` and `merge`, which this run never reached, still get it.
+    spent = [l for l in report.confirmations if "decided by" in l or "confirmed by" in l]
+    assert not any("acceptance" in line for line in spent), spent
+    assert any("acceptance was confirmed 1 time(s) and none was spent" in line
+               for line in report.confirmations), report.confirmations
+    assert any("pr was confirmed 1 more time(s) than the run stopped at it" in line
+               for line in report.confirmations), report.confirmations
+
+
+def test_a_person_answering_the_stop_does_open_the_independent_rung():
+    """The other side of the ruling, and the one that keeps the rung reachable.
+
+    `policy.verdict`'s sentence is about **pre-authorisation** — *"`confirm` can be pre-authorised
+    with `--confirm`"* — so that is what CHG-20260903-27 refuses at this rung, and only that.
+    Measured, the two approval paths in `_gate` have exactly one source each and do not overlap:
+
+        the counter path    `cfg.confirmed` counts   only `--confirm <gate>`, given before the run,
+                                                     naming no node, for a stop nobody has seen
+        the targeted path   `Approval` objects       only `server.Runner.approve` (`server.py:323`,
+                                                     the sole site in `src/` that mints one), given
+                                                     after the suspension was returned and read
+
+    A person answering the stop they were shown is what *"stops for a person"* means. Refusing that
+    too would make the rung unreachable through the only interface a person has — a broken rule
+    rather than a stricter one.
+    """
+    approval = engine.Approval(gate="acceptance", node_id="qa_accept")
+    report = engine.walk(_cfg(risk="high", confirmed=(*ALL_GATES, approval)), Recorder(),
+                         enabled=True)
+
+    assert report.halted_at != "qa_accept", report.halt_reason
+    assert any("acceptance" in line and "decided by the operator" in line
+               for line in report.confirmations), report.confirmations
+
+
+def test_a_confirmation_still_opens_an_ordinary_halt():
+    """The other half of the ruling, so the fix is pinned to the rung and not to halting.
+
+    `ARCHITECTURE.md` says *"A halt is a pause with a way back — `--confirm <gate>` continues past
+    one"*, and that stays true of `halt`. Without this the previous test would also pass if
+    confirmations stopped working entirely.
+    """
+    report = engine.walk(_cfg(risk="high", confirmed=ALL_GATES), Recorder(), enabled=True)
+
+    plan = report.verdicts["pm_confirm"]
+    assert plan["verdict"] == policy.HALT
+    assert any("plan_confirmed" in line for line in report.confirmations), report.confirmations
 
 
 def test_a_node_with_no_gate_says_so_rather_than_borrowing_one():

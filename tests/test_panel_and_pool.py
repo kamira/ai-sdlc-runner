@@ -378,3 +378,115 @@ def test_a_panel_can_route_every_node_it_may_be_configured_on(node_id):
     assert took in report.visited, (
         f"{node_id} adjudicated `pass` but the run never reached {took!r} — "
         f"visited {report.visited}, halted at {report.halted_at}")
+
+
+# ── a word nobody wrote down was counted as a no vote (CHG-20260903-27) ────────────────────────
+#
+# Three collection sites read a voice's answer as `str(... or ... or "")`, fabricating a verdict
+# where there was no answer, and each of the three guards that followed counted **keys**. So a seat
+# that said nothing was recorded as *"conformance holds a veto and did not pass"* and the run
+# stopped permanently on a veto nobody cast. On the models panel the same hole was fatal rather
+# than merely false.
+
+
+def _seat_run(seat_answer, node_models=None):
+    """Walk with seats returning `seat_answer` verbatim; models keep the flow moving."""
+    def factory(seat=None, model=None):
+        class Session(engine.Session):
+            def ask(self, order):
+                if seat:
+                    return dict(seat_answer)
+                branch = {"pm_confirm": "yes", "pm_signoff": "yes",
+                          "lead_task_review": "pass", "re_review": "pass",
+                          "qa_accept": "pass"}.get(order["node_id"])
+                return {"verdict": branch} if branch else {"ok": True}
+
+            def close(self):
+                pass
+        return Session()
+
+    base = dict(node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+                decisions=dict(DECISIONS), risk="low", undeclared="allow",
+                node_models=node_models or {})
+    return engine.walk(engine.RunConfig(**base), factory, enabled=True)
+
+
+def test_a_seat_that_names_no_verdict_is_refused_rather_than_recorded_as_a_veto():
+    """L-30. A backend that returns prose carries neither `verdict` nor `outcome`.
+
+    `{"exit_code": 0, "stdout": ...}` is the ordinary shape of a real backend, not an exotic one.
+    It used to become `""`, which `policy.adjudicate` read as a no vote, which the conformance
+    seat's veto turned into an unresumable stop whose recorded reason named a veto nobody cast.
+    """
+    with pytest.raises(engine.EngineError) as caught:
+        _seat_run({"exit_code": 0, "stdout": "the change looks fine to me"})
+
+    said = str(caught.value)
+    assert "named no verdict" in said, said
+    assert "conformance" in said, said
+    assert "said nothing is not a seat that voted no" in said, said
+
+
+def test_a_seat_that_shouts_its_verdict_is_refused_by_name_not_read_as_a_no():
+    """`PASS` was a veto. It is a word the seat chose, so this refuses it rather than guessing."""
+    with pytest.raises(policy.PolicyError) as caught:
+        _seat_run({"verdict": "PASS"})
+
+    assert "unreadable verdict(s)" in str(caught.value), str(caught.value)
+    assert "'PASS'" in str(caught.value), str(caught.value)
+
+
+def test_a_trailing_newline_is_a_transport_artifact_and_not_a_different_word():
+    """The other side of the same line, so the fix is pinned to the word and not to strictness.
+
+    A CLI backend's `pass\n` is the single most likely real answer of all, and it was a veto.
+    """
+    report = _seat_run({"verdict": "pass\n"})
+
+    seat_panels = [e for e in report.adjudications
+                   if "conformance" in e.get("verdicts", {})]
+    assert seat_panels, report.adjudications
+    for entry in seat_panels:
+        assert entry["outcome"] == "pass", entry
+        assert entry["vetoed"] == [], entry
+        assert set(entry["verdicts"].values()) == {"pass"}, entry
+
+    # It stops at `merge` because nothing was confirmed, not because a seat objected. Before
+    # this the same answer produced a stop on a veto nobody cast.
+    assert report.halted_at == "merge", report.halt_reason
+
+
+def test_a_model_panel_answering_the_single_paths_word_is_refused_not_looped():
+    """L-29. The same node asks for different words depending on how many models are configured.
+
+    `pm_confirm` branches on `yes`/`no` and carries `panel_branches = {"pass": "yes", "fail":
+    "no"}`, so a panel there must say `pass` while the same node asked single must say `yes` — and
+    the work order names neither. A model answering `yes` was a vote against, the node re-entered
+    through `rejects_to`, and the walk dispatched **267 model sessions** before the 200-step
+    ceiling stopped it. One message now, on the first round.
+    """
+    with pytest.raises(policy.PolicyError) as caught:
+        _seat_run({"verdict": "pass"}, node_models={"pm_confirm": ("a", "b", "c")})
+
+    said = str(caught.value)
+    assert "unreadable verdict(s)" in said, said
+    assert "'yes'" in said, said
+
+
+def test_adjudicate_refuses_an_unknown_word_as_it_already_refused_an_unknown_speaker():
+    """The two halves of one check, and only one of them existed.
+
+    `adjudicate_grade` has refused an unrecognised grade all along; `adjudicate` refused an
+    unrecognised *seat* and voted with an unrecognised *word* — two adjudicators in one file
+    disagreeing about whether a word they cannot read is a vote.
+    """
+    with pytest.raises(policy.PolicyError, match="unknown seat"):
+        policy.adjudicate({"nobody": "pass"})
+    with pytest.raises(policy.PolicyError, match="unreadable verdict"):
+        policy.adjudicate({"conformance": "yes", "defect": "pass", "risk": "pass"})
+    with pytest.raises(policy.PolicyError, match="unreadable verdict"):
+        policy.adjudicate({"a": "yes", "b": "yes"}, voices="models")
+
+    assert policy.adjudicate({"a": "pass", "b": "pass"}, voices="models")["outcome"] == "pass"
+    assert policy.adjudicate(
+        {"conformance": "undecided", "defect": "pass", "risk": "pass"})["outcome"] == "fail"

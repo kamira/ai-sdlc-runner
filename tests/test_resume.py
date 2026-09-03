@@ -220,6 +220,12 @@ def test_resumed_counts_the_asks_that_were_actually_reused(tmp_path):
         class Session(engine.Session):
             def ask(self, order):
                 dispatched.append(order["node_id"])
+                # The seats answer, because this walk runs to completion and a review panel
+                # that says nothing no longer passes for one that voted no (CHG-20260903-27).
+                # It said nothing before and the engine read that as a veto, so this run has
+                # always failed `lead_review` without the fixture saying so.
+                if seat:
+                    return {"verdict": "pass"}
                 branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
                           "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])
                 return {"verdict": branch} if branch else {"ok": True}

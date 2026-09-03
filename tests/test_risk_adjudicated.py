@@ -253,7 +253,8 @@ def test_the_gate_over_an_assessment_resolves_at_the_grade_that_assessment_propo
                     return {"risk": "high"}
                 branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
                           "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])
-                return {"verdict": branch} if branch else {"ok": True}
+                return ({"verdict": branch} if branch
+                        else {"verdict": "pass"} if seat else {"ok": True})
 
             def close(self):
                 pass
@@ -286,7 +287,8 @@ def _walk(risk="low", node_models=None, seen=None):
                                  (order.get("policy_verdict") or {}).get("risk")))
                 branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
                           "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])
-                return {"verdict": branch} if branch else {"ok": True}
+                return ({"verdict": branch} if branch
+                        else {"verdict": "pass"} if seat else {"ok": True})
 
             def close(self):
                 pass

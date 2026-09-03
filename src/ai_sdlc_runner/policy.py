@@ -54,6 +54,15 @@ STOPPING = (CONFIRM, HALT, HALT_INDEPENDENT)
 
 RISKS = ("low", "medium", "high")
 
+#: What a voice may return to `adjudicate`, on either kind of panel. `RISKS`'s shape, one
+#: vocabulary over, and it exists for `RISKS`'s reason: `adjudicate_grade` refuses a grade it does
+#: not recognise, and `adjudicate` counted one as a no vote — so a voice that said `PASS`, or `yes`,
+#: or nothing at all, was a vote against (CHG-20260903-27, found by the defect seat).
+#:
+#: `undecided` is in the list so this changes nothing for a voice that returns it: it is not
+#: `pass`, so it still fails, exactly as before. What the list refuses is a word nobody wrote down.
+VERDICTS = ("pass", "fail", "undecided")
+
 
 class PolicyError(Exception):
     """Raised when something is asked of the policy that it does not define. Never defaulted."""
@@ -976,9 +985,20 @@ def verdict(gate: str, risk: str, autonomy: Optional[str] = None,
         # The partial order this reads by is **`relax`'s**, not a new one: `relax` allows
         # `confirm -> auto` and nothing else, which says `auto` is looser than `confirm`, and
         # `confirm` looser than either halt — because `confirm` can be pre-authorised with
-        # `--confirm` and a halt cannot. `halt` and `halt_independent` are left **unranked against
-        # each other**, because `engine.py` states that no ordering between them is needed anywhere
-        # and inventing one here would be a design change wearing a bug fix's clothes.
+        # `--confirm` and a halt cannot.
+        #
+        # That second clause was **false when it was written** and is true now. `engine._gate`
+        # had no rung check at all, so a plain `--confirm acceptance` opened the single
+        # `halt_independent` cell in `GATES` and the report recorded it as *"confirmed by the
+        # operator"* — this rank order rested on a premise the code falsified one module over,
+        # and the only text that said so was `README.md`'s Known gaps. CHG-20260903-27 closed it
+        # at `_gate`, for `halt_independent` only: an ordinary `halt` still opens, which is what
+        # `docs/ARCHITECTURE.md` says and what *a pause with a way back* means.
+        #
+        # `halt` and `halt_independent` are left **unranked against each other**, because
+        # `engine.py` states that no ordering between them is needed anywhere and inventing one
+        # here would be a design change wearing a bug fix's clothes. That stays true: they are
+        # now distinguishable at the *door* without being ordered *here*.
         #
         # Before CHG-20260902-19 this branch recognised exactly one tightening — `auto` to a stop —
         # and reported exactly one loosening — a stop to `auto`. Every other request was **silently
@@ -1224,6 +1244,29 @@ def adjudicate(verdicts: Mapping[str, str], *, voices: str = "seats") -> Dict[st
     """
     if voices not in ("seats", "models"):
         raise PolicyError(f"unknown panel kind {voices!r}")
+
+    # Above the `voices` branch, because both panels had the same hole and only one of them was
+    # ever going to get looked at (CHG-20260903-27).
+    #
+    # This function refused an unknown **speaker** — `unknown seat(s): ['a']` — and accepted an
+    # unknown **word** from a known one, counting it as a no vote. So `PASS`, `pass ` and `` each
+    # produced `conformance holds a veto and did not pass`: a veto nobody cast, which is the
+    # failure the comment further down was already written about, arriving by a second road.
+    #
+    # On the models panel the same hole is fatal rather than merely false. `pm_confirm` and
+    # `pm_signoff` branch on `yes`/`no` and carry `panel_branches = {"pass": "yes", "fail": "no"}`,
+    # so a panel there must speak `pass`/`fail` while the same node asked single speaks `yes`/`no`.
+    # A voice answering `yes` was a vote against, the node re-entered through `rejects_to`, and the
+    # walk dispatched **267 model sessions** before the 200-step ceiling stopped it. It now says so
+    # on the first round instead.
+    unreadable = sorted(s for s, v in verdicts.items() if v not in VERDICTS)
+    if unreadable:
+        said = ", ".join(f"{s} said {verdicts[s]!r}" for s in unreadable)
+        raise PolicyError(
+            f"unreadable verdict(s): {said}. A voice must return one of {list(VERDICTS)} — "
+            f"counting a word nobody wrote down as a no vote records a decision the voice "
+            f"never made")
+
     if voices == "models":
         if not verdicts:
             raise PolicyError("no verdicts to adjudicate")
