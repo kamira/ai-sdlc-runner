@@ -136,7 +136,13 @@ class Store:
         # rather than crash a request. Found by clearing the store between runs of a live demo.
         paths.makedirs(self.dir)
         target = self.dir / stored_name(digest)
-        if not target.exists():                 # the same bytes twice is the same attachment
+        # `paths.exists`, not `Path.exists` — and the comment eight lines below is why:
+        # past MAX_PATH Windows reports a path that is merely too long as **absent**,
+        # about a directory that exists. Every write in this module was wrapped for that
+        # and every read was left bare, so a deep store accepted uploads and read back
+        # empty, and `missing()` — the detector written for exactly this — agreed with it
+        # (CHG-20260903-28, found by the defect seat).
+        if not paths.exists(target):            # the same bytes twice is the same attachment
             try:
                 paths.write_bytes(target, data)
             except OSError as exc:
@@ -158,10 +164,14 @@ class Store:
         return attachment
 
     def all(self) -> List[Attachment]:
-        if not self.manifest_path.exists():
+        # The load-bearing one. `_write` rebuilds the manifest from this, so a bare
+        # `exists()` that says "absent" on a deep path turned every `add()` into a
+        # **truncation**: the second upload destroyed the first, and both calls returned
+        # successfully (CHG-20260903-28).
+        if not paths.exists(self.manifest_path):
             return []
         try:
-            raw = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+            raw = json.loads(paths.read_text(self.manifest_path))
         except ValueError as exc:
             raise AttachmentError(f"{self.manifest_path} is not valid JSON: {exc}")
         return [Attachment(**entry) for entry in raw.get("attachments", [])]
@@ -178,7 +188,8 @@ class Store:
                 f"hashes precisely so that nothing an operator typed ends up on a path the runner "
                 f"passes around.")
         target = self.dir / stored_name(attachment_id)
-        if not target.exists():
+        # Bare, this raised *"is not in this store"* about a file the store was holding.
+        if not paths.exists(target):
             raise AttachmentError(f"attachment {attachment_id} is not in this store")
         return target
 
@@ -197,7 +208,13 @@ class Store:
         half: it becomes **visible**. A run whose brief has quietly lost a document is worse than one
         that says so.
         """
-        return [a.id for a in self.all() if not (self.dir / stored_name(a.id)).exists()]
+        # Wrong in **both** directions before this. Measured with `LongPathsEnabled = 0`,
+        # the Windows default: at a 252-character store directory it returned `[]` while
+        # nothing was readable, and at 235 it reported every attachment missing while the
+        # directory listing showed all of them present. It inherits whichever answer
+        # `all()` gives and then asks the same bare question again, once per attachment.
+        return [a.id for a in self.all()
+                if not paths.exists(self.dir / stored_name(a.id))]
 
     def _write(self, attachments: Sequence[Attachment]) -> None:
         payload = {"attachments": [a.as_dict() for a in

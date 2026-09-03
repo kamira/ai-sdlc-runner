@@ -18,6 +18,8 @@ the floor was crossed. That is "the user decides"; it is not "set it in the GUI"
 from __future__ import annotations
 
 import json
+import pathlib
+import re
 
 import pytest
 
@@ -467,3 +469,63 @@ def test_the_flag_is_harmless_when_nothing_was_saved(tmp_path, py_stub, capsys):
                      "allow", "--plan", plan, "--confirm", "merge", "--no-high-risk-mode"])
     assert code == 0
     assert "stopped at:    done" in capsys.readouterr().out
+
+
+# ── the file counted itself and got the wrong number, in a sentence it prints ──────────────────
+#
+# `FIELDS` has held three names since `ordinary_commands` was added. Three sentences in this module
+# said one or two, and the fourth was the `SettingsError` an operator reads on a typo. The third
+# field is not decorative: measured, `policy.unverified({kind: ordinary, targets: ['npm ci']}, ())`
+# returns `('npm ci',)` with `on_trust=True` — which `engine.py:1557` refuses on — and vouching
+# `npm` returns `()` with `on_trust=False` and the run proceeds. `policy.py` even records that
+# `load` refuses certain commands in that field, so a guard existed for the field whose existence
+# the module's own paragraph denied (CHG-20260903-28, found by the defect seat).
+#
+# `test_settings.py:347` already pinned `FIELDS` to all three and its docstring names the third.
+# Nothing compared the tuple to the prose, which is the gap these close.
+
+
+def _module_prose():
+    """Every docstring and comment in `settings.py`, which is where the counting happened."""
+    return pathlib.Path(settings_mod.__file__).read_text(encoding="utf-8")
+
+
+def test_no_sentence_in_this_module_states_a_count_that_disagrees_with_fields():
+    """A paragraph that counts the file it is in has to be read against the file.
+
+    This module's own docstring records being corrected once before, for the same class of error:
+    it said "or corrupt yields the defaults" and contradicted `load()` directly below it.
+    """
+    prose = _module_prose()
+    wrong = {"one": 1, "two": 2, "three": 3, "four": 4}
+    claims = re.findall(r"(?:one|two|three|four) of the (one|two|three|four) settings", prose)
+    for claimed in claims:
+        assert wrong[claimed] == len(settings_mod.FIELDS), (
+            f"a sentence says there are {claimed} settings; FIELDS has {len(settings_mod.FIELDS)}: "
+            f"{list(settings_mod.FIELDS)}")
+
+
+def test_the_module_does_not_claim_the_seat_floor_is_all_settings_can_do():
+    """The specific false sentence, named, so a rewrite that reintroduces it goes red.
+
+    `ordinary_commands` vouches commands so an undeclared target stops being refused. That is not
+    lowering the seat floor, and it is the setting the file guards most carefully.
+    """
+    prose = _module_prose()
+
+    assert "lower the seat floor and can do nothing else" not in prose
+    assert "may lower the seat floor and nothing else" not in prose
+    assert "ordinary_commands" in prose, "the third field must be described where the others are"
+
+
+def test_the_error_an_operator_reads_names_every_field_this_runner_reads(tmp_path):
+    """Derived from `FIELDS`, not typed beside it — so the sentence cannot drift again."""
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"nonsense": 1}), encoding="utf-8")
+
+    with pytest.raises(settings_mod.SettingsError) as caught:
+        settings_mod.load(path)
+
+    said = str(caught.value)
+    for field in settings_mod.FIELDS:
+        assert field in said, f"{field} is read by this runner and the refusal does not say so"

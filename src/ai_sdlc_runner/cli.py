@@ -1582,10 +1582,19 @@ def build_parser() -> argparse.ArgumentParser:
                          "each model is assigned to (default <token-dir>/config.sqlite). An "
                          "existing models.json is imported once and left where it is. Unlike `run`, "
                          "this takes no `none`: a console with no store has no models to assign.")
-    # Not `default=None`: this flag shadows the global `--settings`, whose default exists
-    # precisely so nobody has to pass it. With None it reached `Path(None)` and `runner
-    # serve` — the dashboard, in its plainest form — died with a raw TypeError.
-    pv.add_argument("--settings", default=settings_mod.DEFAULT_PATH,
+    # `SUPPRESS`, not `None` and not `DEFAULT_PATH`. This flag shadows the global `--settings`,
+    # and argparse applies the subparser's default **after** the global — so with `None` it reached
+    # `Path(None)` and `runner serve`, the dashboard in its plainest form, died with a raw
+    # TypeError, and with `DEFAULT_PATH` it silently threw away what the operator typed:
+    #
+    #     runner --settings /tmp/CUSTOM.json settings  ->  /tmp/CUSTOM.json
+    #     runner --settings /tmp/CUSTOM.json run       ->  /tmp/CUSTOM.json
+    #     runner --settings /tmp/CUSTOM.json serve     ->  config/settings.json
+    #
+    # One defect's fix made the next one. `SUPPRESS` sets no attribute when the flag is absent, so
+    # the global's value survives — including its default, which is what `serve`'s plainest form
+    # needs — and a `--settings` typed *after* `serve` still wins (CHG-20260903-28).
+    pv.add_argument("--settings", default=argparse.SUPPRESS,
                     help=f"path to the settings file (default {settings_mod.DEFAULT_PATH})")
     # `serve` already takes `--risk`, `--sandbox` and `--undeclared`; this was the one governance
     # flag it did not (CHG-20260903-22). The consequence was not that a console operator had a
