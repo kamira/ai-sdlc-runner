@@ -744,3 +744,119 @@ def test_the_run_level_name_is_still_the_fallback():
 
     engine._finish(report, {}, conversation=_Conversation())
     assert seen == [("merge: gate would have been 'confirm'", "alex@example.com")]
+
+
+# ── a review date that only sorts like a date (CHG-20260903-45) ─────────────────────────────
+
+def test_a_date_that_only_sorts_like_one_does_not_open_the_one_way_door():
+    """**The reproduction.** `class_in_force` compares `review_by < today` as text, and nothing made
+    the text a date. `2026-1-5` is a real date eight months past, and it read as never expiring."""
+    def door(review_by):
+        entry = {"class": "standard", "authorised_by": "alex@example.com", "review_by": review_by}
+        try:
+            name, _ = policy.class_in_force(entry, "2026-09-03")
+        except policy.PolicyError:
+            return "refused"
+        return str(policy.verdict("merge", "low", None, name)["verdict"])
+
+    assert policy.GATES["merge"]["low"] == policy.CONFIRM, (
+        "this test is about the cell where a class turns a question into an action")
+    assert door("2026-12-31") == "auto", "a real future date still relaxes"
+    assert door("2026-01-05") == "confirm", "a real past date still expires to normal"
+    assert door("2026-1-5") == "refused", (
+        "the same past date unpadded opened the one-way door at low risk without asking")
+    for shaped_wrong in ("26-12-31", "31/12/2026", "whenever", "asap", ""):
+        assert door(shaped_wrong) == "refused", shaped_wrong
+
+
+def test_a_date_shaped_right_and_impossible_is_refused():
+    """`2026-13-45` passes any pattern that only counts digits, and sorts above today."""
+    with pytest.raises(policy.PolicyError, match="shaped like a date"):
+        policy.check_review_date("2026-13-45")
+    # 2026 is not a leap year, so this one is impossible in the way a calendar knows and a
+    # digit-counting pattern does not.
+    with pytest.raises(policy.PolicyError, match="shaped like a date"):
+        policy.check_review_date("2026-02-29")
+    assert policy.check_review_date("2028-02-29") == "2028-02-29", "2028 IS a leap year"
+
+
+def test_expiry_itself_is_unchanged():
+    """**Refused, not degraded** applies to malformed dates only. A real past date still expires —
+    a change that also swept up expiry would have made the class useless rather than safe."""
+    name, why = policy.class_in_force(
+        {"class": "standard", "authorised_by": "a", "review_by": "2026-01-05"}, "2026-09-03")
+    assert name == policy.DEFAULT_CLASS
+    assert "expired back to" in why
+
+
+def test_the_review_date_is_checked_wherever_it_is_compared():
+    """**The rule** (CHG-20260903-45): over the module, not over one call site.
+
+    The comparison `review_by < today` is only correct for one shape, and the docstring asserting
+    that shape is what stood in for a check. A second comparison written later — for a project
+    table, which CHG-20260903-25 task 12 proposes — would reach the same field without passing the
+    CLI. This asks that every such comparison sits downstream of the one function that checks it.
+    """
+    import ast
+
+    tree = ast.parse(pathlib.Path(policy.__file__).read_text(encoding="utf-8"))
+    offenders = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.FunctionDef) or fn.name == "check_review_date":
+            continue
+        compares = [n for n in ast.walk(fn) if isinstance(n, ast.Compare)
+                    and isinstance(n.left, ast.Name) and n.left.id == "review_by"]
+        if not compares:
+            continue
+        checked = any(isinstance(n, ast.Call) and getattr(n.func, "id", None) == "check_review_date"
+                      for n in ast.walk(fn))
+        if not checked:
+            offenders.append(fn.name)
+
+    assert offenders == [], (
+        f"{offenders} compare a review date without checking it is one — the comparison is text, "
+        f"so an unparseable date sorts above today and never expires")
+
+
+def test_the_rule_is_looking_at_a_comparison_that_exists():
+    """**The floor.** A rule that finds no comparisons passes, which is how this defect returns."""
+    import ast
+
+    tree = ast.parse(pathlib.Path(policy.__file__).read_text(encoding="utf-8"))
+    found = [fn.name for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef)
+             and any(isinstance(n, ast.Compare) and isinstance(n.left, ast.Name)
+                     and n.left.id == "review_by" for n in ast.walk(fn))]
+    assert found == ["class_in_force"], (
+        f"the rule above scans {found}; if a second comparison was added, this floor is where to "
+        f"say so rather than letting the rule quietly cover less")
+
+    # And both directions on the checker itself, so it is known to be capable of refusing.
+    assert policy.check_review_date("2026-12-31") == "2026-12-31"
+    for bad in ("2026-1-5", "26-12-31", "whenever", "2026-13-45"):
+        with pytest.raises(policy.PolicyError):
+            policy.check_review_date(bad)
+
+
+def test_the_person_typing_the_date_is_told_at_the_keystroke():
+    """**Task 4, which the mutation found unguarded** (CHG-20260903-45).
+
+    Reverting `cli._change_class`'s call left every other guard here green: `policy` still refuses,
+    so the run still stops — but it stops later, with a message about a class rather than about the
+    thing the person typed. `_change_class`'s own docstring is why this is a separate claim: *"this
+    is the one place a person types"*, and *"a mistyped class relaxes a gate for a whole run"*.
+
+    Caught before shipping this time. CHG-20260903-41 shipped the same shape green, and the lesson
+    is the same one: mutate the line the change edited, not the helper it introduced.
+    """
+    assert cli._change_class("standard:alex@example.com:2026-12-31") == {
+        "class": "standard", "authorised_by": "alex@example.com", "review_by": "2026-12-31"}
+
+    for typed in ("standard:alex@example.com:2026-1-5",
+                  "standard:alex@example.com:31/12/2026",
+                  "emergency:alex@example.com:whenever"):
+        with pytest.raises(SystemExit) as raised:
+            cli._change_class(typed)
+        said = str(raised.value)
+        assert "--change-class" in said, said
+        assert typed.split(":")[-1] in said, (
+            f"the refusal does not name the value the person typed: {said}")

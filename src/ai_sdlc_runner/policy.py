@@ -40,6 +40,7 @@ cheap to redo and never stops.
 from __future__ import annotations
 
 import re
+from datetime import date as _date
 
 from dataclasses import dataclass
 from typing import Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
@@ -51,6 +52,9 @@ HALT_INDEPENDENT = "halt_independent"
 
 #: Anything that is not `auto` stops the run. Stated once, so no caller has to rank the others.
 STOPPING = (CONFIRM, HALT, HALT_INDEPENDENT)
+
+#: `YYYY-MM-DD`, the one shape `class_in_force`'s string comparison is correct for.
+_ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 RISKS = ("low", "medium", "high")
 
@@ -317,6 +321,46 @@ def combined_class(names: Sequence[str]) -> str:
     return "emergency" if "emergency" in seen else "standard"
 
 
+def check_review_date(value: str, *, where: str = "a change class") -> str:
+    """A review date that is a date, refusing one that only **sorts** like one.
+
+    `class_in_force` compares `review_by < today` as strings, and its docstring calls that
+    *"compared as ISO strings, which sorts correctly"* — a precondition nothing enforced. Measured
+    at `today = 2026-09-03` (CHG-20260903-45, defect seat L-10):
+
+        2026-01-05   a real past date, zero-padded    -> normal     merge@low asks
+        2026-1-5     the SAME date, unpadded          -> standard   merge@low proceeds
+        26-12-31 / 31/12/2026 / whenever / 2026-13-45 -> standard   merge@low proceeds
+
+    So the same day, written the way a person ordinarily writes it, took the one-way door from
+    *a person is asked* to *it happens*.
+
+    **Refused rather than degraded**, matching the branch above it for a `review_by` that is
+    missing entirely — whose reason is exactly this harm: *"Without one it never expires, and a
+    class that never expires outlives the assessment it was granted for."* A date nobody can parse
+    never expires either. Degrading instead would be the quieter choice and the wrong one: it would
+    turn a typo into a silently weaker run rather than a stopped one.
+
+    One function, called where the value is compared **and** where a person types it, so the two
+    cannot drift apart.
+    """
+    text = str(value or "").strip()
+    if not _ISO_DATE.fullmatch(text):
+        raise PolicyError(
+            f"{where} carries a review date of {text!r}, which is not a date in `YYYY-MM-DD` form. "
+            f"Dates here are compared as text, so an unparseable one never expires — and a class "
+            f"that never expires outlives the assessment it was granted for. `2026-1-5` is not "
+            f"`2026-01-05`.")
+    year, month, day = (int(part) for part in text.split("-"))
+    try:
+        _date(year, month, day)
+    except ValueError:
+        raise PolicyError(
+            f"{where} carries a review date of {text!r}, which is shaped like a date and is not "
+            f"one.") from None
+    return text
+
+
 def class_in_force(declared: Optional[Mapping[str, object]], today: str) -> Tuple[str, str]:
     """The class that actually applies now, and why — an unreviewed one expires to `normal`.
 
@@ -344,6 +388,8 @@ def class_in_force(declared: Optional[Mapping[str, object]], today: str) -> Tupl
         raise PolicyError(
             "a change class must carry a review date. Without one it never expires, and a class "
             "that never expires outlives the assessment it was granted for.")
+    # And one that cannot be parsed never expires either (CHG-20260903-45).
+    review_by = check_review_date(review_by)
     if review_by < today:
         return DEFAULT_CLASS, (
             f"the {name!r} class was authorised by {who} and was due for review on {review_by}; "

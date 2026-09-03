@@ -1289,6 +1289,15 @@ def _change_class(raw: Optional[str]):
         raise SystemExit(
             f"--change-class: no class {name!r}; this runner defines "
             f"{sorted(policy.BY_CLASS)}.")
+    # **Here as well as in `policy`, through the same function** (CHG-20260903-45). This is the one
+    # place a person types, and the docstring above already says a mistyped class relaxes a gate for
+    # a whole run — a mistyped *date* did exactly that, unguarded: `2026-1-5` is a real past date
+    # and read as never expiring. Refusing at the keystroke says so while the person is still here;
+    # `policy.check_review_date` is what makes it true for every other route to the same field.
+    try:
+        review_by = policy.check_review_date(review_by, where="--change-class")
+    except policy.PolicyError as exc:
+        raise SystemExit(f"--change-class: {exc}") from None
     return {"class": name, "authorised_by": who, "review_by": review_by}
 
 
