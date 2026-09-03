@@ -860,3 +860,100 @@ def test_the_person_typing_the_date_is_told_at_the_keystroke():
         assert "--change-class" in said, said
         assert typed.split(":")[-1] in said, (
             f"the refusal does not name the value the person typed: {said}")
+
+
+# ── a relaxation at the post-work grade (CHG-20260903-46) ───────────────────────────────
+
+def _graded_up(**kw):
+    """A run graded `low` whose grading **panel** reveals `medium` after `lead_assess` has worked.
+
+    `lead_assess` is `gate_when="after"` with `grades_risk=True`, and `feasibility_confirmed` is
+    `auto` at low and `confirm` at medium — so the entry resolution relaxes nothing and the
+    post-work one is where the class acts.
+
+    **A panel, not a single answer.** The first version of this used `test_flow.Recorder` with
+    `answers={"lead_assess": {"risk": "medium"}}` and measured `risk_proposed={}`,
+    `risk_settled="low"` — the grade never reached the grading path, the second resolution never
+    differed, and the test was passing over the defect while appearing to exercise it. The shape
+    that works is `test_risk_adjudicated.py`'s: `node_models` naming several voices, each answering
+    with a grade (CHG-20260903-46).
+    """
+    from test_flow import DECISIONS, SPEC
+
+    def factory(seat=None, model=None, **_):
+        class Session(engine.Session):
+            def ask(self, order):
+                if order["node_id"] == "lead_assess":
+                    return {"risk": "medium"}
+                branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
+                          "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])
+                return ({"verdict": branch} if branch
+                        else {"verdict": "pass"} if seat else {"ok": True})
+
+            def close(self):
+                pass
+        return Session()
+
+    cfg = engine.RunConfig(node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+                           decisions=dict(DECISIONS), risk="low", undeclared="allow",
+                           today=TODAY, node_models={"lead_assess": ["a", "b", "c"]}, **kw)
+    return engine.walk(cfg, factory, enabled=True)
+
+
+def test_a_gate_the_class_dissolved_after_the_work_reaches_the_record():
+    """**The site CHG-20260903-41 did not sweep** (CHG-20260903-46, defect seat L-9).
+
+    The note block lived after the entry resolution only. `walk` resolves a second time once an
+    `after` gate's node has graded the risk, and a class that dissolves the stop *there* produced no
+    note, no authoriser, no export and no footer — against `relaxations_by_class`' own comment,
+    *"A relaxation nobody can enumerate afterwards is a relaxation nobody can audit."*
+
+    A `grades_risk` node is designed for the two grades to differ, so this was the path rather than
+    an edge of it.
+    """
+    assert graph.BY_ID["lead_assess"].grades_risk and         graph.BY_ID["lead_assess"].gate_when == "after", "this test is about the post-work grade"
+    assert policy.GATES["feasibility_confirmed"]["low"] == "auto"
+    assert policy.GATES["feasibility_confirmed"]["medium"] == policy.CONFIRM
+
+    strict = _graded_up()
+    relaxed = _graded_up(change_class=_signed("standard"))
+
+    assert strict.risk_agreed == "medium", (
+        f"the panel did not grade it medium, so the two resolutions never differ and this test "
+        f"exercises nothing (risk_agreed={strict.risk_agreed!r}, proposed={strict.risk_proposed})")
+    assert strict.halted_at == "lead_assess", (
+        f"without a class the revealed grade stops the run at the node that revealed it; "
+        f"got {strict.halted_at!r}")
+
+    noted = [n for n in relaxed.relaxations_by_class if n.startswith("lead_assess:")]
+    assert noted, (
+        "a person's stop was skipped on a standing authority at the post-work grade and the "
+        f"durable record does not enumerate it: {relaxed.relaxations_by_class}")
+    assert relaxed.relaxation_authorisers.get(noted[0]) == "alex@example.com", (
+        f"the note carries no authoriser: {relaxed.relaxation_authorisers}")
+
+
+def test_both_resolutions_record_through_one_function():
+    """**The rule** (CHG-20260903-46): a third resolution cannot be added without recording.
+
+    CHG-20260903-41's rule counts `relaxations_by_class.append` sites against
+    `relaxation_authorisers` writes — which cannot see an append that was never written. This
+    counts *resolutions that carry a class* against calls to the one recorder instead.
+    """
+    import ast
+
+    fn = next(n for n in ast.walk(ast.parse(pathlib.Path(engine.__file__).read_text(
+        encoding="utf-8"))) if isinstance(n, ast.FunctionDef) and n.name == "walk")
+
+    with_class = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                  and getattr(n.func, "id", None) == "resolve_verdict"
+                  and any(isinstance(a, ast.Name) and a.id == "here" for a in n.args)]
+    recorded = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                and getattr(n.func, "id", None) == "_record_relaxation"]
+
+    assert len(with_class) >= 2, (
+        "`walk` resolves the verdict with a class in fewer places than this rule was written for; "
+        "if a resolution was removed, say so here rather than letting the rule cover less")
+    assert len(recorded) >= len(with_class), (
+        f"{len(with_class)} resolution(s) carry a change class and only {len(recorded)} record what "
+        f"the class dissolved — a gate relaxed and not noted is one nobody can audit")

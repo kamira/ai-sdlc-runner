@@ -2107,23 +2107,49 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
 
         here, _ = _class_in_force(cfg, node, today)
         verdict = resolve_verdict(node, _grade_in_force(cfg, report, node), cfg.autonomy, here)
-        if here != policy.DEFAULT_CLASS and verdict.get("gate"):
+        def _record_relaxation(verdict, grade):
+            """Note a gate the class dissolved, wherever the verdict was resolved.
+
+            **Called at every resolution, not only the first** (CHG-20260903-46, defect seat L-9).
+            This lived inline after the entry resolution, and `walk` resolves a second time after
+            the work for an `after` gate whose node graded the risk — with no note block there. So
+            the case where the class matters *most* recorded nothing:
+
+                lead_assess   gate feasibility_confirmed, gate_when after, grades_risk True
+                  graded low at entry     -> the gate is `auto`, nothing is relaxed, nothing noted
+                  reveals medium itself   -> the gate re-resolves to `confirm`
+                  standard class          -> `auto`, and no note, no authoriser, no export
+
+            A `grades_risk` node is *designed* to differ between the two grades, so this was the
+            path rather than an edge of it. `report.relaxations_by_class`' own comment is the
+            requirement: *"A relaxation nobody can enumerate afterwards is a relaxation nobody can
+            audit."*
+
+            CHG-20260903-41 shipped the attribution at the first site and the rule it added counts
+            appends against authorisers — structurally blind to a **missing** append. One function
+            both sites call, so a third resolution cannot be added without recording.
+            """
+            if here == policy.DEFAULT_CLASS or not verdict.get("gate"):
+                return
             # What WOULD have happened without the class. Comparing beats a flag on the verdict:
             # the verdict's shape is closed (see `policy.verdict`), and "it would have stopped at
             # confirm" is the sentence an audit actually needs.
-            strict = resolve_verdict(node, _grade_in_force(cfg, report, node), cfg.autonomy)
-            if strict["verdict"] != verdict["verdict"]:
-                # Named, not counted. "Three gates were relaxed" is not auditable;
-                # "merge at low, which would have been confirm" is.
-                note = (f"{node.id}: {verdict['gate']} at risk {verdict['risk']} would have been "
-                        f"{strict['verdict']!r} and passed on the {here!r} class")
-                if note not in report.relaxations_by_class:
-                    report.relaxations_by_class.append(note)
-                # **Whose authority opened this one** (CHG-20260903-41). `node` is in hand here
-                # and `_class_in_force` has already chosen which class applies, so the person
-                # is reachable exactly where the note is written — rather than being looked up
-                # later from a run-level field that a split programme never fills.
-                report.relaxation_authorisers[note] = _class_authoriser(cfg, node)
+            strict = resolve_verdict(node, grade, cfg.autonomy)
+            if strict["verdict"] == verdict["verdict"]:
+                return
+            # Named, not counted. "Three gates were relaxed" is not auditable;
+            # "merge at low, which would have been confirm" is.
+            note = (f"{node.id}: {verdict['gate']} at risk {verdict['risk']} would have been "
+                    f"{strict['verdict']!r} and passed on the {here!r} class")
+            if note not in report.relaxations_by_class:
+                report.relaxations_by_class.append(note)
+            # **Whose authority opened this one** (CHG-20260903-41). `node` is in hand here
+            # and `_class_in_force` has already chosen which class applies, so the person
+            # is reachable exactly where the note is written — rather than being looked up
+            # later from a run-level field that a split programme never fills.
+            report.relaxation_authorisers[note] = _class_authoriser(cfg, node)
+
+        _record_relaxation(verdict, _grade_in_force(cfg, report, node))
         report.verdicts[node.id] = dict(verdict)
 
         def _gate(phase: str):
@@ -2545,6 +2571,10 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                                       _grade_in_force(cfg, report, node)])
             if after != verdict.get("risk"):
                 verdict = resolve_verdict(node, after, cfg.autonomy, here)
+                # The second resolution records too (CHG-20260903-46). This is the one that
+                # matters for a node that grades the risk: the entry grade did not stop, the
+                # revealed one would have, and the class is what let it through.
+                _record_relaxation(verdict, after)
                 report.verdicts[node.id] = dict(verdict)
         stop = _gate("after")
         if isinstance(stop, _Redirect):
