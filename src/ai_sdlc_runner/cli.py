@@ -1136,7 +1136,21 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"single model:  {line}")
     for decision in report.adjudications:
         seat_line = ", ".join(f"{k}={v}" for k, v in sorted(decision["verdicts"].items()))
-        print(f"panel:         {decision['node_id']} → {decision['outcome']} ({seat_line})")
+        # **Whichever the adjudicator actually wrote** (CHG-20260903-48, defect seat L-14). This
+        # printed `outcome` alone, and `adjudicate_grade` returns `outcome="pass"` for every grade
+        # it settles — so a panel that graded the change `high` and one that graded it `low`
+        # produced byte-identical output here. `console/index.html` has read `a.grade || a.outcome`
+        # since CHG-20260901-18, whose own title is *"the grade a panel decides reached nothing
+        # that names it"*; the terminal was never swept, and `cli.py` names `risk_agreed`,
+        # `risk_settled` and `risk_proposed` nowhere at all.
+        said = decision.get("grade") or decision.get("outcome") or "?"
+        print(f"panel:         {decision['node_id']} → {said} ({seat_line})")
+    if report.risk_settled and report.risk_settled != (args.risk or plan.get("risk", "high")):
+        # The grade the run ended up governed by, when a panel moved it off the one asked for.
+        # `risk_settled` reached `--json` and the console and no terminal line (CHG-20260903-48).
+        print(f"risk:          settled at {report.risk_settled} "
+              f"(asked for {args.risk or plan.get('risk', 'high')})"
+              + (f", agreed by the panel" if report.risk_agreed else ""))
     if report.resumed:
         print(f"resumed:       {len(report.resumed)} ask(s) answered from the journal, "
               f"not re-asked")
