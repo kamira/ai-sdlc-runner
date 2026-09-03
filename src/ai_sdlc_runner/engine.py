@@ -1612,6 +1612,34 @@ def _permanent_halt(node: graph.Node, cfg: "RunConfig", report: "RunReport") -> 
     return None
 
 
+def _spoken(result, *, graded: bool = False):
+    """The word a voice actually said, stripped — or `None` when it said nothing.
+
+    Three sites read a voice's answer as `str(result.get("verdict") or result.get("outcome") or "")`
+    and so **fabricated a verdict where there was no answer**. A backend that returns prose rather
+    than JSON carries neither key (`{"exit_code": 0, "stdout": ...}`), which is the ordinary shape
+    of a real one, not an exotic one. The empty string then reached `policy.adjudicate`, which read
+    it as a no vote — so a seat that said nothing was recorded as *"conformance holds a veto and did
+    not pass"*, and the run stopped permanently on a veto nobody cast.
+
+    Each of the three guards that follows those reads counts **keys**, and the fabricating line had
+    already set the key: a panel short of a *voice* passed the check written to catch a panel short
+    of a *seat*.
+
+    `_answered_branch` is the fourth reader of the same shape and the only one that got it right —
+    it raises, naming the branches it would have accepted. This exists so the other three can
+    (CHG-20260903-27, found by the defect seat).
+
+    Stripped, because a trailing newline is a transport artifact and not a different word. **Not
+    lowered:** `PASS` is a word the voice chose, and `policy.adjudicate` refuses it by name rather
+    than deciding on the voice's behalf what it meant.
+    """
+    spoken = (result.get("risk") if graded else None) or result.get("verdict") or result.get("outcome")
+    if spoken is None:
+        return None
+    return str(spoken).strip() or None
+
+
 def _answered_branch(node: graph.Node, answers: List[Mapping[str, object]]) -> str:
     """The branch the answer names, at a node where somebody was asked to decide.
 
@@ -1683,10 +1711,19 @@ def _adjudicate(node: graph.Node, report: "RunReport",
     """
     rework: Optional[Dict[str, object]] = None
     verdicts = {}
+    silent = []
     for ask in report.asks:
         if ask.node_id == node.id and ask.seat:
-            answer = ask.result or {}
-            verdicts[ask.seat] = str(answer.get("verdict") or answer.get("outcome") or "")
+            spoken = _spoken(ask.result or {})
+            if spoken is None:
+                silent.append(ask.seat)
+            else:
+                verdicts[ask.seat] = spoken
+    if silent:
+        raise EngineError(
+            f"{node.id!r} opened {seats} seat(s) and {len(silent)} of them named no verdict: "
+            f"{sorted(silent)}. An answer must carry `verdict` or `outcome` — a seat that said "
+            f"nothing is not a seat that voted no")
     if len(verdicts) != seats:
         raise EngineError(
             f"{node.id!r} opened {seats} seat(s) but collected {len(verdicts)} verdict(s) — a panel "
@@ -1727,8 +1764,19 @@ def _finish(report: "RunReport", confirmations: Dict[str, int],
     of the five ways a walk can end — halt, terminal, permanent halt, effect failure — jumped
     straight past it. A report that is only correct when the run succeeds is not a report.
     """
+    # Two ways a confirmation goes unspent, and until CHG-20260903-27 there was only one. The
+    # sentence below was written for "the run never got there"; a confirmation aimed at the
+    # `halt_independent` rung is unspent because the run **did** get there and a confirmation does
+    # not open that rung. Telling an operator the run never stopped at a gate it visibly stopped at
+    # is a false sentence in a report, which is the class this whole round has been closing.
+    independent_rungs = {
+        str(v["gate"]) for v in report.verdicts.values()
+        if v.get("gate") and str(v.get("verdict")) == policy.HALT_INDEPENDENT}
     unspent = {gate: n for gate, n in confirmations.items() if n > 0}
     report.confirmations.extend(
+        f"{gate} was confirmed {n} time(s) and none was spent: the run stopped there and a "
+        f"confirmation does not open that rung"
+        if gate in independent_rungs else
         f"{gate} was confirmed {n} more time(s) than the run stopped at it"
         for gate, n in sorted(unspent.items()))
 
@@ -2060,6 +2108,41 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     "reason": rejection.reason or ""}
                 return _Redirect(node.rejects_to)
 
+            # The one rung `--confirm` cannot open (CHG-20260903-27, found by the defect seat).
+            #
+            # `policy.verdict` grounds the shipped rank order on this being already true — *"because
+            # `confirm` can be pre-authorised with `--confirm` and a halt cannot"* — and `_gate` had
+            # no rung check at all, so a plain `--confirm acceptance` opened the single
+            # `halt_independent` cell in `GATES` and the report recorded it as *"confirmed by the
+            # operator"*. Two shipped texts disagreed about this and the code implemented neither
+            # cleanly: `ARCHITECTURE.md` says a confirmation continues past a halt, which stays
+            # true of `halt`; `README.md`'s Known gaps says `halt_independent` is treated
+            # identically to `halt`, which was the honest one and is what this closes.
+            #
+            # Only the independent rung is refused. An ordinary `halt` still opens, so
+            # `ARCHITECTURE.md`'s sentence keeps its meaning, and a **rejection** still applies at
+            # either rung — a "no" was never the thing being guarded against.
+            #
+            # And only the **blanket** path is refused, which is the distinction `policy.verdict`'s
+            # sentence is actually about: it says `confirm` can be **pre-authorised** with
+            # `--confirm`. Measured, the two paths below have exactly one source each and they do
+            # not overlap:
+            #
+            #   the counter path   `cfg.confirmed` counts  <- only `--confirm <gate>`, given before
+            #                                                 the run, naming no node, for a stop
+            #                                                 nobody has seen yet
+            #   the targeted path  `Approval` objects      <- only `server.Runner.approve`
+            #                                                 (`server.py:323`, the sole site in
+            #                                                 `src/` that mints one), given after
+            #                                                 the suspension was returned and read,
+            #                                                 naming the node it answers
+            #
+            # A person answering the stop they were shown is what `halt_independent` means by
+            # "stops for a person". Blocking that would make the rung unreachable through the only
+            # interface a person has, which is not a stricter rule but a broken one. What is refused
+            # is authorising it in advance.
+            independent = str(verdict["verdict"]) == policy.HALT_INDEPENDENT
+
             # A decision naming this node is spent first: it is the more specific answer, and
             # preferring the blanket one would let a targeted approval survive its own stop and open
             # some later gate nobody meant it for.
@@ -2076,7 +2159,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     cfg.conversation.decision("approval", node.id, f"{node.gate} ({approval})")
                 return None
 
-            if confirmations.get(node.gate, 0) > 0:
+            if not independent and confirmations.get(node.gate, 0) > 0:
                 confirmations[node.gate] -= 1
                 report.confirmations.append(
                     f"{node.gate} = {verdict['verdict']} at risk {verdict['risk']} at {node.id}, "
@@ -2107,9 +2190,14 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 "run_id": cfg.run_id,
             }
             report.halted_at = node.id
+            # "confirm it to continue" is false at the rung a confirmation cannot open, and a
+            # halt reason that tells an operator to do something that will not work is this
+            # repository's recurring defect wearing an instruction (CHG-20260903-27).
             report.halt_reason = (
                 f"{verdict['gate']} = {verdict['verdict']} at risk {verdict['risk']} "
-                f"(per {verdict['source']}) — confirm it to continue")
+                f"(per {verdict['source']}) — "
+                + ("a confirmation does not open this rung; it needs a person here"
+                   if independent else "confirm it to continue"))
             return _finish(report, confirmations, cfg.conversation, _held(), _unsandboxed)
 
         stop = _gate("before")
@@ -2148,6 +2236,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 # the same independence rule the seats have, for the same reason.
                 before = len(opened)
                 verdicts: Dict[str, str] = {}
+                silent: List[str] = []
                 for model in configured:
                     ask_id = f"{len(report.asks):03d}-{node.id}-{model}"
                     result = _ask(factory, _order_for(node, cfg, verdict, carried=carried, sent_back=came_back),
@@ -2161,9 +2250,17 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     # Read from `risk` first and fall back to `verdict`, because an agent answering
                     # `{"verdict": "medium"}` has said the same thing in the older shape and
                     # refusing it would be refusing a well-formed answer over its key name.
-                    verdicts[model] = str(
-                        (result.get("risk") if node.grades_risk else None)
-                        or result.get("verdict") or result.get("outcome") or "")
+                    spoken = _spoken(result, graded=node.grades_risk)
+                    if spoken is None:
+                        silent.append(model)
+                    else:
+                        verdicts[model] = spoken
+                if silent:
+                    raise EngineError(
+                        f"{node.id!r} asked {len(configured)} model(s) and {len(silent)} of them "
+                        f"named no answer: {sorted(silent)}. An answer must carry "
+                        f"{'`risk`, ' if node.grades_risk else ''}`verdict` or `outcome` — a voice "
+                        f"that said nothing is not a voice that voted no")
                 if len(verdicts) != len(configured):
                     # The failure an independent seat named: three configured, fewer asked, and
                     # nothing saying so. Refused rather than adjudicated on a short panel.
@@ -2217,7 +2314,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                         "why": "undecided; put to the panel again with what both sides said",
                     })
                     rounds += 1
-                    verdicts, answers = {}, []
+                    verdicts, answers, silent = {}, [], []
                     for model in configured:
                         ask_id = f"{len(report.asks):03d}-{node.id}-{model}-r{rounds}"
                         result = _ask(factory, _order_for(node, cfg, verdict, carried=carried, sent_back=came_back),
@@ -2228,8 +2325,17 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                                   workspace=_workspace(node, build_cycles))
                         report.asks.append(Ask(node.id, node.role, None, result, model=model))
                         answers.append(result)
-                        verdicts[model] = str(
-                            result.get("verdict") or result.get("outcome") or "")
+                        spoken = _spoken(result)
+                        if spoken is None:
+                            silent.append(model)
+                        else:
+                            verdicts[model] = spoken
+                    if silent:
+                        raise EngineError(
+                            f"{node.id!r} asked {len(configured)} model(s) and {len(silent)} of "
+                            f"them named no answer: {sorted(silent)}. An answer must carry "
+                            f"`verdict` or `outcome` — a voice that said nothing is not a voice "
+                            f"that voted no")
                     outcome = policy.adjudicate(verdicts, voices="models")
                     report.adjudications.append(
                         {"node_id": node.id, **outcome, "verdicts": dict(verdicts),

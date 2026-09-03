@@ -214,8 +214,15 @@ def test_the_suspended_report_is_returned_not_yielded():
     # takes. CHG-20260903-23 gave it two more arguments and both of these turned red on
     # the argument list, which is a test pinned to a signature while its name is about
     # control flow.
-    assert re.search(r"return _finish\(report, confirmations, cfg\.conversation",
-                     source[marker:marker + 1400]), "this exit must return, not yield"
+    #
+    # The 1400-character window was that same brittleness one layer out: CHG-20260903-27 added a
+    # comment and three lines of halt reason to this block and pushed the `return` past the count,
+    # turning a control-flow test red over a paragraph. What the name claims is that the **first**
+    # exit after the suspension is a return, so that is what this reads — no magic number, and it
+    # still goes red if someone turns the exit into a yield.
+    exit_kind = re.search(r"\b(return|yield)\s+_finish\(report, confirmations", source[marker:])
+    assert exit_kind, "this exit must reach _finish"
+    assert exit_kind.group(1) == "return", "this exit must return, not yield"
 
 
 def test_a_report_cannot_claim_a_state_the_engine_does_not_know():

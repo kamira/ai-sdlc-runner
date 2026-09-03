@@ -62,7 +62,11 @@ Reviewing a module is cheap to redo, so it never stops the run; merging is a one
 at every grade.
 
 `auto` proceeds · `confirm` asks · `halt` stops for a person · `halt_independent` stops for a person
-**and** forbids the implementer from verifying it.
+**and cannot be opened by a confirmation**.
+
+It does **not** forbid the implementer from verifying it. That sentence stood here unqualified while
+`README.md`'s Known gaps said the opposite — there is one operator identity, and nothing compares who
+confirmed against who built. The name is an intent; what is enforced is the stop (CHG-20260903-27).
 
 Each node says **when** its gate is consulted: `before` the work where the work is the risk, `after`
 it where the point is to hold the result. A review that halts before it runs is a review a high-risk
@@ -70,6 +74,11 @@ change can never get.
 
 A halt is a pause with a way back — `--confirm <gate>` continues past one, and the confirmation is
 recorded in the run report.
+
+**`halt_independent` is the exception, and it is the only one.** A confirmation does not open that
+rung: the run stops there for a person, and the halt reason says so rather than telling the operator
+to confirm something that will not work. Until CHG-20260903-27 a plain `--confirm` opened it, which
+left `policy.verdict`'s stated ground for its own rank order false.
 
 Six actions are never automated at any grade and no confirmation, mode or change class relaxes them: production
 deploys, data migrations, hard deletes, moving money, changing secrets or permissions, publishing.
