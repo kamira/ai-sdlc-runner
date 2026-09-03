@@ -161,8 +161,10 @@ def check(payload: Mapping[str, object], where: str = "the plan") -> Dict[str, o
     # after `intake_review` through `pm_signoff` have already spent seven of them.
     #
     # **Five fields, not six.** `instructions` is deliberately absent: `engine.py` joins any
-    # `--instruction` text onto the node spec's own, and line 515 reads
-    # `own = spec.get("instructions") or ()` — explicitly tolerating a blank. A plan that leaves
+    # `--instruction` text onto the node spec's own: `_brief` and `_order_for` both read
+    # `own = spec.get("instructions") or ()` — explicitly tolerating a blank. (The address that
+    # stood here named a blank line, and had for twelve days — described rather than reproduced,
+    # because the rule that now forbids it reads comments too; CHG-20260904-06.) A plan that leaves
     # every node's `instructions` empty and supplies the text on the command line is coherent and
     # works today, so refusing it at the door would be this same defect inverted: a check answering
     # "malformed" about something it had not examined.
