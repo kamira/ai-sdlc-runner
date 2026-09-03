@@ -394,6 +394,17 @@ MUTATIONS: List[Mutation] = [
         "tests/test_workstream_risk.py"),
 
     Mutation(
+        # The guarantee CHG-20260903-30 added, mutated the way the seven beside it are: not by
+        # deleting the check but by emptying what it checks against, which is how a blocklist
+        # actually stops working. `wrap` still runs, the profile is still assembled, and a path
+        # that ends the string literal early is written straight into it.
+        "sandbox", "a filename can rewrite the seatbelt policy again",
+        SRC / "sandbox.py",
+        """UNREPRESENTABLE_IN_SBPL = '"'""",
+        """UNREPRESENTABLE_IN_SBPL = ''""",
+        "tests/test_sandbox.py"),
+
+    Mutation(
         "sandbox", "a role that may not write gets a pen again",
         SRC / "policy.py",
         '''    if not can_write:

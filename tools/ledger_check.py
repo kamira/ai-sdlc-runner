@@ -387,6 +387,18 @@ def check(repo: Path) -> List[str]:
                     f"section and must be one of: {', '.join(SUPERSEDED_STATUSES[:3])}. Saying it "
                     f"in prose above will not clear this — that is the failure this check is for")
 
+    # And the back-pointer's own dangling case, which the three checks above do not cover: they
+    # all start at a `Supersedes:`, so a `Superseded by:` naming a record that does not exist was
+    # invisible. Found by using the machinery above on real work one change later, which is the
+    # same asymmetry one field in (CHG-20260903-30).
+    for path in changes:
+        chg_id = path.stem
+        for claimed in _superseded_by(texts[chg_id]):
+            if claimed not in texts:
+                problems.append(
+                    f"{chg_id}: says {claimed} superseded it, and docs/changes/ does not have "
+                    f"{claimed} — a replaced record whose replacement is missing leads nowhere")
+
     # ── the other direction, which nothing walked (CHG-20260828-02) ─────────────────────────────
     #
     # Everything above starts at a CHG. An ACC naming a change that does not exist was therefore

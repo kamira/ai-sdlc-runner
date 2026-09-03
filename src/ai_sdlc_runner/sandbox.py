@@ -144,9 +144,73 @@ def wrap(argv: Sequence[str], *, risk: str, can_write: bool = True,
     return wrapped, {**wanted, "mechanism": name, "enforced": True}
 
 
+#: The character that ends an sbpl string literal early.
+#:
+#: CHG-20260828-25 proposed refusing the backslash as well, on the ground that its meaning
+#: inside `subpath` was never established. Measured, that refuses a path the suite
+#: legitimately produces: `wrap` computes `root` with `os.path.abspath`, which uses the
+#: **host's** separators no matter what `system=` says, so `workspace="/w"` becomes a
+#: backslashed path on Windows and the macOS-profile test stops being runnable. A blocklist
+#: that fires on a legal path is the trade this repository has a record about, so this refuses
+#: only what provably breaks the literal (CHG-20260903-30, deviating from the record it
+#: adopts, and saying so).
+#:
+#: A blocklist is not a proof and this one does not pretend to be. Whether sbpl has other
+#: metacharacters inside `subpath` was not established by anyone who wrote it down, which is
+#: why the refusal names the character it met rather than saying "invalid path".
+UNREPRESENTABLE_IN_SBPL = '"'
+
+
+def _sbpl_path(root: str) -> str:
+    """`root`, checked for characters the profile cannot carry — or refused, naming the one it met.
+
+    `_seatbelt` interpolates this into `(allow file-write* (subpath "..."))` and hands the assembled
+    profile to `sandbox-exec -p`. macOS paths may contain `"`, and **sbpl has no escape for `"`
+    inside a string literal**, so escaping is not on the table the way it would be for a shell or
+    for JSON. A path that breaks the literal makes the policy *broken*; a path chosen to break it
+    makes the policy **different**:
+
+        root = /tmp/x") (allow network*) (allow file-write* (subpath "/
+
+    renders a profile that allows the network the grade denied. The quoting is the whole of what
+    keeps the policy table and the enforced policy the same document.
+
+    **Refused, not encoded**, because that is what this module's neighbour already does: `policy`'s
+    sandbox scope refuses a value it does not implement rather than absorbing it. If someone finds a
+    representation sbpl accepts for every path, that is a better fix and this should be argued with
+    rather than followed (CHG-20260903-30, adopting CHG-20260828-25).
+
+    Not claimed: that this is exploitable today. `root` is the operator's `--workspace` or `cwd`,
+    and an operator who wants a wider sandbox can pass a flag. What this fixes is a boundary that
+    stops being one if that ever stops being true — a policy alterable by a filename is not a policy.
+
+    `_bwrap` takes the same `root` as an **argv element**, where quoting does not arise. So the two
+    mechanisms differ not only in what they enforce but in **which inputs they can represent at
+    all**, and a path legal for one is a refusal for the other.
+    """
+    for character in UNREPRESENTABLE_IN_SBPL:
+        if character in root:
+            raise SandboxError(
+                f"the workspace path contains {character!r}, which cannot be written into a "
+                f"seatbelt profile: sbpl has no escape for it inside a string literal, so the "
+                f"path would end the literal and the rest would be read as policy. Refused before "
+                f"anything starts rather than enforced as something else. Move the workspace, or "
+                f"drop {REQUIRE_FLAG} to run unsandboxed and recorded as such. "
+                f"(`bwrap` on Linux takes this path unchanged — it passes it as an argument "
+                f"rather than into a profile.)")
+    return root
+
+
 def _bwrap(argv: Sequence[str], tool: str, root: str,
            wanted: Mapping[str, object]) -> List[str]:
-    """Linux. Read-only everywhere, then the workspace bound writable if the policy allows it.
+    """Linux. The host read-only, a **private** tmpfs at `/tmp`, then the workspace bound writable
+    if the policy allows it.
+
+    `--tmpfs /tmp` is not a write grant against the host and is why this said "read-only everywhere"
+    for as long as it did: the sandbox gets an empty `/tmp` of its own and the machine's is neither
+    visible nor writable. It is containment, and it is also not nothing — the sentence is now what
+    the argv actually is (CHG-20260903-30, L-36). `_seatbelt` has no equivalent and grants the
+    host's `/tmp` instead; its docstring says so.
 
     `--unshare-net` is the network denial and it is unconditional when the policy says no — there is
     no partial network here, because "some hosts" is a firewall and this is a boundary.
@@ -164,11 +228,24 @@ def _bwrap(argv: Sequence[str], tool: str, root: str,
 def _seatbelt(argv: Sequence[str], tool: str, root: str,
               wanted: Mapping[str, object]) -> List[str]:
     """macOS. The profile is generated from the same policy rather than kept as a file, so there is
-    one source for what is allowed and no second document to drift."""
+    one source for what is allowed and no second document to drift.
+
+    **With one exception, stated here because the sentence above is otherwise false.** The `/tmp`
+    grant below is unconditional and comes from no policy row: it is written even at `write: none`,
+    the scope `policy` describes as the one a verifier gets *"so it cannot fix while verifying"*.
+    Tools need somewhere to write temporary files, and denying it would refuse `npm`, `pip` and
+    every compiler — but on macOS that is the **host's** `/tmp`, shared with everything else on the
+    machine, where `_bwrap`'s `--tmpfs` gives the sandbox a private one instead. The two mechanisms
+    are not equivalent here and nothing said so (CHG-20260903-30, L-36).
+
+    Narrowing this to a per-run directory needs `TMPDIR` plumbed into the child's environment, which
+    is a separate change. What is fixed here is that the boundary module stops describing a boundary
+    it does not draw.
+    """
     lines = ["(version 1)", "(deny default)", "(allow process*)", "(allow file-read*)",
              "(allow sysctl-read)"]
     if wanted["write"] == "workspace":
-        lines.append(f'(allow file-write* (subpath "{root}"))')
+        lines.append(f'(allow file-write* (subpath "{_sbpl_path(root)}"))')
     lines.append('(allow file-write* (subpath "/tmp"))')
     if wanted["network"]:
         lines.append("(allow network*)")
