@@ -22,7 +22,9 @@ back in order by name.
 ## What is not recorded
 
 Input. There is no pty here — on Windows there is no pty at all — so this records what the command
-*emitted*, plus the command line itself as the first event. A session where someone types into a
+*emitted*. The command line itself is **not** an event: it is `header["command"]`, which
+`render_cast.py` reads and shows. This said "as the first event", which invites emitting it into
+the stream — and that would print it **twice** on every rendered page (CHG-20260903-43). A session where someone types into a
 prompt is not something this can capture, and it does not pretend to: `runner` is non-interactive by
 design, and the one place a person acts is a gate, which is recorded in the conversation store where
 it belongs.

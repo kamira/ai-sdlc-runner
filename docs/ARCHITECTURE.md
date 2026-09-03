@@ -58,8 +58,10 @@ re-review, second failure halts), and the **feedback edge** (the flow closes rat
 ## 4. The gates
 
 10 gates, three risk grades. One rule: **a gate stops when getting it wrong is expensive to undo.**
-Reviewing a module is cheap to redo, so it never stops the run; merging is a one-way door, so it asks
-at every grade.
+Reviewing a module is cheap to redo, so it never stops the run; merging is a one-way door, so it
+stops at every grade: `confirm` at low, `halt` at medium and high. It **stops** at every grade and
+**asks** at one — the legend below is the difference, and it is the difference between a question
+and a door that will not open without somebody named.
 
 `auto` proceeds · `confirm` asks · `halt` stops for a person · `halt_independent` stops for a person
 **and cannot be opened by a confirmation**.

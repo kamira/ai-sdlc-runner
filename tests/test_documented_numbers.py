@@ -838,3 +838,121 @@ def test_the_node_docstring_does_not_state_a_phase_the_field_owns():
     assert "gate_when" in said, "the class docstring must name the field that owns the phase"
     assert "answerable to" in said, (
         "the class docstring must say what `gate` names without claiming when it fires")
+
+
+# --------------------------------------------------------------------------------------
+# the words for what a gate does (CHG-20260903-43)
+# --------------------------------------------------------------------------------------
+
+#: The claim and the property it requires. `asks` is `confirm` and nothing else — `policy.py` says
+#: in as many words that *"a halt is not a question"*, and `ARCHITECTURE.md`'s own legend reads
+#: `auto proceeds · confirm asks · halt stops for a person`.
+_EVERY_GRADE = (
+    ("asks at every", lambda grades: set(grades) == {"confirm"}),
+    ("stops at every", lambda grades: all(g != "auto" for g in grades)),
+)
+
+
+def _plain(text):
+    """Prose with markdown emphasis removed, and newlines flattened.
+
+    **The first version of the rule below matched literal phrases and found nothing at all in
+    `ARCHITECTURE.md`** (CHG-20260903-43): the file writes `**stops** at every grade` and
+    `*asks* at every grade`, and an asterisk inside the phrase defeats a literal search. Reverting
+    the sentence there left the rule green — it was passing by examining nothing, on the one file
+    that had refuted itself. A rule that reads prose has to read it the way a person does.
+    """
+    for mark in ("**", "*", "`", "_"):
+        text = text.replace(mark, "")
+    return " ".join(text.split(chr(10) + chr(10) + chr(0)))  # paragraphs kept, see below
+
+
+def _paragraphs(text):
+    """Each paragraph as one flat line, with emphasis stripped — what the rule actually scans."""
+    return [" ".join(_plain(block).split()) for block in text.split(chr(10) * 2)]
+
+
+def _forms(gate):
+    """A gate id and the ordinary words a document uses for it.
+
+    **`"merge" is not a substring of "merging"`** — the fifth letter is an `i`. The rule was written
+    on the assumption that it is, and stayed green while `ARCHITECTURE.md` said the wrong thing,
+    because the document names the act in prose (*merging*) and the policy names it as an id
+    (`merge`). The measurement is what settled that; reading the sentence twice did not
+    (CHG-20260903-43).
+    """
+    stem = gate[:-1] if gate.endswith("e") else gate
+    return {gate, stem + "ing", stem + "ed", stem + "es", gate + "s"}
+
+
+def _gate_named_near(text, at, gates):
+    """The gate a sentence is about: the last one named before the phrase, within the paragraph."""
+    window = text[:at]                          # the paragraph is already the caller's unit
+    hits = [(window.rfind(form), gate) for gate in gates for form in _forms(gate)
+            if form in window]
+    hits = [h for h in hits if h[0] >= 0]
+    return max(hits)[1] if hits else None
+
+
+def test_a_document_may_only_say_asks_at_every_grade_of_a_gate_that_asks_at_every_grade():
+    """**Derived from `policy.GATES`, not pinned to two sentences** (CHG-20260903-43).
+
+    `ARCHITECTURE.md` and `logical.md` both said merge *"asks at every grade"*. Measured, merge is
+    `confirm` at low and `halt` at medium and high — and `ARCHITECTURE.md` defines the word two
+    lines below the sentence that misuses it. Editing the two sentences fixes today; a third
+    document brings it back, and `docs/` has had that round already (CHG-20260903-37, six documents
+    describing a different program).
+
+    So the claim is checked against the policy that decides it. It holds for gates nobody has
+    written about yet, and it goes red if `GATES` changes under a sentence that was true when
+    written.
+    """
+    from ai_sdlc_runner import policy
+
+    wrong = []
+    for name, text in _text().items():
+        for para in _paragraphs(text):
+            for phrase, holds in _EVERY_GRADE:
+                at = 0
+                while True:
+                    at = para.find(phrase, at)
+                    if at < 0:
+                        break
+                    gate = _gate_named_near(para, at, policy.GATES)
+                    if gate and not holds(policy.GATES[gate].values()):
+                        wrong.append(f"{name}: {phrase!r} of {gate!r}, which is "
+                                     f"{dict(policy.GATES[gate])}")
+                    at += len(phrase)
+
+    assert wrong == [], (
+        "these describe a gate with a word the policy contradicts — `asks` is `confirm`, and "
+        f"anything that is not `auto` `stops`: {wrong}")
+
+
+def test_the_rule_can_tell_the_two_claims_apart():
+    """**The floor.** Without it the rule passes by matching nothing, which is how a rule dies.
+
+    Measured on the real policy: **no gate is all-`confirm`**, so "asks at every grade" is currently
+    unsayable of any of the ten — and `merge` is the **only** all-stopping one, so the sentence the
+    documents now carry is not merely accurate but uniquely so.
+    """
+    from ai_sdlc_runner import policy
+
+    asks, stops = dict(_EVERY_GRADE)["asks at every"], dict(_EVERY_GRADE)["stops at every"]
+    GATES_ = policy.GATES
+
+    assert not [g for g, v in policy.GATES.items() if asks(v.values())], (
+        "a gate became all-`confirm`; the rule above now permits “asks at every grade” of it, which "
+        "is correct — update this floor rather than deleting it")
+    assert [g for g, v in policy.GATES.items() if stops(v.values())] == ["merge"], (
+        "`merge` is no longer the only gate that stops at every grade, and the documents say it is")
+
+    # And both directions on planted grades, so the rule is known to be capable of firing.
+    assert asks({"confirm", "confirm"}) and not asks({"confirm", "halt"})
+    assert stops({"confirm", "halt"}) and not stops({"auto", "halt"})
+
+    # And the gate has to be findable in prose, which is where this rule was silently
+    # passing: a document writes *merging*, the policy writes `merge`, and one is not a
+    # substring of the other.
+    assert _gate_named_near("merging is a one-way door, so it ", 36, GATES_) == "merge"
+    assert _gate_named_near("nothing here names a gate ", 20, GATES_) is None
