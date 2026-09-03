@@ -98,10 +98,23 @@ def record_effects(repo: str | Path, chg_id: str, task: str, acc_id: Optional[st
                    tick=None, write_acc=None) -> List[effects.Effect]:
     """What `record_module` and `close_out` actually do, as probed effects.
 
-    The flow says `record_module` "ticks, commits and updates the worklog — three ordered effects",
-    and until this existed that sentence was a comment on a node that did nothing. ``tick`` and
-    ``write_acc`` are supplied by the caller, the same way `effects_for` takes ``write_chg``: this
-    module owns the ordering and the probes, never the content of somebody else's record.
+    The flow says `record_module` "ticks, commits and updates the worklog — three ordered
+    effects", and until this existed that sentence was a comment on a node that did nothing.
+
+    **This ships one of the three, or two.** Measured: ``tick`` alone without an ``acc_id``,
+    and ``tick`` plus ``acceptance`` with one. There is no ``commit`` effect and no ``worklog``
+    effect — the flow's sentence is still a comment on work nothing does, one layer in from
+    where it was (CHG-20260903-32, found by the defect seat).
+
+    Named rather than quietly narrowed: a docstring that quotes a promise it does not keep is
+    the defect this whole review round has been finding, and the two missing effects are real
+    work rather than a wording change. Building them means deciding what a `commit` effect
+    probes for — a clean tree, a specific message, a signature — which is a design question
+    with an operator in it.
+
+    ``tick`` and ``write_acc`` are supplied by the caller, the same way `effects_for` takes
+    ``write_chg``: this module owns the ordering and the probes, never the content of somebody
+    else's record.
     """
     repo = Path(repo)
     sequence = [

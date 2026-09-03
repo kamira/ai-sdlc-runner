@@ -651,3 +651,57 @@ def test_the_lock_order_is_stated_and_every_path_takes_it():
     joined = chr(10).join(code)
     assert joined.index("with held_lock") < joined.index("write()"), (
         f"_config_edit reaches the store before held; that is the inverted order:{chr(10)}{joined}")
+
+
+# ── the migration really is one transaction, for the first time (CHG-20260903-32) ──────────────
+
+
+def test_a_crash_part_way_through_a_migration_leaves_nothing_behind():
+    """Three migration blocks each said *"individual statements inside one transaction"*, and
+    `sqlite3` in its default mode opens its implicit transaction before **DML only**.
+
+    A body of `CREATE TABLE` plus `PRAGMA user_version` therefore ran with
+    `db.in_transaction == False` throughout and `with db:` committed nothing it had wrapped. The
+    half-built state all three paragraphs promise is impossible was, in fact, possible. This is the
+    behaviour rather than the flag, because the flag is an implementation detail and the promise is
+    about what survives a crash.
+    """
+    import sqlite3
+
+    def build(explicit_begin):
+        path = tmp = Path(tempfile.mkdtemp()) / "s.sqlite"
+        db = sqlite3.connect(tmp)
+        try:
+            with db:
+                if explicit_begin:
+                    db.execute("BEGIN")
+                db.execute("CREATE TABLE models (id TEXT)")
+                db.execute("PRAGMA user_version = 1")
+                raise RuntimeError("the machine went away")
+        except RuntimeError:
+            pass
+        tables = [row[0] for row in
+                  db.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        version = db.execute("PRAGMA user_version").fetchone()[0]
+        db.close()
+        del path
+        return tables, version
+
+    assert build(explicit_begin=False) == (["models"], 1), (
+        "the defect must still be reproducible, or this test is asserting nothing")
+    assert build(explicit_begin=True) == ([], 0), (
+        "with the BEGIN the migration is atomic: no table, and the version not stamped")
+
+
+def test_every_migration_block_opens_its_transaction():
+    """The rule, so a fourth schema does not arrive without one.
+
+    Each `if found < N:` block claims one transaction in its own words — the comments say the
+    repetition is the point — and each needs the `BEGIN` for that to be true.
+    """
+    source = Path(store.__file__).read_text(encoding="utf-8")
+    migrations = source.count("PRAGMA user_version = ")
+    begins = source.count('db.execute("BEGIN")')
+
+    assert begins >= migrations, (
+        f"{migrations} migration blocks stamp a version and only {begins} open a transaction")

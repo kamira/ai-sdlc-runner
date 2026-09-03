@@ -90,9 +90,18 @@ def cycle_index(idx: int, n: int, key: int, *, key_up: Sequence[int] = (), key_d
 def _curses_select_on(stdscr, title: str, options: Sequence[Option]) -> Optional[int]:
     """Arrow-key menu drawn on an **already-initialized** ``stdscr`` (no nested ``curses.wrapper``).
 
-    ↑/↓ (or k/j) to move, Enter to choose, q/Esc to cancel. This is the embeddable core reused by
-    ``_curses_select`` (its own wrapper) and by callers — such as the resident dashboard — that already
-    own the curses screen and must not open a second nested session.
+    ↑/↓ (or k/j) to move, Enter to choose, q/Esc to cancel.
+
+    **One caller today**: ``_curses_select``, immediately below, which opens its own
+    ``curses.wrapper``. This said it was *"the embeddable core reused by callers — such as the
+    resident dashboard — that already own the curses screen"*, and `dashboard.py` no longer
+    exists: `test_ledger_check.py` records it as part of an architecture that was removed. A
+    split justified by a caller nobody can find is a split with no reason on the record
+    (CHG-20260903-32, found by the defect seat).
+
+    Kept rather than inlined, because the shape is still right — a menu that does not open a
+    nested session is the reusable one, and merging it back would have to be undone by whoever
+    next embeds a menu. What is removed is the claim that someone already did.
     """
     import curses
 
