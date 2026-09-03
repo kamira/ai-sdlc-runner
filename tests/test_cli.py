@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_sdlc_runner import cli, engine, graph, policy, workorder
+from ai_sdlc_runner import cli, engine, graph, policy, settings as settings_mod, workorder
 
 SPEC = {
     "scope": "src/", "objective": "build the thing", "instructions": "do the work",
@@ -873,3 +873,38 @@ def test_a_requirement_naming_an_undefined_aspect_is_reported_rather_than_raised
     assert code == 10, f"expected the halt code, got {code}"
     assert "halted:" in out, out
     assert "database" in out, "the message must name the aspect the seat invented"
+
+
+# ── one subcommand shadowed a global flag and threw away what the operator typed ────────────────
+
+
+def _parser():
+    return cli.build_parser() if hasattr(cli, "build_parser") else cli._parser()
+
+
+def test_the_settings_flag_reaches_every_subcommand_that_takes_one():
+    """`serve` re-declared `--settings` with a default, applied after the global, so:
+
+        runner --settings /tmp/CUSTOM.json settings  ->  /tmp/CUSTOM.json
+        runner --settings /tmp/CUSTOM.json run       ->  /tmp/CUSTOM.json
+        runner --settings /tmp/CUSTOM.json serve     ->  config/settings.json
+
+    The shadow was added for a real reason — `default=None` reached `Path(None)` and killed
+    `runner serve` in its plainest form — and the fix reached for the wrong constant. Every
+    subcommand, not the one that broke, because one shadowed subparser was enough to lose it
+    (CHG-20260903-28, found by the defect seat).
+    """
+    parser = _parser()
+    chosen = "/tmp/CUSTOM.json"
+
+    for sub in ("settings", "run", "serve"):
+        namespace = parser.parse_args(["--settings", chosen, sub])
+        assert getattr(namespace, "settings", None) == chosen, sub
+
+
+def test_the_plainest_form_still_gets_the_default_and_a_later_flag_still_wins():
+    """Both halves of what the shadow existed to protect, so the fix cannot regress into either."""
+    parser = _parser()
+
+    assert str(parser.parse_args(["serve"]).settings) == str(settings_mod.DEFAULT_PATH)
+    assert parser.parse_args(["serve", "--settings", "/tmp/AFTER.json"]).settings == "/tmp/AFTER.json"

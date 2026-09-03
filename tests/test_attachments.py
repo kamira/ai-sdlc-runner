@@ -18,11 +18,15 @@ So the fix is neither direction: **stored names are content hashes**, and the op
 stays in the manifest as data. `test_both_directions_of_the_scan_survive` is the one that matters
 here, because it is the only test that would fail for *either* wrong answer.
 """
+import ast
 import hashlib
+import pathlib
+import shutil
+import tempfile
 
 import pytest
 
-from ai_sdlc_runner import attachments, engine, graph, policy
+from ai_sdlc_runner import attachments, engine, graph, paths, policy
 
 
 def _store(tmp_path):
@@ -382,3 +386,71 @@ def test_a_frontier_with_no_plan_is_refused_rather_than_assumed_empty():
     """An empty frontier and an unstated one are not the same thing."""
     with pytest.raises(engine.EngineError, match="no plan has named any modules"):
         _frontier_run([{}], [])
+
+
+# ── every write went through the long-path layer and every read went around it ─────────────────
+#
+# `LongPathsEnabled = 0` is the Windows default. Measured on `main`, with a 252-character store
+# directory: `add()` returned successfully, `all()` read `[]`, `order_paths()` returned 0 — which
+# `server.py:503` feeds into `input_artifacts` for **every** work order — and `missing()`, the
+# detector written for exactly this, agreed that nothing was wrong. At 235 characters the failure
+# inverted and `missing()` reported every attachment gone while the directory listing showed all of
+# them present (CHG-20260903-28, found by the defect seat).
+#
+# Thirty-nine fixtures in this file use `tmp_path`, which is about sixty characters. None of them
+# could see it.
+
+
+def _deep(target_len):
+    """A directory whose path is `target_len` characters, nested the way a real checkout gets deep."""
+    base = pathlib.Path(tempfile.gettempdir()) / "aslr_deep"
+    d = base / ("x" * 30)
+    while len(str(d)) < target_len - 31:
+        d = d / ("y" * 30)
+    pad = target_len - len(str(d)) - 1
+    if pad > 0:
+        d = d / ("z" * pad)
+    return base, d
+
+
+@pytest.mark.parametrize("length", [235, 252])
+def test_a_store_on_a_long_path_holds_what_it_says_it_holds(length):
+    """Both lengths, because the failure inverted between them and one alone would miss half."""
+    base, directory = _deep(length)
+    if len(str(base)) > 120:                       # a temp dir this deep cannot reach the case
+        pytest.skip("temp directory is already too deep to construct the case")
+    shutil.rmtree("\\\\?\\" + str(base), ignore_errors=True)
+    try:
+        store = attachments.Store(directory)
+        store.add("spec.md", b"the spec")
+        store.add("plan.md", b"the plan")
+
+        # `add()` reported success for both. The store must agree.
+        assert sorted(a.filename for a in store.all()) == ["plan.md", "spec.md"]
+        # The one `server.py` puts on every work order.
+        assert len(store.order_paths()) == 2
+        # The detector, which was wrong in both directions.
+        assert store.missing() == []
+        # And the bytes come back, through the same reader that used to say "not in this store".
+        assert pathlib.Path(paths.real(store.path_for(store.all()[0].id))).exists()
+    finally:
+        shutil.rmtree("\\\\?\\" + str(base), ignore_errors=True)
+
+
+def test_every_filesystem_read_in_this_module_goes_through_the_long_path_layer():
+    """The rule, not one instance of it — and the half a Linux runner can still check.
+
+    The behavioural test above is only a real test on Windows; on a runner with no `MAX_PATH` it
+    passes either way. This one fails everywhere the moment a bare `Path.exists()` or
+    `.read_text()` comes back, which is how the five got there in the first place: every write in
+    this module was wrapped and every read was not.
+    """
+    tree = ast.parse(pathlib.Path(attachments.__file__).read_text(encoding="utf-8"))
+    bare = [
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"exists", "read_text", "read_bytes", "is_file", "iterdir"}
+        and not (isinstance(node.func.value, ast.Name) and node.func.value.id == "paths")
+    ]
+    assert bare == [], f"filesystem reads not going through paths.*: {bare}"

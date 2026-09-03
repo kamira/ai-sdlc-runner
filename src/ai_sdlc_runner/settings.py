@@ -21,16 +21,33 @@ a file rather than a habit nobody wrote down.
 
 ## What settings may not do
 
-**Settings can lower the seat floor and can do nothing else.** They cannot touch a gate verdict, a
-permanent halt, or the adjudication rule — `policy.py` owns those and takes no input. The one
-relaxation the requirement asks for is the one that exists, and `test_settings.py` asserts the
-absence of the others rather than trusting this paragraph.
+**Settings cannot touch a gate verdict, a permanent halt, or the adjudication rule** —
+`policy.py` owns those and takes no input, and `test_settings.py` asserts the absence rather
+than trusting this paragraph.
+
+What they *can* do is three things, not one. This paragraph said *"lower the seat floor and
+can do nothing else"* while `FIELDS` held three names, and the third is not decorative
+(CHG-20260903-28):
+
+- `review_seats` — lowers the seat floor.
+- `high_risk_mode` — changes what a high-risk change is put through.
+- `ordinary_commands` — **vouches commands, so an undeclared target stops being refused.**
+  Measured: `policy.unverified({kind: ordinary, targets: ['npm ci']}, ())` returns
+  `('npm ci',)` with `on_trust=True`, which `engine.py` refuses on; vouching `npm` returns
+  `()` with `on_trust=False`, and the run proceeds.
+
+This module already guarded that field — `policy.py` records that `load` refuses certain
+commands in `ordinary_commands` *"so the operator finds out while configuring"*. A guard
+existed for the field whose existence the paragraph above it denied.
 
 A file that is missing or empty yields the **defaults** — floor enforced, high-risk mode off. A file
 that **exists and is malformed is an error**, not the defaults: falling back would make a typo
-indistinguishable from a deliberate choice, and one of the two settings here is a safety bypass.
-(This paragraph said "or corrupt yields the defaults" and contradicted `load()` directly below it; a
-verifier caught the contradiction. The code was right.)
+indistinguishable from a deliberate choice, and **two of the three settings here relax a
+refusal**.
+(This paragraph has now been corrected twice for the same class of error. It once said "or
+corrupt yields the defaults" and contradicted `load()` directly below it; a verifier caught
+that, and the code was right. It then said *two* settings while `FIELDS` held three, and a
+seat caught that. A paragraph that counts the file it is in should be read against the file.)
 """
 from __future__ import annotations
 
@@ -128,7 +145,7 @@ def load(path: str = DEFAULT_PATH) -> Settings:
 
     A missing file is the defaults, and so is an empty one. A file that **exists and is malformed**
     is an error rather than the defaults: silently falling back would make a typo indistinguishable
-    from a deliberate choice, and one of the two settings here is a safety bypass.
+    from a deliberate choice, and two of the three settings here relax a refusal.
     """
     p = Path(path)
     if not p.is_file():
@@ -147,9 +164,10 @@ def load(path: str = DEFAULT_PATH) -> Settings:
     unknown = sorted(set(raw) - set(FIELDS))
     if unknown:
         raise SettingsError(
-            f"{path} sets {unknown}, which this runner does not read. Settings may lower the seat "
-            f"floor and nothing else — gates, permanent halts and the adjudication rule live in "
-            f"policy.py and take no input. A setting nobody reads looks exactly like one that works.")
+            f"{path} sets {unknown}, which this runner does not read. This runner reads "
+            f"{list(FIELDS)} and nothing else — gates, permanent halts and the "
+            f"adjudication rule live in policy.py and take no input. A setting nobody "
+            f"reads looks exactly like one that works.")
 
     seats = raw.get("review_seats")
     if seats is not None:
