@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 
+import pathlib
+
 import pytest
 
 from ai_sdlc_runner import engine, graph, policy, workorder
@@ -1167,3 +1169,72 @@ def test_the_report_does_not_say_both_that_it_was_spent_and_that_it_could_not_be
     unspent = [line for line in about if "none was spent" in line]
 
     assert not (spent and unspent), about
+
+
+# ── every suspension carries the same keys, and now that is checked (CHG-20260904-07) ─────────
+
+def test_every_suspension_shape_carries_the_same_keys():
+    """**The comment promised this and the data did not deliver it** (defect seat L-28).
+
+    The three `report.suspended` sites carried 9, 11 and 13 keys — nine shared, two only on a tie
+    (`reason`, `verdicts`) and four only on an incomplete requirement (`missing`, `options`,
+    `problems`, `safety`) — under a comment reading *"Every kind of suspension carries the same
+    keys, so a caller never has to know which shape it is holding … each says so rather than
+    omitting the field — a missing key and a false one read the same way only until they do not."*
+
+    Asserted over the **calls**, so a fourth shape cannot be added by writing a dict literal.
+    """
+    import ast
+
+    tree = ast.parse(pathlib.Path(engine.__file__).read_text(encoding="utf-8"))
+    literals = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Attribute) and t.attr == "suspended" for t in n.targets)
+                and isinstance(n.value, ast.Dict)]
+    assert literals == [], (
+        f"{len(literals)} suspension(s) are built as a dict literal, so nothing fills the fields "
+        f"this shape does not set")
+
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
+             and any(isinstance(t, ast.Attribute) and t.attr == "suspended" for t in n.targets)
+             and isinstance(n.value, ast.Call)
+             and getattr(n.value.func, "id", None) == "_suspension"]
+    assert len(calls) == 3, f"expected the three known shapes, found {len(calls)}"
+
+
+def test_a_suspension_says_so_rather_than_omitting_the_field():
+    """Driven, at the shape that had the fewest fields and the caller that believed the comment."""
+    from test_flow import DECISIONS, SPEC
+
+    def factory(seat=None, model=None, **_):
+        class Session(engine.Session):
+            def ask(self, order):
+                if order["node_id"] == "intake_review":
+                    return {"missing": ["architecture"], "problems": []}
+                return {"verdict": "pass"} if seat else {"ok": True}
+
+            def close(self):
+                pass
+        return Session()
+
+    report = engine.walk(engine.RunConfig(
+        node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+        decisions=dict(DECISIONS), risk="low", undeclared="allow"), factory, enabled=True)
+    stop = report.suspended or {}
+
+    assert set(stop) == set(engine.SUSPENSION_FIELDS), (
+        f"an incomplete stop omits {sorted(set(engine.SUSPENSION_FIELDS) - set(stop))}")
+    assert stop["incomplete"] is True and stop["undecided"] is False
+
+    # **Present is not enough** — the key with an empty default is what the terminal would print.
+    # The field has to carry the sentence `intake.stop_reason` writes, which is why the sentence
+    # is now computed before the shape instead of eleven lines after it.
+    assert stop["reason"], "the field cli.cmd_run reads is present and empty"
+    assert "architecture" in stop["reason"] and "asked once" in stop["reason"], stop["reason"]
+    assert stop["reason"] == report.halt_reason, (
+        "the shape and the report disagree about the sentence, which is how they drifted before")
+
+
+def test_a_suspension_refuses_a_field_nobody_reads():
+    """The other half: a typo that adds a key is the quiet version of the same defect."""
+    with pytest.raises(engine.EngineError, match="no reader of"):
+        engine._suspension(node_id="pm_confirm", raeson="typo")

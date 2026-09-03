@@ -1207,7 +1207,11 @@ def cmd_run(args: argparse.Namespace) -> int:
             # `console/index.html` renders all three; the terminal is the surface that was not.
             missing = ", ".join(stop.get("missing") or ()) or "something the brief does not say"
             print(f"waiting for:   the requirement to say {missing}")
-            print(f"               {stop.get('reason', 'nobody has finished it')}")
+            # The sentence `intake.stop_reason` writes — it names the aspect in words and how
+            # many times it has been asked. This printed `stop.get("reason", ...)`, and the
+            # incomplete shape had no `reason` key, so the terminal showed the placeholder while
+            # the console showed the sentence. CHG-20260904-07 gave every shape every field.
+            print(f"               {stop['reason']}")
             for aspect, options in sorted((report.options or {}).items()):
                 print(f"               {aspect}: {' | '.join(options)}")
             print("continue with: --resume, after adding it to the brief — "
