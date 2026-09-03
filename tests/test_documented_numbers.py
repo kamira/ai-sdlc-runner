@@ -27,6 +27,8 @@ from pathlib import Path
 
 import pytest
 
+QUOTES = chr(34) + chr(39)
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 
@@ -956,3 +958,39 @@ def test_the_rule_can_tell_the_two_claims_apart():
     # substring of the other.
     assert _gate_named_near("merging is a one-way door, so it ", 36, GATES_) == "merge"
     assert _gate_named_near("nothing here names a gate ", 20, GATES_) is None
+
+
+# ── a citation in the source resolves to something (CHG-20260904-04) ────────────────────
+
+def test_no_comment_in_the_source_cites_a_line_number():
+    """**Name the symbol, not the line** (CHG-20260904-04, defect seat L-18).
+
+    Two `<module>.py:<n>` citations in `src/` were wrong **at the commit that wrote them**:
+
+        server.py:323   claimed the sole `Approval` mint site   was `self._refresh_attachments()`
+        cli.py:1228     claimed the split-programme refusal     was a docstring line
+
+    `CHG-20260903-44` inserted `_answering` immediately above `approve` and wrote that address in
+    the same commit; `CHG-20260903-41` inserted `_declare_classes` above `_change_classes` and did
+    the same. **Both point into the function that displaced them.**
+
+    The first version of this rule required a citation to land on a non-blank, non-comment line —
+    and both of the cases above land on **real code**, so it permitted exactly the defect it was
+    written for. A line number cannot be verified without a companion string, which is the
+    conclusion this ledger already reached for change records. So the rule is the stronger and
+    simpler one: **`src/` does not cite line numbers.** A symbol name is greppable, survives
+    insertions above it, and says what the number was standing in for.
+
+    `docs/` is out of scope here: a change record is a statement about a moment and pins its own
+    sha. This is about comments in code, which are read at whatever the file says today.
+    """
+    offenders = []
+    pattern = re.compile(r"([a-z_]+\.py):(\d+)")
+    for path in sorted((ROOT / "src" / "ai_sdlc_runner").glob("*.py")):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for name, cited in pattern.findall(line):
+                offenders.append(f"{path.name}:{number} cites {name}:{cited}")
+
+    assert offenders == [], (
+        "these name a line number, which the next insertion above it makes wrong — name the "
+        f"function, the class or the constant instead: {offenders}")

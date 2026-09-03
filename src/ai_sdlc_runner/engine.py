@@ -1881,7 +1881,7 @@ def _finish(report: "RunReport", confirmations: Dict[str, int],
         # caught it filed under `runner` the same day.
         for relaxed in report.relaxations_by_class:
             # Per note, not per run (CHG-20260903-41). `class_authorised_by` is read from
-            # `cfg.change_class`, which `cli.py:1228` refuses over a split programme — so on
+            # `cfg.change_class`, which `cli._change_classes` refuses over a split programme — so on
             # every split programme this was `None` and the export filed a person's
             # pre-authorisation under `runner`, which `conversations.relaxation`'s own
             # docstring calls a misattribution "in the one dimension the document exists to
@@ -2207,7 +2207,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             #                                                 the run, naming no node, for a stop
             #                                                 nobody has seen yet
             #   the targeted path  `Approval` objects      <- only `server.Runner.approve`
-            #                                                 (`server.py:323`, the sole site in
+            #                                                 (`server.Runner.approve`, the sole site in
             #                                                 `src/` that mints one), given after
             #                                                 the suspension was returned and read,
             #                                                 naming the node it answers
@@ -2749,7 +2749,7 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 f"— which should be impossible; the walk records every step it takes.")
         # Node, count, and its last answer, in that order and first. The rest is context.
         #
-        # Ordering is not cosmetic here: `examples/weather-spa/scenarios.py:233` truncates a
+        # Ordering is not cosmetic here: `examples/weather-spa/scenarios.py`’s `scenario_c` truncates a
         # reported error to 150 characters, and the first draft of this message spent those on a
         # three-node summary and a sentence of advice, so the one fact an operator needs — what the
         # spinning node kept saying — fell off the end. Caught by the scenario suite.
