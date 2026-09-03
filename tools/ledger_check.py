@@ -38,6 +38,16 @@ REQUIRED_FIELDS = ("Project", "Date", "Risk")
 #: same way the rules it replaces were.
 BRANCH_REQUIRED_FROM = "CHG-20260703-01"
 
+#: Records from this id onward may not carry a `Supersedes:` the ledger cannot walk
+#: (CHG-20260903-26). Prospective for `BRANCH_REQUIRED_FROM`'s reason, and cheap to be
+#: prospective about: exactly two of the 155 records carry the field at all, and both are from
+#: this id.
+SUPERSESSION_REQUIRED_FROM = "CHG-20260903-24"
+
+#: What a superseded record's Status must say. A subset of `IN_PROGRESS`, not a new vocabulary —
+#: the words were always there, and a record that is superseded is not also under review.
+SUPERSEDED_STATUSES = ("superseded", "withdrawn", "abandoned", "已作廢", "已取代")
+
 #: Records from this id onward may not name a test that does not exist (CHG-20260828-20).
 #:
 #: A record's job is to let a later reader check the claim. `pinned by ``test_foo``` is worth
@@ -253,6 +263,29 @@ def _target_chg(text: str) -> str:
     return found.group(1) if found else ""
 
 
+def _supersedes(text: str) -> List[str]:
+    """The changes a change says it replaces, or `[]` when it says none.
+
+    `_target_chg`'s shape, one edge over. Absence is not a problem for the same reason it gives:
+    almost no record supersedes anything, and requiring the field would turn traceability into
+    formatting. What is checked is a field that **names** something — and then whether the ledger
+    can walk to what it named.
+    """
+    line = re.search(r"^[-*]\s*(?:\*\*)?Supersedes(?:\*\*)?\s*:(.*)$", text, re.M)
+    return re.findall(r"CHG-[\d-]*\d", line.group(1)) if line else []
+
+
+def _superseded_by(text: str) -> List[str]:
+    """The changes a change says replaced it — the direction nothing walked (CHG-20260903-26).
+
+    The same asymmetry CHG-20260828-02 found between ACC and CHG, one field later: a forward edge
+    with no return path is half a trail, and the missing half is the one a reader landing on the
+    **old** record needs.
+    """
+    line = re.search(r"^[-*]\s*(?:\*\*)?Superseded by(?:\*\*)?\s*:(.*)$", text, re.M)
+    return re.findall(r"CHG-[\d-]*\d", line.group(1)) if line else []
+
+
 def check(repo: Path) -> List[str]:
     problems: List[str] = []
     changes = sorted((repo / "docs" / "changes").glob("CHG-*.md"))
@@ -320,6 +353,39 @@ def check(repo: Path) -> List[str]:
                 f"change redid the work, or one of: {', '.join(IN_PROGRESS[:4])}. "
                 f"Explaining it after the word will not clear this, because `_status_word` reads "
                 f"only the head of the line")
+
+    # ── the third edge, which nothing walked either (CHG-20260903-26) ──────────────────────────
+    #
+    # `Supersedes:` is a CHG->CHG edge, invented by CHG-20260903-24 and -25 — the first two records
+    # in 155 to carry it — and nothing walked it in either direction. The live failure that found
+    # this: CHG-20260901-15 announced its own withdrawal in prose under a heading shaped like a
+    # field, `_status_line` could not see it, and the lint went on reporting `under review, fifth
+    # draft` for a record two successors already claimed. Green, because it never looked.
+    #
+    # The third check below is the one that catches that; the first two are what keep it caught,
+    # and they are `_target_chg`'s two directions with the nouns changed.
+    for path in changes:
+        chg_id = path.stem
+        if chg_id < SUPERSESSION_REQUIRED_FROM:
+            continue
+        for target in _supersedes(texts[chg_id]):
+            if target not in texts:
+                problems.append(
+                    f"{chg_id}: says it supersedes {target}, which docs/changes/ does not have — a "
+                    f"record cannot replace one that is not there")
+                continue
+            if chg_id not in _superseded_by(texts[target]):
+                problems.append(
+                    f"{chg_id}: says it supersedes {target}, and {target} does not say so back. Add "
+                    f"`- **Superseded by: {chg_id}**` to it — a reader landing on the replaced "
+                    f"record has no way forward otherwise")
+            word = _status_word(_status_line(texts[target]))
+            if word and not _standing(word, SUPERSEDED_STATUSES)[0]:
+                problems.append(
+                    f"{target}: {chg_id} supersedes it, but its Status still says {word!r}. A "
+                    f"superseded record is not also open; the word belongs in its `## Status` "
+                    f"section and must be one of: {', '.join(SUPERSEDED_STATUSES[:3])}. Saying it "
+                    f"in prose above will not clear this — that is the failure this check is for")
 
     # ── the other direction, which nothing walked (CHG-20260828-02) ─────────────────────────────
     #
