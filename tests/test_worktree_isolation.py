@@ -563,3 +563,43 @@ def test_without_the_flag_the_same_ask_is_recorded_rather_than_refused(tmp_path)
     assert "worktrees" in str(relaxed(workspace="m0").cwd or "")
     assert "worktrees" not in str(relaxed(workspace="m0", model="m1").cwd or "")
     assert relaxed.isolated["shared"] >= 1, "the ask that could not be isolated must be counted"
+
+
+# ── a staged rename is two fields, and the second has no status prefix (CHG-20260903-31) ───────
+
+
+def test_a_staged_rename_does_not_invent_a_filename():
+    """`git status --porcelain -z` emits a rename as **two** NUL-terminated fields: the new path
+    with its `XY ` prefix, then the old path with **no prefix at all**.
+
+    Slicing `[3:]` off every field chopped three characters off a bare filename and reported the
+    result to the operator as an uncommitted file:
+
+        R  DOCS.md \0 README.md \0  M agent.py \0   ->   ['DME.md', 'DOCS.md', 'agent.py']
+
+    `uncommitted`'s whole job is to say a surprise out loud rather than let it be discovered thirty-
+    nine cycles later. A filename that exists nowhere is a different surprise.
+    """
+    raw = "R  DOCS.md\0README.md\0 M agent.py\0"
+
+    paths = sorted(worktree._porcelain_paths(raw))
+
+    assert paths == ["DOCS.md", "README.md", "agent.py"], paths
+    assert "DME.md" not in paths
+
+
+def test_an_old_path_of_three_characters_is_not_dropped():
+    """The other half of the same line: `if len(entry) > 3` skipped a short old path entirely.
+
+    One direction invented a name and the other lost one, from the same slice.
+    """
+    raw = "R  long-new-name.md\0a.c\0"
+
+    assert sorted(worktree._porcelain_paths(raw)) == ["a.c", "long-new-name.md"]
+
+
+def test_an_ordinary_status_line_is_unchanged():
+    """The false-stop guard: the common case must parse exactly as it did before."""
+    raw = " M agent.py\0?? new.txt\0A  added.py\0"
+
+    assert sorted(worktree._porcelain_paths(raw)) == ["added.py", "agent.py", "new.txt"]

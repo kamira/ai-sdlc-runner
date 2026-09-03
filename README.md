@@ -524,7 +524,7 @@ that file is in**, not against your shell — so an example works the same wheth
 the repository root, from inside the example, or from somewhere else entirely. See
 [Where the agent runs](#where-the-agent-runs) if you keep your own `runner.yaml`.
 
-That **visits 22 of the 31 nodes** — five are failure paths a green run never takes, and two
+That **visits 21 of the 31 nodes** — eight are failure paths a green run never takes, and two
 (`sub_plan`, `reconcile`) are the second planning tier, which a single-workstream plan skips —
 asks 17 questions, writes a real `examples/minimal/greet.py` beside the agent that wrote it, and
 finishes. It is three
@@ -724,7 +724,7 @@ first one winning — so two of them disagreeing inside one answer resolves sile
 ## Testing
 
 ```bash
-pytest -q          # 2003 tests
+pytest -q          # 2008 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

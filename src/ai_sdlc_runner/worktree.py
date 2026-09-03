@@ -127,6 +127,47 @@ def describe(root: str | Path | None = None, run=subprocess.run) -> str:
     return f"a worktree per module build, from {top}"
 
 
+def _porcelain_paths(raw: str) -> List[str]:
+    """The paths in `git status --porcelain -z` output, without inventing any.
+
+    `-z` emits one NUL-terminated field per entry — except a rename or a copy, which emits
+    **two**: the new path with its `XY ` status prefix, then the old path with **no prefix at
+    all**. Slicing `[3:]` off every field therefore chopped three characters off a bare filename
+    and handed the result to the operator as an uncommitted file:
+
+        R  DOCS.md \0 README.md \0  M agent.py \0
+          ->  ['DME.md', 'DOCS.md', 'agent.py']         `DME.md` exists nowhere
+
+    and the `len(entry) > 3` guard beside it silently dropped an old path of three characters or
+    fewer instead. One direction invented a name, the other lost one, from the same slice.
+
+    `Trees.uncommitted`'s whole job is to say a surprise out loud rather than let it be discovered
+    — it exists because a test left an edit uncommitted and the build ran the previous agent for
+    thirty-nine cycles. A filename that exists nowhere is a different surprise
+    (CHG-20260903-31, found by the defect seat).
+
+    Both halves of a rename are returned: the old path is gone from the working tree and the new
+    one is not in the commit, and a build cut from that commit sees neither — which is the thing
+    being reported.
+    """
+    fields = [field for field in raw.split("\0") if field]
+    paths: List[str] = []
+    index = 0
+    while index < len(fields):
+        entry = fields[index]
+        index += 1
+        if len(entry) <= 3:
+            continue
+        status, path = entry[:2], entry[3:]
+        paths.append(path)
+        if "R" in status or "C" in status:
+            # The next field is the old path, verbatim — it carries no prefix, so it is not sliced.
+            if index < len(fields):
+                paths.append(fields[index])
+                index += 1
+    return paths
+
+
 class Trees:
     """The worktrees one run made, and the promise to take them away again.
 
@@ -395,7 +436,7 @@ class Trees:
         done = self._git(["status", "--porcelain", "--untracked-files=no", "-z"], top)
         if done.returncode != 0:
             return []
-        return sorted(entry[3:] for entry in (done.stdout or "").split("\0") if len(entry) > 3)
+        return sorted(_porcelain_paths(done.stdout or ""))
 
     def carry(self) -> List[str]:
         """Copy each module's build artifacts into the working tree, and say what was copied.

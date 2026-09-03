@@ -14,6 +14,8 @@ effects. The three things worth pinning here are the ones a reader cannot check 
 from __future__ import annotations
 
 import ast
+import contextlib
+import io
 import json
 import re
 import sys
@@ -908,3 +910,51 @@ def test_the_plainest_form_still_gets_the_default_and_a_later_flag_still_wins():
 
     assert str(parser.parse_args(["serve"]).settings) == str(settings_mod.DEFAULT_PATH)
     assert parser.parse_args(["serve", "--settings", "/tmp/AFTER.json"]).settings == "/tmp/AFTER.json"
+
+
+# ── every edge in the graph reaches the operator (CHG-20260903-31) ─────────────────────────────
+
+
+def test_runner_flow_prints_every_edge_the_graph_has():
+    """`cmd_flow` iterated `node.branches` only, so 15 of the graph's 40 edges were invisible.
+
+    A node with no branches printed a line with no successor at all, leaving the reader to infer
+    one from the **listing order** — which disagrees with the graph at three nodes:
+
+        pm_plan         read as pm_confirm    goes to plan_scope
+        record_module   read as fix_pass      goes to next_module
+        review_failed   read as qa_verify     goes to change_retry
+
+    This command's own help calls it the fastest way to see what the runner will actually do
+    (CHG-20260903-31, found by the defect seat).
+    """
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        cli.main(["flow"])
+    printed = buffer.getvalue()
+
+    in_graph = (sum(len(node.branches) for node in graph.NODES)
+                + sum(1 for node in graph.NODES if getattr(node, "next", None)))
+    drawn = sum(1 for line in printed.splitlines() if "\u2192" in line)
+
+    assert drawn == in_graph, f"the graph has {in_graph} edges and `flow` printed {drawn}"
+
+
+def test_the_three_nodes_that_read_backwards_now_name_their_successor():
+    """Named, because the count above would pass if `flow` printed fifteen edges of any kind.
+
+    These are the three whose printed position implied the wrong node.
+    """
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        cli.main(["flow"])
+    printed = buffer.getvalue()
+
+    lines = printed.splitlines()
+    for node_id, goes_to in (("pm_plan", "plan_scope"),
+                             ("record_module", "next_module"),
+                             ("review_failed", "change_retry")):
+        at = next(i for i, line in enumerate(lines) if line.startswith(node_id + " "))
+        follows = " ".join(lines[at + 1:at + 4])
+        assert goes_to in follows, (
+            f"{node_id} does not name {goes_to}; it is followed by {follows!r}")
