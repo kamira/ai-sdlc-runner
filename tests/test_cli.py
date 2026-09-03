@@ -1075,3 +1075,93 @@ def test_the_old_guards_could_not_have_caught_this():
     assert "grade" not in seat_panel, (
         "a seat panel now carries a grade, so the existing footer tests do exercise this path and "
         "this note should be revisited")
+
+
+# ── the terminal reads all three suspension shapes (CHG-20260904-02) ──────────────────────────
+
+def _incomplete_stop():
+    """A run that ends waiting for a requirement nobody has finished."""
+    from test_flow import DECISIONS, SPEC
+
+    def factory(seat=None, model=None, **_):
+        class Session(engine.Session):
+            def ask(self, order):
+                if order["node_id"] == "intake_review":
+                    return {"missing": ["architecture"], "problems": []}
+                return {"verdict": "pass"} if seat else {"ok": True}
+
+            def close(self):
+                pass
+        return Session()
+
+    cfg = engine.RunConfig(node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+                           decisions=dict(DECISIONS), risk="low", undeclared="allow")
+    return engine.walk(cfg, factory, enabled=True)
+
+
+def test_the_terminal_does_not_offer_a_control_that_cannot_answer_the_question():
+    """**Three shapes, not two** (CHG-20260904-02, defect seat L-17).
+
+    `intake_review.gate` is `None`, so the gate branch printed `--resume --confirm None` at an
+    incomplete stop and the engine answered *"confirmed gate 'None' does not exist"*. The tie
+    branch three lines above carries the objection verbatim: *"Offering `--confirm` here would be
+    offering a control that cannot answer what is being asked."*
+
+    Asserted as the **round trip** — whatever the terminal tells the operator to type is handed
+    back to the engine — rather than as a wording, because the claim is that the advice works.
+    """
+    report = _incomplete_stop()
+    stop = report.suspended or {}
+    assert stop.get("incomplete") and stop.get("gate") is None, (
+        f"this test needs the third shape; got {stop}")
+
+    source = inspect.getsource(cli)
+    assert 'elif stop.get("incomplete"):' in source, (
+        "the terminal reads two suspension shapes again")
+
+    # The round trip: the engine refuses the command the old branch printed.
+    from test_flow import DECISIONS, SPEC
+    with pytest.raises(engine.EngineError, match="does not exist"):
+        engine.walk(engine.RunConfig(
+            node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+            decisions=dict(DECISIONS), risk="low", undeclared="allow",
+            confirmed=(str(stop.get("gate")),)), lambda **_: None, enabled=True)
+
+
+def test_the_incomplete_branch_says_what_is_missing_and_offers_no_gate(tmp_path, py_stub, capsys):
+    """What the operator is actually told, read off the terminal rather than out of the source.
+
+    The first version of this asserted strings against `inspect.getsource(cli)` — the
+    wording-instead-of-property trap this ledger has corrected five times, written into the guard
+    for a defect that is *about* what a person reads. This runs the command.
+    """
+    stub = py_stub("""
+import json, sys
+order = json.load(sys.stdin)
+if order["node_id"] == "intake_review":
+    print(json.dumps({"missing": ["architecture"], "problems": []}))
+elif order.get("seat"):
+    print(json.dumps({"verdict": "pass", "seat": order["seat"]}))
+else:
+    print(json.dumps({"ok": True}))
+""")
+    config = tmp_path / "runner.yaml"
+    config.write_text(f"agent_command: {json.dumps(stub)}\n", encoding="utf-8")
+
+    cli.main(["--config", str(config), "run", "--undeclared", "allow",
+              "--plan", _plan_file(tmp_path)])
+    out = capsys.readouterr().out
+
+    assert "--confirm None" not in out, (
+        f"the terminal told the operator to type a command the engine refuses:\n{out}")
+    assert "a decision on None" not in out, out
+    # **The line, not the word.** `architecture` also appears in the `reason` line this branch
+    # prints, so `"architecture" in out` passed even with the "waiting for" line reduced to
+    # "the requirement" — the mutation found it (CHG-20260904-02).
+    waiting = [line for line in out.splitlines() if line.startswith("waiting for:")]
+    assert waiting, f"the terminal says nothing about what it is waiting for:\n{out}"
+    assert "architecture" in waiting[0], (
+        f"the line that says what the run is waiting for does not name the missing aspect: "
+        f"{waiting[0]!r}")
+    assert "no gate here to confirm" in out, (
+        f"the terminal does not say why `--confirm` is not the control here:\n{out}")
