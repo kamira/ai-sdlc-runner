@@ -90,7 +90,8 @@ CONTENTFUL_FIELDS = (
 #:
 #: Named here rather than left implicit because a refusal that only scolds invites the caller to pad
 #: `idempotence_probes` with a fake probe to be safe — manufacturing the very defect the rule exists
-#: to stop. `expected_outputs` is `[]` on 14 of the 15 nodes in `examples/plan.json`: review and gate
+#: to stop. `expected_outputs` is `[]` on 14 of the 15 nodes in `examples/minimal/plan.json`:
+#: review and gate
 #: nodes genuinely produce nothing, and a blanket rule would refuse this repository's own example.
 MAY_BE_EMPTY = ("input_artifacts", "expected_outputs", "idempotence_probes")
 

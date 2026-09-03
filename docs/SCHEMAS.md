@@ -25,7 +25,7 @@ miscounts its own subject is the thing it warns about, so the count is now check
 | 11 | Settings | [`settings.py`](../src/ai_sdlc_runner/settings.py) | shipped · **closed** |
 | 12 | Attachment manifest | [`attachments.py`](../src/ai_sdlc_runner/attachments.py) | shipped |
 | 13 | Run report | [`engine.py`](../src/ai_sdlc_runner/engine.py) | shipped |
-| 14 | **SQLite DDL** | [`DATABASE.md`](DATABASE.md) | 3 of 5 tables **built** |
+| 14 | **SQLite DDL** | [`DATABASE.md`](DATABASE.md) | 6 of 6 tables **built** |
 | 15 | **Server HTTP API** | [`API.md`](API.md) | shipped |
 | 16 | **Model management** — rules, reach, assignment | [`MODELS.md`](MODELS.md) | shipped |
 

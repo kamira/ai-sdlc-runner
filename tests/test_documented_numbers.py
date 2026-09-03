@@ -707,3 +707,134 @@ def test_no_requirement_row_counts_the_settings_surface(tmp_path):
     assert counting == [], (
         "a requirement row states what settings reach as a count; `settings.FIELDS` is the "
         f"surface and it holds {len(settings_mod.FIELDS)}: {list(settings_mod.FIELDS)}")
+
+
+# ── documents that describe a different program (CHG-20260903-37) ───────────────────────────────
+
+
+def test_every_example_path_a_source_file_cites_exists():
+    """**The rule**, because the instance was cited four times and existed nowhere.
+
+    `examples/plan.json` is named by `workorder.py` as the measurement justifying `MAY_BE_EMPTY`
+    (*"`expected_outputs` is `[]` on 14 of the 15 nodes"*), by `cli.py` and `conversations.py` as
+    the reason project defaulting is refused, and by `test_workorder.py`'s own docstring. `ls
+    examples/` gives `README.md demo/ minimal/ tide-spa/ weather-spa/`.
+
+    The **number** was right, for a different file: `examples/minimal/plan.json` has 15 nodes, 14
+    with `expected_outputs == []`. So a shipped refusal's justification pointed at a file a reader
+    could not open (conformance seat L-53).
+    """
+    root = Path(__file__).resolve().parents[1]
+    cited = set()
+    # **Scoped to `src/`.** A source file citing an example path offers it as evidence a
+    # reader can check; a test may legitimately *quote* a path that was wrong — which is
+    # what this test's own docstring does, and what this rule would otherwise fail itself
+    # on. Same reasoning as CHG-20260903-33 excluding the ledger from its scan: a record of
+    # what was wrong is doing its job.
+    #
+    # A citation must also look like a file. A bare directory fragment is prose, not a path.
+    for path in (root / "src").rglob("*.py"):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for match in re.findall(r"examples/[\w./-]+", text):
+            what = match.rstrip(".,`")
+            if "." in what.rsplit("/", 1)[-1]:
+                cited.add((path.relative_to(root).as_posix(), what))
+
+    missing = sorted(f"{where}: {what}" for where, what in cited
+                     if not (root / what).exists())
+
+    assert missing == [], (
+        f"these example paths are cited by source as evidence and do not exist: {missing}")
+
+
+def test_the_api_page_documents_the_survey_shape_that_ships():
+    """`docs/API.md` was wrong about `survey` in three ways at once.
+
+    §3 documented `"safety": […]` — an array — and omitted `complete` entirely. §4 documented
+    `"safety": { "<aspect>": [ … ] }`, and `intake.collect` writes `survey.safety[seat] = unsafe`,
+    so a caller keying by aspect matched **nothing, ever** (defect and idiom seats).
+    """
+    root = Path(__file__).resolve().parents[1]
+    page = (root / "docs" / "API.md").read_text(encoding="utf-8")
+
+    from ai_sdlc_runner import intake
+
+    shipped = intake.collect({"defect": {"problems": ["a"], "unsafe": ["b"]}}).as_dict()
+
+    assert isinstance(shipped["safety"], dict)
+    assert list(shipped["safety"]) == ["defect"], "safety is keyed by seat"
+
+    for key in sorted(shipped):
+        assert f'"{key}"' in page, f"`survey` ships {key!r} and API.md does not document it"
+    assert '"safety": { "<aspect>"' not in page, "safety is keyed by seat, not aspect"
+
+
+def test_the_api_page_does_not_promise_a_null_the_field_cannot_hold():
+    """`"error": null | "…"` — `RunState.error` is `str = ""` and `snapshot()` returns it verbatim.
+
+    A caller writing `if (snap.error === null)` treats every idle run as errored. Nine sibling
+    fields on the same page correctly document `null` where `null` is what ships, so this was not a
+    page-wide convention (conformance seat L-49).
+    """
+    root = Path(__file__).resolve().parents[1]
+    page = (root / "docs" / "API.md").read_text(encoding="utf-8")
+
+    from ai_sdlc_runner import server
+
+    assert server.RunState().snapshot()["error"] == ""
+    assert '"error": null' not in page
+
+
+def test_the_schema_catalogue_counts_the_tables_that_exist():
+    """`SCHEMAS.md` said *"3 of 5 tables built"*; `DATABASE.md` said *"6 of 6"*; `store` has six.
+
+    The sharp part is that `SCHEMAS.md`'s own opening paragraph says *"A catalogue of closedness
+    that miscounts its own subject is the thing it warns about, so the count is now checked by
+    `tests/test_schemas.py` rather than asserted here"* — and that guard covers the **closed-schema**
+    count, not the table count, which was checked by nothing (conformance seat L-51).
+    """
+    root = Path(__file__).resolve().parents[1]
+    catalogue = (root / "docs" / "SCHEMAS.md").read_text(encoding="utf-8")
+
+    from ai_sdlc_runner import store
+
+    built = len(store._EXPECTED)
+    assert f"{built} of {built} tables" in catalogue, (
+        f"store creates {built} tables and the catalogue does not say so")
+
+
+def test_the_database_page_does_not_call_the_same_table_live_and_dead():
+    """It said all six are live, then said two of them are *"created by no code"*, three lines apart.
+
+    Both are in `store._EXPECTED` and among the six `CREATE TABLE IF NOT EXISTS` statements
+    (conformance seat L-52).
+    """
+    root = Path(__file__).resolve().parents[1]
+    page = (root / "docs" / "DATABASE.md").read_text(encoding="utf-8")
+
+    live = page.split("It follows the ruling")[0]
+    assert "created by no code**:" not in live, (
+        "the status paragraph calls a built table uncreated")
+
+
+def test_the_node_docstring_does_not_state_a_phase_the_field_owns():
+    """`graph.Node`'s class docstring said `gate` names the gate *"consulted before the work"*.
+
+    Measured, **seven of the ten** gated nodes are `gate_when="after"` — only `engineer_selfverify`,
+    `pr` and `merge` are `before`. Two sentences in one class body, and the one a reader meets first
+    was false about most of what it described. (Both seats that reported this got the count wrong,
+    one high and one low; it is seven.)
+    """
+    from ai_sdlc_runner import graph
+
+    gated = [node for node in graph.NODES if node.gate]
+    before = [node.id for node in gated if node.gate_when == "before"]
+
+    assert len(gated) == 10 and len(before) == 3, (len(gated), before)
+    # Positive, not negative: the corrected docstring *quotes* the old sentence to say why
+    # it was wrong, so "the phrase is absent" is the wrong test. What must be true is that
+    # the class docstring hands the phase question to the field that owns it.
+    said = graph.Node.__doc__ or ""
+    assert "gate_when" in said, "the class docstring must name the field that owns the phase"
+    assert "answerable to" in said, (
+        "the class docstring must say what `gate` names without claiming when it fires")

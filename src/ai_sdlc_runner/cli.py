@@ -861,7 +861,7 @@ def _store_flags(parser: argparse.ArgumentParser) -> None:
     """The conversation-store flags, on every command that stores one.
 
     `--project` has **no default**. Both review seats refused the first design's default — the plan
-    file's parent directory — because that files every `examples/plan.json` run under a project
+    file's parent directory — because that files every `examples/minimal/plan.json` run under a project
     called "examples", and `serve` may have no plan at all. A location is not an identity, and there
     is no other fact available to default from, so it is asked for.
     """

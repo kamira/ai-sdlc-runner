@@ -3,9 +3,18 @@
 **Status: 6 of 6 tables are built.** `models`, `node_assignments`, `seat_assignments`,
 `conversations`, `turns` and `halt_routing`
 are live in [`store.py`](../src/ai_sdlc_runner/store.py) — that is model configuration, both halves,
-after the ruling that it was meant to include the assignment. `conversations` and `turns` are
-**designed here and created by no code**: a table nothing reads or writes is a mechanism nobody
-invokes, and they arrive with the conversation-store migration.
+after the ruling that it was meant to include the assignment.
+
+> **`conversations` and `turns` are built too, and this paragraph used to deny it three lines
+> after asserting it** (CHG-20260903-37). It said they were *"designed here and created by no
+> code"* — while the sentence above calls all six live, `store._EXPECTED` enumerates all six,
+> and `store.py` carries six `CREATE TABLE IF NOT EXISTS` statements. They arrived with the
+> conversation-store migration, which is schema 2, and the sentence was never updated.
+>
+> `docs/SCHEMAS.md` row 14 said **"3 of 5 tables built"** against this page's **"6 of 6"**. That
+> row now carries the same number. The page whose opening paragraph warns that *"a catalogue of
+> closedness that miscounts its own subject is the thing it warns about"* had this one count
+> checked by nothing: its guard covers the closed-schema count, not the table count.
 
 It follows the ruling on [CHG-20260823-19](design/sqlite-only.md): *「只留 sqlite + file，移除 mongo
 和 tinydb / file 只作為 server 的 config 才處理 / sqlite 內容不僅限於紀錄，也包含 model 模型配置的紀錄
