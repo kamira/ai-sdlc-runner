@@ -20,9 +20,12 @@ The third is also task 15's answer. The identity is what the caller **proved it 
 a name it typed into a body — which was the "button captioned Accept (as verifier), moved one layer
 down and called enforcement" that an independent seat refused.
 """
+import ast
+import inspect
 import json
 import pathlib
 import re
+import tempfile
 import threading
 import time
 import urllib.error
@@ -30,7 +33,7 @@ import urllib.request
 
 import pytest
 
-from ai_sdlc_runner import engine, graph, policy, server
+from ai_sdlc_runner import cli, engine, graph, policy, server, store
 from test_flow import DECISIONS, SPEC
 
 
@@ -1221,3 +1224,101 @@ def test_a_finished_run_does_not_still_carry_the_failure_before_it():
 
     assert after["state"] == engine.FINISHED
     assert after["error"] == "", after["error"]
+
+
+# ── the provenance the server computed and dropped (CHG-20260903-39) ─────────────────────────────
+
+
+def test_a_freshly_started_server_already_knows_where_each_assignment_came_from():
+    """`cmd_serve` computes this map with `store.resolve` and dropped it, so `held["source"]`
+    stayed `{}` until the first config **write**.
+
+    `GET /config/nodes` on a freshly started console therefore answered `"source": {}` against
+    `docs/API.md`'s own *"an override nobody can see is worse than no override"* (defect seat
+    L-51).
+    """
+    import inspect
+
+    assert "assignment_source" in inspect.signature(server.serve).parameters
+    assert "assignment_source" in inspect.signature(server.make_handler).parameters
+
+    source = {"node_models.engineer_build": "plan"}
+    handler = server.make_handler(
+        server.Runner(walk=lambda cfg: engine.RunReport(), make_config=lambda *a, **k: object()),
+        server.Operator.mint(pathlib.Path(tempfile.mkdtemp())),
+        assignment_source=source)
+
+    assert handler is not None
+
+
+#: **Removed, not renamed** (CHG-20260903-39). This slot held
+#: `test_the_cli_hands_the_provenance_it_computed_to_the_server`, which asserted the literal
+#: string `"assignment_source=assignment_source"` appeared in `cmd_serve`'s source. Renaming the
+#: local turned it red with no defect present, and handing over the same map under any other
+#: expression left it green — a check on the wording rather than the property, which is the
+#: class this change already had to fix once in `models.save`'s guard. The replacement is
+#: `test_cmd_serve_hands_over_the_provenance_it_computed` at the end of this file: it reads the
+#: AST and asserts that what reaches `serve` is a name `store.resolve` bound.
+
+
+def test_a_freshly_started_server_answers_the_assignment_provenance():
+    """**The provenance is answered before any write** (CHG-20260903-39, defect seat L-51).
+
+    `cmd_serve` computes this map with `store.resolve` and dropped it, so `held["source"]` stayed
+    empty until the first config *write*, and `GET /config/nodes` on a freshly started console
+    answered `"source": {}` — against `docs/API.md`'s own *"an override nobody can see is worse
+    than no override"*. No request is made here except the read: the point is what a server that has
+    served nothing yet already knows.
+    """
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    operator = server.Operator.mint(tmp)
+    source = {"node_models.draft": store.FROM_STORE, "seat_models.risk": store.FROM_PLAN}
+    httpd = server.serve(_runner(), operator, port=0,
+                         assignments={"node_models": {"draft": "m"},
+                                      "seat_models": {"risk": "m"}},
+                         assignment_source=source)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = httpd.server_address[1]
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/config/nodes", method="GET")
+        req.add_header("X-Operator-Token", operator.token)
+        req.add_header("Host", f"127.0.0.1:{port}")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            answered = json.loads(resp.read().decode("utf-8"))["source"]
+    finally:
+        httpd.shutdown()
+
+    assert answered == source, (
+        "a server that has served nothing yet answers the provenance it was started with; "
+        f"got {answered}")
+
+
+def test_cmd_serve_hands_over_the_provenance_it_computed():
+    """**Computed and dropped is the defect this pins** (CHG-20260903-39).
+
+    The route test above passes whatever `serve` is given, so it cannot see the original mistake:
+    `cmd_serve` bound `assignment_source` from `store.resolve` twelve lines above the `serve` call
+    and then did not pass it. Read from the source tree rather than by running the command, because
+    reaching that call needs a plan, a store, a registry and a bound socket — and the claim is about
+    one argument, not about any of those.
+    """
+    tree = ast.parse(pathlib.Path(cli.__file__).read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "cmd_serve")
+
+    bound = [t.elts[1].id for node in ast.walk(fn) if isinstance(node, ast.Assign)
+             for t in node.targets
+             if isinstance(t, ast.Tuple) and len(t.elts) == 2
+             and all(isinstance(e, ast.Name) for e in t.elts)
+             and isinstance(node.value, ast.Call)
+             and getattr(node.value.func, "attr", None) == "resolve"]
+    assert bound, "`cmd_serve` no longer binds a provenance map from `store.resolve`"
+
+    handed = [kw.value.id for call in ast.walk(fn) if isinstance(call, ast.Call)
+              and getattr(call.func, "attr", None) == "serve"
+              for kw in call.keywords
+              if kw.arg == "assignment_source" and isinstance(kw.value, ast.Name)]
+    assert handed, "`cmd_serve` computes the provenance and does not hand it to `serve`"
+    assert set(handed) <= set(bound), (
+        f"`serve` is given {handed}, which is not what `store.resolve` returned ({bound})")

@@ -218,7 +218,8 @@ def test_the_model_entry_lists_exactly_what_persists():
     document over.
     """
     model = models.Model(id="i", vendor="v", name="n", transport="cli", command=("a",))
-    persisted = set(model.as_dict()) - {"reach", "leaves_this_machine"}
+    # `models.COMPUTED`, not a second copy (CHG-20260903-39).
+    persisted = set(model.as_dict()) - set(models.COMPUTED)
     body = _section(10)
     for field in persisted:
         assert field in body, f"entry 10 omits the persisted field {field!r}"

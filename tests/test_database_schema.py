@@ -145,8 +145,11 @@ def test_a_column_three_review_rounds_removed_has_not_come_back(column, why):
 
 def test_the_models_table_holds_exactly_what_the_registry_persists():
     """Eight fields persist. `command` is a list, so it is `command_json` here."""
+    # `models.COMPUTED`, not a fifth copy of it (CHG-20260903-39). Adding one computed field
+    # turned five guards red, each holding its own hand-written version of the same fact — and
+    # one of them asserted the literal TEXT of another. All five derive from the one name now.
     persisted = set(models.Model(id="i", vendor="v", name="n", transport="cli",
-                                 command=("a",)).as_dict()) - {"reach", "leaves_this_machine"}
+                                 command=("a",)).as_dict()) - set(models.COMPUTED)
     db = _built()
     columns = {row[1] for row in db.execute("pragma table_info(models)")}
     assert columns == (persisted - {"command"}) | {"command_json"}, (

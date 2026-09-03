@@ -1507,7 +1507,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
         httpd = server.serve(runner, operator, port=args.port,
                              registry=registry, registry_path=registry_path,
                              assignments=assignments, db=db,
-                             plan_assignments=plan_assignments)
+                             plan_assignments=plan_assignments,
+                             # Computed twelve lines above by `store.resolve` and dropped
+                             # until now, so a freshly started console answered
+                             # `"source": {}` (CHG-20260903-39).
+                             assignment_source=assignment_source)
     except server.ServerError as exc:
         print(f"error: {exc}")
         return 2

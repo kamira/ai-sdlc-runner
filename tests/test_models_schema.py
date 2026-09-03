@@ -5,6 +5,7 @@ the page to the rules, and they hold the rules to themselves — every refusal `
 **driven**, not read out of the source, so a refusal that stops firing fails here rather than
 quietly widening what the registry accepts.
 """
+import pathlib
 import re
 import sys
 from pathlib import Path
@@ -35,7 +36,10 @@ def _api(**over):
 # ── the shape ─────────────────────────────────────────────────────────────────────────────────
 
 def test_the_page_lists_exactly_the_fields_that_persist():
-    persisted = set(_cli().as_dict()) - {"reach", "leaves_this_machine"}
+    # Derived from `models.COMPUTED`, not a second copy of it (CHG-20260903-39). This set
+    # was written out by hand here, in `test_schemas.py`, and as a literal inside `save` —
+    # three copies of one fact, and adding a third computed field broke all three.
+    persisted = set(_cli().as_dict()) - set(models.COMPUTED)
     for field in persisted:
         assert f'"{field}"' in PAGE, f"the page omits the persisted field {field!r}"
     assert len(persisted) == 8, f"the registry now persists {len(persisted)} fields, not eight"
@@ -47,7 +51,19 @@ def test_the_page_says_reach_is_computed_and_never_stored():
     saved = models.save.__doc__ or ""
     del saved
     import inspect
-    assert 'k not in ("reach", "leaves_this_machine")' in inspect.getsource(models.save)
+    # **The claim is that `save` strips what is computed, not that it does so with one
+    # particular literal.** Pinning the spelling is what turned this guard red when the
+    # exclusion moved into `models.COMPUTED` — a check on the wording rather than the
+    # property, which is the class this ledger keeps finding (CHG-20260903-39).
+    import json
+    import tempfile
+
+    assert "COMPUTED" in inspect.getsource(models.save)
+    where = pathlib.Path(tempfile.mkdtemp()) / "models.json"
+    models.save(models.Registry(models=(_cli(),)), where)
+    on_disk = json.loads(where.read_text(encoding="utf-8"))["models"][0]
+    leaked = sorted(name for name in models.COMPUTED if name in on_disk)
+    assert leaked == [], f"these are computed and reached the file: {leaked}"
     assert "computed on every read and never stored" in FLAT
 
 

@@ -235,6 +235,19 @@ class Model:
         payload["command"] = list(self.command)
         payload["reach"] = self.reach
         payload["leaves_this_machine"] = self.leaves_this_machine
+        # **The grade that is a judgement says it is one** (CHG-20260903-39, idiom seat).
+        #
+        # `internal_by_guess`'s docstring says *"The console names these, so the guess is
+        # visible to the person who can tell whether it is right"*. Measured, its only caller
+        # was `runner models`' stdout footer; `GET /models` carried `reach` and
+        # `leaves_this_machine` and nothing saying the reach was inferred, and the console
+        # rendered `reach` as a fact.
+        #
+        # What the guess buys is the exemption at `graded_by_guess` from the refusal that an
+        # external endpoint must name a key variable. A disclosure that makes an exemption
+        # acceptable has to reach the surface, or the exemption is unaccompanied.
+        payload["reach_guessed"] = bool(
+            self.transport == "api" and graded_by_guess(self.endpoint))
         return payload
 
 
@@ -403,13 +416,21 @@ def load(path: str | Path) -> Registry:
     return Registry(models=tuple(_model_from(e) for e in entries))
 
 
+#: Fields `as_dict` derives rather than stores. Storing one would let a stale label outlive the
+#: truth — a file saying `local` about an endpoint that has since been edited.
+#:
+#: **Named once** (CHG-20260903-39). `save` excluded them with a literal tuple, so adding a third
+#: computed field meant remembering a second place; the test below derives its assertion from this
+#: name, so a fourth cannot reach disk by being forgotten.
+COMPUTED = ("reach", "leaves_this_machine", "reach_guessed")
+
+
 def save(registry: Registry, path: str | Path) -> None:
     file = Path(path)
     paths.makedirs(file.parent)
     payload = {"models": [
-        {k: v for k, v in m.as_dict().items()
-         if k not in ("reach", "leaves_this_machine")}     # both are computed; storing them would
-        for m in registry.models]}                          # let a stale label outlive the truth
+        {k: v for k, v in m.as_dict().items() if k not in COMPUTED}
+        for m in registry.models]}
     paths.write_text(
         file,
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
