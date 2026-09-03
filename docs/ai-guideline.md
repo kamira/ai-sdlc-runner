@@ -97,7 +97,23 @@ nobody reads to the bottom of.
 | FR-13 | The seat floor may be lowered only through an explicit high-risk mode, and the run records that it was. Both the seat count and the mode are **set on a screen** and persisted, not retyped each run | P0 | `policy.resolve_seats`, `settings.edit`, `RunReport.relaxations` |
 | FR-19 | A node's own brief — **every field of it** — is read against the red lines before anything else, and the paths it names go through the target rules too. A brief that describes one stops the node, and declaring it does not get past it either | P0 | `engine._spoken_halt` |
 | FR-21 | The false-stop rate on ordinary work is **measured against a corpus written by someone else** and pinned. A check that fires on ordinary work is one people disable, and the rate is therefore a safety property | P0 | `tests/test_false_stops.py` |
-| FR-20 | Settings may lower the seat floor and nothing else. An unknown key is refused, a corrupt file is an error rather than a silent default | P0 | `settings.load`, `settings.FIELDS` |
+| FR-20 | Settings reach `settings.FIELDS` and nothing outside it. An unknown key is refused, a corrupt file is an error rather than a silent default | P0 | `settings.load`, `settings.FIELDS` |
+
+> **FR-20 said *"may lower the seat floor and nothing else"* and was false about `main` twice
+> over (CHG-20260903-35).** `settings.FIELDS` holds **three** names, and the third is not
+> decorative: `policy.unverified({kind: ordinary, targets: ['npm ci']}, ())` returns
+> `('npm ci',)` with `on_trust=True`, which `engine.py` refuses on, and vouching `npm` returns
+> `()` with `on_trust=False` and the run proceeds — a standing relaxation of a refusal, which
+> is not the seat floor. `CHG-20260903-28` measured that and rewrote `settings.py`'s own
+> paragraph for it, and did not reach this table.
+>
+> It also disagreed with **FR-13**, three rows above and also P0, which says *"**Both** the
+> seat count and the mode are set on a screen and persisted"* — two settings where FR-20 said
+> one. Two P0 rows in one table disagreeing about the size of the same surface is worse than
+> either being wrong alone.
+>
+> The row now names the surface rather than counting it, so it follows `FIELDS` instead of
+> drifting from it.
 | FR-14 | Different seats may be answered by different models — the same question, different answerers. The routing lives in the CLI and never in the order | P0 | `cli.session_factory`; `--seat-model SEAT=COMMAND`, or `seat_models` in the plan |
 | FR-24 | A panel every seat of which was answered by the **same backend** is recorded and printed. Independent sessions are not independent blind spots, and a report that reads like a cross-model panel when one model answered it is false assurance | P0 | `engine._note_panel_diversity`, `RunReport.single_model_panels` |
 | FR-15 | Resume is probe-driven: nothing whose postcondition is already true is re-applied, everything applied is re-probed, and anything found true out of causal order is surfaced rather than redone or waved through | P0 | `effects.run` |

@@ -111,6 +111,24 @@ ROLES: Tuple[Role, ...] = (
 #:
 #: `can_write=True` because a plan is a written thing; `can_execute=False` because planning is not
 #: building, and a planner that could run commands would be an engineer with a different name.
+# **`can_spawn` is carried, not enforced** by any sandbox mechanism either — what bounds the
+# tree at three is the graph: `sub_plan` is the only spawner, and this tier opens nothing.
+# A reader looking for the enforcement should look at `graph.NODES`, not at an argv.
+#
+# **`can_execute` is carried, not enforced** (CHG-20260903-35, risk seat). `sandbox_for`
+# takes `(risk, can_write)` — the third flag is not a parameter, and measured, `planner`
+# (`can_execute=False`) and `engineer` (`can_execute=True`) receive a byte-identical bound
+# at the same grade: `{"write": "workspace", "network": True}`, the same bwrap argv.
+#
+# So the sentence below — *"a planner that could run commands would be an engineer with a
+# different name"* — describes an intent, and `can_write` is the only one of the three
+# flags a mechanism reads. `tests/test_sub_planning.py` pins `caps["can_execute"] is False`,
+# which asserts the dict value and is green whether or not anything enforces it — the class
+# `tools/mutation_check.py`'s own docstring warns about.
+#
+# Enforcing it needs the mechanism to deny exec, which neither `bwrap --ro-bind` nor the
+# seatbelt profile does today and which is its own change. What is fixed here is that the
+# module stops describing a bound it does not draw.
 PLANNER = Role("planner", "分項規劃 / workstream planner", can_spawn=False, can_write=True,
                can_execute=False,
                note="plans one workstream. Dispatched by the PM and dispatches nothing itself, "
@@ -1075,7 +1093,27 @@ def seat_names(count: int) -> List[str]:
 
 
 def resolve_seats(requested: Optional[int], high_risk_mode: bool) -> int:
-    """How many seats a run opens, refusing to go below the floor on its own authority."""
+    """How many seats a run opens, refusing to go below the floor on its own authority.
+
+    **At one seat the panel can no longer return `undecided`, and nothing said so**
+    (CHG-20260903-35, risk seat L-49). `seat_names(1)` is `["conformance"]`, which holds the veto,
+    so `adjudicate` reaches `pass` and `fail` and never the third outcome — the one
+    *"an even split has not decided anything, and returning `fail` would send the work back on
+    nobody's judgement"* exists to produce. Measured:
+
+        1 seat, split   -> fail
+        2 seats, split  -> undecided
+        3 seats, split  -> pass
+
+    One seat is **allowed on purpose** — five tests drive `review_seats: 1, high_risk_mode: True`,
+    and `_note_panel_diversity` is deliberately blind below two sessions. This is not a refusal, it
+    is the disclosure the exemption never carried: the refusal message below says *"one reviewer is
+    the single point of view the panel exists to avoid"*, and the mode that lifts it takes you to
+    exactly one reviewer.
+
+    Both keys — `review_seats` and `high_risk_mode` — are `settings.FIELDS` entries, so the guard
+    and the thing that lifts it are two lines of one file edited by one hand.
+    """
     if requested is None:
         return SEAT_FLOOR
     if requested < SEAT_FLOOR and not high_risk_mode:

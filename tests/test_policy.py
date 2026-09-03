@@ -12,6 +12,8 @@ than a file. Two properties carry most of the weight:
 """
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from ai_sdlc_runner import graph, policy
@@ -212,3 +214,48 @@ def test_an_unknown_seat_is_refused():
 def test_no_verdicts_is_not_a_pass():
     with pytest.raises(policy.PolicyError):
         policy.adjudicate({})
+
+
+# ── four claimed safety properties, against what enforces them (CHG-20260903-35) ────────────────
+
+
+def test_a_capability_flag_is_either_enforced_or_says_it_is_not():
+    """**The rule, so the next flag cannot arrive as an intent wearing a bound.**
+
+    `Role` carries three capability flags and `sandbox_for(risk, can_write)` reads **one**.
+    Measured, `planner` (`can_execute=False`) and `engineer` (`can_execute=True`) receive a
+    byte-identical bound at the same grade. `policy.py` claimed *"a planner that could run commands
+    would be an engineer with a different name"*, and `tests/test_sub_planning.py` pins
+    `caps["can_execute"] is False` — the dict value, green whether or not anything enforces it.
+
+    A flag the mechanism does not read must say so where it is defined. This checks the *shape* of
+    that obligation, not one instance of it (risk seat L-48).
+    """
+    import inspect
+
+    enforced = set(inspect.signature(policy.sandbox_for).parameters) & {
+        "can_write", "can_execute", "can_spawn"}
+    a_role = policy.role("lead")
+    fields = getattr(a_role, "_fields", None) or list(getattr(a_role, "__dataclass_fields__", {}))
+    declared = {name for name in fields if name.startswith("can_")}
+    source = pathlib.Path(policy.__file__).read_text(encoding="utf-8")
+
+    for flag in sorted(declared - enforced):
+        assert f"`{flag}` is carried, not enforced" in source, (
+            f"{flag} is a capability flag no sandbox mechanism reads, and policy.py does not say "
+            f"so. Either enforce it or record that it is carried")
+
+
+def test_resolve_seats_says_what_one_seat_costs():
+    """At one seat the panel can no longer return `undecided`, and nothing said so.
+
+    `seat_names(1)` is the veto-holder alone, so `adjudicate` reaches `pass` and `fail` and never
+    the third outcome — the one *"an even split has not decided anything"* exists to produce. One
+    seat is allowed on purpose (five tests drive it); the consequence was the undisclosed part.
+    """
+    assert policy.resolve_seats(1, high_risk_mode=True) == 1, "one seat stays allowed"
+    assert policy.adjudicate({"conformance": "fail"})["outcome"] == "fail"
+    assert policy.adjudicate({"conformance": "pass", "defect": "fail"})["outcome"] == "undecided"
+
+    said = policy.resolve_seats.__doc__ or ""
+    assert "undecided" in said, "the exemption must carry its own consequence"

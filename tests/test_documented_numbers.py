@@ -680,3 +680,30 @@ def test_the_governance_paragraph_names_the_one_piece_that_is_project_data():
         "the paragraph that says where governance lives must name the piece that is project data")
     # And the claim it makes instead has to still be true of `policy.routed_to`'s signature.
     assert "routed_to" in said
+
+
+# ── no two requirement rows disagree about the same surface (CHG-20260903-35) ───────────────────
+
+
+def test_no_requirement_row_counts_the_settings_surface(tmp_path):
+    """FR-20 said *"Settings may lower the seat floor **and nothing else**"* — a count, and false.
+
+    `settings.FIELDS` holds three names and the third standingly clears a refusal (measured in
+    CHG-20260903-28). FR-20 also disagreed with **FR-13**, three rows above and also P0, which says
+    *"**Both** the seat count and the mode are set on a screen"* — two settings where FR-20 said
+    one. Two P0 rows in one table disagreeing about the size of the same surface is worse than
+    either being wrong alone.
+
+    A row that names the surface follows it; a row that counts it drifts from it.
+    """
+    del tmp_path
+    root = Path(__file__).resolve().parents[1]
+    guideline = (root / "docs" / "ai-guideline.md").read_text(encoding="utf-8")
+
+    rows = [line for line in guideline.splitlines() if line.startswith("| FR-")]
+    counting = [line for line in rows
+                if "seat floor and nothing else" in line or "lower the seat floor and nothing" in line]
+
+    assert counting == [], (
+        "a requirement row states what settings reach as a count; `settings.FIELDS` is the "
+        f"surface and it holds {len(settings_mod.FIELDS)}: {list(settings_mod.FIELDS)}")

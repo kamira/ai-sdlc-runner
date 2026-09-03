@@ -371,3 +371,37 @@ def test_one_definition_of_blank_serves_both_boundaries():
     assert set(workorder.CONTENTFUL_FIELDS) | set(workorder.MAY_BE_EMPTY) == \
         set(workorder.NODE_SPEC_FIELDS), "every field must be on exactly one of the two lists"
     assert not set(workorder.CONTENTFUL_FIELDS) & set(workorder.MAY_BE_EMPTY)
+
+
+# ── an empty seat assignment reads as configured and dispatches the default (CHG-20260903-35) ───
+
+
+@pytest.mark.parametrize("value", ["", None, [], {}, 0])
+def test_an_empty_seat_assignment_is_refused_the_way_a_node_one_is(tmp_path, value):
+    """`seat_models` got **no shape check at all** where `node_models` gets one.
+
+    The validation loop iterated `("node_models", "seat_models")` with a body wholly guarded by
+    `if key == "node_models"`, so walking `seat_models` checked nothing. The guard is right —
+    `store.seat_models(db)` is `Dict[str, str]` — but the omission is not merely unchecked, it is
+    silent: `cli.py` does `argv = seat_argv or default`, so an operator who configured the defect
+    seat and mistyped the value gets the **default backend** with nothing said (defect seat L-55).
+    """
+    payload = json.loads((Path(__file__).resolve().parents[1] /
+                          "examples" / "minimal" / "plan.json").read_text(encoding="utf-8"))
+    payload["seat_models"] = {"defect": value}
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(plan.PlanError, match="one model id per seat"):
+        plan.load(path)
+
+
+def test_a_real_seat_assignment_still_loads(tmp_path):
+    """The false-stop guard: the shape an operator actually writes must survive."""
+    payload = json.loads((Path(__file__).resolve().parents[1] /
+                          "examples" / "minimal" / "plan.json").read_text(encoding="utf-8"))
+    payload["seat_models"] = {"defect": "opus", "risk": "codex"}
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert plan.load(path)
