@@ -270,3 +270,35 @@ def test_a_stop_with_nothing_missing_is_not_recorded(tmp_path):
     journal = engine.AskJournal(tmp_path / "asks")
     journal.record_intake_stop([])
     assert journal.intake_stops() == []
+
+
+# ── a falsy answer is not a problem (CHG-20260903-36) ───────────────────────────────────────────
+
+
+@pytest.mark.parametrize("value", [False, 0, {}, [], "", "   "])
+def test_a_falsy_answer_is_not_recorded_as_a_problem(value):
+    """`_strings`'s `str` and `list` branches strip and drop blanks; the fallback did neither.
+
+    A seat answering `"problems": false` — a plausible JSON shape for *none* — was recorded as
+    having raised one problem named `False`, attributed to it, and printed to the operator by
+    `Survey.all_problems()`:
+
+        _strings(False) -> ['False']    _strings(0) -> ['0']    _strings({}) -> ['{}']
+
+    This is `CHG-20260903-27` L-30's shape — *"fabricated a verdict where there was no answer"* —
+    one module over, and that record swept no further than the adjudicators (idiom seat).
+    """
+    assert intake._strings(value) == []
+
+
+def test_a_real_answer_still_arrives():
+    """The false-stop guard, in both shapes the module reads generously."""
+    assert intake._strings("  a real problem  ") == ["a real problem"]
+    assert intake._strings(["a", "", "b"]) == ["a", "b"]
+
+
+def test_a_seat_that_says_no_problems_raises_none():
+    """The consequence, at the surface an operator reads."""
+    survey = intake.collect({"defect": {"problems": False, "missing": []}})
+
+    assert survey.problems.get("defect", []) == []

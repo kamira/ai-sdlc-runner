@@ -107,3 +107,66 @@ def test_kn14_names_the_tool_so_the_rule_is_no_longer_only_advice():
     knowledge = (ROOT / "docs" / "knowledge" / "knowledge.md").read_text(encoding="utf-8")
     assert "frozen_tree.py" in knowledge, (
         "KN-14 does not name the tool that enforces it, which leaves it reading as advice")
+
+
+# ── a staged rename is not one path with an arrow (CHG-20260903-36) ─────────────────────────────
+
+
+def test_a_staged_rename_yields_both_paths_and_invents_neither():
+    """`--porcelain` without `-z` renders a staged rename on ONE line as `R  <old> -> <new>`.
+
+    `line[3:]` therefore produced `'LICENSE -> LICENCE.txt'` — a single string that is not a
+    filename, and neither of the two real paths. This function's own docstring promises *"the paths
+    that differ from it"* and *"name the files when it is not"*, in the tool a verification round
+    runs to decide whether it may proceed.
+
+    `CHG-20260903-31` fixed this exact shape in `worktree.uncommitted()` and swept no further
+    (conformance seat L-54).
+    """
+    raw = "R  LICENSE\0LICENCE.txt\0 M agent.py\0"
+
+    paths = sorted(frozen_tree._porcelain_paths(raw))
+
+    assert paths == ["LICENCE.txt", "LICENSE", "agent.py"], paths
+    assert not any("->" in path for path in paths)
+
+
+def test_an_ordinary_status_field_is_unchanged():
+    """The false-stop guard: the common case must parse exactly as it did."""
+    raw = " M agent.py\0?? new.txt\0A  added.py\0"
+
+    assert sorted(frozen_tree._porcelain_paths(raw)) == ["added.py", "agent.py", "new.txt"]
+
+
+def test_every_porcelain_reader_in_this_repo_uses_the_nul_form():
+    """**The family rule**, which is the part `CHG-20260903-31` did not ship.
+
+    That record fixed one `[3:]` slice over `git status --porcelain` and left an identical one in
+    `tools/frozen_tree.py`. The sweep for this record found that one, and also found
+    `worktree.py`'s other `[3:]` in `carry()` — which is **correct**, because it is guarded by
+    `entry.startswith("!! ")` so an unprefixed old-path field is skipped rather than sliced.
+
+    `-z` is what makes a rename's two fields separable at all, and it also removes v1's path
+    quoting. A reader without it cannot be right about either.
+    """
+    # **Scoped to readers that turn the output into paths.** The first version of this rule
+    # flagged `probes.working_tree_clean`, which asks only whether the output is empty and
+    # never parses a path — `-z` would change nothing there, and adding a flag to satisfy a
+    # rule rather than for a reason is its own smell. What `-z` buys is that a rename's two
+    # fields are separable and paths are not quoted, and only a reader that splits or slices
+    # needs either.
+    root = Path(__file__).resolve().parents[1]
+    readers = []
+    for path in list((root / "src").rglob("*.py")) + list((root / "tools").glob("*.py")):
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        for i, line in enumerate(lines):
+            if '"status"' not in line or "--porcelain" not in line or '"-z"' in line:
+                continue
+            nearby = " ".join(lines[i:i + 8])
+            parses = any(mark in nearby for mark in ("[3:]", ".splitlines()", ".split("))
+            if parses:
+                readers.append(f"{path.relative_to(root)}: {line.strip()[:70]}")
+
+    assert readers == [], (
+        f"these turn porcelain output into paths without -z, so a rename is one string with "
+        f"an arrow in it and a non-ASCII name keeps its quotes: {readers}")

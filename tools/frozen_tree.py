@@ -53,6 +53,31 @@ def _git(repo: Path, *args: str) -> str:
     return done.stdout
 
 
+def _porcelain_paths(raw: str) -> list:
+    """The paths in `git status --porcelain -z` output, without inventing any.
+
+    `-z` emits one NUL-terminated field per entry — except a rename or a copy, which emits **two**:
+    the new path with its `XY ` status prefix, then the old path with **no prefix at all**. Both are
+    returned: the old one is gone from the working tree and the new one is not in the commit, and a
+    tree frozen at that commit matches neither.
+    """
+    fields = [field for field in raw.split("\0") if field]
+    paths = []
+    index = 0
+    while index < len(fields):
+        entry = fields[index]
+        index += 1
+        if len(entry) <= 3:
+            continue
+        status, path = entry[:2], entry[3:]
+        paths.append(path.strip())
+        if "R" in status or "C" in status:
+            if index < len(fields):
+                paths.append(fields[index].strip())
+                index += 1
+    return paths
+
+
 def state(repo: Path) -> Tuple[str, List[str]]:
     """The HEAD sha, and the paths that differ from it.
 
@@ -62,8 +87,23 @@ def state(repo: Path) -> Tuple[str, List[str]]:
     exists to remove.
     """
     head = _git(repo, "rev-parse", "HEAD").strip()
-    dirty = [line[3:].strip() for line in _git(repo, "status", "--porcelain").splitlines()
-             if line.strip()]
+    # **`-z`, and a rename is two fields** (CHG-20260903-36, conformance seat L-54).
+    #
+    # This read `line[3:]` over `--porcelain` without `-z`, and porcelain v1 renders a staged
+    # rename on ONE line as `R  <old> -> <new>`. Driven here: `git mv LICENSE LICENCE.txt` made
+    # `state()` return `['LICENSE -> LICENCE.txt']` — a single string that is not a filename,
+    # and neither of the two real paths. This function's own docstring promises *"the paths
+    # that differ from it"* and *"name the files when it is not"*, and it named a file that
+    # exists nowhere, in the tool a verification round runs to decide whether it may proceed.
+    #
+    # `CHG-20260903-31` fixed this exact shape in `worktree.uncommitted()` and swept no further.
+    # The sweep this time also checked `worktree.py`'s other `[3:]`, in `carry()`, and found it
+    # **correct** — it is guarded by `entry.startswith("!! ")`, so an unprefixed old-path field
+    # is skipped rather than sliced.
+    #
+    # `-z` also removes v1's path quoting, which returned non-ASCII names with their quotes and
+    # octal escapes still attached.
+    dirty = _porcelain_paths(_git(repo, "status", "--porcelain", "-z"))
     return head, sorted(dirty)
 
 

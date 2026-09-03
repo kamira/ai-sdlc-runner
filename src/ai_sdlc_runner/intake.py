@@ -110,7 +110,23 @@ def _strings(value) -> List[str]:
         return [value.strip()] if value.strip() else []
     if isinstance(value, (list, tuple)):
         return [str(v).strip() for v in value if str(v).strip()]
-    return [str(value)]
+    # **A value that is not a string or a list is not an answer** (CHG-20260903-36, idiom seat).
+    #
+    # The `str` and `list` branches above strip and drop blanks; this fallback did neither, so a
+    # seat answering `"problems": false` — a plausible JSON shape for *none* — was recorded as
+    # having raised one problem named `False`, attributed to it, and printed to the operator by
+    # `Survey.all_problems()`. Measured before the fix:
+    #
+    #     _strings(False) -> ['False']    _strings(0) -> ['0']    _strings({}) -> ['{}']
+    #
+    # This is `CHG-20260903-27` L-30's shape — *"fabricated a verdict where there was no
+    # answer"* — one module over, and that record swept no further than the adjudicators. A
+    # falsy scalar means the seat said nothing; a truthy one that is not text is still not text,
+    # and reading it as a problem invents one.
+    if not value:
+        return []
+    text = str(value).strip()
+    return [text] if text else []
 
 
 def collect(answers: Mapping[str, Mapping[str, object]]) -> Survey:
