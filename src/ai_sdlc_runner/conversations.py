@@ -84,7 +84,7 @@ KINDS = (OPENED, INSTRUCTION, ASK, ANSWER, UNANSWERED, DECISION, RELAXATION, NOT
 #: One backend (CHG-20260823-35). There were three — *「提供所有選擇的可能性」* — and the person
 #: then ruled *「只留 sqlite + file，移除 mongo 和 tinydb」*.
 #:
-#: Kept as a tuple of one rather than deleted, because `backend()` still refuses an unknown kind
+#: Kept rather than deleted, because `backend()` still refuses an unknown kind
 #: **by name**: "I asked for Mongo and got a directory" is this repository's oldest mistake wearing
 #: a config field, and it stays refused now that Mongo is gone rather than silently becoming a
 #: directory. `--store mongo` gets a refusal that says the backend was removed and when.
@@ -97,7 +97,9 @@ DB_NAME = "conversations.sqlite"
 #: config field that stops working deserves better than `unknown store 'mongo'`.
 RETIRED = {
     "mongo": "removed in CHG-20260823-35; the model registry lives in SQLite (`store.py`) and "
-             "conversations in the file store",
+             "so do conversations, since CHG-20260823-41. The `file` store is the JSONL "
+             "layout that came before that and is kept only so an existing one still "
+             "reads",
     "tinydb": "removed in CHG-20260823-35; it was the document backend with neither SQLite's "
               "durability nor the file store's readability",
 }

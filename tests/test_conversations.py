@@ -977,3 +977,29 @@ def test_a_turn_body_cannot_rewrite_its_own_envelope(tmp_path):
     # The conversation is still usable: a refused turn is refused, not a poisoned store.
     c.note("after the refusals")
     assert [t["kind"] for t in c.document()["turns"]] == ["opened", "note"]
+
+
+# ── a refusal that points at a superseded store, and a count of one that is two ────────────────
+
+
+def test_backends_is_not_described_as_a_tuple_of_one():
+    """`BACKENDS = ("sqlite", "file")` has two, and the comment directly above it said one.
+
+    A sentence that counts the line under it is worth reading against the line (CHG-20260903-32).
+    """
+    source = Path(conv.__file__).read_text(encoding="utf-8")
+
+    assert "tuple of one" not in source or len(conv.BACKENDS) == 1
+
+
+def test_the_retired_store_refusal_does_not_send_the_operator_to_a_superseded_store():
+    """`RETIRED["mongo"]` told a stranded user that conversations live *"in the file store"*.
+
+    `--store`'s own help says `sqlite` **is** the store since CHG-20260823-41 and `file` is *"the
+    JSONL layout that came before it"*. The refusal exists so a config field that stops working
+    gets better than `unknown store 'mongo'` — and it pointed at the store that was itself replaced.
+    """
+    said = conv.RETIRED["mongo"]
+
+    assert "conversations in the file store" not in said
+    assert "CHG-20260823-41" in said, "the message must name what actually replaced it"

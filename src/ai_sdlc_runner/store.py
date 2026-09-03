@@ -184,6 +184,18 @@ def _migrate(db: sqlite3.Connection) -> None:
         # any pre-existing table must match column for column or the store is refused by name.
         _verify_or_refuse(db)
         with _locked(db), db:
+            # **The `BEGIN` is load-bearing and was missing.** `sqlite3` in its default
+            # mode opens its implicit transaction before **DML only**, so a body of
+            # `CREATE TABLE` plus `PRAGMA user_version` left `db.in_transaction` False
+            # throughout and `with db:` committed nothing it had wrapped. Measured, on a
+            # bare connection: False after CREATE TABLE, False after PRAGMA, True only
+            # after an INSERT. So the sentence below was false for a third reason, having
+            # already been corrected twice (CHG-20260903-32, found by the defect seat).
+            #
+            # With it: True throughout, and a crash inside the block leaves no table and
+            # `user_version = 0` — the half-built state the paragraph promises is
+            # impossible, now actually impossible.
+            db.execute("BEGIN")
             # **`db.execute`, not `executescript`.** `executescript` issues a COMMIT before it
             # runs, so an enclosing `with db:` does not cover it — which made the previous
             # comment's claim of "one transaction" false about the four lines under it. A seat
@@ -202,6 +214,7 @@ def _migrate(db: sqlite3.Connection) -> None:
         # half-built store blessed as current.
         _verify_or_refuse(db)
         with _locked(db), db:
+            db.execute("BEGIN")            # see schema 1: DDL does not open one by itself
             for statement in _SCHEMA_2:
                 db.execute(statement)
             db.execute("PRAGMA user_version = 2")
@@ -211,6 +224,7 @@ def _migrate(db: sqlite3.Connection) -> None:
         # version inside that same transaction so a crash cannot bless a half-built store.
         _verify_or_refuse(db)
         with _locked(db), db:
+            db.execute("BEGIN")            # see schema 1: DDL does not open one by itself
             for statement in _SCHEMA_3:
                 db.execute(statement)
             db.execute("PRAGMA user_version = 3")

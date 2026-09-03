@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_sdlc_runner import cli, engine, graph, policy, settings as settings_mod, workorder
+from ai_sdlc_runner import cli, conversations as conv_mod, engine, graph, policy, settings as settings_mod, workorder
 
 SPEC = {
     "scope": "src/", "objective": "build the thing", "instructions": "do the work",
@@ -958,3 +958,25 @@ def test_the_three_nodes_that_read_backwards_now_name_their_successor():
         follows = " ".join(lines[at + 1:at + 4])
         assert goes_to in follows, (
             f"{node_id} does not name {goes_to}; it is followed by {follows!r}")
+
+
+# ── every export format the runner has is named where a person looks (CHG-20260903-32) ─────────
+
+
+def test_every_export_format_is_named_in_the_help():
+    """`--help` advertised *"JSON, Markdown or CSV"* against a five-entry `FORMATS`.
+
+    The two it hid — `html` and `playback` — are the only two that render the walk. Derived from
+    the tuple now, so the sentence cannot drift from it again.
+    """
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        try:
+            _parser().parse_args(["--help"])
+        except SystemExit:
+            pass
+    printed = buffer.getvalue()
+
+    missing = [name for name in conv_mod.FORMATS if name not in printed]
+
+    assert missing == [], f"these formats work and `runner --help` does not name them: {missing}"

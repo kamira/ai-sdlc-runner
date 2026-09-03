@@ -534,15 +534,12 @@ class Trees:
 
     # ---------------------------------------------------------------- reporting
 
-    def report(self) -> str:
-        """What actually happened, for the run report — never what was intended."""
-        made = len(self._trees)
-        top = self.top()
-        if top is None:
-            return describe(self.root, run=self._run) + (
-                f" ({REQUIRE_FLAG} not passed, so the run continued)" if not self.required else "")
-        return f"{made} module tree(s) under {self._base}" if made else describe(
-            self.root, run=self._run)
+    # `report()` was removed by CHG-20260903-32. It had **zero** call sites in `src/` or
+    # `tests/` — the run report's line comes from `describe()` — and its one sentence was
+    # *"What actually happened, for the run report — never what was intended."* Measured,
+    # `made = len(self._trees)` reads a dict that `close()` empties, so after a run that made
+    # two trees it fell through to `describe()`, which returns *"a worktree per module build"*:
+    # the design sentence. It returned the intent, in the method that says it never does.
 
 
 def key_for(nth: int) -> str:

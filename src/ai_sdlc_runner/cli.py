@@ -821,7 +821,7 @@ def _import(args: argparse.Namespace, back) -> int:
 def cmd_export(args: argparse.Namespace) -> int:
     """Write one conversation out in the format the operator chose.
 
-    The format is asked for rather than defaulted, because the three are not interchangeable: only
+    The format is asked for rather than defaulted, because the five are not interchangeable: only
     `json` is lossless, and a silent default would pick which information the operator loses.
     """
     back = _read_store(args)
@@ -1702,7 +1702,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="what they found, if anything")
     pq.set_defaults(func=cmd_emergencies)
 
-    pe = sub.add_parser("export", help="export one conversation as JSON, Markdown or CSV")
+    # Five, not three. `html` and `playback` are the only two that render the walk, and
+    # `runner --help` hid both (CHG-20260903-32). Derived from `FORMATS` so the sentence
+    # cannot drift from the tuple again.
+    pe = sub.add_parser(
+        "export",
+        help="export one conversation as one of: "
+             + ", ".join(conv_mod.FORMATS))
     _store_flags(pe)
     pe.add_argument("--conversation", default=None, metavar="ID",
                     help="which conversation; `runner conversations` lists them")
