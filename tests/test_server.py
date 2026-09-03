@@ -1418,3 +1418,112 @@ def test_the_rule_looks_at_the_three_methods_that_exist():
     assert found == {"approve", "reject", "rule"}, (
         f"the rule above scans {sorted(found)}; if a decision method was added or renamed, this "
         f"floor is the place to say so rather than letting the rule quietly cover less")
+
+
+# ── what the console shows of what governs the run (CHG-20260903-49) ───────────────────
+
+#: A report field the console does not render, and **why**. Not an exemption list — an inventory.
+#:
+#: `test_every_key_the_server_sends_reaches_the_console` (CHG-20260903-29) watches the 19 keys
+#: `RunState.snapshot()` builds. `RunReport().as_dict()` has 30 fields, and CHG-20260903-24 retired
+#: `CHG-20260901-15` task 24 on the ground that the `-29` rule would catch the next one to go
+#: unrendered. It cannot: a field that never enters the snapshot cannot fail a rule that iterates
+#: the snapshot. The rule is honestly named — *the server sends* — and the citation was not.
+#:
+#: So the fifteen are written down instead. Every one of them is the record of **what governed the
+#: run** rather than what it did, which is the shape worth seeing in one place.
+NOT_ON_THE_CONSOLE = {
+    # the grade a panel settled on
+    "risk_proposed": "the per-model grades behind `risk_agreed`; the console shows neither yet",
+    "risk_settled": "the grade the run was governed by — reaches `--json` and the terminal only",
+    "risk_agreed": "whether a panel agreed it, as against a grade carried from the plan",
+    # the class, and what it dissolved
+    "change_class": "which class governed the run, as a sentence for a person",
+    "class_authorised_by": "who declared it, as a name",
+    "relaxations": "the runner's own relaxations — `--store-remote allow` and the like",
+    "relaxations_by_class": "the gates a class dissolved, each named",
+    "relaxation_authorisers": "who authorised each of those, per note",
+    # what the run did
+    "effects": "which effects applied and which were already met",
+    "halts": "the permanent halts this run tripped",
+    "panel_rounds": "how many laps a panel took before it settled",
+    "resumed": "asks answered from the journal rather than re-asked",
+    "single_model_panels": "panels that ran on one voice because that is all there was",
+    # trust and the store
+    "on_trust": "targets accepted because the operator vouched for the command",
+    "store_errors": "writes to the conversation store that failed",
+}
+
+
+def _reaches_console(field, page):
+    """True if the field's **content** reaches the console, under whatever key.
+
+    **Content, not name.** `snapshot()` sends `report.halted_at` as `"at"` and `report.halt_reason`
+    as `"reason"`, so a name-based check flags two fields that the console does render — which is
+    how the seat's count of seventeen became fifteen when it was measured (CHG-20260903-49).
+    """
+    import ast
+
+    if re.search(r"\b%s\b" % re.escape(field), page):
+        return True
+    source = pathlib.Path(server.__file__).read_text(encoding="utf-8")
+    fn = next(n for n in ast.walk(ast.parse(source))
+              if isinstance(n, ast.FunctionDef) and n.name == "snapshot")
+    for mapping in ast.walk(fn):
+        if not isinstance(mapping, ast.Dict):
+            continue
+        for key, value in zip(mapping.keys, mapping.values):
+            reads = {a.attr for a in ast.walk(value) if isinstance(a, ast.Attribute)
+                     and isinstance(a.value, ast.Name) and a.value.id == "report"}
+            if field in reads and re.search(r"\b%s\b" % re.escape(key.value), page):
+                return True
+    return False
+
+
+def test_every_report_field_is_rendered_or_written_down():
+    """**The scope the `-29` rule does not cover, made visible rather than assumed.**
+
+    A report field that reaches no console and nobody wrote down is the defect
+    `CHG-20260901-16` was filed for — *"declared, written during the walk, and emitted by nothing"*
+    — one surface further out. This does not build the fifteen views; it refuses a sixteenth field
+    joining them in silence.
+    """
+    page = _console()
+    fields = set(engine.RunReport().as_dict())
+
+    unlisted = sorted(f for f in fields
+                      if not _reaches_console(f, page) and f not in NOT_ON_THE_CONSOLE)
+    assert unlisted == [], (
+        f"these reach no console and no reason is written down for them: {unlisted}. Render them, "
+        f"or add each to NOT_ON_THE_CONSOLE with what it is — an inventory a reader can argue "
+        f"with, not a silence")
+
+    stale = sorted(f for f in NOT_ON_THE_CONSOLE if f not in fields)
+    assert stale == [], f"NOT_ON_THE_CONSOLE names fields the report no longer has: {stale}"
+
+    rendered_but_listed = sorted(f for f in NOT_ON_THE_CONSOLE if _reaches_console(f, page))
+    assert rendered_but_listed == [], (
+        f"these are listed as absent and the console renders them: {rendered_but_listed}")
+
+
+def test_the_inventory_is_fifteen_and_the_two_renamed_ones_are_not_in_it():
+    """**The floor**, and the correction that produced this record's number.
+
+    The conformance seat counted seventeen by field name. `halted_at` reaches the console as `at`
+    and `halt_reason` as `reason`, so two of the seventeen are rendered — a name-based count of a
+    thing that is renamed, which is the class of error this whole review round has been finding,
+    inside one of the round's own findings.
+    """
+    page = _console()
+    assert len(NOT_ON_THE_CONSOLE) == 15, (
+        f"the inventory is {len(NOT_ON_THE_CONSOLE)} entries; if the console grew a view, delete "
+        f"the entry rather than leaving it — the test above already refuses a listed-and-rendered "
+        f"field, and this number is what a reader checks the record against")
+
+    for renamed in ("halted_at", "halt_reason"):
+        assert not re.search(r"\b%s\b" % re.escape(renamed), page), (
+            f"{renamed} is now named directly in the page; the renaming this test exists to "
+            f"describe is gone")
+        assert _reaches_console(renamed, page), (
+            f"{renamed} no longer reaches the console under its snapshot key — if that is "
+            f"deliberate it belongs in NOT_ON_THE_CONSOLE")
