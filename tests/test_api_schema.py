@@ -111,15 +111,40 @@ def test_the_suspension_section_lists_every_key_a_suspension_carries():
     assert not missing, f"the suspension section omits {missing}"
 
 
-def test_the_guard_over_the_suspension_section_reads_every_literal_there_is():
-    # The defect was the guard, not the page, so this pins the guard. Three literals, and the one
-    # with a nested brace is the one a `split("}")` would have cut in half.
-    blocks = _suspension_literals(inspect.getsource(engine))
-    assert len(blocks) == 3, f"expected three suspension literals, found {len(blocks)}"
-    assert any("{k: list(v)" in b for b in blocks), "the nested-brace literal is not being read"
-    first_only = set(re.findall(r'"(\w+)":', blocks[0]))
-    every = set().union(*(set(re.findall(r'"(\w+)":', b)) for b in blocks))
-    assert every - first_only, "reading only the first literal now misses nothing; drop this guard"
+def test_the_page_documents_every_field_a_suspension_can_carry():
+    """**The guard this replaces named its own retirement condition, and it was met.**
+
+    It read the three `report.suspended` dict literals and asserted they differed:
+
+        assert every - first_only, "reading only the first literal now misses nothing; drop this
+        guard"
+
+    It existed because the shapes disagreed — 9, 11 and 13 keys — which is the defect
+    `CHG-20260904-07` closed by routing all three through `engine._suspension`. With one union
+    there is no "first literal" and nothing for a second reading to add, so the guard's own
+    condition for dropping it holds.
+
+    What replaces it is stronger and does not depend on how the shape is spelled: the page
+    documents every field the union declares.
+    """
+    section = PAGE.split("## 4 · The suspension")[1].split("## 5 ·")[0]
+    missing = sorted(f for f in engine.SUSPENSION_FIELDS if f'"{f}"' not in section)
+    assert not missing, (
+        f"a suspension carries these and the page does not name them: {missing}")
+
+
+def test_the_suspension_union_is_the_only_way_a_shape_is_built():
+    """The floor for the test above: it reads `SUSPENSION_FIELDS`, so a shape built some other way
+    would be documented by accident rather than by rule."""
+    import ast
+
+    tree = ast.parse(inspect.getsource(engine))
+    literals = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                and any(isinstance(x, ast.Attribute) and x.attr == "suspended" for x in n.targets)
+                and isinstance(n.value, ast.Dict)]
+    assert literals == [], (
+        f"{len(literals)} suspension(s) are built as a dict literal, so `SUSPENSION_FIELDS` is no "
+        f"longer the union the page is checked against")
 
 
 def test_the_flow_route_section_names_the_node_fields_it_actually_sends():

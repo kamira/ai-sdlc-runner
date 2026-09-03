@@ -1903,6 +1903,44 @@ def _finish(report: "RunReport", confirmations: Dict[str, int],
     return report
 
 
+#: Every field any suspension can carry, and what it says when this shape does not have one.
+#:
+#: **The comment promised this and the data did not deliver it** (CHG-20260904-07, defect seat
+#: L-28). The three `report.suspended = {...}` sites carried 9, 11 and 13 keys — nine shared, two
+#: only on a tie (`reason`, `verdicts`) and four only on an incomplete requirement (`missing`,
+#: `options`, `problems`, `safety`) — under a comment reading *"Every kind of suspension carries
+#: the same keys, so a caller never has to know which shape it is holding … each says so rather
+#: than omitting the field — a missing key and a false one read the same way only until they do
+#: not."*
+#:
+#: `cli.cmd_run` is the caller that took it at its word: CHG-20260904-02 read
+#: `stop.get("reason", "nobody has finished it")` at an incomplete stop and printed the
+#: placeholder, so the sentence naming the missing aspect **and how many times it has been asked**
+#: never reached the terminal — in the surface that record exists because nobody had swept it.
+SUSPENSION_FIELDS = {
+    "node_id": None, "gate": None, "gate_when": None, "verdict": None, "risk": None,
+    "incomplete": False, "undecided": False, "branches": (), "run_id": None,
+    "reason": "", "verdicts": {}, "missing": (), "options": {}, "problems": (), "safety": (),
+}
+
+
+def _suspension(**said):
+    """One suspension, carrying every field, whichever shape it is.
+
+    Unknown names are refused rather than passed through: a typo that adds a key nobody reads is
+    the quiet half of the defect this exists to close.
+    """
+    unknown = sorted(set(said) - set(SUSPENSION_FIELDS))
+    if unknown:
+        raise EngineError(
+            f"a suspension names {unknown}, which no reader of `report.suspended` expects. Add it "
+            f"to SUSPENSION_FIELDS, where every shape gets it, or spell it the way the others do.")
+    shape = {k: (list(v) if isinstance(v, tuple) else dict(v) if isinstance(v, dict) else v)
+             for k, v in SUSPENSION_FIELDS.items()}
+    shape.update(said)
+    return shape
+
+
 def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunReport:
     """Walk the flow from ``intake``, dispatching one work order per ask.
 
@@ -2263,22 +2301,22 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
             # continuing". What is new is that the report says which of the two it is, and carries
             # what an answer would have to match.
             report.state = SUSPENDED
-            report.suspended = {
-                "node_id": node.id,
-                "incomplete": False,
+            report.suspended = _suspension(
+                node_id=node.id,
+                incomplete=False,
                 # Every kind of suspension carries the same keys, so a caller never has to know which
                 # shape it is holding before it can read one. A gate has no branches to choose
                 # between and a tie has no gate to confirm, and each says so rather than omitting
                 # the field -- a missing key and a false one read the same way only until they do
                 # not.
-                "undecided": False,
-                "gate": node.gate,
-                "gate_when": node.gate_when,
-                "verdict": verdict["verdict"],
-                "risk": verdict["risk"],
-                "branches": [],
-                "run_id": cfg.run_id,
-            }
+                undecided=False,
+                gate=node.gate,
+                gate_when=node.gate_when,
+                verdict=verdict["verdict"],
+                risk=verdict["risk"],
+                branches=[],
+                run_id=cfg.run_id,
+            )
             report.halted_at = node.id
             # "confirm it to continue" is false at the rung a confirmation cannot open, and a
             # halt reason that tells an operator to do something that will not work is this
@@ -2489,23 +2527,29 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                         report.options[aspect] = intake_mod.read_options(answer, aspect)
 
                     report.state = SUSPENDED
-                    report.suspended = {
-                        "node_id": node.id,
-                        "undecided": False,
-                        "incomplete": True,
-                        "gate": node.gate,
-                        "gate_when": node.gate_when,
-                        "verdict": verdict["verdict"],
-                        "risk": verdict["risk"],
-                        "branches": [],
-                        "missing": list(survey.missing),
-                        "problems": survey.all_problems(),
-                        "safety": {k: list(v) for k, v in survey.safety.items()},
-                        "options": {k: list(v) for k, v in report.options.items()},
-                        "run_id": cfg.run_id,
-                    }
+                    # Computed **before** the shape rather than after it (CHG-20260904-07). It was
+                    # assigned to `halt_reason` eleven lines below, so the suspension could not
+                    # carry it and `cli.cmd_run` printed a placeholder where the console printed
+                    # the sentence. The shape says what it says it says.
+                    said = intake_mod.stop_reason(survey, cfg.intake_history)
+                    report.suspended = _suspension(
+                        node_id=node.id,
+                        undecided=False,
+                        incomplete=True,
+                        reason=said,
+                        gate=node.gate,
+                        gate_when=node.gate_when,
+                        verdict=verdict["verdict"],
+                        risk=verdict["risk"],
+                        branches=[],
+                        missing=list(survey.missing),
+                        problems=survey.all_problems(),
+                        safety={k: list(v) for k, v in survey.safety.items()},
+                        options={k: list(v) for k, v in report.options.items()},
+                        run_id=cfg.run_id,
+                    )
                     report.halted_at = node.id
-                    report.halt_reason = intake_mod.stop_reason(survey, cfg.intake_history)
+                    report.halt_reason = said
                     return _finish(report, confirmations, cfg.conversation, _held(), _unsandboxed)
 
             elif node.mode == graph.SEAT_PANEL:
@@ -2676,19 +2720,19 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     # this, and reporting it as unresumable would hide a live decision from the one
                     # party entitled to make it.
                     report.state = SUSPENDED
-                    report.suspended = {
-                        "node_id": node.id,
-                        "undecided": True,
-                        "incomplete": False,
-                        "gate": None,
-                        "gate_when": None,
-                        "verdict": policy.UNDECIDED,
-                        "risk": cfg.risk,
-                        "branches": sorted(node.branches),
-                        "reason": last.get("reason", "the panel was split"),
-                        "verdicts": dict(last.get("verdicts") or {}),
-                        "run_id": cfg.run_id,
-                    }
+                    report.suspended = _suspension(
+                        node_id=node.id,
+                        undecided=True,
+                        incomplete=False,
+                        gate=None,
+                        gate_when=None,
+                        verdict=policy.UNDECIDED,
+                        risk=cfg.risk,
+                        branches=sorted(node.branches),
+                        reason=last.get("reason", "the panel was split"),
+                        verdicts=dict(last.get("verdicts") or {}),
+                        run_id=cfg.run_id,
+                    )
                     report.halted_at = node.id
                     report.halt_reason = (
                         f"{node.id} reached no decision — "
