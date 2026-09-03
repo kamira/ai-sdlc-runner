@@ -56,7 +56,9 @@ The one flow the runner drives, and the loop the whole design is about:
 7. **QA tests and verifies** the whole change, then **acceptance**. Both gate *after* the work — a
    review that halts before it runs is a review a high-risk change can never get.
 8. **PR, then merge.** Merge is gated **before**: a one-way door has to be stopped in front of, not
-   behind, so it asks at every risk grade.
+   behind, so it stops at every risk grade — `confirm` at low, `halt` at medium and high. It is
+   the only gate of the ten that stops at all three, and `policy.py` says in as many words that
+   *a halt is not a question*.
 9. **Close out, then feedback returns to PM.** The flow closes rather than ends.
 
 Cutting across all of it:
