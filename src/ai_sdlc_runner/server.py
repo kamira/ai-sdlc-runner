@@ -338,8 +338,29 @@ class Runner:
         Returns the suspension, so the caller can stamp `node_id` and `run_id` from it —
         `Approval`'s docstring calls `None` *"the wrong one for an answer typed into a console after
         a stop"*, and it was the one `reject` and `rule` passed.
+
+        **A missing value is refused, not skipped** (CHG-20260904-01, defect seat L-15). `do_POST`
+        turns an absent field into `""` — `str(body.get("gate") or "")` — and the guards below were
+        written `if gate and …`, so an empty one short-circuited both and **no check ran at all**.
+        The decision then reached a ledger this class's own docstring calls append-only with no
+        removal route, and `walk`'s up-front check refused it on every subsequent walk:
+
+            Approval(gate="")    EngineError: approval for gate '' does not exist
+            Rejection(gate="")   EngineError: rejection names gate '', which does not exist
+            Ruling(node_id="")   EngineError: ruling names a node that is not in the flow
+
+        The run was then unrecoverable short of `POST /run` — which is CHG-20260903-23's L-25
+        defect arriving by the empty-string road, into the helper CHG-20260903-44 extracted to stop
+        exactly this. The helper asked the question and the question answered nothing.
         """
         waiting = self.state.report.suspended or {} if self.state.report else {}
+        for label, given in (("gate", gate), ("node", node_id)):
+            if given is not None and not str(given).strip() and waiting.get(
+                    "gate" if label == "gate" else "node_id"):
+                raise ServerError(
+                    f"this decision names no {label}, and the run is waiting at "
+                    f"{waiting.get('gate')!r} / {waiting.get('node_id')!r}. An empty answer cannot "
+                    f"be spent anywhere and cannot be withdrawn once recorded.")
         if gate and waiting.get("gate") and gate != waiting["gate"]:
             raise ServerError(
                 f"this run is waiting at {waiting['gate']!r}, not {gate!r}. A decision names the "

@@ -1386,15 +1386,38 @@ def test_no_operator_decision_reaches_state_without_naming_its_stop():
                    and getattr(getattr(n.func, "value", None), "attr", None) in DECISIONS]
         if not appends:
             continue
-        asked = any(isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "_answering"
-                    for n in ast.walk(fn))
-        stamped = any(kw.arg == "run_id" for call in appends
-                      for inner in ast.walk(call) if isinstance(inner, ast.Call)
-                      for kw in inner.keywords)
-        if not asked or not stamped:
-            missing.append(f"{fn.name}: {'no _answering' if not asked else ''}"
-                           f"{' and ' if not asked and not stamped else ''}"
-                           f"{'no run_id' if not stamped else ''}")
+        # **What it was given, not that it was named** (CHG-20260904-01, defect seat L-20). This
+        # asked only whether the token `_answering` appeared and whether the token `run_id=` did,
+        # so a fourth method calling `self._answering()` with no arguments and passing
+        # `run_id=None` satisfied it while checking nothing — measured, and it passed.
+        calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                 and getattr(n.func, "attr", None) == "_answering"]
+        given = {kw.arg for call in calls for kw in call.keywords}
+        params = {a.arg for a in fn.args.args} - {"self", "version"}
+        asked = bool(calls) and given >= (params & {"gate", "node_id"})
+
+        # And `run_id` must come from what the helper returned, not from any expression: the
+        # literal `None` is what `Approval`'s docstring calls "the wrong one for an answer typed
+        # into a console after a stop", and it is what `reject` and `rule` used to pass.
+        stamped = []
+        for call in appends:
+            for inner in ast.walk(call):
+                if not isinstance(inner, ast.Call):
+                    continue
+                for kw in inner.keywords:
+                    if kw.arg != "run_id":
+                        continue
+                    stamped.append(any(isinstance(sub, ast.Call)
+                                       and getattr(sub.func, "attr", None) == "get"
+                                       for sub in ast.walk(kw.value)))
+        carried = bool(stamped) and all(stamped)
+
+        if not asked or not carried:
+            missing.append(
+                f"{fn.name}: "
+                f"{'_answering is not given the values this method takes' if not asked else ''}"
+                f"{' and ' if not asked and not carried else ''}"
+                f"{'run_id is not read from the suspension' if not carried else ''}")
 
     assert missing == [], (
         f"these append an operator decision without naming the stop it answers or the run it "
@@ -1527,3 +1550,45 @@ def test_the_inventory_is_fifteen_and_the_two_renamed_ones_are_not_in_it():
         assert _reaches_console(renamed, page), (
             f"{renamed} no longer reaches the console under its snapshot key — if that is "
             f"deliberate it belongs in NOT_ON_THE_CONSOLE")
+
+
+def test_a_decision_that_names_nothing_is_refused_before_it_reaches_the_ledger(live):
+    """**The empty-string road into an append-only ledger** (CHG-20260904-01, defect seat L-15).
+
+    `do_POST` turns an absent field into `""` (`str(body.get("gate") or "")`), and `_answering`'s
+    guards were written `if gate and …` — so an empty one short-circuited both and no check ran.
+    The entry then reached a ledger with no removal route, and `walk`'s up-front check refused it
+    on **every subsequent walk**:
+
+        Approval(gate="")    approval for gate '' does not exist
+        Rejection(gate="")   rejection names gate '', which does not exist
+        Ruling(node_id="")   ruling names a node that is not in the flow
+
+    Unrecoverable short of `POST /run` — CHG-20260903-23's L-25 arriving by a different road, into
+    the helper CHG-20260903-44 extracted to stop it. The helper asked the question; the question
+    answered nothing.
+    """
+    call, runner, _ = live
+    _, started = call("POST", "/run", {"instruction": "do it", "version": 0})
+    stop = started["suspended"]
+    assert stop, "the run is not waiting, so there is no decision to leave empty"
+
+    empty = [
+        ("/run/gate", {"version": started["version"], "gate": "", "node_id": stop["node_id"]}),
+        ("/run/reject", {"version": started["version"], "gate": "",
+                         "node_id": stop["node_id"], "reason": "x"}),
+        ("/run/decide", {"version": started["version"], "node_id": "", "branch": "yes"}),
+    ]
+    for route, payload in empty:
+        code, said = call("POST", route, payload)
+        assert code >= 400, f"{route} accepted a decision naming nothing: {said}"
+
+    assert not runner.state.approvals, runner.state.approvals
+    assert not runner.state.rejections, runner.state.rejections
+    assert not runner.state.rulings, runner.state.rulings
+
+    # And the run is still answerable, which is the property the ledger's append-only shape puts
+    # at risk: one accepted empty entry would have made this 409 for the life of the run.
+    code, _ = call("POST", "/run/gate", {"version": started["version"], "gate": stop["gate"],
+                                         "node_id": stop["node_id"]})
+    assert code == 200, "the run could not be answered after the empty decisions were refused"
