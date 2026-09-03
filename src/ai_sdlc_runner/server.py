@@ -177,6 +177,12 @@ class RunState:
     #: escalation to options depends on this being **counted** rather than remembered, and it has to
     #: survive the walks in between — a counter that resets each walk would ask forever.
     intake_history: List[Dict[str, object]] = field(default_factory=list)
+    #: How many instructions had been given when the last intake ask was counted (CHG-20260904-05).
+    #: **On the run, not on the runner** (CHG-20260904-09): `start` builds a fresh `RunState` with
+    #: `instructions=[instruction]`, so a mark that outlived it made `told > mark` false for every
+    #: run after the first in a process, and `intake_history` above stayed empty — the field whose
+    #: own comment says the escalation depends on it being counted.
+    instructions_when_last_asked: int = 0
     log: List[Dict[str, object]] = field(default_factory=list)
     #: What the operator handed over, and anything the store has since lost. A brief that has
     #: quietly lost a document is worse than one that says so.
@@ -517,10 +523,6 @@ class Runner:
             raise ServerError(
                 f"this run is waiting for {wanted}, and that is not what you sent.")
 
-    #: How many instructions had been given when the last intake ask was
-    #: counted. `0` before the first walk, so the first incomplete stop always counts
-    #: (CHG-20260904-05).
-    _instructions_when_last_asked = 0
     def _advance(self) -> Dict[str, object]:
         """Run the walk to its next return — **one at a time**, and never dropping what arrived.
 
@@ -644,8 +646,8 @@ class Runner:
             # reaches work orders as an artifact; it is not somebody supplying the aspect.
             stop = report.suspended or {}
             told = len(self.state.instructions)
-            if stop.get("incomplete") and told > self._instructions_when_last_asked:
-                self._instructions_when_last_asked = told
+            if stop.get("incomplete") and told > self.state.instructions_when_last_asked:
+                self.state.instructions_when_last_asked = told
                 self.state.intake_history.append({"missing": list(stop.get("missing") or ())})
             self.state.report = report
             self.state.state = report.state

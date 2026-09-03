@@ -1700,6 +1700,20 @@ MUTATIONS: List[Mutation] = [
         'tests/test_sub_planning.py'),
 
     Mutation(
+        'decisions', 'the two names are handed over swapped, so every valid refusal dies',
+        SRC / 'server.py',
+        '            waiting = self._answering(gate=gate, node_id=node_id)\n            self.state.rejections.append(\n                engine.Rejection(gate=gate, node_id=node_id or waiting.get("node_id"),',
+        '            waiting = self._answering(gate=node_id, node_id=gate)\n            self.state.rejections.append(\n                engine.Rejection(gate=gate, node_id=node_id or waiting.get("node_id"),',
+        'tests/test_server.py'),
+
+    Mutation(
+        'decisions', 'the ask counter goes back to outliving the run it counts',
+        SRC / 'server.py',
+        '            self.state = RunState(state="running", version=self.state.version + 1,\n                                  instructions=[instruction] if instruction else [])',
+        '            self.state = RunState(state="running", version=self.state.version + 1,\n                                  instructions=[instruction] if instruction else [],\n                                  instructions_when_last_asked=(\n                                      self.state.instructions_when_last_asked))',
+        'tests/test_server.py'),
+
+    Mutation(
         'supersession', 'a back-pointer the named record denies goes unreported again',
         TOOLS / 'ledger_check.py',
         '            if claimed >= SUPERSESSION_REQUIRED_FROM and chg_id not in _supersedes(texts[claimed]):',

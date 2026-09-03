@@ -1346,6 +1346,28 @@ def test_a_refusal_that_names_a_different_gate_is_refused(live):
     assert "waiting at" in json.dumps(body), body
 
 
+def test_a_refusal_naming_the_runs_own_stop_is_accepted(live):
+    """**The test this file did not have** (defect seat L-37).
+
+    All four `reject` tests assert a 4xx — `nowhere to send a refusal`, a mismatched gate, an empty
+    gate, an incomplete stop. So the suite could only see refusals becoming *more* likely, and a
+    one-token swap in `reject`'s call to `_answering` — which breaks every valid refusal — left
+    82 server tests and 19 schema tests green. A rule about the source caught nothing because it
+    compared two sets; this is the floor under it, and it is about behaviour.
+    """
+    call, _, _ = live
+    _, started = call("POST", "/run", {"instruction": "do it", "version": 0})
+    stop = started["suspended"]
+
+    code, body = call("POST", "/run/reject",
+                      {"version": started["version"], "gate": stop["gate"],
+                       "node_id": stop["node_id"], "reason": "not like that"})
+
+    assert code < 400, (
+        f"a refusal naming the run's own stop {stop['node_id']}/{stop['gate']} was refused: "
+        f"{json.dumps(body)[:300]}")
+
+
 def test_every_operator_decision_carries_the_run_it_answers(live):
     """`run_id=None` left the engine's staleness guards — `if rejection.run_id is not None and
     rejection.run_id != cfg.run_id` and the same for rulings — unreachable through the only human
@@ -1399,13 +1421,23 @@ def test_no_operator_decision_reaches_state_without_naming_its_stop():
         # `def veto(self, version, *, gate, node_id)` emptied `params` and the comparison was
         # vacuously true. Both are one-token edits.
         #
-        # The property is that the helper is handed the same names the method took. Compared as
-        # the **argument expressions**, so a literal or an alias is not the method's parameter.
+        # **The pairing, not the two sets** (CHG-20260904-09, defect seat L-37). This compared the
+        # set of values handed over against the set of names taken, so `_answering(gate=node_id,
+        # node_id=gate)` — one token — satisfied it: both names appear on both sides. And the swap
+        # is not cosmetic. `_answering` then compares `node_id` against `waiting["gate"]`, so
+        # **every valid refusal** dies with *"this run is waiting at 'plan_confirmed', not
+        # 'pm_confirm'"*. Measured: 82 server tests and 19 schema tests all green under it, because
+        # all four `reject` tests assert a 4xx and the swap only makes refusals likelier. The
+        # happy-path test this file was missing is below.
+        #
+        # The property is that each parameter is handed to the argument of the same name. Compared
+        # as **pairs of argument expressions**, so a literal, an alias or a swap is not it.
         taken = ({a.arg for a in fn.args.args} | {a.arg for a in fn.args.kwonlyargs}) - {
             "self", "version"}
-        handed = {kw.value.id for call in calls for kw in call.keywords
+        handed = {(kw.arg, kw.value.id) for call in calls for kw in call.keywords
                   if isinstance(kw.value, ast.Name)}
-        asked = bool(calls) and handed >= (taken & {"gate", "node_id"})
+        asked = bool(calls) and all(
+            (name, name) in handed for name in taken & {"gate", "node_id"})
 
         # And `run_id` must come from what the helper returned, not from any expression: the
         # literal `None` is what `Approval`'s docstring calls "the wrong one for an answer typed
@@ -1770,6 +1802,38 @@ def test_the_runner_does_not_give_up_on_somebody_it_never_asked_again(tmp_path):
     assert not intake_mod.needs_options(runner.state.intake_history, "architecture"), (
         f"the runner stopped asking after {len(runner.state.intake_history)} recorded asks, "
         f"having asked once and been answered by nobody")
+
+
+def test_the_ask_counter_still_counts_on_the_second_run_of_a_process(tmp_path):
+    """**The mark was run state living on the runner** (defect seat L-35, CHG-20260904-09).
+
+    `start` replaces `self.state` with a fresh `RunState` — `instructions=[instruction]`,
+    `intake_history=[]` — and a mark that outlived it made `told > mark` false for every run after
+    the first. Measured before the fix: run 1 counted twice and carried a mark of 2; run 2's
+    instructions restarted at 1, nothing was counted, `intake_asks_by_aspect` was `{}` while the
+    sentence beside it said *"(asked once)"*, and `ASK_LIMIT` fired two asks late.
+
+    All three of CHG-20260904-05's tests drive one run per runner, which is why the fix's own
+    changed line had no guard over the one thing that resets around it.
+    """
+    runner = _intake_only_runner(tmp_path)
+
+    runner.start("do it", runner.state.version)
+    # The floor. Without it this passes over the defect by never counting at all, which is how the
+    # first attempt at this reproduction failed.
+    assert len(runner.state.intake_history) == 1, "run 1 did not reach an incomplete stop"
+    runner.instruct(runner.state.version, "and the architecture is three services")
+    assert len(runner.state.intake_history) == 2, "run 1's second ask was not counted"
+    mark = runner.state.instructions_when_last_asked
+
+    # The one precondition `start` checks is the state word, and a finished run is what a person
+    # starting a second one has in front of them.
+    runner.state.state = engine.FINISHED
+    runner.start("do something else", runner.state.version)
+
+    assert runner.state.intake_history, (
+        f"run 2 recorded no intake ask. A mark of {mark} carried across a fresh RunState whose "
+        f"instructions restarted at {len(runner.state.instructions)}, so `told > mark` was false")
 
 
 def test_a_gate_decision_cannot_walk_from_an_incomplete_stop():
