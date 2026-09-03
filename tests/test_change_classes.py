@@ -945,9 +945,18 @@ def test_both_resolutions_record_through_one_function():
     fn = next(n for n in ast.walk(ast.parse(pathlib.Path(engine.__file__).read_text(
         encoding="utf-8"))) if isinstance(n, ast.FunctionDef) and n.name == "walk")
 
+    # **Both halves of the call** (CHG-20260904-04, defect seat L-19). This read `n.args` only,
+    # so a resolution written `resolve_verdict(node, grade, cfg.autonomy, change_class=here)` was
+    # not counted as class-carrying and the `>=` comparison below silently covered less. The `>= 2`
+    # floor does not help: it fires only if an existing positional call is removed. Measured — a
+    # third class-carrying resolution in keyword form recorded nothing and this rule stayed green.
+    def _carries_the_class(call):
+        named = list(call.args) + [kw.value for kw in call.keywords]
+        return any(isinstance(a, ast.Name) and a.id == "here" for a in named)
+
     with_class = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
                   and getattr(n.func, "id", None) == "resolve_verdict"
-                  and any(isinstance(a, ast.Name) and a.id == "here" for a in n.args)]
+                  and _carries_the_class(n)]
     recorded = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
                 and getattr(n.func, "id", None) == "_record_relaxation"]
 
