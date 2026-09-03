@@ -529,8 +529,13 @@ function drawAsk() {
       if (opts && opts.length) {
         // Asked three times and not supplied. The runner stops asking and puts options on the
         // table — it does not pick one, and there are always at least three so the choice is real.
-        v.textContent = "asked " + (state.intake_asks || 0) +
-                        " times. Options, none of them chosen for you:";
+        // Per aspect, matching the sentence in the `<p>` above (CHG-20260904-03). This read
+        // `state.intake_asks`, a total over every intake stop, and disagreed with that
+        // sentence from the second aspect onward.
+        var asked = (state.intake_asks_by_aspect || {})[aspect] || 0;
+        v.textContent = "asked " + (asked === 1 ? "once" : asked === 2 ? "twice"
+                                   : asked + " times") +
+                        ". Options, none of them chosen for you:";
         opts.forEach(function (text, i) {
           var o = document.createElement("div"); o.className = "opt";
           var n = document.createElement("div"); n.className = "n"; n.textContent = (i + 1) + ".";

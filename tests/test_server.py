@@ -1592,3 +1592,102 @@ def test_a_decision_that_names_nothing_is_refused_before_it_reaches_the_ledger(l
     code, _ = call("POST", "/run/gate", {"version": started["version"], "gate": stop["gate"],
                                          "node_id": stop["node_id"]})
     assert code == 200, "the run could not be answered after the empty decisions were refused"
+
+
+# ── one question, one answer, in one rendered box (CHG-20260904-03) ───────────────────────────
+
+def _intake_runner(sequence):
+    """A runner whose intake seat reports `sequence[i]` missing on the i-th walk."""
+    from test_flow import DECISIONS, SPEC
+
+    aspect = {"now": sequence[0]}
+
+    def factory(seat=None, model=None, **_):
+        class Session(engine.Session):
+            def ask(self, order):
+                if order["node_id"] == "intake_review":
+                    return {"missing": [aspect["now"]], "problems": []}
+                return {"verdict": "pass"} if seat else {"ok": True}
+
+            def close(self):
+                pass
+        return Session()
+
+    def make_config(instructions, approvals, rulings, artifacts=(), rejections=(),
+                    intake_history=()):
+        return engine.RunConfig(node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+                                decisions=dict(DECISIONS), risk="low", undeclared="allow",
+                                instructions=tuple(instructions), confirmed=tuple(approvals),
+                                rulings=tuple(rulings), rejections=tuple(rejections),
+                                intake_history=tuple(intake_history))
+
+    runner = server.Runner(walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
+                           make_config=make_config)
+    for lap, missing in enumerate(sequence):
+        aspect["now"] = missing
+        version = runner.state.version
+        if lap == 0:
+            runner.start("do it", version)
+        else:
+            runner.instruct(version, "more")
+        yield missing, runner.state.snapshot()
+
+
+def test_the_console_shows_one_answer_to_how_many_times_it_has_been_asked():
+    """**Two numbers in one box** (CHG-20260904-03, defect seat L-16).
+
+    The panel's `<p>` renders `reason`, which `intake.stop_reason` writes **per aspect**. The row
+    below it rendered `intake_asks`, which was `len(intake_history)` — every intake stop, whatever
+    was missing. Measured, from the second aspect onward:
+
+        missing        the <p> said     the counter said
+        flow           asked once       1
+        architecture   asked once       2      <-
+        architecture   asked twice      3      <-
+
+    CHG-20260903-42 gave the two engine-side readers one name; the console is the third reader and
+    it was not swept. The claim asserted here is that the two agree, not that either is spelled a
+    particular way.
+    """
+    words = {1: "asked once", 2: "asked twice"}
+    for missing, snap in _intake_runner(["flow", "architecture", "architecture", "architecture"]):
+        counted = (snap.get("intake_asks_by_aspect") or {}).get(missing)
+        assert counted is not None, (
+            f"the console has no per-aspect count for {missing!r}: "
+            f"{snap.get('intake_asks_by_aspect')}")
+        said = words.get(counted, f"asked {counted} times")
+        assert said in str(snap.get("reason")), (
+            f"the sentence and the counter disagree in one box: the counter says {counted} "
+            f"({said!r}) and the sentence reads {snap.get('reason')!r}")
+
+
+def test_the_count_is_the_tally_because_the_stop_is_already_recorded():
+    """**The same question has two correct answers at two moments**, which is why one shared
+    function would give the wrong one here.
+
+    `intake.asks_including_this_one` is right during the walk — the engine checks before the stop
+    is written. The snapshot is read *after* `_walk_once` appends it, so the ask in flight is
+    already in the history and the correct count is the raw tally. Pinned so a later "tidy-up" that
+    routes this through the shared name is caught.
+    """
+    from ai_sdlc_runner import intake as intake_mod
+
+    history = [{"missing": ["flow"]}, {"missing": ["architecture"]},
+               {"missing": ["architecture"]}]
+    assert intake_mod.times_asked(history, "architecture") == 2
+    assert intake_mod.asks_including_this_one(history, "architecture") == 3, (
+        "the two differ by exactly the ask in flight, which is the whole point")
+
+    # **The call, not the prose.** The first version asserted the name did not appear in
+    # `inspect.getsource`, and failed on the comment that explains *why* it does not apply —
+    # a rule flagging its own explanation, for the fourth time in two days (CHG-20260904-03).
+    import ast
+
+    tree = ast.parse(inspect.getsource(server).lstrip())
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "snapshot")
+    called = {getattr(n.func, "attr", None) for n in ast.walk(fn) if isinstance(n, ast.Call)}
+    assert "times_asked" in called, "the snapshot no longer counts the recorded stops"
+    assert "asks_including_this_one" not in called, (
+        "the snapshot counts the ask in flight twice — it is already in the history by the time "
+        "this is read")
