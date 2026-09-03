@@ -1152,3 +1152,72 @@ def test_no_class_attribute_carries_a_token_that_starts_with_a_dot():
     dotted = re.findall(r"class=\"[^\"]*(?<![\w-])\.[\w-]+", page)
 
     assert dotted == [], f"class attributes carrying a selector rather than a name: {dotted}"
+
+
+# ── an approval names the stop it answers, and a finished run is not still failing ──────────────
+
+
+def test_approving_a_gate_the_run_is_not_waiting_at_is_refused():
+    """`_require_suspension` checks *that* the run is waiting, never *which* gate it waits at.
+
+    So a client could approve `acceptance` while the run was suspended at `plan_confirmed`, and
+    `state.approvals` is append-only with no removal route — the pre-authorisation then waited
+    indefinitely for a rung the person would never be shown. Driven end to end before the fix, it
+    opened `halt_independent` at `qa_accept` on a high-risk run whose operator answered only the
+    seven stops the console put in front of them (CHG-20260903-34, risk seat L-47).
+    """
+    runner = _runner()
+    state = runner.start("do it", 0)
+    waiting = state["suspended"]["gate"]
+    assert waiting != "acceptance", "this test needs a run waiting somewhere else"
+
+    with pytest.raises(server.ServerError, match="waiting at"):
+        runner.approve(state["version"], "acceptance", None)
+
+
+def test_an_approval_through_the_door_names_the_node_and_the_run():
+    """`Approval`'s docstring: `node_id` and `run_id` are *"what make refusing a stale or
+    misdirected answer possible"*, and `None` is *"the wrong one for an answer typed into a console
+    after a stop."* This is that console, and it was passing the wrong one.
+    """
+    runner = _runner()
+    state = runner.start("do it", 0)
+    stop = state["suspended"]
+
+    runner.approve(state["version"], stop["gate"], None)
+
+    minted = runner.state.approvals[-1]
+    assert minted.node_id == stop["node_id"], minted
+    assert minted.run_id == stop["run_id"], minted
+
+
+def test_a_finished_run_does_not_still_carry_the_failure_before_it():
+    """`state.error` was assigned at one site and cleared at none.
+
+    `instruct` and `attach` reach `_advance` without guarding on suspension, so an operator who
+    added a line to the brief after a failure got a **finished** run still showing the error — and
+    CHG-20260903-29, which reported this as not reproducing, is what made the field reach the page.
+    The measurement behind that report tested two of six `_advance` call sites
+    (CHG-20260903-34, conformance seat L-48).
+    """
+    calls = {"n": 0}
+
+    def walk(cfg):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("the disk went away")
+        report = engine.RunReport()
+        report.state = engine.FINISHED
+        report.halted_at = "done"
+        return report
+
+    runner = server.Runner(walk=walk, make_config=lambda *a, **k: object())
+
+    failed = runner.start("do it", 0)
+    assert failed["state"] == engine.STOPPED
+    assert failed["error"], "the failure must still be reported when it is true"
+
+    after = runner.instruct(failed["version"], "try again")
+
+    assert after["state"] == engine.FINISHED
+    assert after["error"] == "", after["error"]

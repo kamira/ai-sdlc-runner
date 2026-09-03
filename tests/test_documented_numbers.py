@@ -637,12 +637,28 @@ def test_no_live_text_claims_the_verifier_is_checked_against_the_builder():
             root / "docs" / "API.md", *(root / "src").rglob("*.py"),
             *(root / "docs" / "structure").glob("*.md")]
 
+    # **The qualifier is looked for around the claim, not anywhere in the file**
+    # (CHG-20260903-34, idiom seat L-50). As first written the exemption was file-scoped:
+    # `phrase in text and "does **not**" not in text`. Measured, nine of the twenty-eight
+    # files scanned already contain one of those strings for unrelated reasons — README.md,
+    # ARCHITECTURE.md, graph.py, plan.py, policy.py, server.py, settings.py, store.py and
+    # design.md — so the scan was switched **off** in every one of them. Appending a fourth
+    # copy of the claim to README.md left this test green.
+    #
+    # A rule that a file can disable by containing an unrelated sentence is not a rule. The
+    # window is the paragraph the claim is made in.
+    window = 400
     offenders = []
     for path in live:
         text = path.read_text(encoding="utf-8", errors="replace")
         for phrase in ("verifier must not be the builder", "forbids the implementer from verifying"):
-            if phrase in text and "does **not**" not in text and "does not check" not in text:
-                offenders.append(f"{path.relative_to(root)}: {phrase!r}")
+            at = text.find(phrase)
+            while at != -1:
+                near = text[max(0, at - window):at + window]
+                if "does **not**" not in near and "does not check" not in near:
+                    offenders.append(f"{path.relative_to(root)}: {phrase!r}")
+                    break
+                at = text.find(phrase, at + 1)
 
     assert offenders == [], (
         "these say `halt_independent` enforces independence, and it does not: " + repr(offenders))

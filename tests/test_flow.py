@@ -1123,3 +1123,47 @@ def test_a_rejection_reason_reaches_the_node_the_run_is_sent_back_to():
         "the node the run was sent back to was not told why — it will produce the same plan and be "
         "refused again, which is the loop this test exists to close")
     assert orders[0] != orders[1], "the same question, asked twice"
+
+
+# ── an approval that names no node is blanket, whichever ledger it arrived in ───────────────────
+
+
+def test_an_approval_naming_no_node_does_not_open_the_independent_rung():
+    """CHG-20260903-27's ruling, implemented on one of the two ledgers.
+
+    It said a blanket `--confirm` cannot open `halt_independent` and a person answering the stop
+    they were shown can, and it guarded the counter path only — reasoning that an `Approval` object
+    **is** the person-at-the-stop path. It is not. `node_id` is optional, `server.approve` passes
+    whatever the client sent, and `Approval(gate="acceptance")` naming no node is exactly what -27's
+    own text calls blanket: *"naming no node, for a stop nobody has seen yet."*
+
+    Measured before the fix: it opened the rung, and the report then contradicted itself two lines
+    apart — *"decided by the operator"* beside *"none was spent … a confirmation does not open that
+    rung"* — with the reassuring line being the false one (CHG-20260903-34, risk seat).
+    """
+    blanket = engine.Approval(gate="acceptance")
+
+    report = engine.walk(_cfg(risk="high", confirmed=(*ALL_GATES, blanket)), Recorder(),
+                         enabled=True)
+
+    assert report.halted_at == "qa_accept", report.halt_reason
+    assert not any("decided by the operator" in line and "acceptance" in line
+                   for line in report.confirmations), report.confirmations
+
+
+def test_the_report_does_not_say_both_that_it_was_spent_and_that_it_could_not_be():
+    """The contradiction is the finding, not a side effect of it.
+
+    Two adjacent lines said opposite things about the same approval. Whichever way the rung
+    resolves, the report may only say one of them.
+    """
+    blanket = engine.Approval(gate="acceptance")
+
+    report = engine.walk(_cfg(risk="high", confirmed=(*ALL_GATES, blanket)), Recorder(),
+                         enabled=True)
+
+    about = [line for line in report.confirmations if "acceptance" in line]
+    spent = [line for line in about if "decided by the operator" in line]
+    unspent = [line for line in about if "none was spent" in line]
+
+    assert not (spent and unspent), about
