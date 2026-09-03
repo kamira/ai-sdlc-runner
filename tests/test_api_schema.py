@@ -67,50 +67,6 @@ def test_the_snapshot_section_lists_every_key_the_snapshot_carries():
     assert not missing, f"the snapshot section omits {missing}"
 
 
-def _suspension_literals(source):
-    """Every ``report.suspended = {...}`` literal in the engine, brace-matched.
-
-    There are three, and they carry different keys — an ordinary gate, an intake survey, and an
-    undecided panel. This read `split('report.suspended = {')[1]`, which is the **first** one, and
-    then `.split("}")[0]`, which would have truncated the survey literal at its first nested brace
-    (``"safety": {k: list(v) for ...}``) had it ever reached it. So a guard named for enumerating
-    every key a suspension carries enumerated nine of fifteen — and passed, while the page it pins
-    says "Every kind of suspension carries the same keys" directly above a list missing four of
-    them that the shipped console reads (CHG-20260901-16, defect seat).
-
-    Brace-matched rather than split, because the failure was a split that could not see nesting.
-    """
-    marker = "report.suspended = {"
-    blocks, at = [], 0
-    while True:
-        start = source.find(marker, at)
-        if start < 0:
-            assert blocks, "no `report.suspended = {` literal found; this guard has gone blind"
-            return blocks
-        opened = start + len(marker) - 1
-        depth, cursor = 0, opened
-        while cursor < len(source):
-            if source[cursor] == "{":
-                depth += 1
-            elif source[cursor] == "}":
-                depth -= 1
-                if depth == 0:
-                    break
-            cursor += 1
-        assert depth == 0, "unbalanced braces in a `report.suspended` literal"
-        blocks.append(source[opened:cursor + 1])
-        at = cursor + 1
-
-
-def test_the_suspension_section_lists_every_key_a_suspension_carries():
-    # Read the literals the engine builds, rather than driving three walks to reach them.
-    blocks = _suspension_literals(inspect.getsource(engine))
-    keys = set().union(*(set(re.findall(r'"(\w+)":', b)) for b in blocks))
-    section = PAGE.split("## 4 · The suspension")[1].split("## 5 ·")[0]
-    missing = sorted(k for k in keys if f'"{k}"' not in section)
-    assert not missing, f"the suspension section omits {missing}"
-
-
 def test_the_page_documents_every_field_a_suspension_can_carry():
     """**The guard this replaces named its own retirement condition, and it was met.**
 
@@ -131,6 +87,33 @@ def test_the_page_documents_every_field_a_suspension_can_carry():
     missing = sorted(f for f in engine.SUSPENSION_FIELDS if f'"{f}"' not in section)
     assert not missing, (
         f"a suspension carries these and the page does not name them: {missing}")
+
+
+def test_the_page_does_not_call_a_field_conditional_when_every_shape_carries_it():
+    """**The guard above asks whether a field is *named*; this asks what the page *claims*.**
+
+    `CHG-20260904-07` made all fifteen fields present on every suspension. The page went on saying
+    *"Nine keys are on every suspension … Six more are carried only by the question that needs
+    them"*, with `// only when` dividers over six of them, for a day — and the `-07` guard passed
+    the whole time, because all fifteen names were still on the page. A client written to that
+    sentence writes `stop.get("reason", "…")` at a gate stop and gets `""`, which is verbatim the
+    failure `-07` exists to close, moved out of the data and into the document.
+
+    So the count is read from `SUSPENSION_FIELDS` rather than trusted, and the word `only` is
+    refused where the page describes what a suspension carries. `meaningful when` is the honest
+    form: present either way, empty when the question is not this one.
+    """
+    section = PAGE.split("## 4 · The suspension")[1].split("## 5 ·")[0]
+    claim = f"All {len(engine.SUSPENSION_FIELDS)} keys are on every suspension"
+
+    assert claim in section, (
+        f"the page does not say {claim!r}. A suspension carries "
+        f"{len(engine.SUSPENSION_FIELDS)} fields and the page has to say so in the sentence a "
+        f"reader reads, not only in the block they skim")
+    conditional = [line.strip() for line in section.splitlines() if "only when" in line]
+    assert not conditional, (
+        f"the page calls a field conditional and `_suspension` puts it on every shape: "
+        f"{conditional}")
 
 
 def test_the_suspension_union_is_the_only_way_a_shape_is_built():

@@ -255,16 +255,20 @@ console's list of who was asked.
 
 ## 4 · The suspension
 
-`null` unless `state == "suspended"`. **Nine keys are on every suspension** — a gate has no branches
-to choose between and a tie has no gate to confirm, and each says so rather than omitting the field,
-because *a missing key and a false one read the same way only until they do not*. Six more are
-carried only by the question that needs them, and the two booleans below say which question this is.
+`null` unless `state == "suspended"`. **All 15 keys are on every suspension** — a gate has no
+branches to choose between and a tie has no gate to confirm, and each says so rather than omitting
+the field, because *a missing key and a false one read the same way only until they do not*. Six of
+them are **meaningful** only for one of the three questions and carry their empty value otherwise;
+the two booleans below say which question this is.
 
-This page said "every kind of suspension carries the same keys" until CHG-20260901-16, over a block
-listing eleven of the fifteen. The guard meant to keep it honest —
-`test_the_suspension_section_lists_every_key_a_suspension_carries` — read the first of the engine's
-three `report.suspended` literals and passed on nine keys, while the shipped console read four of
-the ones it never looked at.
+That sentence has been false in both directions. The page said *"every kind of suspension carries
+the same keys"* until CHG-20260901-16 found the engine building three literals of 9, 11 and 13 keys
+— so it was corrected to name nine as universal and six as conditional, which described the data.
+CHG-20260904-07 then routed all three shapes through `engine._suspension`, which fills every field
+from `SUSPENSION_FIELDS`, and the original sentence became true while the corrected one became
+false. It stayed false for a day, because the guard that shipped with `-07` asks only whether each
+field is **named** on this page, not what the page says about it (CHG-20260904-10, defect seat
+L-36).
 
 ```jsonc
 { "node_id":    "<node id>",
@@ -277,7 +281,7 @@ the ones it never looked at.
   "branches":   [ "<branch>", … ],     // empty for a gate; the choices for a tie
   "run_id":     "<absolute journal path>" | null,
 
-  // only when `incomplete` — the intake survey
+  // meaningful when `incomplete` — the intake survey. Present either way: `[]`, `{}`, `[]`, `{}`
   "missing":    [ "<aspect>", … ],
   "options":    { "<aspect>": [ …≥3… ] },
   "problems":   [ "<problem>", … ],    // what the seats found wrong with the requirement
@@ -287,7 +291,7 @@ the ones it never looked at.
                                        // caller keying by aspect matched nothing, ever
                                        // (CHG-20260903-37)
 
-  // only when `undecided` — the tie
+  // meaningful when `undecided` — the tie. Present either way: `""` and `{}`
   "reason":     "<why this is being asked>",
   "verdicts":   { "<voice>": "<verdict>", … } }   // who said what, so a tie can be read
 ```

@@ -21,8 +21,11 @@ Prose is exempt. This checks figures a reader would take as measurements.
 """
 from __future__ import annotations
 
+import ast
+import io
 import re
 import sys
+import tokenize
 from pathlib import Path
 
 import pytest
@@ -962,6 +965,77 @@ def test_the_rule_can_tell_the_two_claims_apart():
 
 # ── a citation in the source resolves to something (CHG-20260904-04) ────────────────────
 
+#: What a comment or a docstring says, with a name for where it said it. **The scope of the
+#: citation rule, stated rather than approximated** (CHG-20260904-10).
+#:
+#: `line N column M` is a parser's position report, not a citation: `paths.py` quotes `json`'s own
+#: `Expecting value: line 1 column 1` in the docstring explaining why `read_text` exists. Widening
+#: the scope to docstring bodies brought it in range, and exempting it by name would be an
+#: allowlist; the rule is that `column` following the number is what tells a machine's position
+#: from a reference to this source.
+CITATIONS = (re.compile(r"[a-z_]+\.py:(\d+)"), re.compile(r"\bline (\d+)\b(?! column)"))
+
+#: The nodes a docstring can hang from.
+_HOLDERS = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+
+
+def prose_of(source: str, name: str):
+    """Every comment and every docstring **body** in `source`, each with where it was written.
+
+    The scope this replaces was: the line starts with `#`, or the line contains a triple quote.
+    That admits a comment and a docstring's opening or closing line, and **nothing in between** —
+    demonstrated by planting a banned sentence as the *second* line of a docstring, which passed
+    (CHG-20260904-10, defect seat L-41). Scoping to prose was and remains necessary; what changes
+    is that `tokenize` and `ast` say what prose is, rather than what one line happens to look like.
+    """
+    found = []
+    with io.StringIO(source) as handle:
+        for token in tokenize.generate_tokens(handle.readline):
+            if token.type == tokenize.COMMENT:
+                found.append((f"{name} comment at line {token.start[0]}", token.string))
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, _HOLDERS):
+            text = ast.get_docstring(node, clean=False)
+            if text:
+                where = getattr(node, "name", None) or name
+                found.append((f"{name} docstring of {where}", text))
+    return found
+
+
+BANNED_SENTENCE = "The dispatcher for this is engine.py " + "line" + " 2110, which is the guard."
+PARSER_MESSAGE = "Expecting value: " + "line" + " 1 column 1"
+
+
+def test_the_citation_rule_reads_a_docstring_past_its_first_line():
+    """**The scope was an accident of a filter, and this is the floor under the new one.**
+
+    Planted as the *second* line of a docstring, the sentence the rule exists to ban passed:
+    the scope admitted a line starting with `#` or containing a triple quote, which is a
+    docstring's opening and closing lines and nothing between them (defect seat L-41).
+
+    Both directions are asserted, because a rule that catches everything is not a rule: the
+    parser's own position report has to survive it, and it is the reason scoping to prose was
+    needed in the first place.
+    """
+    planted = (
+        '"""A node in the flow.\n\n    %s\n    """\n'
+        "\n"
+        "VALUE = 1\n" % BANNED_SENTENCE)
+    cited = [c for where, text in prose_of(planted, "planted.py")
+             for pattern in CITATIONS for c in pattern.findall(text)]
+    assert cited == ["2110"], (
+        f"a citation on the second line of a docstring was not seen: {cited}")
+
+    quoted = (
+        '"""Why this function exists.\n\n    The file came out empty and json died on\n'
+        "    `%s`.\n" % PARSER_MESSAGE
+        + '    """\n')
+    survived = [c for where, text in prose_of(quoted, "quoted.py")
+                for pattern in CITATIONS for c in pattern.findall(text)]
+    assert survived == [], (
+        f"a parser's own position report was read as a citation into this source: {survived}")
+
+
 def test_no_comment_in_the_source_cites_a_line_number():
     """**Name the symbol, not the line** (CHG-20260904-04, defect seat L-18).
 
@@ -998,14 +1072,11 @@ def test_no_comment_in_the_source_cites_a_line_number():
     # window is the wrong move: what makes a citation a citation is the number, not its
     # distance from a filename. `ACC-20260904-04` reservation 1 said the banned pattern
     # *"appears nowhere"*; it appeared, in a spelling the rule could not see.
-    patterns = (re.compile(r"[a-z_]+\.py:(\d+)"), re.compile(r"\bline (\d+)\b"))
     for path in sorted((ROOT / "src" / "ai_sdlc_runner").glob("*.py")):
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if not line.lstrip().startswith("#") and '"""' not in line:
-                continue
-            for pattern in patterns:
-                for cited in pattern.findall(line):
-                    offenders.append(f"{path.name}:{number} cites line {cited}")
+        for where, text in prose_of(path.read_text(encoding="utf-8"), path.name):
+            for pattern in CITATIONS:
+                for cited in pattern.findall(text):
+                    offenders.append(f"{where} cites line {cited}")
 
     assert offenders == [], (
         "these name a line number, which the next insertion above it makes wrong — name the "
