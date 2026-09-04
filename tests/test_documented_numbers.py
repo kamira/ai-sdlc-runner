@@ -824,6 +824,36 @@ def test_provenance_skips_rather_than_passes_when_git_cannot_answer(tmp_path):
         f"asking would be indistinguishable from one that asked and was refused: {said!r}")
 
 
+def test_the_known_gaps_section_exists_and_says_what_it_is_for():
+    """**Pinned by a test rather than by a line number** (CHG-20260904-16, conformance seat).
+
+    `ACC-20260823-16` criterion 5 records this section as a governance property, and its
+    evidence is `README.md:636-672` with three entries at `:642`, `:647`, `:652`. The section
+    is now at 683-737 and those three are at 689, 694, 701 — every citation about 47 lines
+    stale. An accepted record pins its own moment, which is right; what it cannot do is keep
+    pinning. Nothing else named the section at all.
+
+    What is asserted is what the criterion was about: the section exists, it says why it
+    exists, and it is not empty.
+    """
+    root = Path(__file__).resolve().parents[1]
+    readme = (root / "README.md").read_text(encoding="utf-8")
+
+    assert "## Known gaps" in readme, (
+        "the section ACC-20260823-16 criterion 5 records as a governance property is gone")
+    section = readme.split("## Known gaps")[1].split(chr(10) + "## ")[0]
+    flowed = " ".join(section.split())      # the sentence wraps; the claim is not a line
+    assert "overstates what it enforces" in flowed, (
+        "the section no longer says why it exists, which is the half a reader needs")
+
+    entries = [line for line in section.splitlines()
+               if line.startswith("**") or line.startswith("~~**")]
+    assert len(entries) >= 5, (
+        f"the section names {len(entries)} gaps; it has never named fewer than five, and a "
+        f"governance tool that quietly stops saying what it does not enforce is the failure "
+        f"this section exists to prevent")
+
+
 def test_every_example_path_a_source_file_cites_exists():
     """**The rule**, because the instance was cited four times and existed nowhere.
 

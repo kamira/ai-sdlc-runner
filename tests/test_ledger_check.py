@@ -1005,6 +1005,86 @@ def _superseded(status, extra=""):
 BACK = "- **Superseded by: CHG-20260903-24**" + NEWLINE
 
 
+def _graded(tmp_path, risk, status="in progress"):
+    """A one-record repo whose **filename** is past `RISK_GRADE_REQUIRED_FROM`.
+
+    `_repo` writes every body to `CHG-20260901-01.md`, and the gate compares the stem — so a
+    fixture built with it is skipped before the check runs, and the first version of these
+    three tests reported *nothing was flagged* when the truth was *nothing was looked at*.
+    """
+    changes = tmp_path / "docs" / "changes"
+    changes.mkdir(parents=True)
+    (tmp_path / "docs" / "acceptance").mkdir(parents=True)
+    name = "CHG-20260903-90"
+    assert name >= ledger_check.RISK_GRADE_REQUIRED_FROM, (
+        "this fixture is older than the gate, so the check under test never runs")
+    changes.joinpath(name + ".md").write_text(
+        "# " + name + NEWLINE
+        + "- Project: p" + NEWLINE + "- Date: 2026-09-03" + NEWLINE
+        + "- Risk: " + risk + NEWLINE + "- Branch: b" + NEWLINE
+        + NEWLINE + "## Status" + NEWLINE + NEWLINE + status + NEWLINE, encoding="utf-8")
+    return tmp_path
+
+
+def test_a_risk_the_ledger_does_not_grade_by_is_reported(tmp_path):
+    """**`REQUIRED_FIELDS` asked whether the line was there** (CHG-20260904-16, idiom seat).
+
+    Two records carry `Risk: **none, now**`, outside `low|medium|high`, and it passed because
+    nothing read the value. Qualified grades are normal here — `high (the permanent halts)`,
+    `medium, driven by *where* the change lands` — so what is read is the head of the line,
+    the way `_status_word` reads a status.
+    """
+    repo = _graded(tmp_path, "catastrophic")
+
+    problems = ledger_check.check(repo)
+
+    assert any("does not grade by" in p for p in problems), (
+        "a Risk value outside the grading passed: " + repr(problems))
+
+
+def test_a_qualified_grade_is_read_by_its_head(tmp_path):
+    """The floor: reading the whole line would refuse most of this ledger."""
+    # Numbered directories, not ones named after the grade: `**high**` is not a legal path on
+    # Windows and the first version of this loop died on `WinError 123` rather than on the claim.
+    for nth, said in enumerate(("**high** (the permanent halts)",
+                                "medium, driven by *where* the change lands",
+                                "low - documentation only")):
+        repo = _graded(tmp_path / ("case%d" % nth), said)
+        assert not any("does not grade by" in p for p in ledger_check.check(repo)), (
+            "a qualified grade was refused: " + said)
+
+
+def test_none_is_admitted_only_where_nothing_was_built(tmp_path):
+    """`none` is the right word for a record that built nothing, and the wrong one for a
+    record still deciding — which is the distinction `REQUIRED_FIELDS` could not draw."""
+    withdrawn = _graded(tmp_path / "a", "**none, now** - nothing is built", "withdrawn")
+    assert not any("does not grade by" in p for p in ledger_check.check(withdrawn)), (
+        "a withdrawn record was refused the word for having built nothing")
+
+    open_ = _graded(tmp_path / "b", "**none, now** - nothing is built", "in progress")
+    problems = ledger_check.check(open_)
+    assert any("does not grade by" in p for p in problems), (
+        "an open record graded itself `none`: " + repr(problems))
+    assert any("built nothing" in p for p in problems), (
+        "the refusal does not say why `none` is not available here: " + repr(problems))
+
+
+def test_this_repos_own_risk_grades_are_words_it_knows(tmp_path):
+    """Not a fixture — the real ledger, from the gate forward."""
+    del tmp_path
+    seen = {}
+    for path in sorted((REPO / "docs" / "changes").glob("CHG-*.md")):
+        if path.stem < ledger_check.RISK_GRADE_REQUIRED_FROM:
+            continue
+        said = ledger_check._risk_word(path.read_text(encoding="utf-8"))
+        seen.setdefault(said, []).append(path.stem)
+
+    allowed = set(ledger_check.RISK_GRADES) | {ledger_check.RISK_WHEN_NOTHING_WAS_BUILT}
+    assert set(seen) <= allowed, (
+        "these records grade themselves by a word the ledger does not know: "
+        + repr({k: v for k, v in seen.items() if k not in allowed}))
+
+
 def test_a_supersedes_naming_a_change_that_does_not_exist_is_reported(tmp_path):
     repo = _pair(tmp_path, superseded_body=None)
 
