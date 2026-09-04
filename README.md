@@ -741,6 +741,32 @@ standard,  high      auto 3 · halt 6 · halt_independent 1
 So `relax` refuses to touch a halt — seven survive at high risk, and `merge` still stops at
 medium and high. What a declared relaxing class removes entirely is the low-risk run.
 
+**A settings file can reverse the panel's verdict, and the ledger recorded the other half.**
+`policy.adjudicate` counts the seats it was given, so the seats a low `review_seats` never opens
+are not seats that abstained — they are seats that never voted, and the panel reads their absence
+as agreement:
+
+```
+adjudicate({conformance: pass, defect: fail, risk: fail})  ->  fail, "only 1/3 seats passed"
+adjudicate({conformance: pass})                            ->  pass, "1/1 seats passed"
+```
+
+`{"review_seats": 1, "high_risk_mode": true}` is forty bytes and needs no expiry, no authoriser and
+no per-run typing. Driven with one dispatcher and one set of judgements, the two mechanisms in this
+section compose and neither is enough alone:
+
+```
+nothing set                                the change is rejected and cycles to the retry budget
+the settings file above                    reaches merge; a class alone does not
+--change-class standard, at the floor      still rejected: a class moves gate cells, not the panel
+both                                       finished
+```
+
+`CHG-20260904-18` made the crossing name its source and carry a `by=`, and made a working vouch
+leave a line where a failing one already did. What is **not** closed is the composition: nothing
+refuses a run whose panel was reduced below the floor *and* whose gates were relaxed by a class,
+and no surface shows the pair.
+
 **Two requirements have no owner**, both the operator's own words, both named only in records
 that are withdrawn — `CHG-20260901-15`, `CHG-20260903-24` and `CHG-20260903-25`, all three.
 
@@ -759,7 +785,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 2156 tests
+pytest -q          # 2161 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

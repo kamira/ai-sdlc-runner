@@ -477,6 +477,14 @@ class RunConfig:
     autonomy: Optional[str] = None
     review_seats: Optional[int] = None
     high_risk_mode: bool = False
+    #: Where the seat count came from — `config/settings.json`, `--review-seats`, or empty
+    #: when nothing set one. **A standing configuration and a one-run flag are different
+    #: decisions and were recorded identically** (CHG-20260904-18, risk seat): the relaxation
+    #: a below-floor run wrote was byte-identical either way, and `conversations.relaxation`'s
+    #: own docstring draws exactly this line — *"the first is the runner's voice; the second
+    #: is not"*. A settings file is a person pre-authorising a type, standing, with no expiry
+    #: and no authoriser field; the honest `by=` for it today is the file that holds it.
+    seats_from: str = ""
     #: The ordered effects a node carries out, looked up by node id. `record_module` says in the
     #: flow that it ticks, commits and updates the worklog — "three ordered effects" — and until
     #: this hook existed that sentence was a comment: the node did nothing at all. Each effect is
@@ -1597,6 +1605,27 @@ def _permanent_halt(node: graph.Node, cfg: "RunConfig", report: "RunReport") -> 
                 f"(`ordinary_commands`), declare the operation's real kind, or pass "
                 f"undeclared='allow' to proceed on the plan's word, which is recorded.")
 
+        # **A vouch that works is recorded too** (CHG-20260904-18, risk seat). `on_trust` is true
+        # only where a target was *not* recognised, so the branch below — the one whose comment says
+        # the trust must not be invisible — is exactly the branch a **successful** vouch skips:
+        #
+        #     not vouched        recognise unrecognised   on_trust True    the run stops, and says why
+        #     vouches the name   recognise ordinary       on_trust False   nothing, anywhere
+        #
+        # A vouch turns a hard refusal into silence, and the silence is the part an auditor needs.
+        # Everything required is already in the call: a target is vouched-ordinary when its first
+        # word is one of `cfg.ordinary_commands` and `recognise` therefore answered `ordinary`.
+        vouched = {str(name).casefold() for name in (cfg.ordinary_commands or ())}
+        if halt is None and vouched:
+            for target in operation.get("targets") or ():
+                first = str(target).split()[0].casefold() if str(target).split() else ""
+                if first in vouched and policy.recognise(str(target),
+                                                         cfg.ordinary_commands) == "ordinary":
+                    report.on_trust.append(
+                        f"{node.id}: {str(target)!r} was taken as ordinary because "
+                        f"{first!r} is vouched for in settings — the red-line list was not "
+                        f"consulted for it")
+
         if halt is None and policy.on_trust(operation, cfg.ordinary_commands):
             # Nothing about this was checked except its own prose: it declares `ordinary` and names
             # no targets. Not blocked — forcing every operation to name one buys ceremony, since an
@@ -1860,7 +1889,14 @@ def _finish(report: "RunReport", confirmations: Dict[str, int],
         # conversation that only closes when the run succeeds is the same defect this function's
         # own docstring was written for.
         for relaxed in report.relaxations:
-            conversation.relaxation(relaxed)
+            # **Attributed where there is something to attribute it to** (CHG-20260904-18).
+            # This wrote every runner-side relaxation with no `by=`, so a seat floor crossed by a
+            # standing `config/settings.json` and one crossed by a one-run `--high-risk-mode` flag
+            # produced byte-identical records — and the first is a person pre-authorising a type,
+            # which `conversations.relaxation`'s docstring says is not the runner's voice. Entries
+            # with no source are unchanged.
+            conversation.relaxation(
+                relaxed, by=report.relaxation_authorisers.get(relaxed) or None)
         # **And the gates a change class dissolved** (CHG-20260902-21, defect seat L-22). This
         # iterated `report.relaxations` alone, so `relaxations_by_class` reached `as_dict()` and
         # `cmd_run`'s stdout footer and **nothing durable** — while the same loop wrote fourteen
@@ -1979,9 +2015,23 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
 
     seats = policy.resolve_seats(cfg.review_seats, cfg.high_risk_mode)
     if cfg.review_seats is not None and cfg.review_seats < policy.SEAT_FLOOR:
-        report.relaxations.append(
-            f"high-risk mode: review opened with {seats} seat(s), below the floor of "
-            f"{policy.SEAT_FLOOR}")
+        # **What the pair does, not what the seat count does** (CHG-20260904-18, risk seat).
+        # `resolve_seats`' docstring records that `undecided` becomes unreachable at one seat.
+        # The half neither function says is that `policy.adjudicate` counts the seats it was
+        # given, so the same judgements change answer:
+        #
+        #     adjudicate({conformance: pass, defect: fail, risk: fail})  ->  fail
+        #     adjudicate({conformance: pass})                            ->  pass
+        #
+        # The seats not opened are not seats that abstained; they are seats that never voted, and
+        # the panel reads their absence as agreement.
+        which = ", ".join(policy.seat_names(seats))
+        note = (f"high-risk mode: review opened with {seats} seat(s) ({which}), below the floor "
+                f"of {policy.SEAT_FLOOR}. A panel of {seats} reads a verdict from the seats it "
+                f"opened, so the {policy.SEAT_FLOOR - seats} not opened cannot dissent")
+        report.relaxations.append(note)
+        if cfg.seats_from:
+            report.relaxation_authorisers[note] = cfg.seats_from
 
     # A confirmation is spent, not standing. Counted per gate and decremented at each stop it
     # covers, because the operator confirmed *that* stop having seen it — an independent verifier

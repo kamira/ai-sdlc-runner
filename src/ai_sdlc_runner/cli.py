@@ -1015,6 +1015,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         class_by_workstream=class_by_workstream,
         autonomy=plan.get("autonomy"),
         review_seats=seats,
+        # Where it came from, so a standing configuration and a one-run flag do not write
+        # the same record (CHG-20260904-18).
+        seats_from=("--review-seats" if args.review_seats is not None
+                    else (args.settings if saved.review_seats is not None else "")),
         halt_routing=halt_routes,
         high_risk_mode=high_risk,
         operations=plan.get("operations", {}),
@@ -1430,6 +1434,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
         node_workstream=plan.get("node_workstream") or {},
         interfaces=plan.get("interfaces") or {},
             autonomy=plan.get("autonomy"),
+            # `serve` reads the file and nothing else, so the file is the source.
+            seats_from=(args.settings if saved.review_seats is not None else ""),
             review_seats=saved.review_seats,
             high_risk_mode=saved.high_risk_mode,
             operations=plan.get("operations", {}),

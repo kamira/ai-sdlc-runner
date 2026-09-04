@@ -25,6 +25,7 @@ import re
 import pytest
 
 from ai_sdlc_runner import engine, graph, policy, settings as settings_mod
+from ai_sdlc_runner import tui as tui_mod
 
 SPEC = {
     "scope": "src/", "objective": "build the thing", "instructions": "do the work",
@@ -375,6 +376,171 @@ def test_the_screen_refuses_a_vouch_load_would(tmp_path):
     assert result == settings_mod.Settings(), (
         "the screen accepted a vouch on the executor list, which `load` refuses")
     assert "not vouched" in picks.stream.getvalue() or True
+
+
+def test_the_confirmation_follows_the_crossing_in_either_order():
+    """**Two edits, neither a crossing on its own** (CHG-20260904-18, defect and risk seats).
+
+    The confirmation lived in `_toggle_high_risk`, which returns early when nothing is crossed
+    *yet*, and `_edit_seats` never asked. So turning the bypass on first and lowering the seats
+    afterwards reached `review_seats=1, high_risk_mode=True` with the question never shown — same
+    screen, same keystroke count, opposite ceremony.
+    """
+    asked = []
+    real = tui_mod.confirm_high_risk
+
+    def spy(*a, **k):
+        asked.append(a[:2])
+        return real(*a, **k)
+
+    orders = [("Review seats", "1", "High-risk mode", "Enable", "Save and close"),
+              ("High-risk mode", "Review seats", "1", "Enable", "Save and close")]
+    try:
+        tui_mod.confirm_high_risk = spy
+        settings_mod.tui.confirm_high_risk = spy
+        results = []
+        for keys in orders:
+            asked.clear()
+            picks = _Picks(*keys)
+            # `edit` first, then the count. Written as one tuple, Python evaluated `len(asked)`
+            # before the call and both orders read 0 — the instrument measured before the thing
+            # it was measuring happened.
+            got = settings_mod.edit(settings_mod.Settings(), input_fn=picks,
+                                    stream_out=picks.stream)
+            results.append((len(asked), got))
+    finally:
+        tui_mod.confirm_high_risk = real
+        settings_mod.tui.confirm_high_risk = real
+
+    counts = [n for n, _ in results]
+    assert counts == [1, 1], (
+        f"the two orders asked {counts} times; a crossing is a crossing whichever edit gets there "
+        f"last")
+    assert results[0][1] == results[1][1] == settings_mod.Settings(
+        review_seats=1, high_risk_mode=True), results
+
+
+class _Spoken:
+    """A conversation that keeps what was said to it, and who it was attributed to."""
+
+    def __init__(self):
+        self.relaxations = []
+
+    def relaxation(self, text, by=None):
+        self.relaxations.append((text, by))
+
+    #: `engine._finish` reads this after closing, so it is a collection and not a method.
+    write_errors = ()
+
+    def __getattr__(self, name):
+        """Every other call is a no-op. Attributes the engine *reads* are declared above —
+        returning a callable for one of those made `for failure in conversation.write_errors`
+        iterate a function, which is a different error than the one under test."""
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return lambda *a, **k: None
+
+
+def _walk_below_the_floor(seats_from, conversation=None):
+    """A real walk that crosses the seat floor, so what is asserted is what a run produces."""
+    from test_flow import DECISIONS, SPEC
+
+    def factory(seat=None, model=None, **_):
+        class Session(engine.Session):
+            def ask(self, order):
+                if seat or model:
+                    node = graph.BY_ID.get(order["node_id"])
+                    if node is not None and getattr(node, "grades_risk", False):
+                        return {"risk": "low"}
+                    return {"verdict": "pass"}
+                branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
+                          "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])
+                return {"verdict": branch} if branch else {"ok": True}
+
+            def close(self):
+                pass
+        return Session()
+
+    return engine.walk(engine.RunConfig(
+        node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+        decisions=dict(DECISIONS), risk="low", undeclared="allow", node_models={},
+        review_seats=1, high_risk_mode=True, seats_from=seats_from,
+        conversation=conversation), factory, enabled=True)
+
+
+def test_a_below_floor_run_records_where_the_seat_count_came_from():
+    """**A standing file and a one-run flag wrote the same record** (CHG-20260904-18, risk seat).
+
+    `_finish` wrote `report.relaxations` with no `by=`, so the crossing was filed in the runner's
+    voice — while `conversations.relaxation`'s own docstring says a person pre-authorising a type
+    is *not* the runner's voice. A settings file is exactly that: standing, no expiry, no
+    authoriser field.
+
+    **Driven, not restated.** The first version of this test copied `walk`'s block into itself and
+    asserted on the copy, so both mutations of the real code survived it.
+    """
+    report = _walk_below_the_floor("config/settings.json")
+
+    crossing = [line for line in report.relaxations if "below the floor" in line]
+    assert crossing, f"a run at one seat recorded no crossing: {report.relaxations}"
+    assert report.relaxation_authorisers.get(crossing[0]) == "config/settings.json", (
+        f"the crossing is unattributable, so a file and a flag read the same: "
+        f"{report.relaxation_authorisers}")
+    assert "cannot dissent" in crossing[0], (
+        "the note does not say what the seats that were not opened cannot do")
+
+    flagged = _walk_below_the_floor("--review-seats")
+    other = [line for line in flagged.relaxations if "below the floor" in line][0]
+    assert flagged.relaxation_authorisers.get(other) == "--review-seats"
+
+
+def test_the_crossing_reaches_the_conversation_attributed():
+    """The `by=` that `relaxations_by_class` has had all along, for the list that did not."""
+    spoken = _Spoken()
+    _walk_below_the_floor("config/settings.json", conversation=spoken)
+
+    said = [(text, by) for text, by in spoken.relaxations if "below the floor" in text]
+    assert said, f"the crossing never reached the conversation: {spoken.relaxations}"
+    assert said[0][1] == "config/settings.json", (
+        f"the crossing was filed in the runner's voice: by={said[0][1]!r}")
+
+
+def test_the_panel_reads_a_missing_seat_as_agreement():
+    """The measurement the note above exists to carry, stated once where it can be checked."""
+    judgements = {"conformance": "pass", "defect": "fail", "risk": "fail"}
+
+    assert policy.adjudicate(judgements)["outcome"] == "fail"
+    assert policy.adjudicate({"conformance": judgements["conformance"]})["outcome"] == "pass", (
+        "this test no longer measures the reversal it names")
+
+
+def test_a_vouch_that_works_is_recorded(tmp_path):
+    """**The branch that records the trust is the branch a successful vouch skips**
+    (CHG-20260904-18, risk seat).
+
+    `policy.on_trust` is true only where a target was *not* recognised, so vouching turned a hard
+    refusal into silence — in the one place whose comment says *"What is unacceptable is the trust
+    being invisible"*.
+    """
+    del tmp_path
+    from ai_sdlc_runner import engine as engine_mod
+
+    target = "npm ci"
+    operation = {"kind": "ordinary", "description": "install", "targets": [target]}
+    assert policy.recognise(target, ()) == "unrecognised", "this test needs a vouchable target"
+    assert policy.recognise(target, ("npm",)) == "ordinary"
+    assert policy.on_trust(operation, ("npm",)) is False, (
+        "on_trust already covers this case, so there would be nothing to add")
+
+    node = next(n for n in graph.NODES if n.role)
+    report = engine_mod.RunReport()
+    cfg = engine_mod.RunConfig(node_specs={}, decisions={}, ordinary_commands=("npm",),
+                               operations={node.id: [operation]})
+
+    engine_mod._permanent_halt(node, cfg, report)
+
+    assert any("npm" in line and "vouched" in line for line in report.on_trust), (
+        f"a vouch that worked left nothing an auditor could read: {report.on_trust}")
 
 
 def test_every_setting_is_reachable_from_the_screen():
