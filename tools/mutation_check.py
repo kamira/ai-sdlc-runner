@@ -1742,6 +1742,34 @@ MUTATIONS: List[Mutation] = [
         'tests/test_server.py'),
 
     Mutation(
+        'bypass', 'the crossing stops naming where the seat count came from',
+        SRC / 'engine.py',
+        '        if cfg.seats_from:\n            report.relaxation_authorisers[note] = cfg.seats_from',
+        '        if False:\n            report.relaxation_authorisers[note] = cfg.seats_from',
+        'tests/test_settings.py'),
+
+    Mutation(
+        'bypass', 'a relaxation goes back to being filed in the runner voice',
+        SRC / 'engine.py',
+        '            conversation.relaxation(\n                relaxed, by=report.relaxation_authorisers.get(relaxed) or None)',
+        '            conversation.relaxation(relaxed)',
+        'tests/test_settings.py'),
+
+    Mutation(
+        'bypass', 'a vouch that works goes back to leaving nothing behind',
+        SRC / 'engine.py',
+        '        if halt is None and vouched:',
+        '        if False:',
+        'tests/test_settings.py'),
+
+    Mutation(
+        'bypass', 'the confirmation is bound to the toggle again, so one order skips it',
+        SRC / 'settings.py',
+        '    if not after.below_floor() or before.below_floor():',
+        '    if not after.high_risk_mode or before.high_risk_mode:',
+        'tests/test_settings.py'),
+
+    Mutation(
         'settings', 'a seat count no panel can open loads, and every surface crashes on it',
         SRC / 'settings.py',
         '    if seats > len(policy.SEATS):',

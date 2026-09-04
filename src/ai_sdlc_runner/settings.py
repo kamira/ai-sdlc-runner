@@ -126,6 +126,10 @@ class Settings:
                 and self.review_seats < policy.SEAT_FLOOR
                 and not self.high_risk_mode)
 
+    def seats_requested(self) -> int:
+        """What this file asks for, before the floor is applied. `seats()` is what it gets."""
+        return self.review_seats if self.review_seats is not None else policy.SEAT_FLOOR
+
     def below_floor(self) -> bool:
         return self.seats() < policy.SEAT_FLOOR
 
@@ -353,7 +357,8 @@ def _edit_seats(current: Settings, *, input_fn, stream_out) -> Settings:
                         [row[:2] for row in rows], input_fn=input_fn, stream_out=stream_out)
     if choice is None:
         return current
-    return replace(current, review_seats=rows[choice][2])
+    return _crossing(current, replace(current, review_seats=rows[choice][2]),
+                     input_fn=input_fn, stream_out=stream_out)
 
 
 def _edit_vouched(current: Settings, *, input_fn, stream_out) -> Settings:
@@ -400,12 +405,28 @@ def _toggle_high_risk(current: Settings, *, input_fn, stream_out) -> Settings:
     """
     if current.high_risk_mode:
         return replace(current, high_risk_mode=False)
-    requested = current.review_seats if current.review_seats is not None else policy.SEAT_FLOOR
-    if requested >= policy.SEAT_FLOOR:
-        # Nothing is being crossed yet, so there is nothing to confirm — but the mode still says
-        # "this project may cross the floor", so it is recorded as such rather than refused.
-        return replace(current, high_risk_mode=True)
-    if tui.confirm_high_risk(requested, policy.SEAT_FLOOR,
+    return _crossing(current, replace(current, high_risk_mode=True),
+                     input_fn=input_fn, stream_out=stream_out)
+
+
+def _crossing(before: Settings, after: Settings, *, input_fn, stream_out) -> Settings:
+    """`after`, if it does not newly cross the floor, or if the person says it may.
+
+    **Bound to the crossing, not to the toggle** (CHG-20260904-18, defect and risk seats). The
+    confirmation used to live in `_toggle_high_risk`, which returns early when nothing is being
+    crossed *yet* — and `_edit_seats` never asked at all. So two edits, neither a crossing on its
+    own, composed into one that was never confirmed:
+
+        seats -> 1, then the bypass on    the confirmation is shown
+        the bypass on, then seats -> 1    it is not, and the result is identical
+
+    Asking here means the question follows the state the two edits reach together, in whichever
+    order a person gets there. Re-enforcing a floor still asks nothing: it can only make the run
+    safer, which is the asymmetry `_toggle_high_risk` was written for and keeps.
+    """
+    if not after.below_floor() or before.below_floor():
+        return after
+    if tui.confirm_high_risk(after.seats_requested(), policy.SEAT_FLOOR,
                              input_fn=input_fn, stream_out=stream_out):
-        return replace(current, high_risk_mode=True)
-    return current
+        return after
+    return before
