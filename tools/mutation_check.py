@@ -1700,6 +1700,27 @@ MUTATIONS: List[Mutation] = [
         'tests/test_sub_planning.py'),
 
     Mutation(
+        'adjacency', 'the box goes back to whichever adjudication happened last',
+        SRC / 'server.py',
+        '    mine = [a for a in report.adjudications if a.get("node_id") == here]',
+        '    mine = list(report.adjudications)',
+        'tests/test_server.py'),
+
+    Mutation(
+        'adjacency', "a panel's first lap is shown instead of what it settled on",
+        SRC / 'server.py',
+        '    return dict(mine[-1]) if mine else None',
+        '    return dict(mine[0]) if mine else None',
+        'tests/test_server.py'),
+
+    Mutation(
+        'adjacency', 'the box stops reading the field and shows nothing again',
+        SRC / 'console' / 'index.html',
+        '    var here = state.adjudication_here;',
+        '    var here = null;',
+        'tests/test_server.py'),
+
+    Mutation(
         'contract', 'the page goes back to calling six of the fifteen conditional',
         REPO / 'docs' / 'API.md',
         '**All 15 keys are on every suspension**',

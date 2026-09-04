@@ -1224,16 +1224,45 @@ def test_a_panel_that_took_more_than_one_lap_shows_what_it_settled_on():
     assert here["outcome"] == "pass", here
 
 
+def _console_code():
+    """The page with its prose removed — comment lines and block comments.
+
+    **Written because the first version of the guard below was satisfied by its own comment**
+    (CHG-20260904-11). Replacing `var here = state.adjudication_here;` with `var here = null;`
+    left 89 tests green: the explanation above the code says the field's name, and a text search
+    over the whole page cannot tell an explanation from the thing it explains. That is verbatim
+    the defect `CHG-20260904-10` shipped for, one change later and in my own work — so the guard
+    reads code here, and prose is not code.
+    """
+    page = _console()
+    page = re.sub(r"/\*.*?\*/", "", page, flags=re.S)
+    return chr(10).join(line for line in page.splitlines()
+                        if not line.strip().startswith("//"))
+
+
 def test_the_console_reads_the_field_and_does_not_pick_for_itself():
     """The browser cannot be executed here — every console guard in this file is a text search —
     which is **why** the selection lives in `server.py` and is tested above. What is left to check
     of the page is that it did not keep a rule of its own."""
-    page = _console()
+    code = _console_code()
 
-    assert "adjudication_here" in page, "the box does not read the field the server derives"
-    assert "adjudications[state.adjudications.length" not in page, (
+    assert "state.adjudication_here" in code, (
+        "the box does not read the field the server derives — and naming it in a comment is not "
+        "reading it")
+    assert "adjudications[state.adjudications.length" not in code, (
         "the console picks an adjudication by position, which is the rule CHG-20260903-24 was "
         "withdrawn over")
+
+
+def test_stripping_the_prose_is_what_makes_that_guard_a_guard():
+    """The floor. Without it the strip could quietly stop stripping and nothing would say so."""
+    page = _console()
+
+    assert "adjudication_here" in page, "this floor needs the field to be on the page at all"
+    assert "// What a panel already said" in page, "the comment this distinguishes from code moved"
+    assert "// What a panel already said" not in _console_code(), (
+        "the strip no longer removes comment lines, so the guard above is a search over prose "
+        "again")
 
 
 def test_no_class_attribute_carries_a_token_that_starts_with_a_dot():
