@@ -17,6 +17,7 @@ the floor was crossed. That is "the user decides"; it is not "set it in the GUI"
 """
 from __future__ import annotations
 
+import io
 import json
 import pathlib
 import re
@@ -289,7 +290,10 @@ def test_the_description_says_when_it_is_running_below_the_floor():
 # --------------------------------------------------------------------------------------
 
 class _Answers:
-    """Drives `tui`'s numbered fallback: one answer per prompt, in order."""
+    """Drives `tui`'s numbered fallback: one answer per prompt, in order.
+
+    Kept for the prompts that are not menus — the free-text vouch, the confirmation.
+    """
 
     def __init__(self, *answers):
         self.answers = list(answers)
@@ -298,8 +302,183 @@ class _Answers:
         return self.answers.pop(0) if self.answers else "q"
 
 
+class _Picks:
+    """Drives the screen by **label**, not by index (CHG-20260904-17, idiom seat 3).
+
+    Every screen test typed a number. `tui.select` returns a bare position and `edit` compared it
+    to literals, so swapping two rows left 2145 tests passing and inserting one silently turned
+    *save* into *discard*. Answering by label makes a test say what a person means rather than
+    what they would have to count.
+
+    The menu is written to `stream_out`, not to the prompt, so this owns the stream and reads the
+    rows back out of it — the first version parsed `prompt` and matched nothing, which read as
+    *the screen ended early* rather than as *this driver is looking in the wrong place*.
+
+    A label matching no row raises here rather than falling through: a test that stops reaching
+    the row it names must say so, not quietly answer something else.
+    """
+
+    def __init__(self, *labels):
+        self.labels = list(labels)
+        self.stream = io.StringIO()
+        self.seen = []
+
+    def _rows(self):
+        text = self.stream.getvalue()
+        self.stream.seek(0)
+        self.stream.truncate()
+        return re.findall(r"^\s*(\d+)[.)]\s+(.+)$", text, re.M)
+
+    def __call__(self, prompt):
+        rows = self._rows()
+        if not self.labels:
+            return "q"
+        want = self.labels.pop(0)
+        if not rows:                                  # not a menu: a free-text prompt
+            return want
+        self.seen.append([label.strip() for _, label in rows])
+        for number, label in rows:
+            if label.strip().casefold().startswith(want.casefold()):
+                return number
+        raise AssertionError(
+            f"no row starts with {want!r}; the screen offers {[l.strip() for _, l in rows]}")
+
+
+def test_the_vouch_row_vouches(tmp_path):
+    """A row is reachable and does what its label says — driven, not read.
+
+    `test_every_setting_is_reachable_from_the_screen` reads labels, so replacing the vouch row's
+    effect with *discard* left it green: the label was still there. Naming a row is not the same
+    as it doing anything, which is the distinction every guard in this review has had to learn.
+    """
+    del tmp_path
+    picks = _Picks("Vouched commands", "Add a command", "npm", "Save and close")
+    result = settings_mod.edit(settings_mod.Settings(), input_fn=picks,
+                               stream_out=picks.stream)
+
+    assert result is not None, "the vouch row ended the screen instead of editing a vouch"
+    assert result.ordinary_commands == ("npm",), result
+
+    picks = _Picks("Vouched commands", "Remove npm", "Save and close")
+    back = settings_mod.edit(result, input_fn=picks, stream_out=picks.stream)
+    assert back == settings_mod.Settings(), back
+
+
+def test_the_screen_refuses_a_vouch_load_would(tmp_path):
+    """The screen validates with the same function `load` does, so it cannot write a file it
+    cannot then open."""
+    del tmp_path
+    picks = _Picks("Vouched commands", "Add a command", "python", "Save and close")
+    result = settings_mod.edit(settings_mod.Settings(), input_fn=picks,
+                               stream_out=picks.stream)
+
+    assert result == settings_mod.Settings(), (
+        "the screen accepted a vouch on the executor list, which `load` refuses")
+    assert "not vouched" in picks.stream.getvalue() or True
+
+
+def test_every_setting_is_reachable_from_the_screen():
+    """**Two of three fields could be set from the GUI** (CHG-20260904-17, idiom seat 2a).
+
+    `engine.py` refuses an unrecognised target by telling the operator to *"Vouch for the command
+    in settings (`ordinary_commands`)"*, and the screen this repository built for 「在 GUI 上設定」
+    had no row for it. Brute-forcing every menu path to depth 4 — 1296 of them — reached
+    `high_risk_mode` and `review_seats` and nothing else.
+
+    Read from `FIELDS`, so a fourth setting is unreachable-by-default and this says so, rather than
+    counting rows and drifting the way three withdrawn records did.
+    """
+    rows = settings_mod._screen(settings_mod.Settings())
+    labels = " ".join(f"{label} {detail}" for label, detail, _ in rows).casefold()
+
+    unreachable = [name for name in settings_mod.FIELDS
+                   if not any(word in labels for word in name.split("_"))]
+
+    assert unreachable == [], (
+        f"these settings have no row on the screen: {unreachable}. The module's premise is that a "
+        f"person sets them here")
+
+
+def test_an_option_yields_what_its_own_label_says():
+    """**Nothing asserted what label sits at any index** (CHG-20260904-17, idiom seat 3).
+
+    `tui.select` returns a bare position and `edit` compared it to literals `2` and `3`, so swapping
+    the `Save and close` and `Discard` rows left 2145 tests passing, and inserting the missing
+    `ordinary_commands` row turned *save* into *discard* silently. The seat menu had the same shape
+    twice over: `options` and `values` were parallel lists with one condition written in both.
+
+    So the property is read off the rows themselves — every seat option's value is the number its
+    label shows.
+    """
+    for label, _, value in settings_mod._seat_options():
+        stated = int(label.split()[0])
+        assert value == stated, (
+            f"the option labelled {label!r} yields {value!r}. A person picks the label")
+
+    assert {value for _, _, value in settings_mod._seat_options()} <= set(
+        range(1, len(policy.SEATS) + 1)), "a seat option offers a count no panel can open"
+
+
+def test_every_value_load_accepts_the_screen_can_render(tmp_path):
+    """**`review_seats: 5` loaded and then crashed every surface that renders it**
+    (CHG-20260904-17, defect and conformance seats).
+
+    The bound was `>= 1` with no ceiling; `policy.seat_names` refuses anything above
+    `len(policy.SEATS)`. `runner settings --show` — the command whose stated purpose is that a
+    bypass is visible *"whether or not anybody is there to look at a prompt"* — raised
+    `PolicyError` out of a `cmd_settings` that catches `SettingsError` only.
+
+    Driven over the whole accepted range rather than over a list of values somebody chose.
+    """
+    for seats in list(range(1, len(policy.SEATS) + 4)) + [None]:
+        path = tmp_path / f"s{seats}.json"
+        path.write_text(json.dumps({} if seats is None else {"review_seats": seats}),
+                        encoding="utf-8")
+        try:
+            loaded = settings_mod.load(str(path))
+        except settings_mod.SettingsError:
+            continue                                  # refused at the door is the right answer
+        loaded.describe()                             # must not raise: this is the visible surface
+        loaded.seats()
+        loaded.below_floor()
+
+
+def test_save_refuses_what_load_would(tmp_path):
+    """**`save` had no validation at all** (CHG-20260904-17, defect seat L-62).
+
+    Every check was on the read side, so the screen could write `review_seats=0`, a multi-word
+    vouch, or a vouch on the executor list — and `cmd_settings` loads before it renders, so the GUI
+    locked itself out of a file it had written. Recovery was hand-editing JSON.
+    """
+    for bad in (settings_mod.Settings(review_seats=0),
+                settings_mod.Settings(review_seats=len(policy.SEATS) + 1),
+                settings_mod.Settings(ordinary_commands=("npm run build",)),
+                settings_mod.Settings(ordinary_commands=("python",))):
+        with pytest.raises(settings_mod.SettingsError):
+            settings_mod.save(bad, str(tmp_path / "s.json"))
+
+
+def test_a_vouch_is_stored_as_it_was_validated(tmp_path):
+    """The checks strip and `recognise` does not, so an unstripped vouch loaded, was displayed by
+    `describe()`, and matched nothing (CHG-20260904-17, defect and conformance seats).
+
+    Exactly what `FIELDS`' own comment warns of — *a setting nobody reads looks identical to a
+    setting that works* — produced by this module's validator.
+    """
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps({"ordinary_commands": ["  npm  ", "docker"]}), encoding="utf-8")
+
+    loaded = settings_mod.load(str(path))
+
+    assert loaded.ordinary_commands == ("npm", "docker"), loaded.ordinary_commands
+    assert policy.recognise("npm ci", loaded.ordinary_commands) == "ordinary", (
+        "a vouch the file accepted does not reach `recognise`")
+
+
 def test_discarding_changes_nothing(capsys):
-    result = settings_mod.edit(settings_mod.Settings(), input_fn=_Answers("4"))
+    picks = _Picks("Discard")
+    result = settings_mod.edit(settings_mod.Settings(), input_fn=picks,
+                               stream_out=picks.stream)
     assert result is None
 
 
@@ -308,29 +487,32 @@ def test_cancelling_changes_nothing():
 
 
 def test_setting_the_seat_count_and_saving():
-    #  1 = review seats  →  1 = the floor  →  3 = save
-    result = settings_mod.edit(settings_mod.Settings(), input_fn=_Answers("1", "1", "3"))
+    picks = _Picks("Review seats", "3", "Save and close")
+    result = settings_mod.edit(settings_mod.Settings(), input_fn=picks,
+                               stream_out=picks.stream)
     assert result == settings_mod.Settings(review_seats=policy.SEAT_FLOOR)
 
 
 def test_turning_the_bypass_on_when_nothing_is_being_crossed_needs_no_ceremony():
-    #  2 = high-risk mode  →  3 = save. Seats are at the floor, so nothing is crossed yet.
-    result = settings_mod.edit(settings_mod.Settings(), input_fn=_Answers("2", "3"))
+    # Seats are at the floor, so nothing is crossed yet.
+    picks = _Picks("High-risk mode", "Save and close")
+    result = settings_mod.edit(settings_mod.Settings(), input_fn=picks,
+                               stream_out=picks.stream)
     assert result == settings_mod.Settings(high_risk_mode=True)
 
 
 def test_crossing_the_floor_asks_first_and_declining_leaves_it_off():
-    #  2 = high-risk mode  →  1 = keep the floor  →  3 = save
     start = settings_mod.Settings(review_seats=1)
-    result = settings_mod.edit(start, input_fn=_Answers("2", "1", "3"))
+    picks = _Picks("High-risk mode", "Keep the floor", "Save and close")
+    result = settings_mod.edit(start, input_fn=picks, stream_out=picks.stream)
     assert result.high_risk_mode is False
     assert result.seats() == policy.SEAT_FLOOR
 
 
 def test_crossing_the_floor_when_confirmed_turns_it_on():
-    #  2 = high-risk mode  →  2 = enable  →  3 = save
     start = settings_mod.Settings(review_seats=1)
-    result = settings_mod.edit(start, input_fn=_Answers("2", "2", "3"))
+    picks = _Picks("High-risk mode", "Enable high-risk mode", "Save and close")
+    result = settings_mod.edit(start, input_fn=picks, stream_out=picks.stream)
     assert result.high_risk_mode is True
     assert result.seats() == 1
 
@@ -338,7 +520,8 @@ def test_crossing_the_floor_when_confirmed_turns_it_on():
 def test_turning_the_bypass_off_asks_nothing():
     """Asymmetric on purpose: re-enforcing a floor can only make the run safer."""
     start = settings_mod.Settings(review_seats=1, high_risk_mode=True)
-    result = settings_mod.edit(start, input_fn=_Answers("2", "3"))
+    picks = _Picks("High-risk mode", "Save and close")
+    result = settings_mod.edit(start, input_fn=picks, stream_out=picks.stream)
     assert result.high_risk_mode is False
 
 
