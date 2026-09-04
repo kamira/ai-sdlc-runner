@@ -66,18 +66,25 @@ LF, UTF-8 — so the same order is the same bytes on every machine.
 | `on_trust` | list[str] | Operations nothing could confirm — declared ordinary, with no targets *or* with targets this runner does not recognise. The planner's word is all that is behind them, and this is where that shows |
 | `resumed` | list[str] | Ask ids answered from the journal rather than by opening a session |
 | `single_model_panels` | list[str] | Panels where every seat was answered by the same backend — independent sessions, one set of blind spots |
-| `effects` | dict[str, object] | Per node: applied, already met, and anything found true out of causal order |
+| `effects` | dict[str, object] | Per node, all four keys `EffectOutcome.as_dict()` writes: `frontier` (where the resume started), `already_met`, `applied`, `out_of_order`. An out-of-order effect is in **both** `already_met` and `out_of_order`, so the two lists do not partition the sequence |
 | `halted_at`, `halt_reason` | str | Where the run stopped and why, in words that name the rule |
 
 ### The effect
 
-An operation is admitted as an effect **only if it leaves a probeable postcondition** — there is
-deliberately no way to construct one without a probe.
+An operation is admitted as an effect **only if it leaves a probeable postcondition**. That rule
+is D6.2 and it is settled in **review**, not by the type: `__post_init__` refuses a missing
+probe, a non-callable one, and one that cannot be called with no arguments, and it cannot tell
+whether what a probe reads is the world or a receipt. `Effect(probe=lambda: True)` is admitted.
+
+Every ordinary route to a probeless one is closed — the constructor, `dataclasses.replace`, and
+assignment, since the class is frozen. Deliberate bypasses (`object.__setattr__`, a subclass
+overriding `__post_init__`, unpickling an `object.__new__` instance) are not, and nothing in
+`src/` uses any of them.
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | str | Required; it is what a resume log reports |
-| `probe` | callable | Reads the postcondition from the world. Unanswerable raises rather than returning False |
+| `probe` | callable | Reads the postcondition from the world. Every probe in `probes.py` **raises** when it cannot answer, rather than returning False — see below; the type does not check it |
 | `apply` | callable | Carries the effect out |
 | `postcondition` | str | What the probe reads, in one line. An effect that cannot be said in a line usually cannot be probed either |
 

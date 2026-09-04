@@ -93,6 +93,29 @@ class Mutation(NamedTuple):
 
 
 MUTATIONS: List[Mutation] = [
+    # ── doc-anchors (CHG-20260905-02) ──────────────────────────────────────────────────────
+    # A document repair with nothing watching it is the defect this round was about, one file over.
+    # Each entry reverts the sentence the change edited, in the document itself.
+    Mutation(
+        "doc-anchors", "D6.2 goes back to having one line binding it",
+        REPO / "docs" / "changes" / "CHG-20260822-04.md",
+        """2. **D6.2 - effect admissibility rule**: an operation may be an effect""",
+        """2. **Effect admissibility rule**: an operation may be an effect""",
+        "tests/test_documented_numbers.py"),
+
+    Mutation(
+        "doc-anchors", "a definition is any bold anywhere, not one that starts a line",
+        REPO / "tests" / "test_documented_numbers.py",
+        r'''    return set(re.findall(r"(?m)^\s*(?:\d+\.\s+)?\*\*(D\d+\.\d+)\b", text))''',
+        r'''    return set(re.findall(r"\*\*(D\d+\.\d+)\b", text))''',
+        "tests/test_documented_numbers.py"),
+
+    Mutation(
+        "doc-anchors", "the effects report row goes back to naming three of four fields",
+        REPO / "docs" / "structure" / "data.md",
+        """`frontier` (where the resume started), `already_met`, `applied`, `out_of_order`""",
+        """`already_met`, `applied`, `out_of_order`""",
+        "tests/test_documented_numbers.py"),
     # ── effects (CHG-20260905-01) ──────────────────────────────────────────────────────────
     # `effects.py` carried 0 of 238 registered mutations while `engine.py` carried 35 — the module
     # the crash-safety rests on, and the one D6 defines, with no revert check at all. Its 12 tests
