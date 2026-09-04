@@ -186,3 +186,185 @@ def test_an_effect_already_true_is_never_applied_even_far_past_the_frontier():
     outcome = effects.run(seq)
     assert applied == ["branch", "push"]
     assert outcome.out_of_order == ["pr"]
+
+
+# --------------------------------------------------------------------------------------
+# CHG-20260905-01 — what the module does on the path it exists for: a failing one
+# --------------------------------------------------------------------------------------
+
+
+class _Unanswerable(Exception):
+    """Stands in for `probes.ProbeError`, which `probes.py` raises by design when a probe cannot
+    answer. `effects.py` must not import `probes`, so the test uses a foreign exception class —
+    which is also the sharper test: the translation must be by *behaviour*, not by a name."""
+
+
+def _cannot_answer(name):
+    def probe():
+        raise _Unanswerable("could not reach origin")
+    return effects.Effect(name=name, probe=probe, apply=lambda: None,
+                          postcondition=f"{name} is on the remote")
+
+
+def test_a_probe_that_cannot_answer_halts_the_run_instead_of_the_process():
+    """`ProbeError` used to travel out of the process entirely.
+
+    `engine._run_effects` catches `EffectError` only and `cli.cmd_run`'s handler tuple listed
+    neither `ProbeError` nor `ShipError`, so an unreachable remote killed the run with a traceback,
+    no report, and no halt — which leaks a `--worktree` run's tree, the damage `cli.py`'s own
+    comment records as already found once for `IntakeError`.
+    """
+    world = {}
+    sequence = _seq(world, order=("chg",)) + [_cannot_answer("push")]
+
+    with pytest.raises(effects.EffectError) as caught:
+        effects.run(sequence)
+
+    assert isinstance(caught.value.__cause__, _Unanswerable), (
+        "the original is dropped, so nobody can see what actually went wrong")
+
+
+def test_the_halt_says_which_probe_could_not_answer():
+    """A halt naming neither the effect nor its postcondition sends an operator to read the code."""
+    with pytest.raises(effects.EffectError) as caught:
+        effects.run([_cannot_answer("push")])
+
+    said = str(caught.value)
+    assert "push" in said, "the halt does not name the effect"
+    assert "push is on the remote" in said, "the halt does not name what could not be read"
+    assert "could not reach origin" in said, "the halt drops the probe's own reason"
+
+
+def test_a_halted_sequence_reports_what_had_already_landed():
+    """The outcome used to be a local in `run` and died with the raise.
+
+    On the one path where *which effects are already done* is the entire question, the answer was
+    thrown away — while `relaxations` and `on_trust` came through the same halt intact.
+    """
+    world = {}
+    sequence = _seq(world, order=("chg", "branch")) + [_cannot_answer("push")]
+
+    with pytest.raises(effects.EffectError) as caught:
+        effects.run(sequence)
+
+    assert world == {"chg": True, "branch": True}, "two effects really landed"
+    assert caught.value.outcome is not None, "the record of what landed died with the raise"
+    assert caught.value.outcome.applied == ["chg", "branch"]
+
+
+def test_a_failure_to_establish_a_postcondition_also_reports_what_landed():
+    """The other raise out of `run` — the false-green check — carries the outcome too."""
+    world = {}
+    sequence = _seq(world, order=("chg", "branch", "push"))
+    silent = sequence[2]
+    sequence[2] = effects.Effect(name=silent.name, probe=silent.probe, apply=lambda: None,
+                                 postcondition=silent.postcondition)
+
+    with pytest.raises(effects.EffectError) as caught:
+        effects.run(sequence)
+
+    assert caught.value.outcome is not None
+    assert caught.value.outcome.applied == ["chg", "branch"]
+
+
+def test_a_dry_run_sees_what_is_out_of_causal_order():
+    """The mode for looking before acting could not see the thing most worth looking at.
+
+    `run` returned at the frontier, so `out_of_order` came back empty for a world that was not in
+    causal order — indistinguishable from a clean answer. FR-15 is P0, names `effects.run`, and
+    carries no dry-run caveat.
+    """
+    world = {"chg": True, "push": True}          # `push` true while `branch` is not
+
+    dry = effects.run(_seq(world), dry_run=True).as_dict()
+
+    assert dry["frontier"] == "branch"
+    assert dry["out_of_order"] == ["push"], (
+        "a dry run reports a world out of causal order as if it were in order")
+    assert dry["already_met"] == ["chg", "push"]
+
+
+def test_a_dry_run_and_a_wet_run_read_the_same_world_the_same_way():
+    """The property under the test above: looking and acting must not disagree about what is there.
+
+    Asserting the dry list alone would stay green if the wet path stopped reporting it too.
+    """
+    dry = effects.run(_seq({"chg": True, "push": True}), dry_run=True).as_dict()
+    wet = effects.run(_seq({"chg": True, "push": True})).as_dict()
+
+    assert dry["frontier"] == wet["frontier"]
+    assert dry["out_of_order"] == wet["out_of_order"]
+    assert dry["already_met"] == wet["already_met"]
+
+
+def test_a_dry_run_applies_nothing():
+    """Reading the whole sequence must not have turned looking into acting."""
+    world = {"chg": True, "push": True}
+
+    outcome = effects.run(_seq(world), dry_run=True)
+
+    assert outcome.applied == []
+    assert world == {"chg": True, "push": True}, "a dry run changed the world"
+
+
+def test_the_frontier_is_not_probed_twice():
+    """`find_frontier` just read it as unmet; asking again is a second round trip for that answer.
+
+    Probes are deliberately uncached and `probes.DEFAULT_TIMEOUT` is 60s, so the redundant read was
+    a real one. Counted rather than described, because a comment saying "we do not re-probe" is
+    exactly the kind of claim that stops being true without anything noticing.
+    """
+    world = {}
+    asked = []
+
+    def make(name):
+        def probe():
+            asked.append(name)
+            return bool(world.get(name))
+        return effects.Effect(name=name, probe=probe,
+                              apply=lambda name=name: world.__setitem__(name, True),
+                              postcondition=f"world[{name!r}] is set")
+
+    effects.run([make("chg"), make("branch")])
+
+    assert asked == ["chg", "chg", "branch", "branch"], (
+        "the frontier was read once to find it, once again before applying, and once after")
+
+
+def test_an_out_of_order_effect_does_not_stop_the_ones_after_it():
+    """`continue`, not `break`. Replacing it skips every later effect and the PR is never created.
+
+    The existing sequence tests have nothing out of causal order, so the swap left all of them
+    green: the loop never reached the branch that would differ.
+    """
+    world = {"push": True}
+
+    outcome = effects.run(_seq(world))
+
+    assert outcome.out_of_order == ["push"]
+    assert "pr" in outcome.applied, "the effect after the out-of-order one was skipped"
+    assert world["pr"] is True
+
+
+def test_a_probe_that_takes_arguments_is_refused_at_construction():
+    """`Effect(probe=len)` was admitted and blew up inside `find_frontier` — at run time, which is
+    after the effects before it have already been applied."""
+    with pytest.raises(effects.EffectError) as caught:
+        effects.Effect(name="x", probe=len, apply=lambda: None)
+
+    assert "no arguments" in str(caught.value)
+
+    with pytest.raises(effects.EffectError):
+        effects.Effect(name="x", probe=lambda: True, apply=lambda a: None)
+
+
+def test_a_callable_whose_signature_cannot_be_read_is_admitted():
+    """The guard refuses what it can prove wrong, not what it cannot read.
+
+    Refusing the unreadable would turn every valid-but-unintrospectable probe into a refusal in
+    order to catch the invalid ones — a guard whose subject is *what it can see* rather than the
+    property it is for.
+    """
+    admitted = effects.Effect(name="y", probe=dict, apply=lambda: None)
+
+    assert admitted.probe() == {}

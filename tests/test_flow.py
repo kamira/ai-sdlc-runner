@@ -1238,3 +1238,36 @@ def test_a_suspension_refuses_a_field_nobody_reads():
     """The other half: a typo that adds a key is the quiet version of the same defect."""
     with pytest.raises(engine.EngineError, match="no reader of"):
         engine._suspension(node_id="pm_confirm", raeson="typo")
+
+
+def test_the_engine_records_a_halted_nodes_partial_outcome():
+    """A halted node used to have no `report.effects` entry at all (CHG-20260905-01).
+
+    `_run_effects` set `halted_at` and returned before writing the outcome, so on the one path
+    where knowing which effects had already landed is the whole question, the report said nothing —
+    while `docs/ai-guideline.md` promises the effect outcome is in the run report.
+    """
+    from ai_sdlc_runner import effects
+
+    landed = []
+
+    def sequence():
+        return [
+            effects.Effect(name="first", probe=lambda: "first" in landed,
+                           apply=lambda: landed.append("first"),
+                           postcondition="first is done"),
+            effects.Effect(name="second", probe=lambda: "second" in landed,
+                           apply=lambda: None,          # runs, establishes nothing
+                           postcondition="second is done"),
+        ]
+
+    cfg = _cfg(undeclared="allow", confirmed=THROUGH,
+               operations={"record_module": [_op("tick the task box")]},
+               effects=lambda n: sequence() if n == "record_module" else ())
+    report = engine.walk(cfg, Recorder(), enabled=True)
+
+    assert report.halted_at == "record_module"
+    assert landed == ["first"], "one effect really landed before the halt"
+    assert "record_module" in report.effects, (
+        "the halted node left no record of what had already been applied")
+    assert report.effects["record_module"]["applied"] == ["first"]

@@ -93,6 +93,115 @@ class Mutation(NamedTuple):
 
 
 MUTATIONS: List[Mutation] = [
+    # ── effects (CHG-20260905-01) ──────────────────────────────────────────────────────────
+    # `effects.py` carried 0 of 238 registered mutations while `engine.py` carried 35 — the module
+    # the crash-safety rests on, and the one D6 defines, with no revert check at all. Its 12 tests
+    # were green against every finding the eleventh review round made.
+    Mutation(
+        "effects", "an unanswerable probe walks out of the process again",
+        SRC / "effects.py",
+        '''    try:
+        return bool(effect.probe())
+    except EffectError:
+        raise
+    except Exception as exc:''',
+        '''    try:
+        return bool(effect.probe())
+    except EffectError:
+        raise
+    except ValueError as exc:''',
+        "tests/test_effects.py"),
+
+    Mutation(
+        "effects", "the halt stops naming which probe could not answer",
+        SRC / "effects.py",
+        '''            f"could not read whether {effect.name!r} is done "
+            f"({effect.postcondition or 'no postcondition described'}): "
+            f"{type(exc).__name__}: {exc}", outcome=outcome) from exc''',
+        '''            "a probe could not be read", outcome=outcome) from exc''',
+        "tests/test_effects.py"),
+
+    Mutation(
+        "effects", "a halted sequence loses the record of what had already landed",
+        SRC / "effects.py",
+        '''            f"{type(exc).__name__}: {exc}", outcome=outcome) from exc''',
+        '''            f"{type(exc).__name__}: {exc}") from exc''',
+        "tests/test_effects.py"),
+
+    Mutation(
+        "effects", "the false-green refusal loses the record of what had already landed",
+        SRC / "effects.py",
+        '''                f"design exists to prevent.", outcome=outcome)''',
+        '''                f"design exists to prevent.")''',
+        "tests/test_effects.py"),
+
+    Mutation(
+        "effects", "a dry run stops reading past the frontier",
+        SRC / "effects.py",
+        '''    outcome.frontier = effects[start].name
+
+    for position, effect in enumerate(effects[start:], start):''',
+        '''    outcome.frontier = effects[start].name
+    if dry_run:
+        return outcome
+
+    for position, effect in enumerate(effects[start:], start):''',
+        "tests/test_effects.py"),
+
+    Mutation(
+        "effects", "a dry run starts applying what it was only meant to look at",
+        SRC / "effects.py",
+        '''        if dry_run:
+            continue
+        effect.apply()''',
+        '''        effect.apply()''',
+        "tests/test_effects.py"),
+
+    Mutation(
+        "effects", "the frontier is read a second time for an answer already in hand",
+        SRC / "effects.py",
+        '''        if position != start and _ask(effect, outcome):''',
+        '''        if _ask(effect, outcome):''',
+        "tests/test_effects.py"),
+
+    Mutation(
+        "effects", "an out-of-order effect stops every effect after it",
+        SRC / "effects.py",
+        '''            outcome.out_of_order.append(effect.name)
+            continue''',
+        '''            outcome.out_of_order.append(effect.name)
+            break''',
+        "tests/test_effects.py"),
+
+    Mutation(
+        "effects", "a probe that cannot be called with no arguments is admitted again",
+        SRC / "effects.py",
+        '''        if not _takes_no_arguments(self.probe):''',
+        '''        if False:''',
+        "tests/test_effects.py"),
+
+    Mutation(
+        "effects", "the arity guard refuses what it merely cannot read",
+        SRC / "effects.py",
+        '''    except (TypeError, ValueError):
+        return True''',
+        '''    except (TypeError, ValueError):
+        return False''',
+        "tests/test_effects.py"),
+
+    Mutation(
+        "effects", "a halted node leaves no record of its effects in the run report",
+        SRC / "engine.py",
+        '''        if exc.outcome is not None:''',
+        '''        if False:''',
+        "tests/test_flow.py"),
+
+    Mutation(
+        "effects", "the frontier and what is out of causal order stop reaching a terminal",
+        SRC / "cli.py",
+        '''        if outcome.get("frontier"):''',
+        '''        if False:''',
+        "tests/test_cli.py"),
     Mutation(
         "importer", "the walk collapses same-named files across projects again",
         SRC / "conversations.py",
