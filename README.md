@@ -719,6 +719,22 @@ and none of them can say which shape it is.
 **A decision node's answer is read under three names.** `branch`, then `verdict`, then `outcome`,
 first one winning — so two of them disagreeing inside one answer resolves silently.
 
+**A change class relaxes everywhere or nowhere.** `policy.relax(graded, klass)` takes no node, and
+`ChangeClass` carries `name`, `relaxes`, `reviewed_after` and `note` — nothing node-aware. So
+declaring a class that relaxes lowers **every** `confirm` cell it can reach, `merge@low` and
+`pr@high` included, and there is no way to say *this class, only at this gate*. Closing it needs the
+predicate on the **route** rather than on the class, because `logical.md`'s *"`policy` depends on
+nothing"* is what stops a class from reading a node. Found by four seats over eight rounds of
+`CHG-20260903-25`, which is withdrawn: it proposed a class bounded to one cell, and that bound
+cannot be written where a class lives.
+
+**Two requirements have no owner.** 「可以依節點 by pass」 — pre-authorise *by node* — is named in
+`CHG-20260901-15`, `CHG-20260903-24` and `CHG-20260903-25`, and deliverable by none of them: the
+first two are withdrawn and the third forbids naming nodes in its own task 2. And
+`CHG-20260901-15`'s two halves were re-issued as `-24` and `-25`, **both of which are now
+withdrawn** — so the whole of `-15` is recorded as replaced by records that produced nothing. Named
+here because that is what this section is for, and because a later record can strike them out.
+
 ---
 
 ## Testing
