@@ -1289,3 +1289,103 @@ def test_no_comment_in_the_source_cites_a_line_number():
     assert offenders == [], (
         "these name a line number, which the next insertion above it makes wrong — name the "
         f"function, the class or the constant instead: {offenders}")
+
+
+# --------------------------------------------------------------------------------------
+# CHG-20260905-02 — an id a reader arrives with must land somewhere
+# --------------------------------------------------------------------------------------
+
+#: A requirement id as `src/` writes it: `D6.2`, `D7.1`. The design documents number their rules
+#: this way and the code cites them by number, which only works if the number is written down
+#: somewhere as a label rather than being the position of an item in an unlabelled list.
+REQUIREMENT_ID = re.compile(r"\bD\d+\.\d+\b")
+
+
+def requirement_ids_in(text):
+    """Every requirement id cited in `text`, in order, without duplicates.
+
+    Takes the text rather than a path so a planted citation can be pointed at it. The rule was
+    written because `D6.2` had exactly one line binding it and `D6.3`–`D6.5` had none; a guard that
+    could only be run against the live tree would have had nothing to prove it worked.
+    """
+    seen = []
+    for match in REQUIREMENT_ID.findall(text):
+        if match not in seen:
+            seen.append(match)
+    return seen
+
+
+def labelled_ids_in(text):
+    """Every requirement id `text` defines as a **label** a reader can find.
+
+    A definition is a bold label at the **start of a line** — a list item or a heading. Matching
+    the same bold anywhere on a line made prose *about* the rule count as a definition: the
+    acceptance record for CHG-20260905-02 quoted the pattern while explaining what it matches,
+    and that one sentence was enough to keep the guard below green against the label being
+    deleted from the ledger. A guard whose subject is the text rather than the property, fed by
+    its own author's account of the defect.
+    """
+    return set(re.findall(r"(?m)^\s*(?:\d+\.\s+)?\*\*(D\d+\.\d+)\b", text))
+
+
+def test_every_requirement_id_the_source_cites_can_be_looked_up():
+    """A citation in `src/` must resolve to a labelled item, not to a position in a list.
+
+    `effects.py`, `probes.py` and `ship.py` cite `D6.2`, `D6.3`, `D6.4` and `D6.5`. `D6.2` was
+    reachable only through a single back-reference line in `CHG-20260822-04.md` — delete that one
+    line and four modules cite an id that is nowhere. The other three were resolvable only by
+    counting items in an unlabelled ordered list (CHG-20260905-02, round-11 conformance seat).
+    """
+    root = ROOT
+    cited = {}
+    for path in sorted((root / "src").rglob("*.py")):
+        for what in requirement_ids_in(path.read_text(encoding="utf-8", errors="replace")):
+            cited.setdefault(what, []).append(path.name)
+
+    assert cited, "no requirement id is cited anywhere in src/ — the rule now guards nothing"
+
+    labelled = set()
+    for path in sorted((root / "docs").rglob("*.md")):
+        labelled |= labelled_ids_in(path.read_text(encoding="utf-8", errors="replace"))
+
+    unresolvable = {k: v for k, v in cited.items() if k not in labelled}
+    assert not unresolvable, (
+        "these ids are cited in src/ and are written down nowhere as a label a reader can find: "
+        "%s" % unresolvable)
+
+
+def test_the_id_rule_can_see_an_id_that_lands_nowhere():
+    """The floor. Without it the guard above passes whenever its two searches both find nothing."""
+    assert requirement_ids_in("this rests on D6.2 and on D9.7") == ["D6.2", "D9.7"]
+    assert requirement_ids_in("no ids here at all") == []
+
+    defines = "2. **D6.2 - effect admissibility rule**: an operation may be an effect only if"
+    assert labelled_ids_in(defines) == {"D6.2"}
+    assert labelled_ids_in("- **No effect without a probeable postcondition** (D6.2).") == set(), (
+        "a mention in passing was counted as a definition, which is how the id had one way in")
+
+    # Assembled from fragments so this file never contains the thing it forbids — the plant is
+    # what the acceptance record accidentally wrote in prose, which is how this case was found.
+    quoted = "the rule reads " + "*" + "*D6.2" + " where a label starts a line"
+    assert labelled_ids_in(quoted) == set(), (
+        "prose explaining the rule counted as a definition of the id it happens to mention")
+
+
+def test_the_effects_report_row_names_every_field_the_outcome_carries():
+    """Driven off `as_dict()`, so a fifth field makes the row wrong until somebody writes it.
+
+    The row described three of four: `frontier` — where a resume started — was missing. A row
+    listing the fields by hand is a copy of the truth, and copies drift (CHG-20260905-02).
+    """
+    from ai_sdlc_runner import effects
+
+    root = ROOT
+    data = (root / "docs" / "structure" / "data.md").read_text(encoding="utf-8")
+    row = next((ln for ln in data.split("\n") if ln.startswith("| `effects` |")), None)
+    assert row, "docs/structure/data.md no longer has a row for the `effects` report field"
+
+    carried = effects.EffectOutcome().as_dict()
+    assert len(carried) >= 4, "the outcome shrank; this guard was written against four fields"
+    missing = [k for k in carried if "`%s`" % k not in row]
+    assert not missing, (
+        "the `effects` row does not name %s, which `EffectOutcome.as_dict()` writes" % missing)

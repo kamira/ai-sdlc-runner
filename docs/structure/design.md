@@ -44,7 +44,10 @@ design doc that points at deleted files is worse than no design doc.
   probeability is the admission criterion for being an effect at all, not a property to add later.
 - **Probe** — `() -> bool`, reading the world. Unanswerable **raises** rather than returning `False`:
   "I could not reach the remote" and "the branch is not there" are different facts, and merging them
-  makes a resume push twice.
+  makes a resume push twice. This is a **convention every probe in `probes.py` holds to**, not
+  something `Effect` checks — written here as a property of the field, it read as enforced
+  (CHG-20260905-02). What `effects.py` does with such a raise is turn it into `EffectError`, so
+  it halts the run instead of the process.
 - **Error behaviour** — no silent fallback anywhere. An unknown gate, an untemplated node, a branch
   the plan did not supply, a seat nobody defined, a status word neither list knows: each raises and
   names what is missing.
