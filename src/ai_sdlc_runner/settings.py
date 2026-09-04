@@ -183,11 +183,8 @@ def load(path: str = DEFAULT_PATH) -> Settings:
             f"adjudication rule live in policy.py and take no input. A setting nobody "
             f"reads looks exactly like one that works.")
 
-    seats = raw.get("review_seats")
-    if seats is not None:
-        if not isinstance(seats, int) or isinstance(seats, bool) or seats < 1:
-            raise SettingsError(f"{path}: review_seats must be a whole number of at least 1, "
-                                f"got {seats!r}")
+    seats = _check_seats(raw.get("review_seats"), where=path)
+
     high_risk = raw.get("high_risk_mode", False)
     if not isinstance(high_risk, bool):
         raise SettingsError(f"{path}: high_risk_mode must be true or false, got {high_risk!r}")
@@ -196,29 +193,78 @@ def load(path: str = DEFAULT_PATH) -> Settings:
     if not isinstance(commands, list) or not all(isinstance(c, str) for c in commands):
         raise SettingsError(f"{path}: ordinary_commands must be a list of command names, "
                             f"got {commands!r}")
+
+    # **Stored as it was validated** (CHG-20260904-17). The checks below strip and `recognise`
+    # casefolds without stripping, so `"  npm  "` loaded clean, appeared in `describe()`, and
+    # matched nothing — which is the failure `FIELDS`' own comment names, produced by this
+    # validator.
+    return Settings(review_seats=seats, high_risk_mode=high_risk,
+                    ordinary_commands=_check_vouched(commands, where=path))
+
+
+def _check_seats(seats, *, where: str = "settings"):
+    """The seat count, or `None`. Bounded **at both ends**.
+
+    The lower bound was here from the start; there was no upper one, and `policy.seat_names`
+    refuses anything above `len(policy.SEATS)`. So `{"review_seats": 5}` loaded, and every surface
+    that renders it — `runner settings --show`, the edit screen's own header — raised `PolicyError`
+    out of a `cmd_settings` that catches `SettingsError` only. The command built to make a bypass
+    visible *"whether or not anybody is there to look at a prompt"* was the one that tracebacked
+    (CHG-20260904-17, defect and conformance seats).
+    """
+    if seats is None:
+        return None
+    if not isinstance(seats, int) or isinstance(seats, bool) or seats < 1:
+        raise SettingsError(f"{where}: review_seats must be a whole number of at least 1, "
+                            f"got {seats!r}")
+    if seats > len(policy.SEATS):
+        raise SettingsError(
+            f"{where}: review_seats is {seats} and this runner defines {len(policy.SEATS)} "
+            f"seat(s): {', '.join(s.name for s in policy.SEATS)}. Asking for more opens none of "
+            f"them — the panel is the seats that exist, not a number.")
+    return seats
+
+
+def _check_vouched(commands, *, where: str = "settings"):
+    """The vouched commands, stripped, or a `SettingsError` naming why one was refused.
+
+    Read by `load`, by `save` and by the screen, so the three cannot disagree about what a vouch
+    is. `save` had no validation at all and could write three shapes `load` then refused, which
+    left the GUI unable to open on a file it had written itself (CHG-20260904-17, defect seat).
+    """
+    out = []
     for command in commands:
-        if command.strip().casefold() in policy.EXECUTORS:
+        name = command.strip()
+        if name.casefold() in policy.EXECUTORS:
             raise SettingsError(
-                f"{path}: {command!r} cannot be vouched for. Its name says nothing about what it "
-                f"will do — the argument is the program, so vouching for it vouches for anything it "
-                f"can be told to do. `python -c '...'` and `python -m pytest` are the same command "
-                f"as far as a name can tell.\n"
+                f"{where}: {command!r} cannot be vouched for. Its name says nothing about what it "
+                f"will do — the argument is the program, so vouching for it vouches for anything "
+                f"it can be told to do. `python -c '...'` and `python -m pytest` are the same "
+                f"command as far as a name can tell.\n"
                 f"  For an interpreter, vouch for the **tool you run through it**: with `pytest` "
                 f"vouched, `python -m pytest` is recognised.\n"
                 f"  For a one-off, declare the operation's kind on the work itself — a statement "
                 f"about this piece of work rather than a standing permission.")
-        if not command.strip() or len(command.split()) != 1:
+        if not name or len(name.split()) != 1:
             raise SettingsError(
-                f"{path}: ordinary_commands holds {command!r}. Vouch for the **command**, one word "
-                f"— `npm`, not `npm run build`. A whole command line here would be the prefix "
+                f"{where}: ordinary_commands holds {command!r}. Vouch for the **command**, one "
+                f"word — `npm`, not `npm run build`. A whole command line here would be the prefix "
                 f"mistake this setting exists to avoid.")
-
-    return Settings(review_seats=seats, high_risk_mode=high_risk,
-                    ordinary_commands=tuple(commands))
+        out.append(name)
+    return tuple(out)
 
 
 def save(settings: Settings, path: str = DEFAULT_PATH) -> None:
-    """Write the settings file. Sorted keys and a trailing newline, so a diff is readable."""
+    """Write the settings file. Sorted keys and a trailing newline, so a diff is readable.
+
+    **Validated before it is written** (CHG-20260904-17, defect seat L-62). Every check in this
+    module used to be on the read side, so `save` could write `review_seats=0`, a multi-word vouch
+    or a vouch on the executor list — three shapes `load` then refuses, on the path `cmd_settings`
+    takes before it renders the screen. The GUI could lock itself out of a file it had written, and
+    the only way back was hand-editing JSON.
+    """
+    _check_seats(settings.review_seats, where=path)
+    _check_vouched(settings.ordinary_commands, where=path)
     p = Path(path)
     paths.makedirs(p.parent)
     paths.write_text(p, json.dumps(settings.as_dict(), indent=2, sort_keys=True) + "\n")
@@ -229,47 +275,120 @@ def edit(settings: Settings, *, input_fn=input, stream_out=None) -> Optional[Set
 
     Returns the settings to save, or ``None`` if the user backed out — cancelling changes nothing,
     which is what a cancel has to mean when one of the options is a safety bypass.
+
+    **Keyed by name, not by index** (CHG-20260904-17, idiom seat). `tui.select` returns a bare
+    position, and this compared it to the literals `2` and `3` while the labels lived in a separate
+    list. Adding the missing `ordinary_commands` row in the obvious place therefore moved `Save and
+    close` to 3 and `Discard` to 4 — so typing 3 saved nothing and typing 4 discarded — with the
+    whole suite green, because nothing in the repository asserted what label sits at any index.
+
+    Everywhere else this repository maps a name to an effect by name: `policy.GATES`,
+    `policy.BY_SEAT`, `policy.BY_ROLE`, `graph.BY_ID`, `FIELDS`. This was the one place that did
+    not, and it is the one place a wrong answer writes a safety bypass to disk.
     """
     current = settings
     while True:
-        choice = tui.select(
-            f"Settings — {current.describe()}",
-            [
-                ("Review seats", f"currently {current.seats()}; the floor is {policy.SEAT_FLOOR}"),
-                ("High-risk mode",
-                 "ON — the seat floor may be crossed" if current.high_risk_mode
-                 else "off — the seat floor is enforced"),
-                ("Save and close", "write the choices above to the settings file"),
-                ("Discard", "leave everything as it was"),
-            ],
-            input_fn=input_fn, stream_out=stream_out)
-
-        if choice is None or choice == 3:
+        rows = _screen(current)
+        choice = tui.select(f"Settings — {current.describe()}", [row[:2] for row in rows],
+                            input_fn=input_fn, stream_out=stream_out)
+        if choice is None:
             return None
-        if choice == 2:
+        _, _, effect = rows[choice]
+        if effect is _SAVE:
             return current
-        if choice == 0:
-            current = _edit_seats(current, input_fn=input_fn, stream_out=stream_out)
-        elif choice == 1:
-            current = _toggle_high_risk(current, input_fn=input_fn, stream_out=stream_out)
+        if effect is _DISCARD:
+            return None
+        current = effect(current, input_fn=input_fn, stream_out=stream_out)
+
+
+#: The two effects that end the screen. Sentinels rather than strings, so a row cannot be given an
+#: effect by writing a label that happens to match one.
+_SAVE = object()
+_DISCARD = object()
+
+
+def _screen(current: Settings):
+    """The rows, each carrying its own effect. One list, so a label and what it does cannot drift.
+
+    Every name in `FIELDS` has a row here — asserted by
+    `test_every_setting_is_reachable_from_the_screen`, which reads `FIELDS` rather than counting.
+    """
+    return [
+        ("Review seats", f"currently {current.seats()}; the floor is {policy.SEAT_FLOOR}",
+         _edit_seats),
+        ("High-risk mode",
+         "ON — the seat floor may be crossed" if current.high_risk_mode
+         else "off — the seat floor is enforced",
+         _toggle_high_risk),
+        ("Vouched commands",
+         ", ".join(current.ordinary_commands) if current.ordinary_commands
+         else "none — every target is read against the halts",
+         _edit_vouched),
+        ("Save and close", "write the choices above to the settings file", _SAVE),
+        ("Discard", "leave everything as it was", _DISCARD),
+    ]
+
+
+def _seat_options():
+    """The seat counts a person may pick, each paired with the value it yields.
+
+    One list rather than two. `options` and `values` were parallel lists with
+    `extra <= len(policy.SEATS)` written twice, so a value could drift from the label above it and
+    nothing would say so (CHG-20260904-17).
+    """
+    rows = [(f"{policy.SEAT_FLOOR} (the floor)", "every seat the panel is meant to have",
+             policy.SEAT_FLOOR)]
+    for n in range(1, policy.SEAT_FLOOR):
+        rows.append((f"{n}", "below the floor — needs high-risk mode, and the run records it", n))
+    extra = policy.SEAT_FLOOR + 1
+    if extra <= len(policy.SEATS):
+        rows.append((f"{extra}", "more review than the floor asks for", extra))
+    return rows
 
 
 def _edit_seats(current: Settings, *, input_fn, stream_out) -> Settings:
     """Pick a seat count. The options below the floor say so in the option itself."""
-    options = [(f"{policy.SEAT_FLOOR} (the floor)", "every seat the panel is meant to have")]
-    below = [n for n in range(1, policy.SEAT_FLOOR)]
-    for n in below:
-        options.append((f"{n}", f"below the floor — needs high-risk mode, and the run records it"))
-    extra = policy.SEAT_FLOOR + 1
-    if extra <= len(policy.SEATS):
-        options.append((f"{extra}", "more review than the floor asks for"))
+    rows = _seat_options()
+    choice = tui.select(f"How many review seats? (floor {policy.SEAT_FLOOR})",
+                        [row[:2] for row in rows], input_fn=input_fn, stream_out=stream_out)
+    if choice is None:
+        return current
+    return replace(current, review_seats=rows[choice][2])
 
-    choice = tui.select(f"How many review seats? (floor {policy.SEAT_FLOOR})", options,
+
+def _edit_vouched(current: Settings, *, input_fn, stream_out) -> Settings:
+    """Add or remove a vouched command.
+
+    **The field the screen could not reach** (CHG-20260904-17, idiom seat 2a). `engine.py` refuses
+    an unrecognised target by telling the operator to *"Vouch for the command in settings
+    (`ordinary_commands`)"*, and the screen this repository built for that requirement had no row
+    for it — two of three fields, in the module whose premise is 「在 GUI 上設定」.
+
+    A vouch is validated here with the same function `load` uses, so the screen cannot write a file
+    the screen will not open.
+    """
+    rows = [("Add a command", "one word — the tool, never a command line", None)]
+    for name in current.ordinary_commands:
+        rows.append((f"Remove {name}", "stop treating it as ordinary", name))
+
+    choice = tui.select("Vouched commands", [row[:2] for row in rows],
                         input_fn=input_fn, stream_out=stream_out)
     if choice is None:
         return current
-    values = [policy.SEAT_FLOOR] + below + ([extra] if extra <= len(policy.SEATS) else [])
-    return replace(current, review_seats=values[choice])
+    if rows[choice][2] is not None:
+        return replace(current, ordinary_commands=tuple(
+            n for n in current.ordinary_commands if n != rows[choice][2]))
+
+    said = str(input_fn("Command to vouch for (blank to cancel): ") or "").strip()
+    if not said:
+        return current
+    try:
+        _check_vouched([said])
+    except SettingsError as refused:
+        if stream_out is not None:
+            print(f"not vouched: {refused}", file=stream_out)
+        return current
+    return replace(current, ordinary_commands=current.ordinary_commands + (said,))
 
 
 def _toggle_high_risk(current: Settings, *, input_fn, stream_out) -> Settings:

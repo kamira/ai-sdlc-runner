@@ -1742,6 +1742,41 @@ MUTATIONS: List[Mutation] = [
         'tests/test_server.py'),
 
     Mutation(
+        'settings', 'a seat count no panel can open loads, and every surface crashes on it',
+        SRC / 'settings.py',
+        '    if seats > len(policy.SEATS):',
+        '    if False:',
+        'tests/test_settings.py'),
+
+    Mutation(
+        'settings', 'a vouch is stored as typed, so it is displayed and matches nothing',
+        SRC / 'settings.py',
+        '        out.append(name)',
+        '        out.append(command)',
+        'tests/test_settings.py'),
+
+    Mutation(
+        'settings', 'save writes what load will refuse, locking the screen out of its own file',
+        SRC / 'settings.py',
+        '    _check_seats(settings.review_seats, where=path)\n    _check_vouched(settings.ordinary_commands, where=path)',
+        '    pass',
+        'tests/test_settings.py'),
+
+    Mutation(
+        'settings', 'the vouch row is on the screen and does something else',
+        SRC / 'settings.py',
+        '         _edit_vouched),',
+        '         _DISCARD),',
+        'tests/test_settings.py'),
+
+    Mutation(
+        'settings', 'a below-floor option quietly yields the floor',
+        SRC / 'settings.py',
+        '        rows.append((f"{n}", "below the floor — needs high-risk mode, and the run records it", n))',
+        '        rows.append((f"{n}", "below the floor — needs high-risk mode, and the run records it", policy.SEAT_FLOOR))',
+        'tests/test_settings.py'),
+
+    Mutation(
         'grading', 'the whole Risk line is read, so every qualified grade is refused',
         TOOLS / 'ledger_check.py',
         '    return re.split(r"[\\s,.;(—-]", said, 1)[0] if said else ""',
