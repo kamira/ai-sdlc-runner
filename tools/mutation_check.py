@@ -1700,6 +1700,48 @@ MUTATIONS: List[Mutation] = [
         'tests/test_sub_planning.py'),
 
     Mutation(
+        'prose', 'the strip drops only a comment that starts its line',
+        REPO / 'tests' / 'test_server.py',
+        '        if source.startswith("//", i):',
+        '        if source.startswith("//", i) and source[max(0, i - 200):i].rstrip().endswith(chr(10)):',
+        'tests/test_server.py'),
+
+    Mutation(
+        'prose', 'the strip stops removing a comment that ends a line of code',
+        REPO / 'tests' / 'test_server.py',
+        '        if source.startswith("//", i):',
+        '        if source.startswith("//", i) and not out:',
+        'tests/test_server.py'),
+
+    Mutation(
+        'prose', "the decision rule writes the two names instead of reading _answering",
+        REPO / 'tests' / 'test_server.py',
+        '    wanted = {a.arg for a in _answering_of(runner).args.kwonlyargs}',
+        '    wanted = {"gate", "node_id"}',
+        'tests/test_server.py'),
+
+    Mutation(
+        'prose', 'a call handing nothing counts as compliance again',
+        REPO / 'tests' / 'test_server.py',
+        '        if not (calls and any(call.keywords for call in calls)\n                and all((name, name) in handed for name in taken & wanted)):',
+        '        if not (calls\n                and all((name, name) in handed for name in taken & wanted)):',
+        'tests/test_server.py'),
+
+    Mutation(
+        'prose', 'the stop is given whichever adjudication happened last',
+        SRC / 'server.py',
+        '    mine = [a for a in report.adjudications if a.get("node_id") == here]',
+        '    mine = []',
+        'tests/test_server.py'),
+
+    Mutation(
+        'prose', 'the page says `reason` belongs to the tie alone again',
+        REPO / 'docs' / 'API.md',
+        '  // meaningful on TWO of the three: the tie, and the incomplete requirement',
+        '  // meaningful when `undecided` - the tie, and nothing else',
+        'tests/test_server.py'),
+
+    Mutation(
         'adjacency', 'the box goes back to whichever adjudication happened last',
         SRC / 'server.py',
         '    mine = [a for a in report.adjudications if a.get("node_id") == here]',
@@ -1945,7 +1987,14 @@ def _import_fails(path: Path) -> str:
     with tempfile.TemporaryDirectory(prefix="mutation-probe-") as cache:
         probe = subprocess.run([sys.executable, "-c", stmt], capture_output=True, text=True,
                                encoding="utf-8", errors="replace", cwd=REPO,
-                               env={**os.environ, "PYTHONPATH": str(REPO / where),
+                               # **`src` as well as the file's own directory** (CHG-20260904-13).
+                               # `where` alone imported `tests/test_server.py` with only `tests`
+                               # on the path, so `import ai_sdlc_runner` raised and four honest
+                               # mutations were reported BROKE. A test module that imports the
+                               # package it tests is the ordinary case, not the exception.
+                               env={**os.environ,
+                                    "PYTHONPATH": os.pathsep.join(
+                                        dict.fromkeys([str(REPO / where), str(REPO / "src")])),
                                     "PYTHONPYCACHEPREFIX": cache})
     if probe.returncode == 0:
         return ""
