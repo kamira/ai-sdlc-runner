@@ -706,8 +706,17 @@ _READ_ONLY = r"^git\s+(status|log|diff|show|blame|remote\s+-v|config\s+--get)\b"
 #: `python -c "__import__('pathlib').Path('customers.db').unlink()"`, ordinary because somebody had
 #: vouched for `python`. `rm important-backups.tar` was ordinary for the same reason.
 #:
-#: These are never `ordinary`, and `settings.load` refuses to accept one in `ordinary_commands` so
-#: the operator finds out while configuring rather than while it matters.
+#: `settings.load` refuses to accept one of these in `ordinary_commands`, so the operator
+#: finds out while configuring rather than while it matters. That half is exact: all of them,
+#: case-folded.
+#:
+#: **A bare name with no arguments is still read as a repo path**, because `_REPO_PATH` is
+#: tested before this branch — `recognise('rm')`, `recognise('python')` and `recognise('sh')`
+#: are all `ordinary` (CHG-20260904-19, conformance seat). An earlier version of this comment
+#: said *these are never `ordinary`*, which is the absolute the measurement does not support.
+#: Low consequence: a bare word genuinely is ambiguous with a filename, and anything carrying
+#: an argument or a metacharacter is caught. `README.md` has the scoped version — *can never
+#: be **vouched for** as ordinary* — and that one holds.
 EXECUTORS: FrozenSet[str] = frozenset({
     "python", "python3", "py", "node", "deno", "bun", "ruby", "perl", "php", "lua", "rscript",
     "sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "pwsh", "powershell", "cmd",

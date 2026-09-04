@@ -854,6 +854,62 @@ def test_the_known_gaps_section_exists_and_says_what_it_is_for():
         f"this section exists to prevent")
 
 
+#: The directories a source file may offer a reader a path into. **`config/` as well as
+#: `examples/`** (CHG-20260904-19, conformance seat): `settings.py`'s own
+#: `DEFAULT_PATH = "config/settings.json"` was neither tracked nor ignored — the exact
+#: condition this rule's message calls *the defect this rule was written for* — and it sat
+#: one prefix outside the pattern. A cited path is a path a reader is offered; which directory
+#: it is in is not the property.
+CITED_ROOTS = ("config", "docs", "examples", "tests", "tools")
+
+
+def paths_cited_in(text):
+    """Every path in `text` that a reader is offered as evidence.
+
+    Takes the text so a planted citation can be pointed at it — the scope was widened once
+    already and nothing could show the widening mattered, because no live citation sat in the
+    directory that had just been added.
+    """
+    found = []
+    for match in re.findall(r"(?:%s)/[\w./-]+" % "|".join(CITED_ROOTS), text):
+        what = match.rstrip(".,`")
+        if "." in what.rsplit("/", 1)[-1]:      # a bare directory fragment is prose
+            found.append(what)
+    return found
+
+
+def test_a_cited_path_is_found_in_every_directory_the_rule_covers():
+    """The floor under the widening: a planted citation in each covered root is seen.
+
+    Without it, narrowing `CITED_ROOTS` back to `examples/` alone changed nothing any test
+    could see — no live source cites an unresolvable `config/` path, so the revert was
+    invisible (CHG-20260904-19).
+    """
+    # **Derived from what `src/` actually cites, not from `CITED_ROOTS`.** Looping over the
+    # constant made this floor shrink with it: narrowing the rule to `examples/` narrowed the
+    # loop too, and the revert stayed invisible.
+    root = Path(__file__).resolve().parents[1]
+    offered = set()
+    for path in (root / "src").rglob("*.py"):
+        for match in re.findall(r"\b([a-z][\w-]*)/[\w./-]+\.[A-Za-z]{2,5}\b",
+                                path.read_text(encoding="utf-8", errors="replace")):
+            if (root / match).is_dir():
+                offered.add(match)
+
+    assert offered <= set(CITED_ROOTS), (
+        f"source files offer a reader paths into {sorted(offered - set(CITED_ROOTS))}, and the "
+        f"rule reads {list(CITED_ROOTS)} — a cited path is a path a reader is offered, whichever "
+        f"directory it is in")
+
+    for named in sorted(offered):
+        planted = "the file lives at `%s/nowhere/plan.json` today" % named
+        assert paths_cited_in(planted) == ["%s/nowhere/plan.json" % named], (
+            "a citation into %s/ is not seen by the rule" % named)
+
+    assert paths_cited_in("see examples/minimal for the shape") == [], (
+        "a bare directory fragment is prose, not a path a reader can open")
+
+
 def test_every_example_path_a_source_file_cites_exists():
     """**The rule**, because the instance was cited four times and existed nowhere.
 
@@ -877,10 +933,8 @@ def test_every_example_path_a_source_file_cites_exists():
     # A citation must also look like a file. A bare directory fragment is prose, not a path.
     for path in (root / "src").rglob("*.py"):
         text = path.read_text(encoding="utf-8", errors="replace")
-        for match in re.findall(r"examples/[\w./-]+", text):
-            what = match.rstrip(".,`")
-            if "." in what.rsplit("/", 1)[-1]:
-                cited.add((path.relative_to(root).as_posix(), what))
+        for what in paths_cited_in(text):
+            cited.add((path.relative_to(root).as_posix(), what))
 
     # **Provenance, not existence** (CHG-20260904-14, defect seat L-57). This asked
     # `(root / what).exists()`, and `examples/minimal/greet.py` — cited three times by

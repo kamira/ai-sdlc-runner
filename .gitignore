@@ -186,6 +186,15 @@ cython_debug/
 .runner/
 .preview/
 
+# Per-operator settings, not the project's. `runner settings` writes three keys here, one
+# pair of which is the seat-floor bypass — committing it would make one person's bypass
+# everyone's default on clone. It was neither tracked nor ignored until CHG-20260904-19,
+# which is the condition `test_every_example_path_a_source_file_cites_exists` calls *the
+# defect this rule was written for*, and writing it made `tools/frozen_tree.py` report the
+# tree had moved — with `commit` as the remedy it printed. Same shape as the missing
+# newline four lines above.
+config/settings.json
+
 # Build output from running the shipped examples (CHG-20260823-47: driving
 # examples/weather-spa through the console left this untracked in the worktree).
 examples/*/site/

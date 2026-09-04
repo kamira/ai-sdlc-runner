@@ -1741,6 +1741,27 @@ MUTATIONS: List[Mutation] = [
         '  // meaningful when `incomplete` and nothing else, and',
         'tests/test_server.py'),
 
+    # Three `prose-guards` mutations were retired rather than faked (CHG-20260904-19). Reverting
+    # the flowed read of the module, or the guard's read of its own file, re-opens a hole nothing
+    # currently exercises: no live sentence is wrapped wrongly and this file no longer states the
+    # claim it forbids, because the floors that test those two assemble their plants. What is
+    # pinned instead is the **check**, pointed at planted text — `test_a_rewrapped_count_is_still_
+    # a_count` and `test_the_banned_claim_is_found_wherever_it_is_wrapped`. Same call
+    # CHG-20260904-15 made for the sibling inventory, and stated for the same reason.
+    Mutation(
+        'prose-guards', 'the cited-path rule narrows back to one directory',
+        REPO / 'tests' / 'test_documented_numbers.py',
+        'CITED_ROOTS = ("config", "docs", "examples", "tests", "tools")',
+        'CITED_ROOTS = ("examples",)',
+        'tests/test_documented_numbers.py'),
+
+    Mutation(
+        'prose-guards', 'the banned claim is matched as one exact string again',
+        REPO / 'tests' / 'test_settings.py',
+        'BANNED_CLAIM = re.compile(r"lower\\s+the\\s+seat\\s+floor\\s+and\\s+(?:can\\s+do\\s+)?nothing\\s+else",',
+        'BANNED_CLAIM = re.compile(r"lower the seat floor and can do nothing else",',
+        'tests/test_settings.py'),
+
     Mutation(
         'bypass', 'the crossing stops naming where the seat count came from',
         SRC / 'engine.py',

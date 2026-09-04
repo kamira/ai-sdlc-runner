@@ -241,7 +241,8 @@ def test_a_corrupt_file_is_an_error_not_the_defaults(tmp_path):
 
 
 def test_a_setting_this_runner_does_not_read_is_refused(tmp_path):
-    """Settings may lower the seat floor and nothing else. A key nobody reads looks exactly like one
+    """The claim this repository has twice had to withdraw: that the seat floor is the whole of
+    what settings can reach. A key nobody reads looks exactly like one
     that works, which is how a person ends up believing they turned something on."""
     path = tmp_path / "settings.json"
     path.write_text(json.dumps({"review_seats": 3, "skip_permanent_halts": True}), encoding="utf-8")
@@ -898,8 +899,44 @@ def test_the_flag_is_harmless_when_nothing_was_saved(tmp_path, py_stub, capsys):
 
 
 def _module_prose():
-    """Every docstring and comment in `settings.py`, which is where the counting happened."""
-    return pathlib.Path(settings_mod.__file__).read_text(encoding="utf-8")
+    """Every docstring and comment in `settings.py`, **as flowed text**.
+
+    Read line by line until CHG-20260904-19, so both guards below were defeated by where a line
+    happened to wrap. Measured by the idiom seat against the whole suite:
+
+        the wrong count, same wrapping                        1 failed   caught
+        the same wrong count, rewrapped across a line         2145 passed
+        the banned sentence reinserted, wrapped differently   2145 passed
+
+    A sentence is not a line. Collapsing the whitespace is the smallest thing that makes these
+    guards about what the file says rather than about how it is filled.
+    """
+    raw = pathlib.Path(settings_mod.__file__).read_text(encoding="utf-8")
+    return " ".join(raw.split())
+
+
+#: The sentence this repository has twice had to withdraw, matched as a **phrase**: any whitespace
+#: between the words, so where a line wraps cannot decide whether it is found (CHG-20260904-19).
+BANNED_CLAIM = re.compile(r"lower\s+the\s+seat\s+floor\s+and\s+(?:can\s+do\s+)?nothing\s+else",
+                          re.I)
+
+#: A count of the settings, however the words fall across lines.
+COUNTS_SETTINGS = re.compile(
+    r"(?:one|two|three|four)\s+of\s+the\s+(one|two|three|four)\s+settings", re.I)
+
+_NUMBERS = {"one": 1, "two": 2, "three": 3, "four": 4}
+
+
+def counts_that_disagree(prose, how_many):
+    """Every stated count in `prose` that is not `how_many`. Takes the text, so it can be pointed
+    at a planted rewrapping as well as at the module (CHG-20260904-19)."""
+    return [said for said in COUNTS_SETTINGS.findall(" ".join(prose.split()))
+            if _NUMBERS[said.lower()] != how_many]
+
+
+def states_the_banned_claim(text):
+    """Whether `text` says the seat floor is the whole of what settings reach."""
+    return bool(BANNED_CLAIM.search(" ".join(text.split())))
 
 
 def test_no_sentence_in_this_module_states_a_count_that_disagrees_with_fields():
@@ -908,13 +945,27 @@ def test_no_sentence_in_this_module_states_a_count_that_disagrees_with_fields():
     This module's own docstring records being corrected once before, for the same class of error:
     it said "or corrupt yields the defaults" and contradicted `load()` directly below it.
     """
-    prose = _module_prose()
-    wrong = {"one": 1, "two": 2, "three": 3, "four": 4}
-    claims = re.findall(r"(?:one|two|three|four) of the (one|two|three|four) settings", prose)
-    for claimed in claims:
-        assert wrong[claimed] == len(settings_mod.FIELDS), (
-            f"a sentence says there are {claimed} settings; FIELDS has {len(settings_mod.FIELDS)}: "
-            f"{list(settings_mod.FIELDS)}")
+    wrong = counts_that_disagree(_module_prose(), len(settings_mod.FIELDS))
+
+    assert wrong == [], (
+        f"a sentence says there are {wrong} settings; FIELDS has {len(settings_mod.FIELDS)}: "
+        f"{list(settings_mod.FIELDS)}")
+
+
+def test_a_rewrapped_count_is_still_a_count():
+    """**The floor the first version of this guard did not have** (CHG-20260904-19, idiom seat).
+
+    It matched literal spaces, so the same wrong count survived a line break: measured against the
+    whole suite, `two of the two settings` on one line was caught and the identical claim wrapped
+    after `the` left 2145 tests passing.
+    """
+    for prose in ("this says two of the two settings are a bypass",
+                  "this says two of the two\n    settings are a bypass",
+                  "this says two of the\n    two settings are a bypass"):
+        assert counts_that_disagree(prose, 3) == ["two"], (
+            f"a wrong count survived its wrapping: {prose!r}")
+
+    assert counts_that_disagree("three of the three settings", 3) == []
 
 
 def test_the_module_does_not_claim_the_seat_floor_is_all_settings_can_do():
@@ -925,10 +976,38 @@ def test_the_module_does_not_claim_the_seat_floor_is_all_settings_can_do():
     """
     prose = _module_prose()
 
-    assert "lower the seat floor and can do nothing else" not in prose
-    assert "may lower the seat floor and nothing else" not in prose
+    assert not states_the_banned_claim(prose), (
+        "the module says the seat floor is all settings can do; `ordinary_commands` vouches "
+        "commands so an undeclared target stops being refused, which is a different subject")
+
+    # And the same sentence in the file whose job is to keep it out of that one: it stood here,
+    # in this test's own assertion and in a docstring above, while the guard watched `settings.py`.
+    assert not states_the_banned_claim(
+        pathlib.Path(__file__).read_text(encoding="utf-8")), (
+        "this test file states the sentence it forbids elsewhere — `docs/ai-guideline.md` records "
+        "that it was false about `main` twice over")
     assert "ordinary_commands" in prose, "the third field must be described where the others are"
 
+
+def test_the_banned_claim_is_found_wherever_it_is_wrapped():
+    """The floor under both assertions above, planted rather than waited for.
+
+    The plants are **assembled from fragments**, not written out: the assertion two tests
+    above reads this whole file for the same sentence, and spelling it here tripped it. That
+    is the guard working — a floor for a rule about text has to keep the text out of the file
+    the rule reads.
+    """
+    claim = " ".join(["settings may lower",
+                          "the seat floor",
+                          "and nothing else"])
+    wrapped = claim.replace("and ", "and" + chr(10) + "    ")
+    early = claim.replace("the seat", "the" + chr(10) + "    seat")
+
+    for text in (claim, wrapped, early):
+        assert states_the_banned_claim(text), f"the claim survived its wrapping: {text!r}"
+
+    assert not states_the_banned_claim(
+        claim.replace("and nothing else", ", and vouch commands besides"))
 
 def test_the_error_an_operator_reads_names_every_field_this_runner_reads(tmp_path):
     """Derived from `FIELDS`, not typed beside it — so the sentence cannot drift again."""

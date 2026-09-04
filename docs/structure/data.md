@@ -117,9 +117,9 @@ the `unrecognised-target` halt trips (CHG-20260903-47).
 
 | Field | Type | Constraint | Description |
 |-------|------|------------|-------------|
-| `review_seats` | int \| null | ≥ 1, or absent | How many seats open. `null` means the floor |
+| `review_seats` | int \| null | 1 … `len(policy.SEATS)`, or absent | How many seats open. `null` means the floor, and a count above the seats this runner defines is refused at load rather than raised when something renders it |
 | `high_risk_mode` | bool | required-ish (defaults false) | Whether the floor may be crossed at all |
-| `ordinary_commands` | list[str] | absent → the defaults | Commands a node may run without the description being read against the permanent halts |
+| `ordinary_commands` | list[str] | absent → none; one word each, never an executor | Commands whose **name** stops being unrecognised. The description is still read against the permanent halts — vouching clears `unrecognised-target` and nothing else, which is what the prose four lines above says |
 
 This said *"Two fields, both about the seat floor"* over a table of two until CHG-20260902-20.
 `settings.FIELDS` has had three since `ordinary_commands` shipped, and it is not about the seat
@@ -127,7 +127,7 @@ floor — it is about what a permanent-halt check reads, which is a different su
 file.
 
 Missing or empty → the defaults. **Malformed → an error**, not the defaults: a typo must not be
-indistinguishable from a deliberate choice when one of the two settings is a safety bypass. An
+indistinguishable from a deliberate choice when two of the three settings, taken together, are a safety bypass. An
 unknown key is refused rather than ignored, because a setting nobody reads looks exactly like one
 that works.
 

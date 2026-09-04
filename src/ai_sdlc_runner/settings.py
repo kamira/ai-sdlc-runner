@@ -39,12 +39,21 @@ those and take no input from here.
 `FIELDS == (...)` and an `as_dict` key set under this claim's name — green on the defect, red on a
 rename.
 
-What they *can* do is three things, not one. This paragraph said *"lower the seat floor and
-can do nothing else"* while `FIELDS` held three names, and the third is not decorative
-(CHG-20260903-28):
+What they *can* do is three things, not one. This paragraph once named the seat floor as the
+whole of what settings reach, while `FIELDS` held three names and the third is not
+decorative (CHG-20260903-28). It is described rather than quoted here because the guard
+that forbids it reads this file as flowed text, and a guard cannot tell a claim from an
+account of one (CHG-20260904-19):
 
-- `review_seats` — lowers the seat floor.
-- `high_risk_mode` — changes what a high-risk change is put through.
+- `review_seats` — asks for a seat count. **On its own it lowers nothing**:
+  `Settings(review_seats=1).seats()` is `3`, because `seats()` clamps to the floor and
+  `policy.resolve_seats` raises rather than lowering one on its own authority.
+- `high_risk_mode` — lets `review_seats` go below the floor, and **only that**. Measured:
+  `policy.verdict(gate, risk, autonomy, change_class)` has no such parameter, so what a
+  high-risk *change* is put through is untouched; with `review_seats` unset the field
+  changes nothing at all. The pair is the bypass, which the paragraph above this list
+  already says — *high-risk mode is the bypass* — and this bullet did not
+  (CHG-20260904-19, idiom seat).
 - `ordinary_commands` — **vouches commands, so an undeclared target stops being refused.**
   Measured: `policy.unverified({kind: ordinary, targets: ['npm ci']}, ())` returns
   `('npm ci',)` with `on_trust=True`, which `engine.py` refuses on; vouching `npm` returns
