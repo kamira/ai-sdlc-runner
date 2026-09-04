@@ -1161,6 +1161,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     for node_id, outcome in report.effects.items():
         print(f"effects:       {node_id} applied={outcome['applied']} "
               f"already_met={outcome['already_met']}")
+        # The other two fields `EffectOutcome` carries. They reached `--json` and stopped there,
+        # which is the defect the `risk_settled` line four lines above this one was written to
+        # fix (CHG-20260903-48) — repeated in the next loop down. `out_of_order` is the field
+        # whose own docstring says the state it names is worth a human's attention.
+        if outcome.get("frontier"):
+            print(f"               resumed at {outcome['frontier']}")
+        if outcome.get("out_of_order"):
+            print(f"               out of causal order: {outcome['out_of_order']} "
+                  f"(true after the frontier: neither redone nor waved through)")
     filled = sorted(k for k, v in assignment_source.items() if v == store_mod.FROM_STORE)
     if filled:
         # `serve` prints its override count and `run` printed nothing, so "neither source is

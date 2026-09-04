@@ -1441,6 +1441,14 @@ def _run_effects(node: graph.Node, cfg: "RunConfig", report: "RunReport"):
     except effects_mod.EffectError as exc:
         report.halted_at = node.id
         report.halt_reason = f"effect failed at {node.id!r}: {exc}"
+        if exc.outcome is not None:
+            # What had already landed before the failure. This used to return first, so the run
+            # report carried no effects entry at all for the halted node — on the one path where
+            # which effects are already done is the entire question, and while `relaxations` and
+            # `on_trust` came through the same halt intact. `docs/ai-guideline.md` promises the
+            # effect outcome is in the run report; it was true everywhere except here
+            # (CHG-20260905-01, round-11 conformance seat).
+            report.effects[node.id] = exc.outcome.as_dict()
         return report
     report.effects[node.id] = outcome.as_dict()
     return None

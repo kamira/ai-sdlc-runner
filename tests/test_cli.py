@@ -1165,3 +1165,48 @@ else:
         f"{waiting[0]!r}")
     assert "no gate here to confirm" in out, (
         f"the terminal does not say why `--confirm` is not the control here:\n{out}")
+
+
+# --------------------------------------------------------------------------------------
+# CHG-20260905-01 — the two effect fields that reached `--json` and stopped there
+# --------------------------------------------------------------------------------------
+
+
+def test_the_terminal_names_the_frontier_and_what_is_out_of_order(tmp_path, py_stub, capsys,
+                                                                  monkeypatch):
+    """Through `cli.main`, so the assertion is about what an operator sees, not about a helper.
+
+    `EffectOutcome` carries four fields. Two of them reached `--json` and no other surface: the
+    console renders nothing for effects at all, and the terminal printed `applied` and
+    `already_met` only. `out_of_order` is the field whose own docstring says the state it names is
+    *worth a human's attention rather than a silent redo or a silent pass* — and no human was ever
+    shown it.
+
+    The line four lines above that print loop is `risk_settled`, which **is** the fix for this same
+    defect one field over (CHG-20260903-48). The loop below it repeated it.
+    """
+    import json as _json
+
+    report = engine.RunReport()
+    report.halted_at = "done"
+    report.effects["record_module"] = {
+        "frontier": "branch", "already_met": ["chg", "push"],
+        "applied": ["branch", "pr"], "out_of_order": ["push"],
+    }
+    monkeypatch.setattr(engine, "walk", lambda *a, **kw: report)
+
+    argv = py_stub(AGENT)
+    config = tmp_path / "runner.yaml"
+    config.write_text(f"agent_command: {_json.dumps(argv)}\n", encoding="utf-8")
+    capsys.readouterr()
+
+    cli.main(["--config", str(config), "run", "--undeclared", "allow",
+              "--plan", _plan_file(tmp_path), "--confirm", "merge"])
+
+    said = capsys.readouterr().out
+    assert "branch" in said and "resumed at" in said, (
+        "the terminal never says where the resume started")
+    assert "out of causal order" in said, (
+        "a world out of causal order is reported to nobody who is looking at a terminal")
+    assert "push" in said.split("out of causal order")[1], (
+        "the line names the state but not which effect is in it")
