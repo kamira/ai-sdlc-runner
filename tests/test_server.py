@@ -1138,6 +1138,133 @@ def test_every_key_the_server_sends_reaches_the_console():
     assert unreached == [], f"the server sends these and the console renders nothing for them: {unreached}"
 
 
+# ── what a panel already said about the node being decided (CHG-20260904-11) ──────────────────
+
+def _report(stop_node, adjudications):
+    """A report at a stop, with the adjudications a run had made by then."""
+    report = engine.RunReport()
+    report.suspended = {"node_id": stop_node, "gate": "g"}
+    report.adjudications = list(adjudications)
+    return report
+
+
+def test_the_stop_carries_the_adjudication_for_its_own_node():
+    here = server._adjudication_for(_report("pm_confirm", [
+        {"node_id": "pm_confirm", "outcome": "pass", "reason": "3/3 voices passed"}]))
+
+    assert here and here["node_id"] == "pm_confirm", here
+
+
+def test_a_node_with_no_panel_carries_nothing_rather_than_somebody_elses_judgement():
+    """**The measurement that withdrew CHG-20260903-24**, as a guard.
+
+    That record proposed showing `adjudications[-1]` beside the button. `[-1]` is whichever
+    adjudication happened *last*, and at `merge` on a **default install** — no model configured
+    anywhere — it is `lead_review`, a `seat_panel` whose entry `_adjudicate` appends regardless of
+    `node_models`. So the one-way door would have been pre-answered with the code-review panel's
+    verdict on built work.
+    """
+    report = _report("merge", [{"node_id": "lead_review", "outcome": "pass",
+                                "reason": "3/3 seats passed"}])
+
+    assert server._adjudication_for(report) is None, (
+        f"the stop at 'merge' was given another node's judgement: "
+        f"{server._adjudication_for(report)}")
+    assert report.adjudications[-1]["node_id"] == "lead_review", (
+        "this test stopped testing the thing it names — `[-1]` is no longer another node")
+
+
+def test_on_a_default_install_the_merge_stop_is_driven_to_the_same_answer():
+    """The floor under the test above: that fixture is hand-built, and this is the real walk.
+
+    No model is configured anywhere. `lead_review` is a `graph.SEAT_PANEL`, so `_adjudicate`
+    appends its entry regardless of `node_models` — which is why the failure `CHG-20260903-24` was
+    withdrawn over is **unconditional** rather than something only a configured panel could reach.
+    """
+    from test_flow import DECISIONS, SPEC
+
+    def factory(seat=None, model=None, **_):
+        class Session(engine.Session):
+            def ask(self, order):
+                if seat or model:
+                    node = graph.BY_ID.get(order["node_id"])
+                    if node is not None and getattr(node, "grades_risk", False):
+                        return {"risk": "low"}      # a grading panel grades
+                    return {"verdict": "pass"}      # a binary one votes
+                branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
+                          "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])
+                return {"verdict": branch} if branch else {"ok": True}
+
+            def close(self):
+                pass
+        return Session()
+
+    report = engine.walk(engine.RunConfig(
+        node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+        decisions=dict(DECISIONS), risk="low", undeclared="allow",
+        node_models={}), factory, enabled=True)
+
+    stop = report.suspended or {}
+    assert stop.get("node_id") == "merge", f"this test needs the merge stop, and got {stop}"
+    assert report.adjudications, (
+        "a default install recorded no adjudication at all, so this test no longer measures the "
+        "thing it names — the whole point is that `lead_review` appends one anyway")
+    assert report.adjudications[-1]["node_id"] == "lead_review", report.adjudications
+    assert server._adjudication_for(report) is None, (
+        f"the one-way door was pre-answered with {server._adjudication_for(report)}")
+
+
+def test_a_panel_that_took_more_than_one_lap_shows_what_it_settled_on():
+    """`panel_rounds` exists, so a node can adjudicate twice. What a person is being shown is the
+    decision, not the first attempt at it."""
+    here = server._adjudication_for(_report("pm_confirm", [
+        {"node_id": "pm_confirm", "outcome": "undecided", "reason": "1/3"},
+        {"node_id": "pm_confirm", "outcome": "pass", "reason": "3/3 voices passed"}]))
+
+    assert here["outcome"] == "pass", here
+
+
+def _console_code():
+    """The page with its prose removed — comment lines and block comments.
+
+    **Written because the first version of the guard below was satisfied by its own comment**
+    (CHG-20260904-11). Replacing `var here = state.adjudication_here;` with `var here = null;`
+    left 89 tests green: the explanation above the code says the field's name, and a text search
+    over the whole page cannot tell an explanation from the thing it explains. That is verbatim
+    the defect `CHG-20260904-10` shipped for, one change later and in my own work — so the guard
+    reads code here, and prose is not code.
+    """
+    page = _console()
+    page = re.sub(r"/\*.*?\*/", "", page, flags=re.S)
+    return chr(10).join(line for line in page.splitlines()
+                        if not line.strip().startswith("//"))
+
+
+def test_the_console_reads_the_field_and_does_not_pick_for_itself():
+    """The browser cannot be executed here — every console guard in this file is a text search —
+    which is **why** the selection lives in `server.py` and is tested above. What is left to check
+    of the page is that it did not keep a rule of its own."""
+    code = _console_code()
+
+    assert "state.adjudication_here" in code, (
+        "the box does not read the field the server derives — and naming it in a comment is not "
+        "reading it")
+    assert "adjudications[state.adjudications.length" not in code, (
+        "the console picks an adjudication by position, which is the rule CHG-20260903-24 was "
+        "withdrawn over")
+
+
+def test_stripping_the_prose_is_what_makes_that_guard_a_guard():
+    """The floor. Without it the strip could quietly stop stripping and nothing would say so."""
+    page = _console()
+
+    assert "adjudication_here" in page, "this floor needs the field to be on the page at all"
+    assert "// What a panel already said" in page, "the comment this distinguishes from code moved"
+    assert "// What a panel already said" not in _console_code(), (
+        "the strip no longer removes comment lines, so the guard above is a search over prose "
+        "again")
+
+
 def test_no_class_attribute_carries_a_token_that_starts_with_a_dot():
     """`class="ask .row"` is two tokens, the second named `.row`.
 

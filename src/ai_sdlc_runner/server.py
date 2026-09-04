@@ -151,6 +151,19 @@ class Operator:
         return bool(presented) and secrets.compare_digest(presented, self.token)
 
 
+def _adjudication_for(report: Optional[engine.RunReport]) -> Optional[Dict[str, object]]:
+    """The adjudication belonging to the stop, or `None` when the stopping node has no panel.
+
+    The *last* adjudication for that node, because a panel can take more than one lap
+    (`panel_rounds`) and what a person is being shown is what it settled on.
+    """
+    if not report or not report.suspended:
+        return None
+    here = (report.suspended or {}).get("node_id")
+    mine = [a for a in report.adjudications if a.get("node_id") == here]
+    return dict(mine[-1]) if mine else None
+
+
 @dataclass
 class RunState:
     """Everything a reconnecting browser needs to rebuild the view (task 14).
@@ -232,6 +245,19 @@ class RunState:
             # able to show this or "chosen at random" is a claim nobody can check.
             "dispatches": list(report.dispatches) if report else [],
             "adjudications": [dict(a) for a in report.adjudications] if report else [],
+            # **The adjudication for the node the run is stopping at, or `None`**
+            # (CHG-20260904-11). `drawDecisions` renders every adjudication a run made, two
+            # blocks below the box a person is actually reading when they decide — and that box
+            # rendered none of them. CHG-20260903-24 proposed showing `adjudications[-1]` and was
+            # withdrawn partly for it: `[-1]` is whichever adjudication happened *last*, and at
+            # `merge` on a default install that is `lead_review`'s verdict on built work, shown
+            # as the one-way door's pre-answer. Bound to the stopping node instead, so a node
+            # with no panel shows nothing rather than somebody else's judgement.
+            #
+            # Derived here rather than in the browser because the browser cannot be tested in
+            # this repository — every console guard is a text search over the page — and the
+            # rule this replaces is exactly the kind that reads plausible and measures wrong.
+            "adjudication_here": _adjudication_for(report),
             "log": list(self.log),
         }
 
