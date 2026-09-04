@@ -1129,7 +1129,13 @@ def test_every_key_the_server_sends_reaches_the_console():
     that task, and that record was later withdrawn, so an accepted reservation pointed at nothing
     until CHG-20260903-29 gave it an owner.
     """
-    page = _console()
+    # **Code, not prose** (CHG-20260904-13, defect seat L-46). This read `_console()` — the raw
+    # page — while `_console_code()` was written 110 lines below for exactly this failure, in the
+    # same change. `CHG-20260904-11` then said in writing that this guard *"requires the page to
+    # render it"*; it required the token to appear, and that change shipped a comment naming
+    # `adjudication_here` two lines above the read. Measured: a key added to `snapshot()` and
+    # named only in a comment reached no front end and this passed.
+    page = _console_code()
     snapshot = server.RunState().snapshot()
 
     unreached = [key for key in snapshot
@@ -1172,6 +1178,115 @@ def test_a_node_with_no_panel_carries_nothing_rather_than_somebody_elses_judgeme
         f"{server._adjudication_for(report)}")
     assert report.adjudications[-1]["node_id"] == "lead_review", (
         "this test stopped testing the thing it names — `[-1]` is no longer another node")
+
+
+def _walk_to_a_stop(node_models, risk):
+    """A real walk, so the tests below read what a run produces rather than a built dict."""
+    from test_flow import DECISIONS, SPEC
+
+    def factory(seat=None, model=None, **_):
+        class Session(engine.Session):
+            def ask(self, order):
+                if seat or model:
+                    node = graph.BY_ID.get(order["node_id"])
+                    if node is not None and getattr(node, "grades_risk", False):
+                        return {"risk": "low"}
+                    return {"verdict": "pass"}
+                branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
+                          "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])
+                return {"verdict": branch} if branch else {"ok": True}
+
+            def close(self):
+                pass
+        return Session()
+
+    return engine.walk(engine.RunConfig(
+        node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+        decisions=dict(DECISIONS), risk=risk, undeclared="allow",
+        node_models=node_models), factory, enabled=True)
+
+
+def test_the_page_does_not_say_reason_belongs_to_one_question_when_two_carry_it(tmp_path):
+    """**Which question a field is meaningful for, driven** (CHG-20260904-13, defect seat L-48).
+
+    `docs/API.md` §4 grouped `reason` under *meaningful when `undecided`*. It is also what an
+    incomplete stop carries — the sentence naming the aspect and how many times it has been asked,
+    which is the only ask text the console renders, and the field `CHG-20260904-07` moved earlier
+    in the walk **so that the shape could carry it**.
+
+    `CHG-20260904-10` shipped two guards over that section: one on the count, one on the phrase
+    `only when`. Neither asks which question a field belongs to, so the page went on saying
+    `reason` was tie-only and both stayed green.
+
+    The truth here comes from a run; the page is checked against it.
+    """
+    runner = _intake_only_runner(tmp_path)
+    runner.start("do it", runner.state.version)
+    stop = runner.state.report.suspended or {}
+
+    assert stop.get("incomplete") and not stop.get("undecided"), stop
+    assert stop.get("reason"), (
+        "an incomplete stop carried no `reason`, so this test no longer measures what it names")
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    section = (root / "docs" / "API.md").read_text(encoding="utf-8")
+    section = section.split("## 4 · The suspension")[1].split("## 5 ·")[0]
+
+    # From the **first** divider that names only the tie, not the last. Splitting on `[-1]` reads
+    # the group after the final divider, so moving `reason` under an earlier one passed — measured
+    # against this test's own mutation, which is what a floor is for.
+    lines = section.splitlines()
+    tie_from = next((i for i, line in enumerate(lines)
+                     if "meaningful when `undecided`" in line), len(lines))
+    tie_group = chr(10).join(lines[tie_from:])
+
+    assert '"reason"' not in tie_group, (
+        "the page groups `reason` under the tie, and an incomplete stop carries it — the sentence "
+        "naming the aspect, which is the only ask text the console renders")
+    assert '"verdicts"' in tie_group, (
+        "this test no longer reads the tie group at all; the divider it looks for has moved")
+
+
+def test_a_stop_whose_own_panel_judged_it_carries_that_judgement_driven():
+    """**Task 4 was exercised by nothing driven** (CHG-20260904-13, defect seat L-44).
+
+    `CHG-20260904-11` shipped three guards: one driven, asserting `None`, and two over a
+    hand-built report no walk produces. So the only thing measured on a real run was the empty
+    case, and *the box renders it* rested on a fixture.
+    """
+    panels = {n.id: ["a", "b", "c"] for n in graph.NODES if n.mode == graph.MODEL_PANEL}
+    report = _walk_to_a_stop(panels, "medium")
+
+    stop = report.suspended or {}
+    assert stop.get("node_id") == "pm_confirm", f"this test needs that stop, and got {stop}"
+
+    here = server._adjudication_for(report)
+    assert here is not None, (
+        f"a stop whose own panel judged it carried nothing: adjudications="
+        f"{[a.get('node_id') for a in report.adjudications]}")
+    assert here["node_id"] == stop["node_id"]
+    assert (here.get("grade") or here.get("outcome")) == "pass", here
+
+
+def test_a_default_install_shows_nothing_at_any_stop_and_that_is_the_whole_delivery():
+    """What a default install gets, stated rather than left to be discovered.
+
+    Two different reasons, and neither is a defect: a `MODEL_PANEL` with fewer than two models
+    configured takes the single-ask path and adjudicates nothing at all, and a `SEAT_PANEL`
+    adjudicates **after** its own gate — `walk` returns the suspension from `_gate("after")`
+    before it reaches the branch that calls `_adjudicate`. So at `lead_review`'s gate the seats
+    genuinely have not voted yet, and showing nothing is right.
+
+    The reach of `CHG-20260904-11` is therefore: **two or more models on a panel**, at that
+    panel's own gate. Written down because the seat that found this read the ordering the other
+    way round, and the record should not need re-deriving.
+    """
+    report = _walk_to_a_stop({}, "medium")
+
+    assert (report.suspended or {}).get("node_id") == "pm_confirm"
+    assert server._adjudication_for(report) is None
+    assert report.adjudications == [], (
+        f"a default install adjudicated at this stop after all: {report.adjudications}")
 
 
 def test_on_a_default_install_the_merge_stop_is_driven_to_the_same_answer():
@@ -1225,19 +1340,55 @@ def test_a_panel_that_took_more_than_one_lap_shows_what_it_settled_on():
 
 
 def _console_code():
-    """The page with its prose removed — comment lines and block comments.
+    """The page with its prose removed — every comment, wherever it sits on the line.
 
     **Written because the first version of the guard below was satisfied by its own comment**
-    (CHG-20260904-11). Replacing `var here = state.adjudication_here;` with `var here = null;`
-    left 89 tests green: the explanation above the code says the field's name, and a text search
-    over the whole page cannot tell an explanation from the thing it explains. That is verbatim
-    the defect `CHG-20260904-10` shipped for, one change later and in my own work — so the guard
-    reads code here, and prose is not code.
+    (CHG-20260904-11): replacing `var here = state.adjudication_here;` with `var here = null;`
+    left 89 tests green, because the explanation above the code named the field.
+
+    **And the first version of this helper dropped only lines whose first token was `//`**
+    (CHG-20260904-13, defect seat L-45). Moving the same words to the end of the same line put the
+    defect back exactly — `var here = null;   // was state.adjudication_here` → 109 passed — and
+    the page already uses trailing comments (`body.version = state.version;   // what stops two
+    tabs from both being right`), so that is its own idiom rather than a contrivance.
+
+    A regex cannot do this: `//` occurs inside string literals. So the scan is character by
+    character, tracking quotes, which is the smallest thing that can tell a comment from a URL.
     """
-    page = _console()
-    page = re.sub(r"/\*.*?\*/", "", page, flags=re.S)
-    return chr(10).join(line for line in page.splitlines()
-                        if not line.strip().startswith("//"))
+    return _without_comments(_console())
+
+
+def _without_comments(source):
+    """`source` with `//`-to-end-of-line and `/* … */` removed, but not inside a string."""
+    out, i, quote, n = [], 0, "", len(source)
+    while i < n:
+        ch = source[i]
+        if quote:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:        # an escape carries the next character with it
+                out.append(source[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+            i += 1
+            continue
+        if ch in "'\"`":
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if source.startswith("//", i):
+            end = source.find(chr(10), i)
+            i = n if end < 0 else end            # the newline itself is kept by the next pass
+            continue
+        if source.startswith("/*", i):
+            end = source.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def test_the_console_reads_the_field_and_does_not_pick_for_itself():
@@ -1255,14 +1406,47 @@ def test_the_console_reads_the_field_and_does_not_pick_for_itself():
 
 
 def test_stripping_the_prose_is_what_makes_that_guard_a_guard():
-    """The floor. Without it the strip could quietly stop stripping and nothing would say so."""
+    """The floor. Without it the strip could quietly stop stripping and nothing would say so.
+
+    **Both placements**, because the first version of the strip covered only the first
+    (CHG-20260904-13, defect seat L-45), and a guard that removes one spelling of prose is a
+    guard whose subject is the spelling.
+    """
     page = _console()
 
     assert "adjudication_here" in page, "this floor needs the field to be on the page at all"
     assert "// What a panel already said" in page, "the comment this distinguishes from code moved"
     assert "// What a panel already said" not in _console_code(), (
-        "the strip no longer removes comment lines, so the guard above is a search over prose "
-        "again")
+        "the strip no longer removes a comment on its own line")
+
+    trailing = "var x = 1;   // mentions adjudication_here in passing"
+    assert "adjudication_here" not in _without_comments(trailing), (
+        "a comment at the end of a line survives the strip, so naming a field there still "
+        "satisfies every guard that reads code")
+    assert "adjudication_here" in _without_comments('var u = "//adjudication_here";'), (
+        "the strip removed a `//` inside a string literal, so it cannot tell a comment from a URL")
+
+
+def test_a_key_named_only_in_a_comment_does_not_count_as_rendered():
+    """**The floor under the inventory above** (CHG-20260904-13, defect seat L-46).
+
+    That guard read the raw page until this change, so a key the console never renders read
+    as reached if any comment happened to name it — and `CHG-20260904-11` shipped exactly
+    such a comment two lines above the read it added. Reverting the guard to `_console()`
+    left 93 tests green, because no key on `main` is prose-only today. This plants one, so
+    the revert is visible.
+    """
+    page = _console()
+    planted = page.replace(
+        "function drawDecisions() {",
+        "// seat_notes is computed and rendered by nothing" + chr(10)
+        + "function drawDecisions() {")
+
+    assert planted != page, "the anchor this floor plants against has moved"
+    assert re.search(r"\bseat_notes\b", planted), "the plant did not land"
+    assert not re.search(r"\bseat_notes\b", _without_comments(planted)), (
+        "a key named only in a comment survived the strip, so the inventory above can be "
+        "satisfied by prose again")
 
 
 def test_no_class_attribute_carries_a_token_that_starts_with_a_dot():
@@ -1512,21 +1696,138 @@ def test_every_operator_decision_carries_the_run_it_answers(live):
         "staleness guard cannot refuse it")
 
 
-def test_no_operator_decision_reaches_state_without_naming_its_stop():
-    """**The rule** (CHG-20260903-44): over the class, not over three method names.
+def _answering_of(runner):
+    """`Runner._answering`'s definition, so the rule below reads its parameter names rather than
+    repeating them (CHG-20260904-13)."""
+    found = next((fn for fn in runner.body
+                  if isinstance(fn, ast.FunctionDef) and fn.name == "_answering"), None)
+    assert found is not None, "`Runner._answering` is gone; the rule below has nothing to read"
+    assert found.args.kwonlyargs, (
+        "`_answering` takes no keyword-only parameters, so the rule below would ask for nothing")
+    return found
 
-    The check lived in `approve` alone and its two siblings never got it. A fourth decision method
-    would have been written the same way, so this asks the question of every method that appends an
-    operator decision — including ones nobody has written yet.
+
+def decisions_that_do_not_name_their_stop(source):
+    """Which decision methods in `source` fail to hand `_answering` the names they took.
+
+    **Extracted so the rule can be run over a planted source** (CHG-20260904-13). Three mutations
+    of this rule survived the whole file: reverting the names to a literal pair, and dropping the
+    requirement that a call hand something, are only visible if some method exercises the hole —
+    and today's three do not. A rule nothing can be pointed at is a rule nobody can check.
     """
     import ast
 
-    tree = ast.parse(pathlib.Path(server.__file__).read_text(encoding="utf-8"))
+    tree = ast.parse(source)
     runner = next(n for n in ast.walk(tree)
                   if isinstance(n, ast.ClassDef) and n.name == "Runner")
+    wanted = {a.arg for a in _answering_of(runner).args.kwonlyargs}
 
     DECISIONS = {"approvals", "rejections", "rulings"}
-    missing = []
+    failed = []
+    for fn in runner.body:
+        if not isinstance(fn, ast.FunctionDef):
+            continue
+        if not any(isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "append"
+                   and getattr(getattr(n.func, "value", None), "attr", None) in DECISIONS
+                   for n in ast.walk(fn)):
+            continue
+        calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                 and getattr(n.func, "attr", None) == "_answering"]
+        taken = ({a.arg for a in fn.args.args} | {a.arg for a in fn.args.kwonlyargs}) - {
+            "self", "version"}
+        handed = {(kw.arg, kw.value.id) for call in calls for kw in call.keywords
+                  if isinstance(kw.value, ast.Name)}
+        if not (calls and any(call.keywords for call in calls)
+                and all((name, name) in handed for name in taken & wanted)):
+            failed.append(fn.name)
+    return failed
+
+
+#: A fourth decision method that names its stop something else and hands `_answering` nothing —
+#: the shape the defect seat planted in `Runner` and the whole file passed over (L-47).
+PLANTED_FOURTH = '''
+class Runner:
+    def _answering(self, *, gate=None, node_id=None):
+        return {}
+
+    def veto(self, version, stop, why):
+        waiting = self._answering()
+        self.state.rejections.append(
+            Rejection(gate=stop, node_id=stop, run_id=waiting.get("run_id"), reason=why))
+'''
+
+
+def test_the_rule_refuses_a_method_that_hands_the_helper_nothing():
+    """**The floor the three surviving mutations needed.**
+
+    Reverting `wanted` to the literal `{"gate", "node_id"}`, or dropping the requirement
+    that a call carry keywords at all, left 93 tests green — because no method on `main`
+    exercises either hole. This plants one.
+    """
+    assert decisions_that_do_not_name_their_stop(PLANTED_FOURTH) == ["veto"], (
+        "a method naming its stop `stop` and calling `_answering()` with no arguments was "
+        "read as compliant")
+
+
+#: A helper whose parameters are named something else, and a method that hands it a literal.
+#: Reading `_answering`'s signature refuses this; writing `{"gate", "node_id"}` here does
+#: not, because the intersection is then empty and `all([])` is `True` (CHG-20260904-13).
+RENAMED_HELPER = '''
+class Runner:
+    def _answering(self, *, stop=None):
+        return {}
+
+    def veto(self, version, stop, why):
+        waiting = self._answering(stop=None)
+        self.state.rejections.append(
+            Rejection(gate=stop, node_id=stop, run_id=waiting.get("run_id"), reason=why))
+'''
+
+
+def test_the_rule_asks_for_the_names_the_helper_actually_takes():
+    """**The names come from `_answering`, and this is what makes that testable.**
+
+    With the pair written here instead, a helper renamed to take `stop` empties the
+    intersection and the rule passes over a method handing it a literal — measured: the
+    mutation that writes the pair survived all 97 tests until this plant existed.
+    """
+    assert decisions_that_do_not_name_their_stop(RENAMED_HELPER) == ["veto"], (
+        "the rule asked for `gate` and `node_id` — names this helper does not take — so it "
+        "asked for nothing and passed a method that hands over a literal")
+
+
+def test_the_rule_accepts_a_method_that_hands_over_what_it_took():
+    """The other direction, so the rule above is not simply refusing everything."""
+    ok = PLANTED_FOURTH.replace(
+        "def veto(self, version, stop, why):",
+        "def veto(self, version, gate, node_id, why):"
+    ).replace("self._answering()", "self._answering(gate=gate, node_id=node_id)")
+
+    assert decisions_that_do_not_name_their_stop(ok) == [], (
+        "a method handing over exactly the names it took was refused")
+
+
+def test_this_repos_own_decision_methods_name_their_stop():
+    """The rule, over the real class."""
+    source = pathlib.Path(server.__file__).read_text(encoding="utf-8")
+
+    assert decisions_that_do_not_name_their_stop(source) == [], (
+        "these append an operator decision without handing `_answering` the names they "
+        "took")
+
+
+def _run_ids_not_read_from_the_suspension(source):
+    """Which decision methods stamp `run_id` from something other than what `_answering`
+    returned. The literal `None` is what `Approval`'s docstring calls *"the wrong one for an
+    answer typed into a console after a stop"*, and it is what `reject` and `rule` passed.
+    """
+    import ast
+
+    tree = ast.parse(source)
+    runner = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.ClassDef) and n.name == "Runner")
+    DECISIONS = {"approvals", "rejections", "rulings"}
+    failed = []
     for fn in runner.body:
         if not isinstance(fn, ast.FunctionDef):
             continue
@@ -1535,40 +1836,6 @@ def test_no_operator_decision_reaches_state_without_naming_its_stop():
                    and getattr(getattr(n.func, "value", None), "attr", None) in DECISIONS]
         if not appends:
             continue
-        # **What it was given, not that it was named** (CHG-20260904-01, defect seat L-20). This
-        # asked only whether the token `_answering` appeared and whether the token `run_id=` did,
-        # so a fourth method calling `self._answering()` with no arguments and passing
-        # `run_id=None` satisfied it while checking nothing — measured, and it passed.
-        calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
-                 and getattr(n.func, "attr", None) == "_answering"]
-        # **The values, not the parameter names** (CHG-20260904-06, defect seat L-24). This
-        # collected `kw.arg` — so `self._answering(gate=None, node_id=None)` read as compliant,
-        # which is worse than the original defect because it looks like it passes them. And it
-        # read `fn.args.args`, which misses keyword-only parameters, so declaring the method
-        # `def veto(self, version, *, gate, node_id)` emptied `params` and the comparison was
-        # vacuously true. Both are one-token edits.
-        #
-        # **The pairing, not the two sets** (CHG-20260904-09, defect seat L-37). This compared the
-        # set of values handed over against the set of names taken, so `_answering(gate=node_id,
-        # node_id=gate)` — one token — satisfied it: both names appear on both sides. And the swap
-        # is not cosmetic. `_answering` then compares `node_id` against `waiting["gate"]`, so
-        # **every valid refusal** dies with *"this run is waiting at 'plan_confirmed', not
-        # 'pm_confirm'"*. Measured: 82 server tests and 19 schema tests all green under it, because
-        # all four `reject` tests assert a 4xx and the swap only makes refusals likelier. The
-        # happy-path test this file was missing is below.
-        #
-        # The property is that each parameter is handed to the argument of the same name. Compared
-        # as **pairs of argument expressions**, so a literal, an alias or a swap is not it.
-        taken = ({a.arg for a in fn.args.args} | {a.arg for a in fn.args.kwonlyargs}) - {
-            "self", "version"}
-        handed = {(kw.arg, kw.value.id) for call in calls for kw in call.keywords
-                  if isinstance(kw.value, ast.Name)}
-        asked = bool(calls) and all(
-            (name, name) in handed for name in taken & {"gate", "node_id"})
-
-        # And `run_id` must come from what the helper returned, not from any expression: the
-        # literal `None` is what `Approval`'s docstring calls "the wrong one for an answer typed
-        # into a console after a stop", and it is what `reject` and `rule` used to pass.
         stamped = []
         for call in appends:
             for inner in ast.walk(call):
@@ -1580,19 +1847,32 @@ def test_no_operator_decision_reaches_state_without_naming_its_stop():
                     stamped.append(any(isinstance(sub, ast.Call)
                                        and getattr(sub.func, "attr", None) == "get"
                                        for sub in ast.walk(kw.value)))
-        carried = bool(stamped) and all(stamped)
+        if not (stamped and all(stamped)):
+            failed.append(fn.name)
+    return failed
 
-        if not asked or not carried:
-            missing.append(
-                f"{fn.name}: "
-                f"{'_answering is not given the values this method takes' if not asked else ''}"
-                f"{' and ' if not asked and not carried else ''}"
-                f"{'run_id is not read from the suspension' if not carried else ''}")
 
-    assert missing == [], (
-        f"these append an operator decision without naming the stop it answers or the run it "
-        f"belongs to: {missing}")
+def test_no_operator_decision_reaches_state_without_naming_its_stop():
+    """**The rule** (CHG-20260903-44): over the class, not over three method names.
 
+    The check lived in `approve` alone and its two siblings never got it. A fourth decision
+    method would have been written the same way, so this asks the question of every method
+    that appends an operator decision — including ones nobody has written yet.
+
+    The logic is `decisions_that_do_not_name_their_stop` above, which this called in a second
+    copy until CHG-20260904-13. Two copies meant a mutation of either was invisible: the one
+    here was read by nothing else, and reverting `wanted` to a literal pair or dropping the
+    hands-something requirement left the whole file green. One copy, pointed at planted
+    sources by the three tests above and at the real class here.
+    """
+    source = pathlib.Path(server.__file__).read_text(encoding="utf-8")
+
+    assert decisions_that_do_not_name_their_stop(source) == [], (
+        "these append an operator decision without handing `_answering` the names this "
+        "method took")
+
+    assert _run_ids_not_read_from_the_suspension(source) == [], (
+        "these append an operator decision whose `run_id` is not read from the stop")
 
 def test_the_rule_looks_at_the_three_methods_that_exist():
     """**The floor.** Without it the rule passes by finding no decision methods at all, which is

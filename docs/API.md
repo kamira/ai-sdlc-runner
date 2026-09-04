@@ -262,9 +262,15 @@ console's list of who was asked.
 
 `null` unless `state == "suspended"`. **All 15 keys are on every suspension** — a gate has no
 branches to choose between and a tie has no gate to confirm, and each says so rather than omitting
-the field, because *a missing key and a false one read the same way only until they do not*. Six of
-them are **meaningful** only for one of the three questions and carry their empty value otherwise;
-the two booleans below say which question this is.
+the field, because *a missing key and a false one read the same way only until they do not*. Five of
+them are **meaningful** for exactly one of the three questions, and one — `reason` — for **two**;
+the rest carry their empty value otherwise, and the two booleans below say which question this is.
+
+`reason` was documented as tie-only until CHG-20260904-13. It is also what an incomplete stop
+carries — the sentence naming the aspect and how many times it has been asked, which is the only
+ask text the console renders, and the field CHG-20260904-07 moved earlier in the walk so that
+the shape could carry it. `-10`'s guards check the count and the phrase; neither asks **which
+question** a field is meaningful for.
 
 That sentence has been false in both directions. The page said *"every kind of suspension carries
 the same keys"* until CHG-20260901-16 found the engine building three literals of 9, 11 and 13 keys
@@ -296,8 +302,12 @@ L-36).
                                        // caller keying by aspect matched nothing, ever
                                        // (CHG-20260903-37)
 
-  // meaningful when `undecided` — the tie. Present either way: `""` and `{}`
+  // meaningful on TWO of the three: the tie, and the incomplete requirement — where it carries
+  // the sentence naming the aspect and how many times it has been asked, and is the only ask
+  // text the console renders. Empty at a gate.
   "reason":     "<why this is being asked>",
+
+  // meaningful when `undecided` — the tie. Present either way: `{}`
   "verdicts":   { "<voice>": "<verdict>", … } }   // who said what, so a tie can be read
 ```
 
