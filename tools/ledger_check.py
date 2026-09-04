@@ -44,6 +44,11 @@ BRANCH_REQUIRED_FROM = "CHG-20260703-01"
 #: this id.
 SUPERSESSION_REQUIRED_FROM = "CHG-20260903-24"
 
+#: The `Risk:` grading is read from here forward. Prospective for the same reason supersession is:
+#: 192 records predate anything reading this field, and a rule that reopens all of them is a rule
+#: nobody runs (CHG-20260904-16).
+RISK_GRADE_REQUIRED_FROM = "CHG-20260903-24"
+
 #: What a superseded record's Status must say. A subset of `IN_PROGRESS`, not a new vocabulary —
 #: the words were always there, and a record that is superseded is not also under review.
 SUPERSEDED_STATUSES = ("superseded", "withdrawn", "abandoned", "已作廢", "已取代")
@@ -263,6 +268,27 @@ def _target_chg(text: str) -> str:
     return found.group(1) if found else ""
 
 
+#: The grades a change may carry, read from the **head** of the `Risk:` line the way `_status_word`
+#: reads a status. Values in this ledger are routinely qualified — `high (the permanent halts)`,
+#: `medium, driven by *where* the change lands` — so what is checked is the first word.
+#:
+#: `none` is admitted only where the record is terminal. It is the right word for a change that
+#: built nothing, and `CHG-20260903-24` and `-25` reached for it before anything read this field
+#: at all: `REQUIRED_FIELDS` checks presence, so `none, now` passed because nothing looked
+#: (CHG-20260904-16, idiom seat).
+RISK_GRADES = ("low", "medium", "high")
+RISK_WHEN_NOTHING_WAS_BUILT = "none"
+
+
+def _risk_word(text: str) -> str:
+    """The first word of the `Risk:` line, lowercased, or `""` when there is no such line."""
+    line = re.search(r"^[-*]\s*(?:\*\*)?Risk(?:\*\*)?\s*:(.*)$", text, re.M)
+    if not line:
+        return ""
+    said = re.sub(r"[*`]", "", line.group(1)).strip().lower()
+    return re.split(r"[\s,.;(—-]", said, 1)[0] if said else ""
+
+
 def _supersedes(text: str) -> List[str]:
     """The changes a change says it replaces, or `[]` when it says none.
 
@@ -391,6 +417,30 @@ def check(repo: Path) -> List[str]:
     # all start at a `Supersedes:`, so a `Superseded by:` naming a record that does not exist was
     # invisible. Found by using the machinery above on real work one change later, which is the
     # same asymmetry one field in (CHG-20260903-30).
+    # ── the `Risk:` value, which nothing had ever read (CHG-20260904-16) ──────────────────────
+    #
+    # `REQUIRED_FIELDS` asks whether the line is there. Two records carry `none, now`, which is
+    # outside `low|medium|high` and is also the **right** word for a record that built nothing —
+    # so the vocabulary grows by one rather than the records changing, and `none` is admitted only
+    # where the status says nothing was built.
+    for path in changes:
+        chg_id = path.stem
+        if chg_id < RISK_GRADE_REQUIRED_FROM:
+            continue
+        said = _risk_word(texts[chg_id])
+        if not said:
+            continue
+        word = _status_word(_status_line(texts[chg_id]))
+        terminal = bool(word) and _standing(word, SUPERSEDED_STATUSES)[0]
+        allowed = RISK_GRADES + ((RISK_WHEN_NOTHING_WAS_BUILT,) if terminal else ())
+        if said not in allowed:
+            problems.append(
+                f"{chg_id}: its Risk line begins {said!r}, which this ledger does not grade by. "
+                f"Use one of: {', '.join(allowed)}"
+                + ("" if terminal else
+                   f" — {RISK_WHEN_NOTHING_WAS_BUILT!r} is for a record that built nothing, and "
+                   f"this one's status is {word or 'unset'!r}"))
+
     for path in changes:
         chg_id = path.stem
         for claimed in _superseded_by(texts[chg_id]):

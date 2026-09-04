@@ -1742,6 +1742,27 @@ MUTATIONS: List[Mutation] = [
         'tests/test_server.py'),
 
     Mutation(
+        'grading', 'the whole Risk line is read, so every qualified grade is refused',
+        TOOLS / 'ledger_check.py',
+        '    return re.split(r"[\\s,.;(—-]", said, 1)[0] if said else ""',
+        '    return said',
+        'tests/test_ledger_check.py'),
+
+    Mutation(
+        'grading', '`none` is admitted on a record that is still deciding',
+        TOOLS / 'ledger_check.py',
+        '        allowed = RISK_GRADES + ((RISK_WHEN_NOTHING_WAS_BUILT,) if terminal else ())',
+        '        allowed = RISK_GRADES + (RISK_WHEN_NOTHING_WAS_BUILT,)',
+        'tests/test_ledger_check.py'),
+
+    Mutation(
+        'grading', 'the section stops saying why it exists',
+        REPO / 'README.md',
+        'Named here rather than left for a reader to discover, because a governance tool that overstates what',
+        'Named here for the reader, because a governance tool that claims more than it holds',
+        'tests/test_documented_numbers.py'),
+
+    Mutation(
         'provenance', 'a deliberately ignored artefact reads as a citation nobody can open',
         REPO / 'tests' / 'test_documented_numbers.py',
         '    return split(listed.stdout), split(asked.stdout)',

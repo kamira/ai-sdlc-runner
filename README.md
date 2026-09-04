@@ -724,23 +724,42 @@ first one winning — so two of them disagreeing inside one answer resolves sile
 declaring a class that relaxes lowers **every** `confirm` cell it can reach, `merge@low` and
 `pr@high` included, and there is no way to say *this class, only at this gate*. Closing it needs the
 predicate on the **route** rather than on the class, because `logical.md`'s *"`policy` depends on
-nothing"* is what stops a class from reading a node. Found by four seats over eight rounds of
-`CHG-20260903-25`, which is withdrawn: it proposed a class bounded to one cell, and that bound
-cannot be written where a class lives.
+nothing"* is what stops a class from reading a node.
 
-**Two requirements have no owner.** 「可以依節點 by pass」 — pre-authorise *by node* — is named in
-`CHG-20260901-15`, `CHG-20260903-24` and `CHG-20260903-25`, and deliverable by none of them: the
-first two are withdrawn and the third forbids naming nodes in its own task 2. And
-`CHG-20260901-15`'s two halves were re-issued as `-24` and `-25`, **both of which are now
-withdrawn** — so the whole of `-15` is recorded as replaced by records that produced nothing. Named
-here because that is what this section is for, and because a later record can strike them out.
+What that leaves, per grade — because whether this is a five-cell relaxation or a total bypass
+depends on the grade, and the grade is the variable the sentence above omits:
+
+```
+                     what every gate resolves to
+no class,  low       auto 9 · confirm 1
+standard,  low       auto 10                        <- no confirm, no halt: no person, at any
+                                                       gate, for the whole run
+standard,  medium    auto 9 · halt 1
+standard,  high      auto 3 · halt 6 · halt_independent 1
+```
+
+So `relax` refuses to touch a halt — seven survive at high risk, and `merge` still stops at
+medium and high. What a declared relaxing class removes entirely is the low-risk run.
+
+**Two requirements have no owner**, both the operator's own words, both named only in records
+that are withdrawn — `CHG-20260901-15`, `CHG-20260903-24` and `CHG-20260903-25`, all three.
+
+- 「可以依節點 by pass」. Left unglossed on purpose: an earlier version of this line read it as
+  *pre-authorise by node*, which is one mechanism for it and the one two records failed to
+  build. `by pass` reads as *skip*, and what a skip is authorised by is exactly what is open.
+- 「後方專案設定中可以設定放行者」 — who may release, set in the project's own configuration.
+  This is the half `CHG-20260901-15` re-issued as `-25`, and it is why `-15` is now recorded
+  as replaced by records that produced nothing.
+
+Named here because that is what this section is for, and because a later record can strike
+them out.
 
 ---
 
 ## Testing
 
 ```bash
-pytest -q          # 2144 tests
+pytest -q          # 2149 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is
