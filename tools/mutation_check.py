@@ -1700,6 +1700,27 @@ MUTATIONS: List[Mutation] = [
         'tests/test_sub_planning.py'),
 
     Mutation(
+        'provenance', 'a deliberately ignored artefact reads as a citation nobody can open',
+        REPO / 'tests' / 'test_documented_numbers.py',
+        '    return split(listed.stdout), split(asked.stdout)',
+        '    return split(listed.stdout), set()',
+        'tests/test_documented_numbers.py'),
+
+    Mutation(
+        'provenance', 'git failing to answer passes instead of saying nothing was checked',
+        REPO / 'tests' / 'test_documented_numbers.py',
+        '    if unanswered:',
+        '    if False:',
+        'tests/test_documented_numbers.py'),
+
+    Mutation(
+        'provenance', 'the skip stops naming which command could not answer',
+        REPO / 'tests' / 'test_documented_numbers.py',
+        '        pytest.skip("git could not answer %s, so provenance was NOT checked: %s"',
+        '        pytest.skip("provenance was NOT checked: %.0s%s"',
+        'tests/test_documented_numbers.py'),
+
+    Mutation(
         'prose', 'the strip drops only a comment that starts its line',
         REPO / 'tests' / 'test_server.py',
         '        if source.startswith("//", i):',
