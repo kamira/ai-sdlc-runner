@@ -717,6 +717,113 @@ def test_no_requirement_row_counts_the_settings_surface(tmp_path):
 # ── documents that describe a different program (CHG-20260903-37) ───────────────────────────────
 
 
+def _tracked_and_ignored(root, paths):
+    """Which of `paths` git tracks, and which it deliberately ignores.
+
+    Asked of git rather than matched against `.gitignore` by hand: the ignore syntax has
+    negation, directory and precedence rules that a hand-rolled match gets wrong quietly,
+    which is the failure mode this whole rule exists to remove.
+
+    Where git cannot answer, the caller **skips** rather than passing — the same argument
+    `tools/ledger_check.py` makes when no default branch resolves: *"on a shallow checkout
+    there is nothing to compare and saying so is the whole point"*.
+    """
+    import subprocess
+
+    # **NUL-separated, and bytes.** In text mode Python translates the separator on Windows,
+    # so git received `examples/minimal/greet.py\r`, matched nothing, and answered *not
+    # ignored* — which would have read as the defect rather than as a broken question.
+    def git(args, stdin=None):
+        return subprocess.run(["git", "-C", str(root)] + args, input=stdin,
+                              capture_output=True)
+
+    def split(raw):
+        return {piece for piece in raw.decode("utf-8", "replace").split(chr(0)) if piece}
+
+    listed = git(["ls-files", "-z", "--"] + list(paths))
+    # `check-ignore` exits 1 when nothing matches, which is an answer and not a failure;
+    # anything else means it could not tell us.
+    asked = git(["check-ignore", "--stdin", "-z"],
+                stdin=chr(0).join(paths).encode("utf-8") + b"\x00")
+
+    # **Both, in one check.** Written as two skips first, and they could not be told apart:
+    # in a directory that is not a repository the first fires, so a mutation of the second
+    # was invisible and reported NOT CAUGHT. One question, one message, and the message names
+    # which command could not answer.
+    unanswered = [name for name, done in (("ls-files", listed.returncode == 0),
+                                          ("check-ignore", asked.returncode in (0, 1)))
+                  if not done]
+    if unanswered:
+        pytest.skip("git could not answer %s, so provenance was NOT checked: %s"
+                    % (" and ".join(unanswered),
+                       (listed.stderr + asked.stderr).decode("utf-8", "replace").strip()[:200]))
+
+    return split(listed.stdout), split(asked.stdout)
+
+
+def test_a_cited_path_git_neither_tracks_nor_ignores_is_still_the_defect():
+    """The rule above must still catch what it was written for (CHG-20260904-14).
+
+    Moving from existence to provenance widens what passes, so the floor is that the
+    original failure — a path cited as evidence that nobody can open or produce — is still
+    in neither set.
+    """
+    root = Path(__file__).resolve().parents[1]
+    tracked, ignored = _tracked_and_ignored(
+        root, ["examples/no-such-example/plan.json", "examples/minimal/plan.json"])
+
+    assert "examples/no-such-example/plan.json" not in tracked | ignored, (
+        "a path git has never heard of was read as provenance")
+    assert "examples/minimal/plan.json" in tracked, (
+        "this floor stopped measuring: the tracked arm found nothing")
+
+
+def test_provenance_is_the_same_answer_whether_the_file_is_there(tmp_path):
+    """**The point of the change** (CHG-20260904-14, defect seat L-57).
+
+    `examples/minimal/greet.py` has never been committed, and the suite writes it: a run of
+    `tests/test_change_classes.py` executes the real CLI against `examples/minimal/runner.yaml`
+    and its agent produces the file. Under the old predicate the verdict was *whether that
+    test had run yet* — red on a clean checkout, green in a full run.
+
+    `check-ignore` answers about the **pattern**, so the file being there or not cannot move
+    it. Asserted on a path that exists and one that does not, both covered by the same rule.
+    """
+    del tmp_path
+    root = Path(__file__).resolve().parents[1]
+    here = root / "examples" / "minimal" / "greet.py"
+    absent = "examples/minimal/greet-that-no-run-has-made.py"
+
+    _, ignored = _tracked_and_ignored(root, ["examples/minimal/greet.py", absent])
+
+    assert "examples/minimal/greet.py" in ignored, (
+        "the artefact the citations are about is not covered by .gitignore any more, so the "
+        "rule is back to asking whether something put it there")
+    assert absent not in ignored, (
+        "this floor stopped measuring: `examples/*/greet.py` would have to match this too")
+    assert here.exists() or True, "stated: the verdict above did not consult this"
+
+
+def test_provenance_skips_rather_than_passes_when_git_cannot_answer(tmp_path):
+    """A green that measured nothing is the failure this whole file exists to remove.
+
+    Same argument `tools/ledger_check.py` makes for an unresolvable ref: *"on a shallow
+    checkout there is nothing to compare and saying so is the whole point"*.
+    """
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+
+    with pytest.raises(BaseException) as raised:
+        _tracked_and_ignored(outside, ["examples/minimal/plan.json"])
+
+    said = str(raised.value)
+    assert "NOT checked" in said, (
+        f"git could not answer and the rule did not say so: {said!r}")
+    assert "ls-files" in said and "check-ignore" in said, (
+        f"the skip does not name which command could not answer, so a check that stopped "
+        f"asking would be indistinguishable from one that asked and was refused: {said!r}")
+
+
 def test_every_example_path_a_source_file_cites_exists():
     """**The rule**, because the instance was cited four times and existed nowhere.
 
@@ -745,11 +852,28 @@ def test_every_example_path_a_source_file_cites_exists():
             if "." in what.rsplit("/", 1)[-1]:
                 cited.add((path.relative_to(root).as_posix(), what))
 
+    # **Provenance, not existence** (CHG-20260904-14, defect seat L-57). This asked
+    # `(root / what).exists()`, and `examples/minimal/greet.py` — cited three times by
+    # `worktree.py`, every time as an example of a **build artefact** — has never been in the
+    # repository. `.gitignore` carries `examples/*/greet.py`. The rule failed on a clean
+    # checkout and passed in a full run, because `tests/test_change_classes.py` runs the real
+    # CLI against `examples/minimal/runner.yaml` and its agent writes the file, before this
+    # file sorts. So a rule whose docstring is *"the instance was cited four times and
+    # existed nowhere"* was satisfied by the suite producing the thing it checks for.
+    #
+    # `.exists()` is neither question worth asking. A citation offers either something a
+    # reader who clones can open — **tracked** — or an artefact a run produces, and the
+    # `.gitignore` line is where the repository says that on purpose — **ignored**. Anything
+    # that is neither is the defect this rule was written for. Existence leaves the predicate,
+    # so the answer no longer depends on what ran first.
+    tracked, ignored = _tracked_and_ignored(root, sorted({what for _, what in cited}))
+
     missing = sorted(f"{where}: {what}" for where, what in cited
-                     if not (root / what).exists())
+                     if what not in tracked and what not in ignored)
 
     assert missing == [], (
-        f"these example paths are cited by source as evidence and do not exist: {missing}")
+        f"these example paths are cited by source as evidence, and git neither tracks them "
+        f"nor ignores them — a reader can neither open them nor produce them: {missing}")
 
 
 def test_the_api_page_documents_the_survey_shape_that_ships():
