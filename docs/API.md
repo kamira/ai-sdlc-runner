@@ -292,6 +292,11 @@ L-36).
   "branches":   [ "<branch>", … ],     // empty for a gate; the choices for a tie
   "run_id":     "<absolute journal path>" | null,
 
+  // Carried by TWO of the three questions, so it belongs to neither group below: the tie, and
+  // the incomplete requirement — where it is the sentence naming the aspect and how many times
+  // it has been asked, and the only ask text the console renders. Empty at a gate.
+  "reason":     "<why this is being asked>",
+
   // meaningful when `incomplete` — the intake survey. Present either way: `[]`, `{}`, `[]`, `{}`
   "missing":    [ "<aspect>", … ],
   "options":    { "<aspect>": [ …≥3… ] },
@@ -302,10 +307,6 @@ L-36).
                                        // caller keying by aspect matched nothing, ever
                                        // (CHG-20260903-37)
 
-  // meaningful on TWO of the three: the tie, and the incomplete requirement — where it carries
-  // the sentence naming the aspect and how many times it has been asked, and is the only ask
-  // text the console renders. Empty at a gate.
-  "reason":     "<why this is being asked>",
 
   // meaningful when `undecided` — the tie. Present either way: `{}`
   "verdicts":   { "<voice>": "<verdict>", … } }   // who said what, so a tie can be read

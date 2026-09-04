@@ -740,7 +740,7 @@ here because that is what this section is for, and because a later record can st
 ## Testing
 
 ```bash
-pytest -q          # 2140 tests
+pytest -q          # 2144 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

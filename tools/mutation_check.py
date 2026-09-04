@@ -1700,6 +1700,48 @@ MUTATIONS: List[Mutation] = [
         'tests/test_sub_planning.py'),
 
     Mutation(
+        'readers', 'the strip forgets the page is HTML',
+        REPO / 'tests' / 'test_server.py',
+        '    return _without_scripts_comments(_without_html_comments(source))',
+        '    return _without_scripts_comments(source)',
+        'tests/test_server.py'),
+
+    Mutation(
+        'readers', 'quotes are tracked in markup again, so one apostrophe disables the strip',
+        REPO / 'tests' / 'test_server.py',
+        '    scripted = "<script" not in source',
+        '    scripted = True',
+        'tests/test_server.py'),
+
+    Mutation(
+        'readers', 'the field inventory reads the page with its prose again',
+        REPO / 'tests' / 'test_server.py',
+        '    page = _console_code()\n    snapshot = server.RunState().snapshot()',
+        '    page = _console()\n    snapshot = server.RunState().snapshot()',
+        'tests/test_server.py'),
+
+    # Two `prose` mutations retired into this group rather than deleted (CHG-20260904-15).
+    # *a call handing nothing counts as compliance again* pinned the `any(call.keywords ...)`
+    # clause, which is gone: a call handing nothing cannot satisfy the recorded-against-handed
+    # rule below, so the clause had nothing left to do and the mutation had nothing to anchor
+    # on. *the page says `reason` belongs to the tie alone again* pinned one divider's
+    # wording; the mutation below pins the **grouping**, which is what the page was wrong
+    # about in both directions. Neither guarantee is unpinned; both are pinned harder.
+    Mutation(
+        'readers', 'a decision may record a stop name it never handed over',
+        REPO / 'tests' / 'test_server.py',
+        '        if not (calls and owed and all(owed)',
+        '        if not (calls',
+        'tests/test_server.py'),
+
+    Mutation(
+        'readers', 'the page puts `reason` back inside one question group',
+        REPO / 'docs' / 'API.md',
+        '  // Carried by TWO of the three questions, so it belongs to neither group below: the tie, and',
+        '  // meaningful when `incomplete` and nothing else, and',
+        'tests/test_server.py'),
+
+    Mutation(
         'provenance', 'a deliberately ignored artefact reads as a citation nobody can open',
         REPO / 'tests' / 'test_documented_numbers.py',
         '    return split(listed.stdout), split(asked.stdout)',
@@ -1742,24 +1784,10 @@ MUTATIONS: List[Mutation] = [
         'tests/test_server.py'),
 
     Mutation(
-        'prose', 'a call handing nothing counts as compliance again',
-        REPO / 'tests' / 'test_server.py',
-        '        if not (calls and any(call.keywords for call in calls)\n                and all((name, name) in handed for name in taken & wanted)):',
-        '        if not (calls\n                and all((name, name) in handed for name in taken & wanted)):',
-        'tests/test_server.py'),
-
-    Mutation(
         'prose', 'the stop is given whichever adjudication happened last',
         SRC / 'server.py',
         '    mine = [a for a in report.adjudications if a.get("node_id") == here]',
         '    mine = []',
-        'tests/test_server.py'),
-
-    Mutation(
-        'prose', 'the page says `reason` belongs to the tie alone again',
-        REPO / 'docs' / 'API.md',
-        '  // meaningful on TWO of the three: the tie, and the incomplete requirement',
-        '  // meaningful when `undecided` - the tie, and nothing else',
         'tests/test_server.py'),
 
     Mutation(

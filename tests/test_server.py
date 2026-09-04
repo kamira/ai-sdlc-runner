@@ -25,6 +25,7 @@ import inspect
 import json
 import pathlib
 import re
+import sys
 import tempfile
 import threading
 import time
@@ -1232,19 +1233,28 @@ def test_the_page_does_not_say_reason_belongs_to_one_question_when_two_carry_it(
     section = (root / "docs" / "API.md").read_text(encoding="utf-8")
     section = section.split("## 4 · The suspension")[1].split("## 5 ·")[0]
 
-    # From the **first** divider that names only the tie, not the last. Splitting on `[-1]` reads
-    # the group after the final divider, so moving `reason` under an earlier one passed — measured
-    # against this test's own mutation, which is what a floor is for.
+    # **Which group, not which side of one divider** (CHG-20260904-15, defect seat L-55).
+    # This read *everything below the first tie divider* and asserted `reason` was not in it,
+    # so the mirror-image error — `reason` moved **up**, into the `incomplete` group, which is
+    # equally false — passed. Measured: 254 tests green with the page saying `reason` is
+    # incomplete-only.
+    #
+    # A field belongs to whichever group its nearest divider above names. `reason` is carried
+    # by two of the three questions, so it belongs to **neither** group and must sit above
+    # both dividers.
     lines = section.splitlines()
-    tie_from = next((i for i, line in enumerate(lines)
-                     if "meaningful when `undecided`" in line), len(lines))
-    tie_group = chr(10).join(lines[tie_from:])
+    dividers = [i for i, line in enumerate(lines) if "meaningful when " in line]
+    field = next((i for i, line in enumerate(lines)
+                  if line.strip().startswith('"reason"')), None)
 
-    assert '"reason"' not in tie_group, (
-        "the page groups `reason` under the tie, and an incomplete stop carries it — the sentence "
-        "naming the aspect, which is the only ask text the console renders")
-    assert '"verdicts"' in tie_group, (
-        "this test no longer reads the tie group at all; the divider it looks for has moved")
+    assert len(dividers) == 2, (
+        f"section 4 has {len(dividers)} conditional groups; this test reads two, one per "
+        f"question that has fields of its own")
+    assert field is not None, "the page no longer documents `reason` at all"
+    assert field < dividers[0], (
+        "`reason` sits inside a group the page says belongs to one question. It is carried "
+        "by two — the tie, and the incomplete requirement, where it is the only ask text the "
+        "console renders — so it belongs above both dividers, not under either")
 
 
 def test_a_stop_whose_own_panel_judged_it_carries_that_judgement_driven():
@@ -1359,13 +1369,67 @@ def _console_code():
 
 
 def _without_comments(source):
-    """`source` with `//`-to-end-of-line and `/* … */` removed, but not inside a string."""
+    """`source` with every comment removed — `<!-- -->`, `//` to end of line, and `/* … */`.
+
+    **Three syntaxes, because the page has three** (CHG-20260904-15, defect seat L-51). The first
+    version knew `//` alone and the second added `/* */`; the file being stripped is an *HTML*
+    file whose first fifteen lines are a shipped `<!-- … -->` block. Measured: the read blanked and
+    the field named inside that block left **98 passed**, which is `CHG-20260904-11`'s defect and
+    `-13`'s two fixes restored through the syntax neither knew.
+
+    **Quotes are tracked outside markup, not inside it** (risk seat 1a, conformance seat). Scanning
+    a whole HTML file under JS quoting rules means one apostrophe in prose — *"it's a view"* — opens
+    a string that never closes, and from there nothing is stripped. Measured on the shipped page:
+    2 of 70 `//` survive as written, **17 of 70** with one possessive apostrophe in the header. And
+    the regex the console actually has — `/token=([^&]+)/` at the top of the token handling, which
+    a reservation said did not exist — is the same trap with a quote inside it.
+
+    So markup is removed first and quoting is only tracked in what remains, which is script. A
+    scanner cannot parse JavaScript; what it can do is stop pretending prose is JavaScript.
+    """
+    return _without_scripts_comments(_without_html_comments(source))
+
+
+def _without_html_comments(source):
+    """`<!-- … -->` removed. Unterminated, the rest of the file is comment, which is what a
+    browser does with it."""
+    out, at = [], 0
+    while True:
+        start = source.find("<!--", at)
+        if start < 0:
+            out.append(source[at:])
+            return "".join(out)
+        out.append(source[at:start])
+        end = source.find("-->", start + 4)
+        if end < 0:
+            return "".join(out)
+        at = end + 3
+
+
+def _without_scripts_comments(source):
+    """`//`-to-end-of-line and `/* … */` removed, but not inside a string literal.
+
+    A quote only opens a string where the scanner is inside `<script>`; outside it, an apostrophe
+    is an apostrophe. That boundary is what stops one word of prose from disabling the strip for
+    the rest of the file.
+    """
     out, i, quote, n = [], 0, "", len(source)
+    # **A fragment with no `<script>` is script.** The boundary exists so an apostrophe in *markup*
+    # does not open a string; a caller handing over a few lines of JavaScript — which is how both
+    # floors below plant their cases — has no markup to be outside of, and treating it as markup
+    # stripped nothing and turned the trailing-comment floor red.
+    scripted = "<script" not in source
     while i < n:
         ch = source[i]
+        if not scripted:
+            out.append(ch)
+            if source.startswith("<script", i):
+                scripted = True
+            i += 1
+            continue
         if quote:
             out.append(ch)
-            if ch == "\\" and i + 1 < n:        # an escape carries the next character with it
+            if ch == chr(92) and i + 1 < n:       # an escape carries the next character with it
                 out.append(source[i + 1])
                 i += 2
                 continue
@@ -1373,14 +1437,19 @@ def _without_comments(source):
                 quote = ""
             i += 1
             continue
-        if ch in "'\"`":
+        if source.startswith("</script", i):
+            scripted = False
+            out.append(ch)
+            i += 1
+            continue
+        if ch in "'" + chr(34) + "`":
             quote = ch
             out.append(ch)
             i += 1
             continue
         if source.startswith("//", i):
             end = source.find(chr(10), i)
-            i = n if end < 0 else end            # the newline itself is kept by the next pass
+            i = n if end < 0 else end            # the newline is left for the next pass
             continue
         if source.startswith("/*", i):
             end = source.find("*/", i + 2)
@@ -1389,6 +1458,88 @@ def _without_comments(source):
         out.append(ch)
         i += 1
     return "".join(out)
+
+
+def test_the_strip_removes_the_pages_third_comment_syntax():
+    """**The page is HTML and its first fifteen lines are a comment** (defect seat L-51).
+
+    The strip knew `//`, then `/* */`. Blanking the read and naming the field inside the
+    shipped `<!-- … -->` header left **98 passed** — `CHG-20260904-11`'s defect, restored
+    through the one syntax neither version knew.
+    """
+    planted = _console().replace(
+        "  The operator console",
+        "  Was state.adjudication_here - restore after the redesign." + chr(10)
+        + "  The operator console").replace(
+        "    var here = state.adjudication_here;", "    var here = null;")
+
+    assert "adjudication_here" in planted, "the plant did not land"
+    assert "state.adjudication_here" not in _without_comments(planted), (
+        "a field named inside an HTML comment reads as code, so every guard that reads code "
+        "can be satisfied by the header")
+
+
+def test_one_apostrophe_in_prose_does_not_disable_the_strip():
+    """**Partial mis-parse fails open, and that is the dangerous direction** (risk seat 1a).
+
+    Scanning a whole HTML file under JavaScript quoting rules meant one possessive apostrophe
+    in the header opened a string that never closed. Measured before the fix: `//` surviving
+    the strip went from **2 of 70** to **17 of 70**, and both existing floors anchor past the
+    point where the next apostrophe re-syncs, so neither fired.
+
+    Quotes are tracked inside `<script>` only now, which is where a quote means a string.
+    """
+    page = _console()
+    # In **markup**, not in the header comment: `_without_html_comments` runs first and would
+    # remove a header plant along with everything around it, so a plant there measures that pass
+    # and not this one. Body text is where an apostrophe actually reaches the quote tracking.
+    planted = page.replace(
+        '<div id="flow"></div>',
+        "<p>the run's flow</p>" + chr(10) + "    <div id='flow'></div>")
+
+    assert planted != page, "the anchor this floor plants against has moved"
+    assert "run's flow" in _without_html_comments(planted), (
+        "the plant is inside an HTML comment, so it never reaches the quote tracking")
+    assert _without_comments(planted).count("//") == _without_comments(page).count("//"), (
+        "an apostrophe in prose changed how much of the page is stripped")
+
+
+def test_the_scanner_leaves_no_string_open_on_the_real_page():
+    """The floor that would have caught a false disclosure at the time it was written.
+
+    `ACC-20260904-13` reservation 2 said the scanner does not know regex literals and that
+    *"nothing in the console uses one"*. The console has used one since the commit that wrote
+    it — `var m = /token=([^&]+)/.exec(location.hash);` — and the failure direction was
+    backwards too: a quote **inside** a regex opens a string that never closes, so later
+    comments survive. That is a false pass, not a false failure.
+
+    A scanner cannot parse JavaScript. What it can do is say when it has lost track, and this
+    is that: at the end of the real page it must not still be inside a string.
+    """
+    page = _console()
+    scripted = "<script" not in page
+    quote, i, n = "", 0, len(page)
+    while i < n:
+        ch = page[i]
+        if not scripted:
+            if page.startswith("<script", i):
+                scripted = True
+        elif quote:
+            if ch == chr(92):
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+        elif page.startswith("</script", i):
+            scripted = False
+        elif ch in "'" + chr(34) + "`":
+            quote = ch
+        i += 1
+
+    assert quote == "", (
+        f"the scanner reaches the end of the page still inside a {quote!r} string, so "
+        f"everything after the quote that opened it is unstripped and every guard reading "
+        f"code is reading prose")
 
 
 def test_the_console_reads_the_field_and_does_not_pick_for_itself():
@@ -1400,9 +1551,23 @@ def test_the_console_reads_the_field_and_does_not_pick_for_itself():
     assert "state.adjudication_here" in code, (
         "the box does not read the field the server derives — and naming it in a comment is not "
         "reading it")
-    assert "adjudications[state.adjudications.length" not in code, (
-        "the console picks an adjudication by position, which is the rule CHG-20260903-24 was "
-        "withdrawn over")
+    # **By position, however it is spelled** (CHG-20260904-15, defect seat L-56). This banned
+    # one spelling. `state.adjudication_here || state.adjudications.at(-1)` satisfies both
+    # assertions — the field is read, and the banned text does not appear — and restores the
+    # defect `CHG-20260903-24` was withdrawn over: at `merge` on a default install
+    # `_adjudication_for` returns `None`, the fallback fires, and the one-way door is
+    # pre-answered with `lead_review`'s verdict on built work. Measured: 117 passed.
+    #
+    # The property is that the box takes the server's answer and does not reach past it, so what
+    # is refused is `state.adjudications` appearing at all in the branch that renders the box.
+    box = code.split("Waiting for you")[1].split("function act(")[0] if (
+        "Waiting for you" in code) else code
+    assert "Waiting for you" in code, (
+        "the box this guard reads is gone, so it is measuring the whole page")
+    assert "state.adjudications" not in box, (
+        "the box reaches into the adjudication list itself rather than taking the one the server "
+        "bound to this stop — which is the rule CHG-20260903-24 was withdrawn over, in whatever "
+        "spelling")
 
 
 def test_stripping_the_prose_is_what_makes_that_guard_a_guard():
@@ -1425,6 +1590,29 @@ def test_stripping_the_prose_is_what_makes_that_guard_a_guard():
         "satisfies every guard that reads code")
     assert "adjudication_here" in _without_comments('var u = "//adjudication_here";'), (
         "the strip removed a `//` inside a string literal, so it cannot tell a comment from a URL")
+
+
+def test_the_inventory_reads_the_stripped_page(monkeypatch):
+    """**`ACC-20260904-13` reservation 1 said this could not be pinned. It can** — the defect
+    seat supplied the shape (CHG-20260904-15).
+
+    Reverting `page = _console_code()` to `page = _console()` in the inventory guard is
+    invisible while no snapshot key is prose-only, and none is. Rather than leave that as a
+    reservation, plant both halves: a snapshot key that reaches no front end, named only in a
+    comment. `_console_code()` resolves `_console` at call time, so monkeypatching it is
+    enough — no source text is read.
+    """
+    planted = _console().replace(
+        "function drawDecisions() {",
+        "// seat_notes is computed and rendered by nothing" + chr(10)
+        + "function drawDecisions() {")
+    assert planted != _console(), "the anchor this pin plants against has moved"
+
+    monkeypatch.setattr(sys.modules[__name__], "_console", lambda: planted)
+    monkeypatch.setattr(server.RunState, "snapshot", lambda self: {"seat_notes": True})
+
+    with pytest.raises(AssertionError):
+        test_every_key_the_server_sends_reaches_the_console()
 
 
 def test_a_key_named_only_in_a_comment_does_not_count_as_rendered():
@@ -1707,6 +1895,17 @@ def _answering_of(runner):
     return found
 
 
+#: The lists an operator decision is appended to. **Written once** (CHG-20260904-15, defect
+#: seat L-54): it stood in three function bodies, and the floor that exists to notice a new
+#: decision method selected methods with the same set — so a method appending to a fourth
+#: list was invisible to the guard whose whole job is to see one. Measured: a planted
+#: `self.state.vetoes.append(...)` carrying `run_id=None` was reported clean by all three.
+#:
+#: The name also stops it shadowing `test_flow`'s `DECISIONS`, imported at the top of this
+#: file and meaning something else entirely — the branches a walk takes.
+DECISION_LISTS = {"approvals", "rejections", "rulings"}
+
+
 def decisions_that_do_not_name_their_stop(source):
     """Which decision methods in `source` fail to hand `_answering` the names they took.
 
@@ -1721,24 +1920,48 @@ def decisions_that_do_not_name_their_stop(source):
     runner = next(n for n in ast.walk(tree)
                   if isinstance(n, ast.ClassDef) and n.name == "Runner")
     wanted = {a.arg for a in _answering_of(runner).args.kwonlyargs}
-
-    DECISIONS = {"approvals", "rejections", "rulings"}
     failed = []
     for fn in runner.body:
         if not isinstance(fn, ast.FunctionDef):
             continue
-        if not any(isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "append"
-                   and getattr(getattr(n.func, "value", None), "attr", None) in DECISIONS
-                   for n in ast.walk(fn)):
+        appends = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                   and getattr(n.func, "attr", None) == "append"
+                   and getattr(getattr(n.func, "value", None), "attr", None)
+                   in DECISION_LISTS]
+        if not appends:
             continue
         calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
                  and getattr(n.func, "attr", None) == "_answering"]
-        taken = ({a.arg for a in fn.args.args} | {a.arg for a in fn.args.kwonlyargs}) - {
-            "self", "version"}
-        handed = {(kw.arg, kw.value.id) for call in calls for kw in call.keywords
+        # **What it records against what it handed over** (CHG-20260904-15, defect seat
+        # L-53, risk seat 1c). Two earlier shapes both enumerated. `taken & wanted` — the
+        # method's parameters intersected with `_answering`'s — let a method taking `stop`
+        # and calling `self._answering(gate=stop)` intersect to nothing and pass. Requiring
+        # every name `_answering` declares was too strong the other way: `rule` answers a
+        # tie, which has no gate, and legitimately hands only `node_id`.
+        #
+        # The invariant underneath both is simpler and does not enumerate: **every stop
+        # name a method writes into the durable record must be one it handed to
+        # `_answering` first, and the same value.** `rule` records no gate, so it owes
+        # none. A planted `veto` recording `node_id=stop` while handing only `gate=stop`
+        # owes one and does not pay it — which is the defect, stated as itself rather than
+        # as a list of names.
+        handed = {kw.arg: kw.value.id for call in calls for kw in call.keywords
                   if isinstance(kw.value, ast.Name)}
-        if not (calls and any(call.keywords for call in calls)
-                and all((name, name) in handed for name in taken & wanted)):
+        took = {a.arg for a in fn.args.args} | {a.arg for a in fn.args.kwonlyargs}
+
+        owed = []
+        for call in appends:
+            for inner in ast.walk(call):
+                if not isinstance(inner, ast.Call):
+                    continue
+                for kw in inner.keywords:
+                    if kw.arg not in wanted:
+                        continue
+                    names = {n.id for n in ast.walk(kw.value) if isinstance(n, ast.Name)}
+                    owed.append(handed.get(kw.arg) in names)
+
+        if not (calls and owed and all(owed)
+                and all(value in took for value in handed.values())):
             failed.append(fn.name)
     return failed
 
@@ -1801,7 +2024,8 @@ def test_the_rule_accepts_a_method_that_hands_over_what_it_took():
     ok = PLANTED_FOURTH.replace(
         "def veto(self, version, stop, why):",
         "def veto(self, version, gate, node_id, why):"
-    ).replace("self._answering()", "self._answering(gate=gate, node_id=node_id)")
+    ).replace("self._answering()", "self._answering(gate=gate, node_id=node_id)"
+    ).replace("Rejection(gate=stop, node_id=stop,", "Rejection(gate=gate, node_id=node_id,")
 
     assert decisions_that_do_not_name_their_stop(ok) == [], (
         "a method handing over exactly the names it took was refused")
@@ -1826,14 +2050,13 @@ def _run_ids_not_read_from_the_suspension(source):
     tree = ast.parse(source)
     runner = next(n for n in ast.walk(tree)
                   if isinstance(n, ast.ClassDef) and n.name == "Runner")
-    DECISIONS = {"approvals", "rejections", "rulings"}
     failed = []
     for fn in runner.body:
         if not isinstance(fn, ast.FunctionDef):
             continue
         appends = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
                    and getattr(n.func, "attr", None) == "append"
-                   and getattr(getattr(n.func, "value", None), "attr", None) in DECISIONS]
+                   and getattr(getattr(n.func, "value", None), "attr", None) in DECISION_LISTS]
         if not appends:
             continue
         stamped = []
@@ -1883,10 +2106,9 @@ def test_the_rule_looks_at_the_three_methods_that_exist():
     runner = next(n for n in ast.walk(tree)
                   if isinstance(n, ast.ClassDef) and n.name == "Runner")
 
-    DECISIONS = {"approvals", "rejections", "rulings"}
     found = {fn.name for fn in runner.body if isinstance(fn, ast.FunctionDef)
              and any(isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "append"
-                     and getattr(getattr(n.func, "value", None), "attr", None) in DECISIONS
+                     and getattr(getattr(n.func, "value", None), "attr", None) in DECISION_LISTS
                      for n in ast.walk(fn))}
     assert found == {"approve", "reject", "rule"}, (
         f"the rule above scans {sorted(found)}; if a decision method was added or renamed, this "
@@ -1960,8 +2182,14 @@ def test_every_report_field_is_rendered_or_written_down():
     `CHG-20260901-16` was filed for — *"declared, written during the walk, and emitted by nothing"*
     — one surface further out. This does not build the fifteen views; it refuses a sixteenth field
     joining them in silence.
+
+    **Reads code, not prose** (CHG-20260904-15, risk seat 1b). `CHG-20260904-13` fixed its sibling
+    and left this one on the raw page. Five report fields — `asks`, `halt_reason`, `halted_at`,
+    `options`, `verdicts` — are not snapshot keys, so they have no other guard: deleting the only
+    rendering of `options` and leaving `// was s.options[aspect] - restore after the redesign`
+    left **98 passed**.
     """
-    page = _console()
+    page = _console_code()
     fields = set(engine.RunReport().as_dict())
 
     unlisted = sorted(f for f in fields
