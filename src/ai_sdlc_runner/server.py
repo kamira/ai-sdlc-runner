@@ -303,9 +303,17 @@ class Runner:
                 raise ServerError(
                     f"a run is already {self.state.state}; one project, one runner, one run at a "
                     f"time. Answer or abandon the one in front of you first.")
+            # Read the store **before** the state moves. This ran after, so a manifest that
+            # could not be read left the runner permanently "running": the raise escaped
+            # `start` with the state already mutated, every later POST answered 409, and
+            # there was no route back to idle short of restarting the process. Meanwhile
+            # `GET /attachments` answered from cached state and reported zero attachments
+            # *and* zero missing while the store held one — inverting the guarantee that a
+            # run which has lost a document says so (CHG-20260905-04).
+            held, lost = self._read_attachments()
             self.state = RunState(state="running", version=self.state.version + 1,
                                   instructions=[instruction] if instruction else [])
-            self._refresh_attachments()
+            self.state.attachments, self.state.missing = held, lost
             self._publish()
         return self._advance()
 
@@ -360,11 +368,19 @@ class Runner:
         # changed and the run has to be walked again for anybody to see it.
         return self._advance()
 
-    def _refresh_attachments(self) -> None:
+    def _read_attachments(self):
+        """What the store holds and what it has lost, without touching `self.state`.
+
+        Separate from the assignment so a caller can raise *before* the run state moves —
+        `Store.all` raises `AttachmentError` on an unreadable manifest, and a half-applied
+        state change is how that became unrecoverable.
+        """
         if self._store is None:
-            return
-        self.state.attachments = self._store.all()
-        self.state.missing = self._store.missing()
+            return [], []
+        return self._store.all(), self._store.missing()
+
+    def _refresh_attachments(self) -> None:
+        self.state.attachments, self.state.missing = self._read_attachments()
 
     def _answering(self, *, gate: Optional[str] = None,
                    node_id: Optional[str] = None) -> Dict[str, object]:

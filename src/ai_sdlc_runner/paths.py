@@ -303,6 +303,24 @@ def write_bytes(path: str | Path, data: bytes) -> None:
         fh.write(data)
 
 
+def replace(src: str | Path, dst: str | Path) -> None:
+    """Move `src` onto `dst` in one step, or not at all.
+
+    `os.replace` is atomic within a filesystem on both platforms, and that is the whole reason
+    this exists: `write_text` opens `"w"`, which truncates first, so anything interrupted
+    between the truncate and the flush leaves an empty file where the data was. For a cache
+    that is a slow start; for `attachments.py`'s manifest — the only record of what every
+    stored blob was called — it is permanent loss (CHG-20260905-04).
+
+    Here rather than at the call site so the long-path layer applies to **both** ends. A rename
+    where only one side carries the extended-length prefix fails past MAX_PATH in exactly the
+    way every bare call in this repository has already failed once.
+    """
+    check(src)
+    check(dst)
+    os.replace(real(src), real(dst))
+
+
 def exists(path: str | Path) -> bool:
     return os.path.exists(real(path))
 

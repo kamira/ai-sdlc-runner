@@ -20,13 +20,14 @@ here, because it is the only test that would fail for *either* wrong answer.
 """
 import ast
 import hashlib
+import json
 import pathlib
 import shutil
 import tempfile
 
 import pytest
 
-from ai_sdlc_runner import attachments, engine, graph, paths, policy
+from ai_sdlc_runner import attachments, paths as paths_mod, engine, graph, paths, policy
 
 
 def _store(tmp_path):
@@ -35,12 +36,26 @@ def _store(tmp_path):
 
 # --- task 17: the safety interaction ---------------------------------------------------------
 
+#: Real signatures, because `add` now refuses bytes that contradict the type the filename
+#: declares (CHG-20260905-04). The tests below are about **filenames** — where they end up and
+#: where they do not — so their bytes only have to stop lying about what they are.
+def _bytes_for(filename):
+    """Bytes that do not contradict what `filename` says they are."""
+    if filename.lower().endswith(".pdf"):
+        return b"%PDF-1.4 content for " + filename.encode()
+    return b"content for " + filename.encode()
+
+
+PNG_BYTES = bytes([137, 80, 78, 71, 13, 10, 26, 10]) + b" a real header, then anything"
+PDF_BYTES = b"%PDF-1.4 a spec"
+
+
 def test_a_stored_path_is_a_hash_and_carries_nothing_the_operator_typed(tmp_path):
     store = _store(tmp_path)
-    a = store.add("production/spec.pdf".replace("/", "_"), b"a spec")
+    a = store.add("production/spec.pdf".replace("/", "_"), PDF_BYTES)
     stored = store.path_for(a.id)
-    assert stored.name == hashlib.sha256(b"a spec").hexdigest()[:attachments._NAME_CHARS]
-    assert a.id == hashlib.sha256(b"a spec").hexdigest(), "the id stays the full digest"
+    assert stored.name == hashlib.sha256(PDF_BYTES).hexdigest()[:attachments._NAME_CHARS]
+    assert a.id == hashlib.sha256(PDF_BYTES).hexdigest(), "the id stays the full digest"
     assert "production" not in str(stored)
     assert "spec" not in stored.name
 
@@ -51,7 +66,7 @@ def test_a_stored_path_is_a_hash_and_carries_nothing_the_operator_typed(tmp_path
 def test_a_filename_that_would_have_tripped_the_scanner_does_not(tmp_path, filename):
     """The exact defect: an ordinary spec whose *name* looked like a deployment target."""
     store = _store(tmp_path)
-    store.add(filename, b"content for " + filename.encode())
+    store.add(filename, _bytes_for(filename))
     for path in store.order_paths():
         assert not policy.derive([path]), f"{filename} still trips the scanner via {path}"
 
@@ -75,7 +90,7 @@ def test_both_directions_of_the_scan_survive(tmp_path):
 def test_the_filename_is_kept_where_a_person_can_read_it(tmp_path):
     """Kept as data, not thrown away — somebody has to be able to tell which document this is."""
     store = _store(tmp_path)
-    a = store.add("wireframes.png", b"\x89PNG fake")
+    a = store.add("wireframes.png", PNG_BYTES)
     assert a.filename == "wireframes.png"
     assert store.all()[0].filename == "wireframes.png"
 
@@ -454,3 +469,158 @@ def test_every_filesystem_read_in_this_module_goes_through_the_long_path_layer()
         and not (isinstance(node.func.value, ast.Name) and node.func.value.id == "paths")
     ]
     assert bare == [], f"filesystem reads not going through paths.*: {bare}"
+
+
+# --------------------------------------------------------------------------------------
+# CHG-20260905-04 — the guard was on the door nobody uses
+# --------------------------------------------------------------------------------------
+
+
+def _plant(store, attachment_id):
+    """Put one row into the manifest by hand, which is what an operator's editor does."""
+    manifest = json.loads(store.manifest_path.read_text(encoding="utf-8"))
+    manifest["attachments"] = [dict(manifest["attachments"][0], id=attachment_id)]
+    store.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+@pytest.mark.parametrize("planted", ["secrets/prod.key", "../.env.production",
+                                     "../../production/deploy", "", ".."])
+def test_a_manifest_id_that_is_not_a_stored_name_never_reaches_a_work_order(tmp_path, planted):
+    """`order_paths` is the function whose output becomes `input_artifacts` on every node.
+
+    `path_for` carried the check and said in its own docstring that it was *"the one function whose
+    output becomes a string in a work order that a safety scanner then reads."* It has no production
+    caller. `order_paths` rebuilt the path itself and refused nothing, so a hand-edited manifest row
+    put a traversal out of the store and into a production path on every order,
+    and halted the whole run at the first node.
+    """
+    store = _store(tmp_path)
+    store.add("brief.md", b"the brief")
+    _plant(store, planted)
+
+    with pytest.raises(attachments.AttachmentError) as caught:
+        store.order_paths()
+
+    assert planted.strip() == "" or planted in str(caught.value)
+
+
+def test_order_paths_still_carries_an_attachment_whose_file_is_gone(tmp_path):
+    """The shape only — deliberately not `path_for`, which also checks existence.
+
+    Routing this through `path_for` was the obvious fix and it is the wrong one: it drops a missing
+    attachment out of every work order, which is precisely what `missing()` exists to prevent. A
+    document the store has lost still belongs on the order, and still gets reported as lost.
+    """
+    store = _store(tmp_path)
+    a = store.add("brief.md", b"the brief")
+    store.path_for(a.id).unlink()
+
+    assert store.order_paths(), "a lost attachment vanished from the work order instead of being reported"
+    assert store.missing() == [a.id]
+
+
+def test_a_torn_write_leaves_the_previous_manifest_intact(tmp_path, monkeypatch):
+    """`paths.write_text` opens "w", so the old manifest was gone before the new one existed.
+
+    Measured on the old form: 0 bytes on disk between the open and the first write, and 4 of 10
+    concurrent trials lost an attachment that had already been reported as added. The single-writer
+    case is worse — a Ctrl-C in that window empties the only record of what each blob was called.
+    """
+    store = _store(tmp_path)
+    store.add("first.md", b"the first brief")
+    before = store.manifest_path.read_text(encoding="utf-8")
+
+    real_write = paths_mod.write_text
+
+    def die_midway(path, text, **kw):
+        if str(path).endswith("manifest.json.writing"):
+            raise OSError("the disk filled up")
+        return real_write(path, text, **kw)
+
+    monkeypatch.setattr(paths_mod, "write_text", die_midway)
+    with pytest.raises(OSError):
+        store.add("second.md", b"the second brief")
+
+    assert store.manifest_path.read_text(encoding="utf-8") == before, (
+        "an interrupted write destroyed the manifest it was replacing")
+    assert [a.filename for a in store.all()] == ["first.md"]
+
+
+@pytest.mark.parametrize("shape", [
+    "[]",
+    '{"attachments": "not a list"}',
+    '{"attachments": [{"id": "a"}]}',
+    '{"attachments": ["not an object"]}',
+])
+def test_a_manifest_that_parses_but_has_the_wrong_shape_is_an_attachment_error(tmp_path, shape):
+    """Every caller catches `AttachmentError` only, so `TypeError` and `AttributeError` went out of
+    `server.py` as a raw 500 and out of this module's stated contract. The existing test writes
+    `"{oops"` — a JSON *parse* failure, which is the one shape that was already handled.
+    """
+    store = _store(tmp_path)
+    store.add("brief.md", b"the brief")
+    store.manifest_path.write_text(shape, encoding="utf-8")
+
+    with pytest.raises(attachments.AttachmentError):
+        store.all()
+
+
+def test_a_row_whose_instruction_is_not_a_number_is_refused_when_it_is_read(tmp_path):
+    """The worst of the six: `all()` succeeded, then the *next* upload wrote its bytes to disk and
+    died inside `_write`'s `sorted(key=...)` — after the write, before the manifest."""
+    store = _store(tmp_path)
+    store.add("brief.md", b"the brief")
+    manifest = json.loads(store.manifest_path.read_text(encoding="utf-8"))
+    manifest["attachments"][0]["instruction"] = "one"
+    store.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(attachments.AttachmentError) as caught:
+        store.all()
+    assert "not a number" in str(caught.value)
+
+
+def test_two_documents_that_share_a_stored_name_are_refused_not_merged(tmp_path, monkeypatch):
+    """A stored name is a 128-bit prefix. Two documents that shared it became one silently: `add`
+    returned success, never wrote the second file, and `path_for` handed back the first one's bytes
+    while `missing()` reported nothing wrong.
+
+    Detected rather than widened. Widening the name orphans every store that exists — the manifest
+    holds full digests, the files are named with 32 characters, and `missing()` would report all of
+    them — so the width is not what makes this safe.
+    """
+    store = _store(tmp_path)
+    first = store.add("first.md", b"one document")
+
+    # Force the collision rather than search for one: the property is what `add` does when two
+    # digests share a stored name, not how hard that is to arrange.
+    monkeypatch.setattr(attachments, "stored_name", lambda digest: "0" * attachments._NAME_CHARS)
+
+    with pytest.raises(attachments.AttachmentError) as caught:
+        store.add("second.md", b"a different document")
+    assert first.id in str(caught.value)
+
+
+def test_bytes_that_do_not_match_the_declared_type_are_refused(tmp_path):
+    """`_media_type` reads the extension — the one part of a filename this store does not otherwise
+    trust — and the answer reaches the console and every answering model."""
+    store = _store(tmp_path)
+
+    with pytest.raises(attachments.AttachmentError) as caught:
+        store.add("screenshot.png", b"%PDF-1.4 this is a pdf, not a png")
+    assert "image/png" in str(caught.value)
+
+
+def test_a_type_with_no_signature_is_still_accepted(tmp_path):
+    """The guard refuses what it can prove wrong, not what it cannot read. Text types have no
+    signature, and refusing them to catch a mislabelled `.png` would refuse every valid `.md`."""
+    store = _store(tmp_path)
+
+    assert store.add("brief.md", b"# just words").media_type == "text/markdown"
+    assert store.add("notes.txt", b"anything at all").media_type == "text/plain"
+
+
+def test_the_signature_table_only_holds_types_the_store_accepts(tmp_path):
+    """The floor under the two above: a signature for a type `ALLOWED` does not list guards nothing,
+    and would read as coverage."""
+    assert set(attachments.SIGNATURES) <= set(attachments.ALLOWED)
+    assert attachments.SIGNATURES, "the signature check has no types left to check"

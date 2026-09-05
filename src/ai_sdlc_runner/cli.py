@@ -1411,6 +1411,29 @@ def cmd_serve(args: argparse.Namespace) -> int:
     journal = engine.AskJournal(args.ask_journal or (Path(args.token_dir) / "asks"))
 
     store = attach_mod.Store(args.attachments or (Path(args.token_dir) / "attachments"))
+    # The store directory travels on every work order. `order_paths` returns
+    # `str(self.dir / <hash>)` — the leaf carries nothing an operator typed, and the
+    # **directory** carries everything they typed. `--attachments` under a path the
+    # permanent-halt scanner reads as a red line therefore halts every node of every run,
+    # unrelaxably, which is verbatim the failure `attachments.py`'s docstring says the
+    # hashing makes impossible. Measured: `spec prod files` -> deploy, `billing/att` -> money.
+    #
+    # Refused here, at launch, with the directory named. The alternative — emitting a relative
+    # path — breaks the property that the answering model can open the file, which is why the
+    # full path is there in the first place (CHG-20260905-04).
+    #
+    # Printed and returned, not raised: every other refusal in `cmd_serve` does that, and `main`
+    # catches nothing, so a raise here would reach the operator as a traceback -- for a message
+    # whose entire job is telling them which directory to change.
+    crosses = policy.derive([str(store.dir)])
+    if crosses:
+        print(
+            f"error: the attachment store is at {store.dir}, and the permanent-halt scanner reads "
+            f"that path as {', '.join(crosses)}. Every work order carries this directory in "
+            f"its input_artifacts, so every node of every run would halt on it and nothing "
+            f"relaxes a permanent halt. Point --attachments somewhere that is not named for "
+            f"a red line.")
+        return 2
     conversation = _open_conversation(args, journal_dir=journal.dir,
                                       run={"journal": str(journal.dir.resolve()),
                                            "plan": _where(args.plan)})
