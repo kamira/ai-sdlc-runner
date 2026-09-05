@@ -852,8 +852,28 @@ def derive(targets: Sequence[str]) -> Tuple[str, ...]:
     haystack = " ".join(str(t) for t in targets).casefold()
     if not haystack.strip():
         return ()
+    # Read the targets in **both** separators and take the union.
+    #
+    # The boundaries in `_TARGET_RULES` are written for POSIX — `(^|/)(secrets?|creds?)/`,
+    # `(^|[\s/@:.])prod(uction)?([\s/.:]|$)` — so `/` is a separator and `\` is not. This
+    # runner is Windows-first: `MAX_PATH` has its own module. Measured before the fix, 8 of 9
+    # path shapes answered differently in the two spellings, and `classify` returned `None`
+    # for `prod\manifest.yaml` while returning the deploy halt for `prod/manifest.yaml`.
+    # The prose backstop does not catch it either: its lists are multi-word phrases and a
+    # path has no spaces. On Windows there was no second line (CHG-20260905-03).
+    #
+    # **Union, not replacement**, and that is the load-bearing part. This module's rule is
+    # that each layer may only ever *add* a stop. Normalising the haystack in place would put
+    # every existing detection at the mercy of the normalisation: a rule that depends on a
+    # literal backslash — now or added later — would quietly stop matching, and a
+    # permanent-halt recogniser that can lose a detection through a refactor is worse than
+    # one that reads a single separator. Taking the union makes that unreachable by
+    # construction: a normalisation bug can add a false stop, which is loud, and cannot
+    # subtract a true one, which is silent.
+    spellings = {haystack, haystack.replace(chr(92), "/")}
     return tuple(kind for kind in PERMANENT_HALT_KINDS
-                 if any(re.search(pattern, haystack) for pattern in _TARGET_RULES[kind]))
+                 if any(re.search(pattern, one)
+                        for one in spellings for pattern in _TARGET_RULES[kind]))
 
 
 def classify(operation: Mapping[str, object]) -> Optional[str]:
