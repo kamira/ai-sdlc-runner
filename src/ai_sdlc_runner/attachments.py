@@ -49,6 +49,22 @@ ALLOWED = {
     "text/csv": (".csv",), "image/gif": (".gif",), "image/webp": (".webp",),
 }
 
+#: What each binary type must actually **begin with**.
+#:
+#: `_media_type` reads `Path(filename).suffix` — the one part of the filename this module
+#: elsewhere refuses to trust — and the answer it produces reaches the console and the models.
+#: `add("screenshot.png", b"%PDF-1.4 …")` was announced as `image/png` (CHG-20260905-04).
+#:
+#: Only types with an unambiguous signature are here. The text types have none, and a guard
+#: that refused what it cannot read would refuse every valid `.md` in order to catch a
+#: mislabelled `.png`.
+SIGNATURES = {
+    "image/png": (bytes([137, 80, 78, 71, 13, 10, 26, 10]),),
+    "image/jpeg": (bytes([255, 216, 255]),),
+    "image/gif": (b"GIF87a", b"GIF89a"),
+    "application/pdf": (b"%PDF-",),
+}
+
 #: 25 MB. Large enough for a spec with screenshots in it, small enough that a mistake is a mistake
 #: rather than a disk. A limit nobody can state is a limit nobody enforces.
 MAX_BYTES = 25 * 1024 * 1024
@@ -129,6 +145,13 @@ class Store:
                 f"{filename!r} is {len(data)} bytes; the limit is {MAX_BYTES}. A limit nobody can "
                 f"state is a limit nobody enforces.")
         media = _media_type(filename)
+        expected = SIGNATURES.get(media)
+        if expected and not any(data.startswith(sig) for sig in expected):
+            raise AttachmentError(
+                f"{filename!r} says it is {media} and its bytes do not begin like one. The "
+                f"type is read from the extension, which is the one part of a filename this "
+                f"store does not otherwise trust, and it is what the console and every "
+                f"answering model are told the document is.")
 
         digest = hashlib.sha256(data).hexdigest()
         # Ensured here and not only in __init__: the store owns this directory for the life of the
@@ -136,6 +159,28 @@ class Store:
         # rather than crash a request. Found by clearing the store between runs of a live demo.
         paths.makedirs(self.dir)
         target = self.dir / stored_name(digest)
+        # Read once. `missing()` and the manifest rebuild below both used to re-read and
+        # re-parse what this call already has, three to four times per state-changing call.
+        held = self.all()
+        # A stored name is a **128-bit prefix** of the digest, not the whole of it. Two
+        # documents that shared that prefix used to become one silently: `add` returned
+        # success, never wrote the second file, and `path_for` handed back the first
+        # attachment's bytes while `missing()` reported nothing wrong.
+        #
+        # Detected rather than widened. The docstring's reason for truncating is stale —
+        # `paths.py` supplies the extended-length prefix now, and 64 characters was measured
+        # working under a 400-character store — but widening the name orphans every store that
+        # exists: the manifest holds full digests, the files on disk are named with 32
+        # characters, and `missing()` would report every one of them. The width is not what
+        # makes this safe; noticing is (CHG-20260905-04).
+        clash = [a.id for a in held
+                 if stored_name(a.id) == stored_name(digest) and a.id != digest]
+        if clash:
+            raise AttachmentError(
+                f"{filename!r} hashes to {digest}, which is stored under the same name as "
+                f"{clash[0]}. Two different documents cannot share a stored name: one would "
+                f"be handed out for the other, on every work order, with nothing reporting "
+                f"it.")
         # `paths.exists`, not `Path.exists` — and the comment eight lines below is why:
         # past MAX_PATH Windows reports a path that is merely too long as **absent**,
         # about a directory that exists. Every write in this module was wrapped for that
@@ -158,7 +203,7 @@ class Store:
         # The name a person typed never reaches the filesystem. Only its bytes do, under their hash.
         attachment = Attachment(id=digest, filename=Path(filename).name, media_type=media,
                                 size=len(data), instruction=instruction)
-        manifest = {a.id: a for a in self.all()}
+        manifest = {a.id: a for a in held}
         manifest[attachment.id] = attachment
         self._write(list(manifest.values()))
         return attachment
@@ -174,7 +219,41 @@ class Store:
             raw = json.loads(paths.read_text(self.manifest_path))
         except ValueError as exc:
             raise AttachmentError(f"{self.manifest_path} is not valid JSON: {exc}")
-        return [Attachment(**entry) for entry in raw.get("attachments", [])]
+        # Valid JSON of the wrong **shape** used to escape as `TypeError` or `AttributeError`:
+        # a list instead of an object, a row missing a field, a row carrying an extra one, a
+        # row that is a string. Every caller catches `AttachmentError` only, so those went out
+        # of `server.py` as a raw 500 and out of the module's stated contract
+        # (CHG-20260905-04). `"{oops"` — the one shape the old code handled — is a JSON parse
+        # failure, and it is what the existing test wrote.
+        if not isinstance(raw, dict):
+            raise AttachmentError(
+                f"{self.manifest_path} is valid JSON but not an object: it is a "
+                f"{type(raw).__name__}")
+        rows = raw.get("attachments", [])
+        if not isinstance(rows, list):
+            raise AttachmentError(
+                f"{self.manifest_path}: `attachments` is a {type(rows).__name__}, not a list")
+        out = []
+        for index, entry in enumerate(rows):
+            if not isinstance(entry, dict):
+                raise AttachmentError(
+                    f"{self.manifest_path}: attachment {index} is a "
+                    f"{type(entry).__name__}, not an object")
+            try:
+                attachment = Attachment(**entry)
+            except TypeError as exc:
+                raise AttachmentError(
+                    f"{self.manifest_path}: attachment {index} does not have the fields an "
+                    f"attachment has ({exc})") from exc
+            # Checked because `_write` sorts on it, so a string here read fine and then killed
+            # the *next* upload, after its bytes were already on disk.
+            if not isinstance(attachment.instruction, int) or isinstance(
+                    attachment.instruction, bool):
+                raise AttachmentError(
+                    f"{self.manifest_path}: attachment {index} has instruction "
+                    f"{attachment.instruction!r}, which is not a number")
+            out.append(attachment)
+        return out
 
     def path_for(self, attachment_id: str) -> Path:
         """The stored path — a hash under the store, and never anything else.
@@ -198,8 +277,30 @@ class Store:
 
         Hashed paths, so `policy.derive` scanning them finds nothing — while a brief that genuinely
         names a production target still halts, because that check was never weakened.
+
+        **This** is the function whose output becomes a string in a work order that a safety
+        scanner then reads. `path_for` said that about itself and has no production caller;
+        the check lived on the door nobody uses while this one rebuilt the path unguarded, so a
+        hand-edited manifest row put a traversal out of the store and into a production
+        path on every node's ``input_artifacts``, and halted the whole run at the first
+        node (CHG-20260905-04).
+
+        The **shape** only. Routing this through `path_for` would add its existence check too,
+        which silently drops a missing attachment from every order — exactly what `missing()`
+        exists to prevent. A document the store has lost still belongs on the order, and still
+        gets reported as lost.
         """
-        return [str(self.dir / stored_name(a.id)) for a in self.all()]
+        out = []
+        for attachment in self.all():
+            name = stored_name(attachment.id)
+            if not _STORED_NAME.match(name):
+                raise AttachmentError(
+                    f"the manifest holds {attachment.id!r}, which is not a stored attachment "
+                    f"name. Stored names are content hashes precisely so that nothing an "
+                    f"operator typed ends up on a path the runner passes around — and this is "
+                    f"the path it passes around.")
+            out.append(str(self.dir / name))
+        return out
 
     def missing(self) -> List[str]:
         """Attachments the manifest lists and the store no longer holds.
@@ -219,7 +320,16 @@ class Store:
     def _write(self, attachments: Sequence[Attachment]) -> None:
         payload = {"attachments": [a.as_dict() for a in
                                    sorted(attachments, key=lambda a: (a.instruction, a.filename))]}
+        # Written beside the manifest and moved onto it, because `paths.write_text` opens "w"
+        # and truncates first. Measured on the old form: the file is 0 bytes on disk between
+        # the open and the first write, and two processes adding at once lost an attachment
+        # that had already been reported as added in 4 of 10 trials. The single-writer case is
+        # worse — a Ctrl-C or a full disk in that window empties the manifest permanently, and
+        # the manifest is the only record of what each stored blob was called
+        # (CHG-20260905-04).
+        staging = self.dir / "manifest.json.writing"
         paths.write_text(
-            self.manifest_path,
+            staging,
             json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8")
+        paths.replace(staging, self.manifest_path)

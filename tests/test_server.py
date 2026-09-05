@@ -516,9 +516,8 @@ def test_an_unexpected_failure_still_gets_an_answer(live, monkeypatch):
 
 
 def test_the_attachment_store_recreates_a_directory_taken_from_under_it(tmp_path):
-    from ai_sdlc_runner import attachments
 
-    store = attachments.Store(tmp_path / "att")
+    store = attach_mod.Store(tmp_path / "att")
     import shutil
     shutil.rmtree(store.dir)
     a = store.add("spec.md", b"the spec")
@@ -662,7 +661,6 @@ def test_our_own_origins_are_still_accepted(live, origin):
 
 def _gated_runner(tmp_path, walks, gate):
     """A runner whose walk blocks on `gate`, so a second caller is guaranteed to arrive mid-walk."""
-    from ai_sdlc_runner import attachments
 
     def walk(cfg):
         walks.append(tuple(cfg.instructions))
@@ -674,7 +672,7 @@ def _gated_runner(tmp_path, walks, gate):
     return server.Runner(
         walk=walk,
         make_config=lambda i, a, r, art=(), rej=(), hist=(): _make_config(i, a, r, art, rej, hist),
-        store=attachments.Store(tmp_path / "att"))
+        store=attach_mod.Store(tmp_path / "att"))
 
 
 def _start_a_blocked_walk(runner, walks):
@@ -795,7 +793,6 @@ def test_an_action_arriving_as_the_walk_decides_to_stop_is_not_stranded(tmp_path
     Forced deterministically: the attachment is posted from inside the gap, by a walk that blocks
     on its *second* call while another thread attaches.
     """
-    from ai_sdlc_runner import attachments
 
     walks, entered_second = [], threading.Event()
     release_second = threading.Event()
@@ -812,7 +809,7 @@ def test_an_action_arriving_as_the_walk_decides_to_stop_is_not_stranded(tmp_path
     runner = server.Runner(
         walk=walk,
         make_config=lambda i, a, r, art=(), rej=(), hist=(): _make_config(i, a, r, art, rej, hist),
-        store=attachments.Store(tmp_path / "att"))
+        store=attach_mod.Store(tmp_path / "att"))
 
     # First walk runs to completion; during it, one attachment arrives, so the gate loops. The
     # second walk blocks, and a further attachment arrives while it is inside.
@@ -844,7 +841,6 @@ def test_the_gate_never_rests_with_something_still_flagged(tmp_path):
     scheduler happens to produce; it cannot make the interleaving happen. The guard on that window
     is `test_the_release_and_the_decision_are_one_critical_section` (CHG-20260827-15).
     """
-    from ai_sdlc_runner import attachments
 
     walks = []
 
@@ -857,7 +853,7 @@ def test_the_gate_never_rests_with_something_still_flagged(tmp_path):
     runner = server.Runner(
         walk=walk,
         make_config=lambda i, a, r, art=(), rej=(), hist=(): _make_config(i, a, r, art, rej, hist),
-        store=attachments.Store(tmp_path / "att"))
+        store=attach_mod.Store(tmp_path / "att"))
     runner.start("go", 0)
 
     def poke(n):
@@ -2481,3 +2477,29 @@ def test_a_gate_decision_cannot_walk_from_an_incomplete_stop():
                  lambda: runner.reject(runner.state.version, "plan_confirmed", "pm_confirm", "no")):
         with pytest.raises(server.ServerError, match="not complete"):
             call()
+
+
+def test_a_torn_manifest_does_not_leave_the_runner_running_forever(tmp_path):
+    """`start` mutated the state and *then* read the store, so an unreadable manifest raised with
+    the runner already "running": every later POST answered 409 and there was no route back to idle
+    short of restarting the process (CHG-20260905-04).
+
+    The store is read first now, so the raise leaves the state where it was and the operator can fix
+    the manifest and try again.
+    """
+
+    store = attach_mod.Store(tmp_path / "att")
+    store.add("brief.md", b"the brief")
+    runner = server.Runner(
+        walk=lambda cfg: engine.RunReport(),
+        make_config=lambda i, a, r, art=(), rej=(), hist=(): _make_config(i, a, r, art, rej, hist),
+        store=store)
+    before = runner.state.state, runner.state.version
+
+    store.manifest_path.write_text("{tor", encoding="utf-8")
+
+    with pytest.raises(attach_mod.AttachmentError):
+        runner.start("do the thing", version=runner.state.version)
+
+    assert (runner.state.state, runner.state.version) == before, (
+        "the run state moved before the failure, and nothing can move it back")

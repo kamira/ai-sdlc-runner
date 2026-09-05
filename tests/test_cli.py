@@ -1210,3 +1210,53 @@ def test_the_terminal_names_the_frontier_and_what_is_out_of_order(tmp_path, py_s
         "a world out of causal order is reported to nobody who is looking at a terminal")
     assert "push" in said.split("out of causal order")[1], (
         "the line names the state but not which effect is in it")
+
+
+def test_a_store_under_a_red_line_directory_is_refused_at_startup(
+        tmp_path, py_stub, capsys, monkeypatch):
+    """The store directory travels on every work order.
+
+    `order_paths` returns `str(self.dir / <hash>)`: the leaf carries nothing an operator typed and
+    the **directory** carries everything they typed. `--attachments` under a path the permanent-halt
+    scanner reads as a red line therefore halts every node of every run, unrelaxably — verbatim the
+    failure `attachments.py`'s docstring says the hashing makes impossible.
+
+    Refused at launch, naming the directory. Emitting a relative path instead would break the
+    property that the answering model can open the file, which is why the full path is there.
+    """
+    import json as _json
+
+    from ai_sdlc_runner import server as server_mod
+
+    config = tmp_path / "runner.yaml"
+    config.write_text(f"agent_command: {_json.dumps(py_stub(AGENT))}\n", encoding="utf-8")
+    bad = tmp_path / "billing" / "att"
+
+    # If the refusal does not fire, `cmd_serve` binds a socket and serves forever, so this
+    # test would **hang** rather than fail — and a test that hangs under its own mutation
+    # verifies nothing. Found exactly that way: the registered revert of this refusal wedged
+    # the mutation run for an hour with no output at all (CHG-20260905-04).
+    def refuse_to_bind(*a, **kw):
+        raise AssertionError(
+            "cmd_serve reached the socket, which means the store directory was accepted")
+
+    monkeypatch.setattr(server_mod, "serve", refuse_to_bind)
+    capsys.readouterr()
+
+    cli.main(["--config", str(config), "serve", "--attachments", str(bad),
+              "--token-dir", str(tmp_path / "tok"), "--plan", _plan_file(tmp_path)])
+
+    said = capsys.readouterr().out
+    assert said.startswith("error:"), (
+        "a startup refusal reached the operator as something other than a message")
+    assert str(bad) in said, "the refusal does not name the directory the operator must change"
+    assert "money" in said, "the refusal does not say what the scanner read the path as"
+
+
+def test_an_ordinary_store_directory_is_not_refused(tmp_path):
+    """The floor. A refusal that fired on every directory would pass the test above and stop the
+    runner working at all."""
+    from ai_sdlc_runner import attachments as attach_mod, policy
+
+    store = attach_mod.Store(tmp_path / "runner" / "attachments")
+    assert policy.derive([str(store.dir)]) == ()

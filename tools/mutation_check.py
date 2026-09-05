@@ -93,6 +93,90 @@ class Mutation(NamedTuple):
 
 
 MUTATIONS: List[Mutation] = [
+    # ── attachments (CHG-20260905-04) ──────────────────────────────────────────────────────
+    # 225 lines, two importers, named in 26 records, and 0 of 253 mutations. Its own docstring
+    # records two defects found live, and nothing guarded either. Every entry here reverts the
+    # line this change edited.
+    Mutation(
+        "attachments", "the wired door stops checking what the manifest holds",
+        SRC / "attachments.py",
+        '''            if not _STORED_NAME.match(name):''',
+        '''            if False:''',
+        "tests/test_attachments.py"),
+
+    Mutation(
+        "attachments", "the shape check picks up an existence check and drops a lost attachment",
+        SRC / "attachments.py",
+        '''            out.append(str(self.dir / name))''',
+        '''            if not paths.exists(self.dir / name):
+                continue
+            out.append(str(self.dir / name))''',
+        "tests/test_attachments.py"),
+
+    Mutation(
+        "attachments", "the manifest is truncated before its replacement exists",
+        SRC / "attachments.py",
+        '''        staging = self.dir / "manifest.json.writing"
+        paths.write_text(
+            staging,''',
+        '''        staging = self.manifest_path
+        paths.write_text(
+            staging,''',
+        "tests/test_attachments.py"),
+
+    Mutation(
+        "attachments", "a manifest that parses into the wrong shape crashes instead of refusing",
+        SRC / "attachments.py",
+        '''        if not isinstance(raw, dict):''',
+        '''        if False:''',
+        "tests/test_attachments.py"),
+
+    Mutation(
+        "attachments", "an instruction that is not a number is read as one",
+        SRC / "attachments.py",
+        '''            if not isinstance(attachment.instruction, int) or isinstance(''',
+        '''            if False and isinstance(''',
+        "tests/test_attachments.py"),
+
+    Mutation(
+        "attachments", "two documents sharing a stored name silently become one again",
+        SRC / "attachments.py",
+        '''        if clash:''',
+        '''        if False:''',
+        "tests/test_attachments.py"),
+
+    Mutation(
+        "attachments", "the declared media type stops having to match the bytes",
+        SRC / "attachments.py",
+        '''        if expected and not any(data.startswith(sig) for sig in expected):''',
+        '''        if False:''',
+        "tests/test_attachments.py"),
+
+    Mutation(
+        "attachments", "the signature check refuses a type it has no signature for",
+        SRC / "attachments.py",
+        '''        if expected and not any(data.startswith(sig) for sig in expected):''',
+        '''        if not any(data.startswith(sig) for sig in (expected or ())):''',
+        "tests/test_attachments.py"),
+
+    Mutation(
+        "attachments", "the run state moves before the store is known to be readable",
+        SRC / "server.py",
+        '''            held, lost = self._read_attachments()
+            self.state = RunState(state="running", version=self.state.version + 1,
+                                  instructions=[instruction] if instruction else [])
+            self.state.attachments, self.state.missing = held, lost''',
+        '''            self.state = RunState(state="running", version=self.state.version + 1,
+                                  instructions=[instruction] if instruction else [])
+            self._refresh_attachments()''',
+        "tests/test_server.py"),
+
+    Mutation(
+        "attachments", "a store directory the scanner reads as a red line is accepted at startup",
+        SRC / "cli.py",
+        '''    crosses = policy.derive([str(store.dir)])''',
+        '''    crosses = ()''',
+        "tests/test_cli.py"),
     # ── separators (CHG-20260905-03) ───────────────────────────────────────────────────────
     # `derive`'s boundaries are POSIX (`(^|/)`, `([\s/.:]|$)`), and this runner is Windows-first.
     # 8 of 9 path shapes answered differently in the two spellings, and `classify` returned None
