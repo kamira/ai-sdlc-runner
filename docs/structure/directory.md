@@ -25,9 +25,23 @@ ai-sdlc-runner/
 │   ├── effects.py             # ordered effects, each admitted only if probeable
 │   ├── probes.py              # postconditions read from the world: git, the forge, the ledger
 │   ├── ship.py                # the ordered ship sequence, each effect paired with its probe
+│   ├── intake.py              # what each seat was asked and what it called unsafe
+│   ├── attachments.py         # what the operator hands the runner; the stored leaf is a hash
+│   ├── server.py              # the console's HTTP surface: loopback only, one operator token
+│   ├── conversations.py       # the durable record of a run, and its exports
+│   ├── store.py               # where conversations live; sqlite only
+│   ├── models.py              # which model answers which seat
+│   ├── plan.py                # the plan file, refused rather than defaulted
+│   ├── paths.py               # every filesystem call, because Windows lies about long ones
+│   ├── worktree.py            # per-module isolation, and what a halted run keeps
+│   ├── sandbox.py             # what a run is permitted to reach, and what it records when it cannot
 │   ├── cli.py                 # flow / policy / run
 │   ├── settings.py            # what the user sets on a screen: seats, high-risk mode
 │   └── tui.py                 # the interactive selector, and the high-risk-mode toggle
+│                              #   All twenty are listed. This tree held ten, and the README's
+│                              #   own list held twelve — two documents disagreeing about what
+│                              #   the package is, with nothing comparing either to `src/`
+│                              #   (CHG-20260905-05). `test_documented_numbers` now does.
 ├── docs/ARCHITECTURE.md       # the overview; the structure docs below carry the detail
 ├── config/
 │   ├── runner.yaml            # dispatch settings only — no skill path, because there is no skill

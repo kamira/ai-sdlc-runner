@@ -15,18 +15,31 @@ The tempting fix — exempt `input_artifacts` from the scan — is worse than th
 brief that genuinely names a production target stops halting. One direction of a safety check traded
 for the other, which is this repository's oldest mistake wearing new clothes.
 
-So instead: **attachments are stored under names that cannot collide.** The stored path is
-`<store>/<sha256>` — no extension, no operator-chosen segment, nothing a scanner can mistake for a
-deployment target. The original filename travels in the *manifest*, where it is data about the
-attachment rather than a path the runner might act on. Both directions of the check survive, because
-neither was weakened.
+So instead: **the stored leaf is a hash.** `<store>/<sha256 prefix>` — no extension, nothing an
+operator typed. The original filename travels in the *manifest*, where it is data about the
+attachment rather than a path the runner might act on. Both directions of the check survive,
+because neither was weakened.
+
+The **leaf** is what carries nothing the operator typed. The **store directory** carries
+everything they typed, and `order_paths` returns the whole path, so `--attachments` under a
+directory named for a red line halts every node of every run — measured: `spec prod files` reads
+as a deploy target, `billing/att` as money. This docstring used to claim the path had "no
+operator-chosen segment", which was true of half of it. `cli.py`'s `serve` refuses such a store
+at startup, naming the directory (CHG-20260905-04); the sentence is corrected here rather than
+left standing on the refusal (CHG-20260905-05).
 
 ## Content-addressed, so "the same spec" means the same bytes
 
 The id is the hash. Two uploads of one file are one attachment, a changed file is a different one,
 and a work order that cites an attachment cites bytes rather than a name somebody can swap
-underneath it. That is also what makes "an attachment changed mid-run" answerable: it cannot. A new
-version is a new id, and the orders already sent still refer to what they were sent with.
+underneath it. A new version is a new id, and the orders already sent still refer to what they
+were sent with.
+
+Stated exactly, because the short form — *"an attachment cannot change mid-run"* — is more than
+is true: an attachment's **identity** cannot change, for anything that goes through `add`.
+Overwriting a stored blob on disk is not prevented and is not detected. Measured: the manifest
+still reports the old size, the sha of what is on disk no longer equals the id, and `missing()`
+returns `[]`, because nothing re-hashes (CHG-20260905-05).
 """
 from __future__ import annotations
 
@@ -256,10 +269,15 @@ class Store:
         return out
 
     def path_for(self, attachment_id: str) -> Path:
-        """The stored path — a hash under the store, and never anything else.
+        """The stored path — a hash under the store, and never anything else, and it must exist.
 
-        Checked rather than assumed, because this is the one function whose output becomes a string
-        in a work order that a safety scanner then reads.
+        The **checked accessor**, for a caller that wants one attachment and wants to know it is
+        there. It has no production caller today; `server.py` and `cli.py` go through `all` and
+        `order_paths`.
+
+        It used to say it was *"the one function whose output becomes a string in a work order
+        that a safety scanner then reads"*, which described `order_paths` — the function that
+        had no check. That sentence now lives there, with the check (CHG-20260905-04/-05).
         """
         if not _STORED_NAME.match(stored_name(attachment_id)):
             raise AttachmentError(

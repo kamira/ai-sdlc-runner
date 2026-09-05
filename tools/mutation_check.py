@@ -93,6 +93,47 @@ class Mutation(NamedTuple):
 
 
 MUTATIONS: List[Mutation] = [
+    # ── doc-truth (CHG-20260905-05) ────────────────────────────────────────────────────────
+    # A test three records call proof of a property it never touched, and two documents that
+    # disagreed about what the package is. Both now have something that fails when they stop
+    # being true.
+    Mutation(
+        "doc-truth", "the scan test stops driving the halt and asserts on a helper again",
+        REPO / "tests" / "test_attachments.py",
+        '''    halt = _halts_on_artifacts(["production/manifest.yaml"])
+    assert halt is not None, "a brief naming a production target stopped halting"''',
+        '''    halt = "deploy" in policy.derive(["kubectl apply -f prod/"]) or None
+    assert halt is not None, "a brief naming a production target stopped halting"''',
+        "tests/test_attachments.py"),
+
+    Mutation(
+        "doc-truth", "a module list stops being compared with the package",
+        REPO / "tests" / "test_documented_numbers.py",
+        '''    return [m for m in modules if m not in text]''',
+        '''    return []''',
+        "tests/test_documented_numbers.py"),
+
+    # One `doc-truth` mutation was retired rather than faked (CHG-20260905-05): narrowing
+    # `INVENTORIES` back to one document. Both documents are complete now, so dropping one changes
+    # nothing any test can observe — the same shape CHG-20260904-19 retired for `CITED_ROOTS`, and
+    # for the same reason. What is pinned instead is the **rule**, pointed at planted text:
+    # `modules_missing_from` above, and `test_the_inventory_guard_can_see_a_module_that_is_missing_
+    # from_a_list`. Re-anchoring it onto a live gap would mean leaving a document wrong on purpose.
+
+    Mutation(
+        "doc-truth", "an id with neither a record nor a link is called resolvable",
+        REPO / "tests" / "test_documented_numbers.py",
+        '''    return {what: where for what, where in cited.items()
+            if what not in records and what not in followable}''',
+        '''    return {}''',
+        "tests/test_documented_numbers.py"),
+
+    Mutation(
+        "doc-truth", "a link nobody can open counts as a way to follow a citation",
+        REPO / "tests" / "test_documented_numbers.py",
+        '''        if (source.parent / href).resolve().exists():''',
+        '''        if True:''',
+        "tests/test_documented_numbers.py"),
     # ── attachments (CHG-20260905-04) ──────────────────────────────────────────────────────
     # 225 lines, two importers, named in 26 records, and 0 of 253 mutations. Its own docstring
     # records two defects found live, and nothing guarded either. Every entry here reverts the

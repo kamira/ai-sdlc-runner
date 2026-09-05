@@ -61,7 +61,12 @@ def test_a_stored_path_is_a_hash_and_carries_nothing_the_operator_typed(tmp_path
 
 
 @pytest.mark.parametrize("filename", [
-    "production.md", "prod.md", "deploy-to-prod.md", "prod spec.pdf", "PRODUCTION.PDF",
+    # `deploy-to-prod.md` was here and was removed in CHG-20260905-05: measured `derive -> ()`
+    # on both platforms, before and after the separator fix, because the rule needs a boundary
+    # character around `prod` and a hyphen is not one. A parameter that names nothing the
+    # scanner reads is a case that cannot fail, sitting in a list of cases that can.
+    # `secrets/aws.json` replaces it so the list is not one rule five times.
+    "production.md", "prod.md", "secrets_aws.json", "prod spec.pdf", "PRODUCTION.PDF",
 ])
 def test_a_filename_that_would_have_tripped_the_scanner_does_not(tmp_path, filename):
     """The exact defect: an ordinary spec whose *name* looked like a deployment target."""
@@ -71,20 +76,49 @@ def test_a_filename_that_would_have_tripped_the_scanner_does_not(tmp_path, filen
         assert not policy.derive([path]), f"{filename} still trips the scanner via {path}"
 
 
+def _halts_on_artifacts(artifacts):
+    """The permanent halt `input_artifacts` produces on a real node, or `None`.
+
+    Through `engine._spoken_halt` with a real `RunConfig`, because that is the thing the claim is
+    about. A helper that stopped at `policy.derive` would be a second copy of the rule rather than
+    a reading of it — which is exactly what this test used to do.
+    """
+    from test_false_stops import SPEC      # the same work order the scan tests already use
+
+    spec = dict(SPEC)
+    spec["input_artifacts"] = list(artifacts)
+    cfg = engine.RunConfig(node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+                           decisions={}, undeclared="allow")
+    cfg.node_specs["engineer_build"] = spec
+    return engine._spoken_halt(graph.BY_ID["engineer_build"], cfg)
+
+
 def test_both_directions_of_the_scan_survive(tmp_path):
     """The one test that fails for *either* wrong answer, which is why it is the important one.
 
     Exempting `input_artifacts` would fix the false positive and create a false negative. Leaving it
     scanned would keep the false positive. Only hashing the stored name does both jobs.
+
+    **Half 2 drives `engine._spoken_halt`, and did not until CHG-20260905-05.** It asserted
+    `policy.derive(["kubectl apply -f prod/"])` — a hard-coded string that never reached the scan at
+    all. Measured with the exemption this docstring calls the wrong answer, `_TARGET_FIELDS` cut
+    down to `("expected_outputs", "workdir")`: this file reported **31 passed**. The property was
+    real and was guarded by `test_false_stops.py`, not by the test that three records
+    (`CHG-20260823-11` task 17, `ACC-20260823-11` row 17, and this docstring) name as its proof.
     """
     store = _store(tmp_path)
     store.add("production-plan.md", b"just a plan")
 
-    # 1. the attachment must not halt anything
+    # 1. the attachment must not halt anything — through the scan, over a real work order
     assert not policy.derive(store.order_paths())
+    assert _halts_on_artifacts(store.order_paths()) is None, (
+        "the stored path halted a node, which is the false positive the hashing exists to prevent")
 
-    # 2. and a brief that genuinely names a production target must still halt
-    assert "deploy" in policy.derive(["kubectl apply -f prod/"])
+    # 2. and a brief that genuinely names a production target must still halt — same scan,
+    #    same field, so a change that exempts the field fails here rather than somewhere else
+    halt = _halts_on_artifacts(["production/manifest.yaml"])
+    assert halt is not None, "a brief naming a production target stopped halting"
+    assert "the paths it names are" in halt
 
 
 def test_the_filename_is_kept_where_a_person_can_read_it(tmp_path):
