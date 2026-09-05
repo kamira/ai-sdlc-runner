@@ -93,6 +93,33 @@ class Mutation(NamedTuple):
 
 
 MUTATIONS: List[Mutation] = [
+    # ── separators (CHG-20260905-03) ───────────────────────────────────────────────────────
+    # `derive`'s boundaries are POSIX (`(^|/)`, `([\s/.:]|$)`), and this runner is Windows-first.
+    # 8 of 9 path shapes answered differently in the two spellings, and `classify` returned None
+    # for the native spelling of a production path. The union is what makes the fix unable to
+    # subtract a detection; both halves are pinned here.
+    Mutation(
+        "separators", "the scanner goes back to reading one separator",
+        SRC / "policy.py",
+        '''    spellings = {haystack, haystack.replace(chr(92), "/")}''',
+        '''    spellings = {haystack}''',
+        "tests/test_policy.py"),
+
+    Mutation(
+        "separators", "normalisation replaces the raw haystack instead of joining it",
+        SRC / "policy.py",
+        '''    spellings = {haystack, haystack.replace(chr(92), "/")}''',
+        '''    spellings = {haystack.replace("/", chr(92))}''',
+        "tests/test_policy.py"),
+
+    Mutation(
+        "separators", "only the first spelling that matches is consulted",
+        SRC / "policy.py",
+        '''                 if any(re.search(pattern, one)
+                        for one in spellings for pattern in _TARGET_RULES[kind]))''',
+        '''                 if all(re.search(pattern, one)
+                        for one in spellings for pattern in _TARGET_RULES[kind]))''',
+        "tests/test_policy.py"),
     # ── doc-anchors (CHG-20260905-02) ──────────────────────────────────────────────────────
     # A document repair with nothing watching it is the defect this round was about, one file over.
     # Each entry reverts the sentence the change edited, in the document itself.

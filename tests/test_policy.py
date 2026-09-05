@@ -259,3 +259,88 @@ def test_resolve_seats_says_what_one_seat_costs():
 
     said = policy.resolve_seats.__doc__ or ""
     assert "undecided" in said, "the exemption must carry its own consequence"
+
+
+# --------------------------------------------------------------------------------------
+# CHG-20260905-03 — the scanner reads one separator, on a runner that runs on the other
+# --------------------------------------------------------------------------------------
+
+#: Assembled with `chr(92)` rather than written as an escape. A backslash in a test that travels
+#: through a shell, a heredoc or a copy-paste is the one character that silently becomes something
+#: else — `secrets\token` reads as a tab — and this file is about backslashes.
+BACKSLASH = chr(92)
+
+#: Path shapes that name a permanent-halt target, in the spelling a document writes them in.
+#: `var/secrets/api.key` is here deliberately: it was the one shape that answered the same in both
+#: spellings before the fix, because a second rule catches it without using a `/` boundary. A rule
+#: measured only on shapes that were broken cannot show it did not break a shape that worked.
+TARGET_SHAPES = (
+    "prod/manifest.yaml", "deploy/production/app.exe", "db/migrations/007.sql",
+    "secrets/token.txt", "creds/aws.json", ".ssh/id_rsa", "config/.env.production",
+    "var/secrets/api.key", "app/db/migrations/init.sql",
+)
+
+
+def _windows(posix):
+    """The same target as the host actually spells it."""
+    out = posix.replace("/", BACKSLASH)
+    assert BACKSLASH in out and "\t" not in out and "\a" not in out, repr(out)
+    return out
+
+
+def test_a_target_is_read_the_same_way_in_both_spellings():
+    """8 of these 9 answered differently before the fix, and `classify` returned `None` for the
+    Windows spelling of a production path — on the platform this runner's own `MAX_PATH` module
+    exists for. The prose backstop does not catch it: its lists are multi-word English phrases and
+    a path has no spaces, so there was no second line.
+    """
+    for posix in TARGET_SHAPES:
+        assert policy.derive([posix]) == policy.derive([_windows(posix)]), (
+            "%r is read as a red line and %r is not" % (posix, _windows(posix)))
+
+
+def test_every_shape_here_is_a_red_line_in_at_least_one_spelling():
+    """The floor. Without it the test above passes when `derive` stops recognising anything —
+    `() == ()` for nine shapes reads exactly like agreement.
+    """
+    for posix in TARGET_SHAPES:
+        assert policy.derive([posix]), "%r stopped being read as a target at all" % posix
+
+
+def test_the_windows_spelling_of_a_production_path_is_classified():
+    """Through `classify`, which is what an operation actually goes through — `derive` alone is a
+    helper, and a test that stops at the helper says nothing about the decision."""
+    for posix, expected in (("prod/manifest.yaml", "production deploy or release"),
+                            ("secrets/token.txt", "changing secrets"),
+                            ("db/migrations/007.sql", "data migration")):
+        for target in (posix, _windows(posix)):
+            said = policy.classify(
+                {"description": "copy the file", "kind": "ordinary", "targets": [target]})
+            assert said and expected in said, (
+                "%r classified as %r" % (target, said))
+
+
+def test_reading_both_spellings_can_only_add_kinds():
+    """The union's own guarantee, and the reason it is a union rather than a normalisation.
+
+    This module's rule is that each layer may only ever *add* a stop. Normalising the haystack in
+    place would put every existing detection at the mercy of the normalisation: a rule that depends
+    on a literal backslash would quietly stop matching, and a recogniser that can lose a detection
+    through a refactor is worse than one that reads a single separator.
+    """
+    for raw in ("kubectl apply -f prod/", "rm -rf /tmp/x", "drop table users",
+                "git push --force", "secrets/token.txt", "C:" + BACKSLASH + "prod" + BACKSLASH + "a"):
+        both = set(policy.derive([raw]))
+        posix_only = set(policy.derive([raw.replace(BACKSLASH, "/")]))
+        assert both >= posix_only, (
+            "reading both spellings lost a kind for %r: %s vs %s" % (raw, both, posix_only))
+
+
+def test_the_prose_check_is_not_a_path_reader():
+    """Scope, asserted rather than assumed. `permanent_halt` reads prose and was measured returning
+    `None` for these targets in *both* spellings before the fix and after it. Making it a path
+    reader is a different change with a different argument, and this pins that it was not made here.
+    """
+    for posix in ("prod/manifest.yaml", "secrets/token.txt"):
+        assert policy.permanent_halt(posix) is None
+        assert policy.permanent_halt(_windows(posix)) is None

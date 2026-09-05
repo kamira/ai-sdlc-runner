@@ -785,7 +785,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 2180 tests
+pytest -q          # 2185 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is
