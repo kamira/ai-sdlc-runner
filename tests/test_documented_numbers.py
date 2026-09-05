@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ast
 import io
+import pathlib
 import re
 import sys
 import tokenize
@@ -1389,3 +1390,135 @@ def test_the_effects_report_row_names_every_field_the_outcome_carries():
     missing = [k for k in carried if "`%s`" % k not in row]
     assert not missing, (
         "the `effects` row does not name %s, which `EffectOutcome.as_dict()` writes" % missing)
+
+
+# --------------------------------------------------------------------------------------
+# CHG-20260905-05 — two documents disagreeing about what the package is
+# --------------------------------------------------------------------------------------
+
+#: Documents that present themselves as listing the package's modules. Both were incomplete and
+#: incomplete *differently* — `directory.md` named 10 of 20 and the README's own block named 12 —
+#: so a reader comparing them would have found two answers and no way to tell which was the
+#: package (CHG-20260905-05). The conformance seat reported the README as already correct; it was
+#: not, which is why this compares both against `src/` rather than one against the other.
+INVENTORIES = ("docs/structure/directory.md", "README.md")
+
+
+def modules_in_the_package(root):
+    """Every module `src/ai_sdlc_runner/` actually holds."""
+    return sorted(p.name for p in (root / "src" / "ai_sdlc_runner").glob("*.py")
+                  if p.name != "__init__.py")
+
+
+def modules_missing_from(text, modules):
+    """Which of `modules` this document never names."""
+    return [m for m in modules if m not in text]
+
+
+def test_every_module_in_the_package_is_in_the_documents_that_list_them():
+    modules = modules_in_the_package(ROOT)
+    assert len(modules) > 10, "the package shrank; this guard was written against twenty modules"
+
+    for where in INVENTORIES:
+        text = (ROOT / where).read_text(encoding="utf-8", errors="replace")
+        missing = modules_missing_from(text, modules)
+        assert not missing, (
+            "%s presents a list of the package's modules and does not name %s" % (where, missing))
+
+
+def test_the_inventory_guard_can_see_a_module_that_is_missing_from_a_list():
+    """The floor. Both searches are substring searches over a document, and a rule whose two halves
+    can each come back empty passes hardest when it is measuring nothing."""
+    assert modules_missing_from("this lists policy.py and graph.py",
+                                ["policy.py", "graph.py"]) == []
+    assert modules_missing_from("this lists policy.py only",
+                                ["policy.py", "graph.py"]) == ["graph.py"]
+    assert modules_in_the_package(ROOT), "no modules found in src/ — the guard measures nothing"
+
+
+#: A change id as `src/` writes it. 104 distinct ones are cited across the package, and until now
+#: nothing checked that any of them resolved: `test_every_requirement_id_the_source_cites_can_be_
+#: looked_up` matches the `D<n>.<n>` form only, and `attachments.py` — the module whose review
+#: found this — cites no `D`-form id at all (CHG-20260905-05).
+CHANGE_ID = re.compile(r"\b((?:CHG|ACC)-\d{8}-\d{2})\b")
+
+
+#: A citation that carries its own destination: `[CHG-…](some/path.md)`.
+LINKED_ID = re.compile(r"\[((?:CHG|ACC)-\d{8}-\d{2})\]\(([^)]+)\)")
+
+
+def change_ids_in(text):
+    """Every change id cited in `text`, without duplicates, in order."""
+    seen = []
+    for match in CHANGE_ID.findall(text):
+        if match not in seen:
+            seen.append(match)
+    return seen
+
+
+def followable_links_in(text, source):
+    """Ids whose citation carries a link a reader can actually open, relative to `source`.
+
+    The first version of the rule below asked whether `docs/changes/<id>.md` exists, and called
+    `store.py`'s `[CHG-20260823-19](../../docs/design/sqlite-only.md)` unresolvable — while a reader
+    clicking it lands on the ruling, in a document that carries the id itself. The rule's subject
+    was the **record file**; the property is whether the reader can follow it (CHG-20260905-05).
+    """
+    found = set()
+    for what, href in LINKED_ID.findall(text):
+        if (source.parent / href).resolve().exists():
+            found.add(what)
+    return found
+
+
+def unresolvable_among(cited, records, followable):
+    """The ids a reader can do nothing with: no record, and no link they can open.
+
+    Extracted so a planted id can be pointed at it. Left inline, the rule was unfalsifiable — every
+    id in the live tree resolves, so a mutation that made *everything* resolve changed nothing any
+    test could see, and reported NOT CAUGHT against a rule that was working (CHG-20260905-05).
+    """
+    return {what: where for what, where in cited.items()
+            if what not in records and what not in followable}
+
+
+def test_every_change_id_the_source_cites_has_a_record():
+    """A citation a reader cannot follow is not evidence — the same rule `D6.2` got, for the id form
+    this repository overwhelmingly uses."""
+    cited = {}
+    followable = set()
+    for path in sorted((ROOT / "src").rglob("*.py")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        followable |= followable_links_in(text, path)
+        for what in change_ids_in(text):
+            cited.setdefault(what, []).append(path.name)
+
+    assert len(cited) > 50, "no change ids found in src/ — the rule guards nothing"
+
+    have = {p.stem for p in (ROOT / "docs" / "changes").glob("CHG-*.md")}
+    have |= {p.stem for p in (ROOT / "docs" / "acceptance").glob("ACC-*.md")}
+    have |= followable
+    unresolvable = unresolvable_among(cited, have, followable)
+    assert not unresolvable, (
+        "these change ids are cited in src/ and have no record and no link a reader can open: "
+        "%s" % unresolvable)
+
+
+def test_the_record_rule_can_see_a_citation_with_no_record():
+    """The floor under it, planted rather than found."""
+    assert change_ids_in("as CHG-20260823-11 says, and ACC-20260823-11 agreed") == [
+        "CHG-20260823-11", "ACC-20260823-11"]
+    assert change_ids_in("no ids here") == []
+    assert change_ids_in("CHG-2026 is not one, nor is CHG-20260823-1") == []
+
+    here = pathlib.Path(__file__)
+    assert followable_links_in("see [CHG-20260823-11](nowhere/at/all.md)", here) == set(), (
+        "a link nobody can open counted as a way to follow the citation")
+    assert followable_links_in(
+        "see [CHG-20260823-11](%s)" % here.name, here) == {"CHG-20260823-11"}
+
+    # The resolution itself, planted: one id with a record, one with only a link, one with neither.
+    cited = {"CHG-1": ["a.py"], "CHG-2": ["b.py"], "CHG-3": ["c.py"]}
+    assert unresolvable_among(cited, {"CHG-1"}, {"CHG-2"}) == {"CHG-3": ["c.py"]}
+    assert unresolvable_among(cited, set(), set()) == cited, (
+        "an id with neither a record nor a link was treated as resolvable")

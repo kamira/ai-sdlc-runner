@@ -613,6 +613,14 @@ src/ai_sdlc_runner/
   conversations.py  every turn of every conversation, append-only, categorised by project
   attachments.py  content-addressed storage; the filename never becomes a path
   server.py       the local-only back end
+  effects.py      ordered effects, each admitted only if probeable
+  probes.py       postconditions read from the world: git, the forge, the ledger
+  ship.py         the ordered ship sequence, each effect paired with its probe
+  paths.py        every filesystem call, because Windows lies about long paths
+  worktree.py     per-module isolation, and what a halted run keeps
+  sandbox.py      what a run may reach, and what it records when it cannot be bounded
+  settings.py     what an operator sets on a screen: seats, high-risk mode, the vouch
+  tui.py          the interactive selector
   console/        the operator console — one page, no build step
   cli.py          flow · policy · settings · run · serve · conversations · export
 docs/
@@ -785,7 +793,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 2204 tests
+pytest -q          # 2208 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is
