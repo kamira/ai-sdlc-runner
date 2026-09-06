@@ -330,11 +330,20 @@ Three questions, told apart by two booleans:
 | `401` | no operator token, or the wrong one |
 | `403` | non-loopback `Host`, or cross-origin `Origin` |
 | `404` | no such route |
+| `413` | the request body is larger than this server will read — the number and the limit are both in the message. The limit is derived from `attachments.MAX_BYTES` (base64 is 4 bytes out for every 3 in, so a legal at-limit attachment is 33.3 MB on the wire) and is not configurable, for the reason the bind address is not |
 | `409` | **the request was understood and refused** — wrong version, wrong kind of answer, nothing waiting, a model the registry will not accept |
 | `500` | `{"error": "<ExceptionType>: <message>"}` |
 
 **`409` is the interesting one.** It is not a conflict in the REST sense — it is this server saying
 *"I understood you and I am not doing that"*, and the message says why in a sentence.
+
+**The body is bounded before it is read.** A `Content-Length` over the limit is refused with
+`413` and the connection closed, without reading or draining what was announced — reading a
+thing in order to reject it is what this replaced. A length that is not a number, is negative,
+or promises bytes that never arrive is a `409` with a sentence, because the server understood
+the header and is refusing it. A connection may hold a thread for **30 seconds** without
+saying anything; the event stream is unaffected, because it waits on its queue rather than on
+the socket.
 
 **`500` always answers.** Without it the handler thread dies, the socket closes, and the client sees
 `RemoteDisconnected` — a failure with no message, which sends whoever is debugging it to the network

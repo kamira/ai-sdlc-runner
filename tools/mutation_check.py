@@ -93,6 +93,63 @@ class Mutation(NamedTuple):
 
 
 MUTATIONS: List[Mutation] = [
+    # ── request-layer (CHG-20260906-02) ────────────────────────────────────────────────────
+    # `_body` read whatever Content-Length announced, before any limit applied and before route
+    # dispatch, so the bound was missing for every POST and not only the one route that had a
+    # limit underneath it. The deadline is a separate property: a connection that says nothing at
+    # all never reaches `_body`, and 20 of them held 20 threads.
+    Mutation(
+        "request-layer", "the body is read before it is bounded again",
+        SRC / "server.py",
+        '''            if length > MAX_BODY_BYTES:''',
+        '''            if False:''',
+        "tests/test_server.py"),
+
+    Mutation(
+        "request-layer", "the wire limit is set to the attachment limit, refusing legal uploads",
+        SRC / "server.py",
+        '''MAX_BODY_BYTES = attach_mod.MAX_BYTES * 4 // 3 + 1024 * 1024''',
+        '''MAX_BODY_BYTES = attach_mod.MAX_BYTES''',
+        "tests/test_server.py"),
+
+    Mutation(
+        "request-layer", "a connection may hold a thread for as long as it likes again",
+        SRC / "server.py",
+        '''        timeout = 30''',
+        '''        timeout = None''',
+        "tests/test_server.py"),
+
+    Mutation(
+        "request-layer", "a Content-Length that is not a number goes back to being a 500",
+        SRC / "server.py",
+        '''            try:
+                length = int(raw_length)
+            except ValueError:''',
+        '''            if True:
+                length = int(raw_length)
+            elif False:''',
+        "tests/test_server.py"),
+
+    Mutation(
+        "request-layer", "a negative Content-Length is read to EOF again",
+        SRC / "server.py",
+        '''            if length < 0:''',
+        '''            if False:''',
+        "tests/test_server.py"),
+
+    Mutation(
+        "request-layer", "a body that arrives short is parsed as if it were whole",
+        SRC / "server.py",
+        '''            if len(data) < length:''',
+        '''            if False:''',
+        "tests/test_server.py"),
+
+    Mutation(
+        "request-layer", "a JSON array reaches body.get() and becomes a 500",
+        SRC / "server.py",
+        '''            if not isinstance(body, dict):''',
+        '''            if False:''',
+        "tests/test_server.py"),
     # ── doc-truth (CHG-20260905-05) ────────────────────────────────────────────────────────
     # A test three records call proof of a property it never touched, and two documents that
     # disagreed about what the package is. Both now have something that fails when they stop

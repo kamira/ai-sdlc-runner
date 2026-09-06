@@ -63,8 +63,32 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})
 IDLE = "idle"
 
 
+#: The largest request body this server will read, derived from the attachment limit rather
+#: than chosen beside it.
+#:
+#: base64 is 4 bytes out for every 3 in, so a **legal** attachment of `attachments.MAX_BYTES`
+#: arrives as 33.33 MB on the wire — measured, 34,952,586 bytes for the envelope. A wire limit
+#: set to `MAX_BYTES` would therefore refuse every attachment that uses the limit it was given,
+#: which is the trap in bounding this at all. The megabyte on top is the JSON envelope and the
+#: room to say so.
+#:
+#: Derived, not written down twice: raising `MAX_BYTES` without this would reintroduce the
+#: refusal it exists to prevent (CHG-20260906-02).
+MAX_BODY_BYTES = attach_mod.MAX_BYTES * 4 // 3 + 1024 * 1024
+
+
 class ServerError(Exception):
     """Refused. Never softened into a partial success."""
+
+
+class BodyTooLarge(ServerError):
+    """A request body larger than this server will read.
+
+    Its own class because it is the one refusal here that is **not** a 409: `docs/API.md` says
+    409 is this server saying *"I understood you and I am not doing that"*, and a body it
+    refused to read is one it did not understand. 413 says which, and the message says both
+    numbers.
+    """
 
 
 def _loopback_host(header: Optional[str]) -> bool:
@@ -837,6 +861,22 @@ def make_handler(runner: Runner, operator: Operator,
         _reassign()
 
     class Handler(BaseHTTPRequestHandler):
+        #: How long a connection may hold a thread without saying anything.
+        #:
+        #: `ThreadingHTTPServer` gives every connection its own thread and, without this, that
+        #: thread waits forever. Measured: 20 bare connections that sent **nothing at all** held
+        #: 20 threads, and a request already refused with 401 kept its thread for as long as the
+        #: socket stayed open. So this is not a property of `_body` — bounding the body alone
+        #: would have left both of those exactly as they were.
+        #:
+        #: Closing the client socket released every one, and `shutdown()` took 0.00s, so what
+        #: this bounds is "one thread per open connection" rather than a leak.
+        #:
+        #: 30 seconds, because a legal at-limit upload — 33.3 MB on the wire — was measured at
+        #: 0.37s. Not a flag: the sentence that keeps the bind address off the command line
+        #: applies here too, and a timeout somebody can lower is one that gets lowered until a
+        #: slow disk fails a legal upload (CHG-20260906-02).
+        timeout = 30
         server_version = "ai-sdlc-runner"
         protocol_version = "HTTP/1.1"
 
@@ -884,13 +924,59 @@ def make_handler(runner: Runner, operator: Operator,
             self.wfile.write(body)
 
         def _body(self) -> Dict[str, object]:
-            length = int(self.headers.get("Content-Length") or 0)
+            """The request body, bounded **before** it is read.
+
+            Every POST comes through here ahead of route dispatch, so none of this is about
+            attachments: a 500 MB body aimed at `/run/instruct` was read in full just as
+            happily, and `/attachments` was the only route with any limit underneath it.
+            """
+            raw_length = self.headers.get("Content-Length") or "0"
+            try:
+                length = int(raw_length)
+            except ValueError:
+                # `int(...)` sat outside the try, so a header a client typed wrong left as a
+                # 500 — the code `docs/API.md` reserves for *unforeseen* failures. A header this
+                # server can read and reject is a 409, which is already the answer a body that
+                # is not JSON gets.
+                raise ServerError(
+                    f"Content-Length is {raw_length!r}, which is not a number of bytes")
+            if length < 0:
+                # `int("-1")` parses, `not -1` is False, and `rfile.read(-1)` reads to EOF, so
+                # a negative length was the stalled-body case wearing a different hat.
+                raise ServerError(
+                    f"Content-Length is {length}, and a request body cannot be shorter than "
+                    f"nothing")
+            if length > MAX_BODY_BYTES:
+                # Refused **before** the read, and the connection closed rather than drained:
+                # reading the thing in order to reject it is the defect itself, and whatever is
+                # left on the wire would otherwise be parsed as the next request.
+                self.close_connection = True
+                raise BodyTooLarge(
+                    f"the request body is {length} bytes; the limit is {MAX_BODY_BYTES}")
             if not length:
                 return {}
             try:
-                return json.loads(self.rfile.read(length).decode("utf-8"))
+                data = self.rfile.read(length)
+            except TimeoutError:
+                self.close_connection = True
+                raise ServerError(
+                    f"Content-Length promised {length} bytes and they did not arrive")
+            if len(data) < length:
+                self.close_connection = True
+                raise ServerError(
+                    f"Content-Length promised {length} bytes and {len(data)} arrived")
+            try:
+                body = json.loads(data.decode("utf-8"))
             except ValueError as exc:
                 raise ServerError(f"the request body is not JSON: {exc}")
+            if not isinstance(body, dict):
+                # Every caller reaches for `body.get(...)` on the next line, so a JSON array
+                # parses here and fails there as an AttributeError — a 500 for something this
+                # server understood perfectly well.
+                raise ServerError(
+                    f"the request body is a JSON {type(body).__name__}, and every route here "
+                    f"reads named fields from an object")
+            return body
 
         def log_message(self, fmt, *args):          # pragma: no cover - quiet by default
             pass
@@ -1038,6 +1124,9 @@ def make_handler(runner: Runner, operator: Operator,
                 else:
                     self._json(404, {"error": f"no route {self.path}"})
                     return
+            except BodyTooLarge as exc:
+                self._json(413, {"error": str(exc)})
+                return
             except ServerError as exc:
                 self._json(409, {"error": str(exc)})
                 return
