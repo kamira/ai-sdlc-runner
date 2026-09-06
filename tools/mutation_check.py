@@ -118,6 +118,18 @@ MUTATIONS: List[Mutation] = [
         '''                    out = runner.attach(version, str(body.get("filename") or ""), raw)''',
         '''                    out = runner.attach(version, "attachment", raw)''',
         "tests/test_server.py"),
+    # ── silent-seat (CHG-20260907-01) ─────────────────────────────────────────────
+    # `engine.walk` refuses a model panel voice that names no answer — *a voice that said
+    # nothing is not a voice that voted no*. The survey had no equivalent, so a seat
+    # answering `{"verdict": "pass"}` — the shape every other seat node expects — was
+    # counted as having found nothing. Measured with `cli._Stub`, the shipped default.
+    Mutation(
+        "silent-seat", "a seat that says nothing about the requirement is counted as a pass",
+        SRC / "intake.py",
+        '''        if not ANSWER_KEYS & set(answer):''',
+        '''        if False:''',
+        "tests/test_intake.py"),
+
     # ── unsafe-stop (CHG-20260906-07) ─────────────────────────────────────────────
     # A seat answering {"unsafe": [...], "missing": []} gave complete=True, no suspension,
     # and the run walked to `merge` with the words the seat used printed on no surface at

@@ -34,6 +34,9 @@ ANSWERS = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
 
 def _answer(order):
     if order.get("seat"):
+        if order["node_id"] == "intake_review":
+            # A survey, not a panel: a `verdict` answers neither question it is asked.
+            return {"problems": [], "missing": [], "unsafe": []}
         return {"verdict": "pass"}
     branch = ANSWERS.get(order["node_id"])
     return {"verdict": branch} if branch else {"ok": True}
@@ -158,7 +161,10 @@ import json, sys
 order = json.load(sys.stdin)
 answers = %r
 if order.get("seat"):
-    print(json.dumps({"verdict": "pass"}))
+    if order["node_id"] == "intake_review":
+        print(json.dumps({"problems": [], "missing": [], "unsafe": []}))
+    else:
+        print(json.dumps({"verdict": "pass"}))
 else:
     branch = answers.get(order["node_id"])
     print(json.dumps({"verdict": branch} if branch else {"ok": True}))
@@ -189,7 +195,10 @@ import json, sys
 order = json.load(sys.stdin)
 answers = %r
 if order.get("seat"):
-    print(json.dumps({"verdict": "pass"}))
+    if order["node_id"] == "intake_review":
+        print(json.dumps({"problems": [], "missing": [], "unsafe": []}))
+    else:
+        print(json.dumps({"verdict": "pass"}))
 else:
     branch = answers.get(order["node_id"])
     print(json.dumps({"verdict": branch} if branch else {"ok": True}))

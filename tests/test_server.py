@@ -54,6 +54,9 @@ def _make_config(instructions, approvals, rulings, artifacts=(), rejections=(),
 def _dispatch(seat_verdicts=None):
     def dispatch(order):
         if order.get("seat"):
+            if order["node_id"] == "intake_review":
+                # A survey, not a panel: `seat_verdicts` is about the panel.
+                return {"problems": [], "missing": [], "unsafe": []}
             return {"verdict": (seat_verdicts or {}).get(order["seat"], "pass")}
         branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
                   "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])
@@ -430,6 +433,9 @@ def test_the_snapshot_carries_where_the_work_was_dispatched(tmp_path):
             def ask(self, order):
                 dispatched[order["node_id"]] = model
                 if seat:
+                    if order["node_id"] == "intake_review":
+                        # A survey, not a panel: a `verdict` answers neither question it is asked.
+                        return {"problems": [], "missing": [], "unsafe": []}
                     return {"verdict": "pass"}
                 branch = {"pm_confirm": "yes", "pm_signoff": "yes",
                           "lead_task_review": "pass", "re_review": "pass",
@@ -473,6 +479,9 @@ def test_a_resumed_run_does_not_re_ask_what_it_already_answered(tmp_path):
             def ask(self, order):
                 asked.append(order["node_id"])
                 if seat:
+                    if order["node_id"] == "intake_review":
+                        # A survey, not a panel: a `verdict` answers neither question it is asked.
+                        return {"problems": [], "missing": [], "unsafe": []}
                     return {"verdict": "pass"}
                 branch = {"pm_confirm": "yes", "pm_signoff": "yes",
                           "lead_task_review": "pass", "re_review": "pass",
@@ -600,6 +609,9 @@ def test_adding_to_the_brief_re_walks_the_run(tmp_path):
             def ask(self, order):
                 asked.append(order["node_id"])
                 if seat:
+                    if order["node_id"] == "intake_review":
+                        # A survey, not a panel: a `verdict` answers neither question it is asked.
+                        return {"problems": [], "missing": [], "unsafe": []}
                     return {"verdict": "pass"}
                 branch = {"pm_confirm": "yes", "pm_signoff": "yes",
                           "lead_task_review": "pass", "re_review": "pass",
@@ -1233,6 +1245,9 @@ def _walk_to_a_stop(node_models, risk):
         class Session(engine.Session):
             def ask(self, order):
                 if seat or model:
+                    if order["node_id"] == "intake_review":
+                        # A survey, not a panel, and not a grader either.
+                        return {"problems": [], "missing": [], "unsafe": []}
                     node = graph.BY_ID.get(order["node_id"])
                     if node is not None and getattr(node, "grades_risk", False):
                         return {"risk": "low"}
@@ -1356,6 +1371,9 @@ def test_on_a_default_install_the_merge_stop_is_driven_to_the_same_answer():
         class Session(engine.Session):
             def ask(self, order):
                 if seat or model:
+                    if order["node_id"] == "intake_review":
+                        # A survey, not a panel, and not a grader either.
+                        return {"problems": [], "missing": [], "unsafe": []}
                     node = graph.BY_ID.get(order["node_id"])
                     if node is not None and getattr(node, "grades_risk", False):
                         return {"risk": "low"}      # a grading panel grades

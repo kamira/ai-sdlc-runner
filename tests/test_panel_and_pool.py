@@ -31,6 +31,9 @@ def _run(node_models=None, answers=None, **cfg_kw):
             def ask(self, order):
                 asked.append((order["node_id"], seat, model))
                 if seat:
+                    if order["node_id"] == "intake_review":
+                        # A survey, not a panel: a `verdict` answers neither question it is asked.
+                        return {"problems": [], "missing": [], "unsafe": []}
                     return {"verdict": "pass"}
                 key = (order["node_id"], model)
                 if key in answers:
@@ -206,6 +209,9 @@ def _tie_run(reruns, resolve_on=None, **kw):
         class S(engine.Session):
             def ask(self, order):
                 if seat:
+                    if order["node_id"] == "intake_review":
+                        # A survey, not a panel: a `verdict` answers neither question it is asked.
+                        return {"problems": [], "missing": [], "unsafe": []}
                     return {"verdict": "pass"}
                 if order["node_id"] == "lead_task_review":
                     rounds["n"] += 1
@@ -264,6 +270,9 @@ def test_the_carried_round_reaches_the_work_order():
                     told.append(got if isinstance(got, str) else " ".join(got))
                     return {"verdict": "fail" if model == "codex" else "pass"}
                 if seat:
+                    if order["node_id"] == "intake_review":
+                        # A survey, not a panel: a `verdict` answers neither question it is asked.
+                        return {"problems": [], "missing": [], "unsafe": []}
                     return {"verdict": "pass"}
                 branch = {"pm_confirm": "yes", "pm_signoff": "yes",
                           "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])
@@ -311,6 +320,10 @@ def test_the_seats_are_never_re_run():
         class S(engine.Session):
             def ask(self, order):
                 if seat:
+                    if order["node_id"] == "intake_review":
+                        # A survey, not a panel — and counting its ask as a panel round is the
+                        # defect `test_sendback_retry_reject` already carries a note about.
+                        return {"problems": [], "missing": [], "unsafe": []}
                     rounds[seat] = rounds.get(seat, 0) + 1
                     if rounds[seat] > 1:
                         return {"verdict": "pass"}
@@ -390,11 +403,19 @@ def test_a_panel_can_route_every_node_it_may_be_configured_on(node_id):
 
 
 def _seat_run(seat_answer, node_models=None):
-    """Walk with seats returning `seat_answer` verbatim; models keep the flow moving."""
+    """Walk with **panel** seats returning `seat_answer` verbatim; models keep the flow moving.
+
+    The intake seats answer the survey instead. These tests are about what a panel does with a
+    voice that named no verdict — and the survey now refuses a seat that says nothing about the
+    requirement (CHG-20260907-01), which is the same rule one node earlier. Handing `seat_answer`
+    to intake as well would stop the walk before it reached the panel these tests are for.
+    """
     def factory(seat=None, model=None):
         class Session(engine.Session):
             def ask(self, order):
                 if seat:
+                    if order["node_id"] == "intake_review":
+                        return {"problems": [], "missing": [], "unsafe": []}
                     return dict(seat_answer)
                 branch = {"pm_confirm": "yes", "pm_signoff": "yes",
                           "lead_task_review": "pass", "re_review": "pass",

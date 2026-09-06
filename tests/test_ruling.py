@@ -37,6 +37,9 @@ def _run(seat_verdicts, **cfg_kw):
 
     def dispatch(order):
         if order.get("seat"):
+            if order["node_id"] == "intake_review":
+                # A survey, not a panel — `seat_verdicts` is about the panel this test is for.
+                return {"problems": [], "missing": [], "unsafe": []}
             return {"verdict": seat_verdicts[order["seat"]]}
         branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
                   "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])

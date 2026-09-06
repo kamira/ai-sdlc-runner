@@ -218,6 +218,9 @@ def test_rejecting_a_gate_sends_the_run_to_the_declared_node():
     def dispatch(order):
         seen.append(order["node_id"])
         if order.get("seat"):
+            if order["node_id"] == "intake_review":
+                # The same distinction the dispatcher at the top of this file already makes.
+                return {"problems": [], "missing": [], "unsafe": []}
             return {"verdict": "pass"}
         if order["node_id"] == "pm_plan":
             return {"modules": ["only-one"]}
@@ -259,6 +262,9 @@ def test_a_rejection_is_spent_once():
     """Otherwise a single refusal would bounce the run round the loop forever."""
     def dispatch(order):
         if order.get("seat"):
+            if order["node_id"] == "intake_review":
+                # A survey, not a panel: a `verdict` answers neither question it is asked.
+                return {"problems": [], "missing": [], "unsafe": []}
             return {"verdict": "pass"}
         if order["node_id"] == "pm_plan":
             return {"modules": ["only-one"]}
@@ -292,6 +298,8 @@ def test_the_rework_brief_reaches_the_node_it_was_written_for():
     def factory(seat=None, model=None):
         class Session(engine.Session):
             def ask(self, order):
+                if order["node_id"] == "intake_review":
+                    return {"problems": [], "missing": [], "unsafe": []}
                 if order["node_id"] == "pm_plan":
                     orders.append(order)
                 if order["node_id"] == "pm_confirm":

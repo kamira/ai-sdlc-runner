@@ -131,6 +131,10 @@ def _strings(value) -> List[str]:
     return [text] if text else []
 
 
+#: The three keys an intake answer may carry. An answer with none of them has not answered.
+ANSWER_KEYS = frozenset(("missing", "problems", "unsafe"))
+
+
 def collect(answers: Mapping[str, Mapping[str, object]]) -> Survey:
     """Aggregate the seats' answers. Union of problems, union of missing aspects.
 
@@ -139,11 +143,30 @@ def collect(answers: Mapping[str, Mapping[str, object]]) -> Survey:
     An aspect a seat names that is not in ``ASPECTS`` is an error rather than a shrug: a seat
     reporting `"database"` missing has answered a question this runner did not ask, and quietly
     dropping it would lose a real observation while looking like agreement.
+
+    **An answer carrying none of the three keys is an error for the same reason.** A seat that
+    looked and found nothing says so with empty lists; a seat that answered something else
+    entirely — `{"verdict": "pass"}`, the shape every *other* seat node in this runner expects —
+    said nothing about the requirement at all, and counting that as "nothing wrong" is the
+    survey agreeing with a voice that did not speak.
+
+    `engine.walk` already refuses this eleven branches up, for model panels, in as many words:
+    *"a voice that said nothing is not a voice that voted no"*. The survey had no equivalent, at
+    the one node whose whole purpose is to find problems. Measured with the shipped default
+    backend and no test harness: `cli._Stub` answers `{"backend", "node_id", "role"}`, all three
+    seats were counted as finding nothing, the run planned at `pm_plan`, and only `pm_confirm`
+    refused it — the node after the one where the silence mattered.
     """
     survey = Survey()
     missing: List[str] = []
     for seat in sorted(answers):
         answer = answers[seat] or {}
+        if not ANSWER_KEYS & set(answer):
+            raise IntakeError(
+                f"seat {seat!r} answered without saying anything about the requirement. An "
+                f"intake answer carries at least one of {sorted(ANSWER_KEYS)} — three empty "
+                f"lists is how a seat says it looked and found nothing. It sent "
+                f"{sorted(answer) or 'nothing at all'}.")
         problems = _strings(answer.get("problems"))
         if problems:
             survey.problems[seat] = problems

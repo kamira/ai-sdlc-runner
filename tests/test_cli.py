@@ -60,7 +60,10 @@ import json, sys
 order = json.load(sys.stdin)
 answers = %r
 if order.get("seat"):
-    print(json.dumps({"verdict": "pass", "seat": order["seat"]}))
+    if order["node_id"] == "intake_review":
+        print(json.dumps({"problems": [], "missing": [], "unsafe": []}))
+    else:
+        print(json.dumps({"verdict": "pass", "seat": order["seat"]}))
 else:
     branch = answers.get(order["node_id"])
     print(json.dumps({"verdict": branch} if branch else {"ok": True}))
@@ -518,6 +521,8 @@ def test_effects_run_at_their_node_and_are_reported(tmp_path):
         operations={"record_module": [{"description": "tick the box", "kind": "ordinary"}]})
 
     def dispatch(order):
+        if order["node_id"] == "intake_review":
+            return {"problems": [], "missing": [], "unsafe": []}
         if order.get("seat"):
             return {"verdict": "pass"}
         if order["node_id"] == "engineer_build":
@@ -554,7 +559,8 @@ def test_an_effect_that_does_not_establish_its_postcondition_halts_the_run():
     # `module_built`, so a stub reporting nothing takes the empty path — and this test is about
     # what happens when the node's effect runs and fails.
     report = engine.walk(cfg, lambda order: (
-        {"verdict": "pass"} if order.get("seat")
+        {"problems": [], "missing": [], "unsafe": []} if order["node_id"] == "intake_review"
+        else {"verdict": "pass"} if order.get("seat")
         else {"module": "alpha"} if order["node_id"] == "engineer_build"
         else ({"verdict": ANSWERS[order["node_id"]]} if order["node_id"] in ANSWERS
               else {"ok": True})), enabled=True)

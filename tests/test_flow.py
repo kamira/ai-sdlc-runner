@@ -57,6 +57,11 @@ def _cfg(**kw):
 def _answer(order, answers=None):
     """The answer a model would give to this order — a branch where the node needs one."""
     if order.get("seat"):
+        if order["node_id"] == "intake_review":
+            # A survey, not a panel — the same distinction `Recorder._answer` makes forty lines
+            # down, which this one was never swept for. A `verdict` here says nothing about the
+            # requirement, and `intake.collect` refuses it now (CHG-20260907-01).
+            return {"problems": [], "missing": [], "unsafe": []}
         return {"verdict": SEAT_PASS}
     if order["node_id"] == "engineer_build":
         # A builder says what it built (CHG-20260828-15). It did not before, and nothing noticed
@@ -449,7 +454,11 @@ def test_a_failed_acceptance_does_not_reach_the_pull_request():
 
 def test_an_answer_naming_no_branch_is_an_error_not_a_default():
     with pytest.raises(engine.EngineError) as exc:
-        engine.walk(_cfg(), lambda order: {"ok": True}, enabled=True)
+        # Answers the survey so the walk reaches a node that decides, which is what this
+        # test is about. It used to get there because intake accepted silence.
+        engine.walk(_cfg(), lambda order: (
+            {"problems": [], "missing": [], "unsafe": []} if order["node_id"] == "intake_review"
+            else {"ok": True}), enabled=True)
     assert "named no branch" in str(exc.value)
 
 
@@ -1093,6 +1102,8 @@ def test_a_rejection_reason_reaches_the_node_the_run_is_sent_back_to():
     def factory(seat=None, model=None):
         class Session(engine.Session):
             def ask(self, order):
+                if order["node_id"] == "intake_review":
+                    return {"problems": [], "missing": [], "unsafe": []}
                 if order["node_id"] == "pm_plan":
                     orders.append(order)
                 branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",

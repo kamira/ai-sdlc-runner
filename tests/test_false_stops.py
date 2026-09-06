@@ -39,6 +39,10 @@ ANSWERS = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
 
 def _dispatch(order):
     if order.get("seat"):
+        if order["node_id"] == "intake_review":
+            # A survey, not a panel: it is asked what is missing and what is
+            # wrong, and a `verdict` answers neither (CHG-20260907-01).
+            return {"problems": [], "missing": [], "unsafe": []}
         return {"verdict": "pass"}
     branch = ANSWERS.get(order["node_id"])
     return {"verdict": branch} if branch else {"ok": True}
