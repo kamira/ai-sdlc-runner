@@ -104,30 +104,60 @@ class Survey:
         }
 
 
-def _strings(value) -> List[str]:
-    """Read a seat's answer generously in shape and strictly in content."""
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value.strip()] if value.strip() else []
+def _text(item, where: str) -> Optional[str]:
+    """One item of a seat's answer as words, or `None` if the seat said nothing there.
+
+    **A value that is not text is not a finding** (CHG-20260903-36, idiom seat; extended to every
+    item by CHG-20260907-03). A falsy value means the seat said nothing: `"problems": false` is a
+    plausible JSON shape for *none*, and it was once recorded as one problem named `False`,
+    attributed to the seat and printed to the operator. Measured before that fix:
+
+        _strings(False) -> ['False']    _strings(0) -> ['0']    _strings({}) -> ['{}']
+
+    A **truthy** value that is not text was left doing exactly the same thing, in both branches,
+    for another fifteen days. The sentence above this used to end *"a truthy one that is not text
+    is still not text, and reading it as a problem invents one"* — an intention written down and
+    never implemented, in no change record, no task table and no test.
+
+    Refused rather than dropped, for the reason `collect` refuses an aspect it does not recognise:
+    dropping loses a real observation while looking like agreement, and reading it as text invents
+    a finding nobody made. Measured on `aea1398`, three seats answering
+    `{"unsafe": [{"issue": "rm -rf /"}]}`:
+
+        today                        stops, and a person is asked to decide about
+                                     `unsafe: risk: {'issue': 'rm -rf /'}` — a Python repr, and
+                                     the digest `--proceed-unsafe` is spent against
+        dropping in the fallback     identical: the list branch is untouched, and a list is the
+                                     shape `docs/SCHEMAS.md` documents
+        dropping in both branches    halted=done, safety=None, **merge reached**
+
+    The last is CHG-20260906-07's finding through another door, and worse than the one
+    CHG-20260907-01 closed: that counted silence as agreement, this turns a seat that spoke into
+    silence first.
+    """
+    if not item:
+        return None
+    if isinstance(item, str):
+        return item.strip() or None
+    raise IntakeError(
+        f"{where} is {type(item).__name__} {item!r}, which is not text. This has to be words a "
+        f"person can read, or a list of them — a finding, an aspect or an option. Reading it as "
+        f"text would invent one; dropping it would lose a real observation while looking like "
+        f"agreement.")
+
+
+def _strings(value, where: str = "an answer") -> List[str]:
+    """Read a seat's answer generously in shape and strictly in content.
+
+    Generous in shape: one string or a list of them. Strict in content: every item goes through
+    the same rule, because the list branch and the scalar fallback were one defect and repairing
+    only one of them is what left this open — `CHG-20260903-36` swept the fallback and the list
+    beside it kept reading `{'issue': ...}` as a finding.
+    """
     if isinstance(value, (list, tuple)):
-        return [str(v).strip() for v in value if str(v).strip()]
-    # **A value that is not a string or a list is not an answer** (CHG-20260903-36, idiom seat).
-    #
-    # The `str` and `list` branches above strip and drop blanks; this fallback did neither, so a
-    # seat answering `"problems": false` — a plausible JSON shape for *none* — was recorded as
-    # having raised one problem named `False`, attributed to it, and printed to the operator by
-    # `Survey.all_problems()`. Measured before the fix:
-    #
-    #     _strings(False) -> ['False']    _strings(0) -> ['0']    _strings({}) -> ['{}']
-    #
-    # This is `CHG-20260903-27` L-30's shape — *"fabricated a verdict where there was no
-    # answer"* — one module over, and that record swept no further than the adjudicators. A
-    # falsy scalar means the seat said nothing; a truthy one that is not text is still not text,
-    # and reading it as a problem invents one.
-    if not value:
-        return []
-    text = str(value).strip()
+        texts = [_text(v, f"{where}[{i}]") for i, v in enumerate(value)]
+        return [text for text in texts if text]
+    text = _text(value, where)
     return [text] if text else []
 
 
@@ -167,13 +197,13 @@ def collect(answers: Mapping[str, Mapping[str, object]]) -> Survey:
                 f"intake answer carries at least one of {sorted(ANSWER_KEYS)} — three empty "
                 f"lists is how a seat says it looked and found nothing. It sent "
                 f"{sorted(answer) or 'nothing at all'}.")
-        problems = _strings(answer.get("problems"))
+        problems = _strings(answer.get("problems"), f"seat {seat!r}, 'problems'")
         if problems:
             survey.problems[seat] = problems
-        unsafe = _strings(answer.get("unsafe"))
+        unsafe = _strings(answer.get("unsafe"), f"seat {seat!r}, 'unsafe'")
         if unsafe:
             survey.safety[seat] = unsafe
-        for aspect in _strings(answer.get("missing")):
+        for aspect in _strings(answer.get("missing"), f"seat {seat!r}, 'missing'"):
             key = aspect.strip().lower()
             if key not in BY_ASPECT:
                 raise IntakeError(
@@ -243,7 +273,8 @@ def read_options(answer: Mapping[str, object], aspect: str) -> List[str]:
     wearing a question mark — and the point of reaching this stage at all was to stop the runner
     narrowing somebody else's decision.
     """
-    options = _strings((answer or {}).get("options"))
+    options = _strings((answer or {}).get("options"),
+                       f"the options offered for {aspect!r}")
     if len(options) < MIN_OPTIONS:
         raise IntakeError(
             f"asked for at least {MIN_OPTIONS} options for {aspect!r} and got {len(options)}. Two "

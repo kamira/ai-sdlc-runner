@@ -118,6 +118,29 @@ MUTATIONS: List[Mutation] = [
         '''                    out = runner.attach(version, str(body.get("filename") or ""), raw)''',
         '''                    out = runner.attach(version, "attachment", raw)''',
         "tests/test_server.py"),
+    # ── non-text-answer (CHG-20260907-03) ─────────────────────────────────────────
+    # `_strings` read a truthy value that was not text with `str()`, in BOTH branches:
+    # `{"problems": true}` became a problem named `True`, and `{"unsafe": [{...}]}` became a
+    # Python repr at the stop that asks a person to read it -- with `--proceed-unsafe`
+    # spending its digest against that repr. CHG-20260903-36 had taught only the scalar
+    # fallback that a falsy value is silence. One helper now reads every item; the second
+    # mutation exists because the first would pass a repair that swept only the fallback,
+    # which is the shape of the mistake this change corrects.
+    Mutation(
+        "non-text-answer", "a truthy value that is not text is read as text again",
+        SRC / "intake.py",
+        '''    if isinstance(item, str):
+        return item.strip() or None''',
+        '''    return str(item).strip() or None''',
+        "tests/test_intake.py"),
+
+    Mutation(
+        "non-text-answer", "the list branch goes back around the one rule",
+        SRC / "intake.py",
+        '''        texts = [_text(v, f"{where}[{i}]") for i, v in enumerate(value)]''',
+        '''        texts = [str(v).strip() for v in value]''',
+        "tests/test_intake.py"),
+
     # ── surveyed-render (CHG-20260907-02) ─────────────────────────────────────────
     # `problems` and `safety` are `seat -> [line]` maps, and the block drawing the survey
     # handed each value to `String()` -- `[object Object]`. It is drawn on every render, and
