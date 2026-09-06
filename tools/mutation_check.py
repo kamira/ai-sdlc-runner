@@ -93,6 +93,31 @@ class Mutation(NamedTuple):
 
 
 MUTATIONS: List[Mutation] = [
+    # ── attachment-route (CHG-20260906-05) ─────────────────────────────────────────────────
+    # `POST /attachments` had a documented request body, a documented row and three documented
+    # refusals, and nothing executable pinning any of them — because the fixture that speaks HTTP
+    # had no attachment store, so the route answered "this runner has no attachment store" from
+    # the only layer that could have tested it.
+    Mutation(
+        "attachment-route", "the route stops refusing a body that is not base64",
+        SRC / "server.py",
+        '''                        raise ServerError(f"the attachment body is not valid base64: {exc}")''',
+        '''                        raw = b""''',
+        "tests/test_server.py"),
+
+    Mutation(
+        "attachment-route", "the route reads a field the page does not send",
+        SRC / "server.py",
+        '''                        raw = base64.b64decode(str(body.get("data") or ""), validate=True)''',
+        '''                        raw = base64.b64decode(str(body.get("data_base64") or ""), validate=True)''',
+        "tests/test_server.py"),
+
+    Mutation(
+        "attachment-route", "the filename the operator sent is dropped on the way through",
+        SRC / "server.py",
+        '''                    out = runner.attach(version, str(body.get("filename") or ""), raw)''',
+        '''                    out = runner.attach(version, "attachment", raw)''',
+        "tests/test_server.py"),
     # ── attachment-provenance (CHG-20260906-04) ───────────────────────────────────────────────────────
     # `Attachment.instruction` was written, validated, sorted on and serialised, and read by
     # nothing that shows it to a person — while its own comment claimed it existed so a later
