@@ -39,6 +39,10 @@ def _walk(build_answer):
     def dispatch(order):
         node = order["node_id"]
         if order.get("seat"):
+            if order["node_id"] == "intake_review":
+                # A survey, not a panel: it is asked what is missing and what is
+                # wrong, and a `verdict` answers neither (CHG-20260907-01).
+                return {"problems": [], "missing": [], "unsafe": []}
             return {"verdict": "pass"}
         if node == "pm_plan":
             return {"modules": ["alpha"]}

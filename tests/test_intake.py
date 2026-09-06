@@ -77,8 +77,54 @@ def test_an_aspect_this_runner_does_not_ask_about_is_an_error():
         intake.collect({"defect": {"missing": ["database"]}})
 
 
+def test_a_seat_that_says_nothing_about_the_requirement_is_an_error():
+    """*"A voice that said nothing is not a voice that voted no"* — `engine.walk` says that for
+    model panels. The survey had no equivalent, at the one node whose purpose is to find problems.
+
+    The realistic answer is not prose or a crash. It is `{"verdict": "pass"}`: the shape every
+    **other** seat node in this runner expects, from an agent that did not special-case this one.
+    """
+    for answer in ({"verdict": "pass", "why": "nothing found"},
+                   {"backend": "stub", "node_id": "intake_review", "role": "seat"},
+                   {},
+                   {"Missing": ["ui"], "Unsafe": ["x"]}):
+        with pytest.raises(intake.IntakeError, match="without saying anything"):
+            intake.collect({"conformance": answer})
+
+
+def test_a_seat_that_looked_and_found_nothing_says_so_with_empty_lists():
+    """The other half, and the reason the check is about **keys** and not about emptiness."""
+    survey = intake.collect({"conformance": {"missing": [], "problems": [], "unsafe": []}})
+    assert survey.complete and not survey.problems and not survey.safety
+
+    # One key is enough. A seat reporting only what is missing has still answered.
+    assert intake.collect({"conformance": {"missing": ["ui"]}}).missing == ["ui"]
+
+
+def test_the_shipped_dry_run_backend_no_longer_passes_the_survey_in_silence():
+    """Measured on `main` before this change, with no test harness at all:
+
+        nodes asked: ['intake_review', 'intake_review', 'intake_review', 'pm_plan', 'pm_confirm']
+        raised at  : node 'pm_confirm' decides on its answer, but the answer named no branch
+
+    `cli._Stub` is the default backend — *"answers nothing, records that it was asked"* — so this
+    is what anyone running `runner run` without an agent got. Three seats were asked, all three
+    said nothing about the requirement, the survey called it complete, and the run **planned** at
+    `pm_plan` before anything refused it.
+
+    It still cannot complete a walk. It now stops at the node whose contract it did not meet,
+    with a sentence naming that contract, rather than two nodes later with one about branches.
+    """
+    from ai_sdlc_runner import cli
+
+    answer = cli._Stub().ask({"node_id": "intake_review", "role": "seat"})
+    assert not intake.ANSWER_KEYS & set(answer), "the stub answers none of the three"
+    with pytest.raises(intake.IntakeError, match="without saying anything"):
+        intake.collect({"conformance": answer})
+
+
 def test_a_complete_requirement_says_so():
-    survey = intake.collect({"a": {"problems": ["a nit"]}, "b": {}})
+    survey = intake.collect({"a": {"problems": ["a nit"]}, "b": {"problems": []}})
     assert survey.complete, "problems do not make a requirement incomplete — missing aspects do"
 
 
@@ -173,7 +219,12 @@ def _walk(seat_answers, **cfg_kw):
     def dispatch(order):
         if order["node_id"] == "intake_review":
             if order.get("seat"):
-                return dict(seat_answers.get(order["seat"], {}))
+                # A seat this test did not name is a seat that looked and found nothing —
+                # three empty lists, not silence. The `{}` this defaulted to was
+                # indistinguishable from a seat that answered something else entirely, so
+                # no test in this file could have been about the difference.
+                return dict(seat_answers.get(
+                    order["seat"], {"problems": [], "missing": [], "unsafe": []}))
             return {"options": ["one", "two", "three"]}      # the option ask
         if order.get("seat"):
             return {"verdict": "pass"}

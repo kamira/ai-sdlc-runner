@@ -887,6 +887,8 @@ def _graded_up(**kw):
                     return {"risk": "medium"}
                 branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
                           "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])
+                if order["node_id"] == "intake_review":
+                    return {"problems": [], "missing": [], "unsafe": []}       # a survey, not a panel
                 return ({"verdict": branch} if branch
                         else {"verdict": "pass"} if seat else {"ok": True})
 

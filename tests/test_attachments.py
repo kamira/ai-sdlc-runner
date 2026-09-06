@@ -208,6 +208,10 @@ def test_attachments_reach_every_node_not_just_the_first(tmp_path):
     def dispatch(order):
         seen[order["node_id"]] = list(order["input_artifacts"])
         if order.get("seat"):
+            if order["node_id"] == "intake_review":
+                # A survey, not a panel: it is asked what is missing and what is
+                # wrong, and a `verdict` answers neither (CHG-20260907-01).
+                return {"problems": [], "missing": [], "unsafe": []}
             return {"verdict": "pass"}
         branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
                   "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])
@@ -232,6 +236,8 @@ def test_a_nodes_own_inputs_are_kept_alongside_the_attachments(tmp_path):
     seen = []
 
     def dispatch(order):
+        if order["node_id"] == "intake_review":
+            return {"problems": [], "missing": [], "unsafe": []}
         if order["node_id"] == "pm_plan":
             seen.extend(order["input_artifacts"])
         return {"ok": True}
@@ -261,6 +267,8 @@ def test_every_instruction_reaches_the_order_numbered(tmp_path):
     seen = []
 
     def dispatch(order):
+        if order["node_id"] == "intake_review":
+            return {"problems": [], "missing": [], "unsafe": []}
         if order["node_id"] == "pm_plan":
             got = order["instructions"]
             seen.append(got if isinstance(got, str) else " ".join(got))
@@ -310,6 +318,10 @@ def _frontier_run(planned_per_call, built_calls):
             calls["engineer_build"] += 1
             return {"module": built_calls[i]} if i < len(built_calls) else {"summary": "none"}
         if order.get("seat"):
+            if order["node_id"] == "intake_review":
+                # A survey, not a panel: it is asked what is missing and what is
+                # wrong, and a `verdict` answers neither (CHG-20260907-01).
+                return {"problems": [], "missing": [], "unsafe": []}
             return {"verdict": "pass"}
         branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
                   "re_review": "pass", "qa_accept": "pass"}.get(node)
@@ -368,6 +380,10 @@ def test_a_blueprint_that_grows_between_walks_keeps_looping(tmp_path):
                 seen["engineer_build"] = list(built_here)
                 return {"module": remaining[0]}
             if order.get("seat"):
+                if order["node_id"] == "intake_review":
+                    # A survey, not a panel: it is asked what is missing and what is
+                    # wrong, and a `verdict` answers neither (CHG-20260907-01).
+                    return {"problems": [], "missing": [], "unsafe": []}
                 return {"verdict": "pass"}
             branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
                       "re_review": "pass", "qa_accept": "pass"}.get(node)
@@ -408,6 +424,10 @@ def test_an_unchanged_brief_still_reuses_the_journal(tmp_path):
     def dispatch(order):
         asked.append(order["node_id"])
         if order.get("seat"):
+            if order["node_id"] == "intake_review":
+                # A survey, not a panel: it is asked what is missing and what is
+                # wrong, and a `verdict` answers neither (CHG-20260907-01).
+                return {"problems": [], "missing": [], "unsafe": []}
             return {"verdict": "pass"}
         if order["node_id"] == "pm_plan":
             return {"modules": ["a"]}

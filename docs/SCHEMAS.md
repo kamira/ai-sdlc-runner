@@ -166,8 +166,17 @@ JSON on stdout. A non-zero exit is a failed attempt.
 | `pm_plan` | `{"modules": [...]}` when `next_module` is `"frontier"` |
 | `engineer_build` | `{"module": "<id>"}` |
 | a seat on a panel | `{"verdict": "pass"\|"fail", "why": "…"}` |
-| a seat at intake | `{"missing": [...], "problems": [...], "unsafe": [...]}` |
+| a seat at intake | `{"missing": [...], "problems": [...], "unsafe": [...]}` — **at least one** |
 | anything else | any JSON object |
+
+**The intake row is enforced, and the row above it is why it had to be.** A seat at intake and a
+seat on a panel are one line apart in this table and answer with different shapes, and an agent
+that did not notice — answering `{"verdict": "pass"}` at both — was counted at intake as having
+looked and found nothing. `intake.collect` refuses an answer carrying none of the three now
+(CHG-20260907-01), for the reason it already refuses an aspect it does not recognise: a survey
+that treats silence as agreement is agreeing with a voice that did not speak.
+
+Three empty lists is how a seat says it looked and found nothing. One of the three is enough.
 
 **Three names for one fact.** `_answered_branch` reads `answer.get("branch") or
 answer.get("verdict") or answer.get("outcome")` — `branch` wins silently, so an answer carrying two

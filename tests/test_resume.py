@@ -36,6 +36,10 @@ ANSWERS = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
 
 def _answer(order):
     if order.get("seat"):
+        if order["node_id"] == "intake_review":
+            # A survey, not a panel: it is asked what is missing and what is
+            # wrong, and a `verdict` answers neither (CHG-20260907-01).
+            return {"problems": [], "missing": [], "unsafe": []}
         return {"verdict": "pass"}
     branch = ANSWERS.get(order["node_id"])
     return {"verdict": branch} if branch else {"ok": True}
@@ -225,6 +229,9 @@ def test_resumed_counts_the_asks_that_were_actually_reused(tmp_path):
                 # It said nothing before and the engine read that as a veto, so this run has
                 # always failed `lead_review` without the fixture saying so.
                 if seat:
+                    if order["node_id"] == "intake_review":
+                        # A survey, not a panel: a `verdict` answers neither question it is asked.
+                        return {"problems": [], "missing": [], "unsafe": []}
                     return {"verdict": "pass"}
                 branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
                           "re_review": "pass", "qa_accept": "pass"}.get(order["node_id"])

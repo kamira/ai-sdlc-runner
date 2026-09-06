@@ -38,6 +38,10 @@ ANSWERS = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
 
 def _dispatch(order):
     if order.get("seat"):
+        if order["node_id"] == "intake_review":
+            # A survey, not a panel: it is asked what is missing and what is
+            # wrong, and a `verdict` answers neither (CHG-20260907-01).
+            return {"problems": [], "missing": [], "unsafe": []}
         return {"verdict": "pass"}
     branch = ANSWERS.get(order["node_id"])
     return {"verdict": branch} if branch else {"ok": True}
@@ -450,6 +454,9 @@ def _walk_below_the_floor(seats_from, conversation=None):
         class Session(engine.Session):
             def ask(self, order):
                 if seat or model:
+                    if order["node_id"] == "intake_review":
+                        # A survey, not a panel: a `verdict` answers neither question it is asked.
+                        return {"problems": [], "missing": [], "unsafe": []}
                     node = graph.BY_ID.get(order["node_id"])
                     if node is not None and getattr(node, "grades_risk", False):
                         return {"risk": "low"}
@@ -814,7 +821,10 @@ import json, sys
 order = json.load(sys.stdin)
 answers = %r
 if order.get("seat"):
-    print(json.dumps({"verdict": "pass"}))
+    if order["node_id"] == "intake_review":
+        print(json.dumps({"problems": [], "missing": [], "unsafe": []}))
+    else:
+        print(json.dumps({"verdict": "pass"}))
 else:
     branch = answers.get(order["node_id"])
     print(json.dumps({"verdict": branch} if branch else {"ok": True}))
