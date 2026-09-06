@@ -508,6 +508,16 @@ function drawBrief() {
     b.textContent = id + " is in the manifest and not in the store";
     row.appendChild(a); row.appendChild(b); el.appendChild(row);
   });
+  // An approval the brief outgrew. It is a fact about the run rather than an act by the
+  // operator, and it belongs where they are already looking: the gate is about to ask again, and
+  // this says why (CHG-20260906-03).
+  ((state && state.retired_approvals) || []).forEach(function (note) {
+    var row = document.createElement("div"); row.className = "cr no";
+    var a = document.createElement("div"); a.className = "cm"; a.textContent = "retired";
+    var b = document.createElement("div"); b.className = "cw";
+    b.textContent = note;
+    row.appendChild(a); row.appendChild(b); el.appendChild(row);
+  });
   box.appendChild(el);
 }
 

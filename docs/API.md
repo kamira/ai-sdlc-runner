@@ -220,6 +220,7 @@ caller never has to know which of the three it is holding.
   "instructions": [ "…", … ],       // in the order they were given
   "attachments": [ {…manifest…} ],
   "attachments_missing": [ "<id>" ],
+  "retired_approvals": [ "<gate> was approved against an earlier brief …" ],
   "error": "" | "…",          // never null: `RunState.error` is `str = ""`,
                               // and `snapshot()` returns it verbatim (CHG-20260903-37)
 
