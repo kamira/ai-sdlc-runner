@@ -178,6 +178,9 @@ that treats silence as agreement is agreeing with a voice that did not speak.
 
 Three empty lists is how a seat says it looked and found nothing. One of the three is enough.
 
+**And the value has to be readable.** Each of the three is text, or a list of text. A number, a boolean or an object in any of them is refused by name
+(CHG-20260907-03): reading it as text invents a finding nobody made, and dropping it loses one somebody did.
+
 **Three names for one fact.** `_answered_branch` reads `answer.get("branch") or
 answer.get("verdict") or answer.get("outcome")` — `branch` wins silently, so an answer carrying two
 of them that disagree resolves to whichever is first, with nothing said. Seat verdicts accept

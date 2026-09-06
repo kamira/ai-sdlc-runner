@@ -77,6 +77,62 @@ def test_an_aspect_this_runner_does_not_ask_about_is_an_error():
         intake.collect({"defect": {"missing": ["database"]}})
 
 
+@pytest.mark.parametrize("answer,where", [
+    ({"problems": True}, "'problems'"),
+    ({"missing": True}, "'missing'"),
+    ({"unsafe": {"issue": "rm -rf /"}}, "'unsafe'"),
+    ({"problems": [True]}, "'problems'[0]"),
+    ({"unsafe": [{"issue": "rm -rf /"}]}, "'unsafe'[0]"),
+    ({"missing": ["ui", 3]}, "'missing'[1]"),
+])
+def test_a_value_that_is_not_text_is_refused_and_says_where(answer, where):
+    """**One rule, both branches.** The scalar fallback and the list read the same question — is
+    this item text — and repairing only one is what left this open for fifteen days:
+    `CHG-20260903-36` swept the fallback, and the list beside it went on reading
+    `{'issue': ...}` as a finding. A list is the shape `docs/SCHEMAS.md` documents, so it is the
+    branch that mattered.
+
+    The message names the seat, the key and the index, because `collect` aggregates four seats and
+    "something was not text" is not actionable.
+    """
+    with pytest.raises(intake.IntakeError, match="which is not text") as caught:
+        intake.collect({"risk": answer})
+    said = str(caught.value)
+    assert "seat 'risk'" in said and where in said, said
+
+
+def test_dropping_it_instead_would_walk_a_safety_finding_to_merge():
+    """Why refusing rather than dropping, measured rather than argued.
+
+    Three seats answering `{"unsafe": [{"issue": "rm -rf /"}]}`, on `aea1398`:
+
+        today                       stops at intake_review; a person is asked to decide about
+                                    `unsafe: risk: {'issue': 'rm -rf /'}`, and `--proceed-unsafe`
+                                    spends its digest against that repr
+        dropping in the fallback    identical — the list branch is untouched, and a list is the
+                                    documented shape, so the repair does nothing to the case it
+                                    was proposed for
+        dropping in both branches   halted=done, safety=None, **merge reached**
+
+    The last is CHG-20260906-07's unanimous finding through another door, and worse than the one
+    CHG-20260907-01 closed: that counted silence as agreement; this turns a seat that spoke into
+    silence first. This test pins the half that can be pinned here — that the finding survives as
+    a refusal rather than as nothing.
+    """
+    with pytest.raises(intake.IntakeError):
+        intake.collect({"risk": {"unsafe": [{"issue": "rm -rf /"}], "missing": [], "problems": []}})
+
+
+def test_three_things_nobody_can_read_are_not_three_options():
+    """`read_options` refuses fewer than three because *two is a false choice*. Three objects
+    passed that count and reached a person as `["{'a': 1}", "{'b': 2}", "{'c': 3}"]`, which is
+    three of nothing.
+    """
+    with pytest.raises(intake.IntakeError, match="which is not text") as caught:
+        intake.read_options({"options": [{"a": 1}, {"b": 2}, {"c": 3}]}, "ui")
+    assert "the options offered for 'ui'" in str(caught.value)
+
+
 def test_a_seat_that_says_nothing_about_the_requirement_is_an_error():
     """*"A voice that said nothing is not a voice that voted no"* — `engine.walk` says that for
     model panels. The survey had no equivalent, at the one node whose purpose is to find problems.
