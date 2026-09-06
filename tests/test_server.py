@@ -2718,3 +2718,133 @@ def test_the_stream_outlives_the_connection_deadline(wire):
         assert sock.recv(200) or True                 # still connected: recv did not raise
     finally:
         sock.close()
+
+
+# --------------------------------------------------------------------------------------
+# CHG-20260906-03 — an approval answers the brief it was shown
+# --------------------------------------------------------------------------------------
+
+
+def _walked_to_the_end(tmp_path):
+    """A high-risk run walked to `finished`, every gate answered by a person.
+
+    Built rather than faked: the finding is about what those approvals do afterwards, and a run
+    with no real approvals cannot show it.
+    """
+    asked = []
+    inner = _dispatch()
+
+    def dispatch(order):
+        asked.append(order.get("node_id"))
+        return inner(order)
+
+    runner = server.Runner(
+        walk=lambda cfg: engine.walk(cfg, dispatch, enabled=True),
+        make_config=lambda i, a, r, art=(), rej=(), hist=(): _make_config(i, a, r, art, rej, hist),
+        store=attach_mod.Store(tmp_path / "att"))
+    runner.start("build the thing", runner.state.version)
+    gates = []
+    for _ in range(14):
+        if runner.state.state != engine.SUSPENDED:
+            break
+        waiting = runner.state.snapshot().get("suspended") or {}
+        gate, node = waiting.get("gate"), waiting.get("node_id")
+        if not gate or not node:
+            break
+        gates.append(gate)
+        runner.approve(runner.state.version, gate, node)
+    assert runner.state.state == engine.FINISHED, runner.state.state
+    assert len(runner.state.approvals) >= 5
+    asked.clear()
+    return runner, asked, gates
+
+
+def test_a_document_does_not_re_spend_the_approvals_given_before_it(tmp_path):
+    """Measured before this change: one attached file re-walked all 17 nodes — rebuild,
+    re-review, re-open the PR, **re-merge** — spending all eight answers again, with no stop, and
+    the snapshot said "nothing further was asked for".
+
+    The run still walks again, because a changed brief changes every question. What it must not do
+    is walk *past the gates* on answers nobody gave for this brief.
+    """
+    runner, asked, _gates = _walked_to_the_end(tmp_path)
+
+    runner.attach(runner.state.version, "late-spec.md", b"# one more document")
+
+    assert runner.state.state == engine.SUSPENDED, (
+        "a changed brief walked to the end again without asking anybody")
+    for one_way in ("merge", "pr", "qa_accept"):
+        assert one_way not in asked, f"{one_way} ran again on an approval given for another brief"
+
+
+def test_an_instruction_does_not_re_spend_them_either(tmp_path):
+    """`instruct` reaches `_advance` by the same road."""
+    runner, asked, _gates = _walked_to_the_end(tmp_path)
+
+    runner.instruct(runner.state.version, "one more thing")
+
+    assert runner.state.state == engine.SUSPENDED
+    assert "merge" not in asked
+
+
+def test_a_walk_with_no_brief_change_keeps_every_approval(tmp_path):
+    """The constraint that makes this fix safe rather than merely strict.
+
+    If a re-walk retired approvals unconditionally, every ordinary resume would stop at the gate it
+    just cleared and the run could never finish. Driving the same run to the end takes exactly the
+    approvals it already took, and no more.
+    """
+    runner, _asked, gates = _walked_to_the_end(tmp_path)
+    before = len(runner.state.approvals)
+
+    runner._advance()                       # the same brief, walked again
+
+    assert runner.state.state == engine.FINISHED, (
+        "a re-walk with nothing changed asked for an approval again")
+    assert len(runner.state.approvals) == before
+    assert runner.state.retired_approvals == []
+
+
+def test_a_retired_approval_is_kept_and_named_rather_than_deleted(tmp_path):
+    """`state.approvals` is append-only and three docstrings rely on it, so a superseded decision
+    stays in the ledger as history and is filtered out of what the walk is handed."""
+    runner, _asked, gates = _walked_to_the_end(tmp_path)
+    before = len(runner.state.approvals)
+
+    runner.attach(runner.state.version, "late.md", b"# late")
+
+    assert len(runner.state.approvals) == before, "a decision was deleted from the ledger"
+    assert runner.state.retired_approvals, "nothing said the approvals had been retired"
+    said = " ".join(runner.state.retired_approvals)
+    assert "brief" in said and any(g in said for g in gates), said
+
+    # Through the snapshot, which is the only thing the console and `--json` ever see. Asserting
+    # the field alone left "the operator is never told" NOT CAUGHT — the same reaches-one-layer-
+    # and-stops shape this round has been about, one level up from where it usually appears.
+    snapshot = runner.state.snapshot()
+    assert snapshot["retired_approvals"] == runner.state.retired_approvals
+
+
+def test_a_retired_approval_reaches_the_console(tmp_path):
+    """It is a fact about the run, and the run's own guard already insists every key the server
+    sends is rendered — which is how this one was caught missing."""
+    page = (pathlib.Path(server.__file__).parent / "console" / "index.html").read_text(
+        encoding="utf-8")
+    assert "retired_approvals" in page
+
+
+def test_an_approval_with_no_brief_answers_any_brief(tmp_path):
+    """`--confirm` on the command line is given before there is a brief to answer, and every
+    existing caller passes one. `None` has to keep meaning "any"."""
+    assert engine.Approval(gate="merge").brief is None
+
+    runner = server.Runner(
+        walk=lambda cfg: engine.RunReport(),
+        make_config=lambda i, a, r, art=(), rej=(), hist=(): _make_config(i, a, r, art, rej, hist),
+        store=attach_mod.Store(tmp_path / "att"))
+    runner.state.approvals.append(engine.Approval(gate="merge"))
+    runner.attach(runner.state.version, "brief.md", b"# the brief")
+
+    live, retired = runner._live_approvals()
+    assert [a.gate for a in live] == ["merge"]
+    assert retired == []

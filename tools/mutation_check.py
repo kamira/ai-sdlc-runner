@@ -93,6 +93,55 @@ class Mutation(NamedTuple):
 
 
 MUTATIONS: List[Mutation] = [
+    # ── approval-lifetime (CHG-20260906-03) ────────────────────────────────────────────────
+    # A finished high-risk run, all eight gates answered by a person, re-walked all 17 nodes on one
+    # attached file — rebuild, re-review, re-open the PR, re-merge — spending all eight answers
+    # again, with no stop, reporting "nothing further was asked for". The engine already applies
+    # this rule to what a model said and did not apply it to what a person said.
+    Mutation(
+        "approval-lifetime", "an approval is spent again on a brief nobody gave it for",
+        SRC / "server.py",
+        """            (live if approval.brief in (None, here) else retired).append(approval)""",
+        """            live.append(approval)""",
+        "tests/test_server.py"),
+
+    Mutation(
+        "approval-lifetime", "every re-walk retires the approvals, so no run can finish",
+        SRC / "server.py",
+        """            (live if approval.brief in (None, here) else retired).append(approval)""",
+        """            retired.append(approval)""",
+        "tests/test_server.py"),
+
+    Mutation(
+        "approval-lifetime", "an approval given up-front on the command line stops answering",
+        SRC / "server.py",
+        """            (live if approval.brief in (None, here) else retired).append(approval)""",
+        """            (live if approval.brief == here else retired).append(approval)""",
+        "tests/test_server.py"),
+
+    Mutation(
+        "approval-lifetime", "the brief is a count again, so a replaced document reads as no change",
+        SRC / "server.py",
+        """        return (len(self.state.instructions),
+                tuple(sorted(a.id for a in self.state.attachments)))""",
+        """        return (len(self.state.instructions),
+                len(self.state.attachments))""",
+        "tests/test_server.py"),
+
+    Mutation(
+        "approval-lifetime", "a retired approval is deleted from the ledger instead of kept",
+        SRC / "server.py",
+        """                if note not in self.state.retired_approvals:""",
+        """                self.state.approvals.remove(approval)
+                if note not in self.state.retired_approvals:""",
+        "tests/test_server.py"),
+
+    Mutation(
+        "approval-lifetime", "the operator is never told an approval was retired",
+        SRC / "server.py",
+        """            "retired_approvals": list(self.retired_approvals),""",
+        """            "retired_approvals": [],""",
+        "tests/test_server.py"),
     # ── request-layer (CHG-20260906-02) ────────────────────────────────────────────────────
     # `_body` read whatever Content-Length announced, before any limit applied and before route
     # dispatch, so the bound was missing for every POST and not only the one route that had a

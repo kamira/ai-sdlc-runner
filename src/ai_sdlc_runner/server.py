@@ -215,6 +215,10 @@ class RunState:
     #: escalation to options depends on this being **counted** rather than remembered, and it has to
     #: survive the walks in between — a counter that resets each walk would ask forever.
     intake_history: List[Dict[str, object]] = field(default_factory=list)
+    #: Approvals the brief outgrew. Retired rather than removed — `approvals` above is
+    #: append-only and three docstrings rely on it — so a superseded decision stays in the
+    #: ledger as history and is named here instead of being spent (CHG-20260906-03).
+    retired_approvals: List[str] = field(default_factory=list)
     #: How many instructions had been given when the last intake ask was counted (CHG-20260904-05).
     #: **On the run, not on the runner** (CHG-20260904-09): `start` builds a fresh `RunState` with
     #: `instructions=[instruction]`, so a mark that outlived it made `told > mark` false for every
@@ -236,6 +240,7 @@ class RunState:
             "instructions": list(self.instructions),
             "attachments": [a.as_dict() for a in self.attachments],
             "attachments_missing": list(self.missing),
+            "retired_approvals": list(self.retired_approvals),
             "error": self.error,
             "at": report.halted_at if report else None,
             "reason": report.halt_reason if report else "",
@@ -393,6 +398,32 @@ class Runner:
         # changed and the run has to be walked again for anybody to see it.
         return self._advance()
 
+    def _brief_now(self) -> tuple:
+        """What the operator is looking at: the instructions, and the attachments in front of
+        them.
+
+        Attachments already carry this stamp — `Store.add(..., instruction=len(instructions))`
+        — and approvals did not, which is the whole of the defect. The attachment ids and not
+        merely a count, because a document replaced is a changed brief even when the number is
+        the same.
+        """
+        return (len(self.state.instructions),
+                tuple(sorted(a.id for a in self.state.attachments)))
+
+    def _live_approvals(self):
+        """The approvals that answer the brief in front of the run now, and the retired rest.
+
+        **Retired, not removed.** `state.approvals` is append-only and three docstrings rely on
+        that, so a superseded decision stays in the ledger as history and is filtered out of
+        what the walk is handed. An approval with no brief — one given up-front on the command
+        line — answers any brief, which is what every existing caller passes.
+        """
+        here = self._brief_now()
+        live, retired = [], []
+        for approval in self.state.approvals:
+            (live if approval.brief in (None, here) else retired).append(approval)
+        return live, retired
+
     def _read_attachments(self):
         """What the store holds and what it has lost, without touching `self.state`.
 
@@ -484,7 +515,8 @@ class Runner:
             self.state.approvals.append(
                 engine.Approval(gate=gate,
                                 node_id=node_id or waiting.get("node_id"),
-                                run_id=waiting.get("run_id")))
+                                run_id=waiting.get("run_id"),
+                                brief=self._brief_now()))
             self.state.state = "running"
             self.state.version += 1
             self._publish()
@@ -671,8 +703,18 @@ class Runner:
     def _walk_once(self) -> Dict[str, object]:
         """One walk, exactly as before. Called only by `_advance`, only one at a time."""
         try:
+            live, retired = self._live_approvals()
+            for approval in retired:
+                # Reported rather than spent, and reported the way `_finish` already reports a
+                # confirmation nobody spent: a fact about the run, not an act by the operator.
+                note = (f"{approval.gate} was approved against an earlier brief "
+                        f"({approval.brief[0]} instruction(s), {len(approval.brief[1])} "
+                        f"attachment(s)); the brief has changed, so that approval is retired "
+                        f"and this gate asks again")
+                if note not in self.state.retired_approvals:
+                    self.state.retired_approvals.append(note)
             report = self._walk(self._make_config(tuple(self.state.instructions),
-                                                  tuple(self.state.approvals),
+                                                  tuple(live),
                                                   tuple(self.state.rulings),
                                                   tuple(self._store.order_paths())
                                                   if self._store else (),

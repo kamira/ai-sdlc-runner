@@ -267,6 +267,20 @@ class Approval:
     #: right default for an approval given up-front on the command line, and the wrong one for an
     #: answer typed into a console after a stop.
     run_id: Optional[str] = None
+    #: The **brief** this answers. `node_id` and `run_id` above are described as what make
+    #: refusing *a stale or misdirected answer* possible; this is the third thing that makes an
+    #: answer stale, and it was missing.
+    #:
+    #: This module already applies the rule to what a **model** said — `_ask`: *"Reuse the answer
+    #: only if the question is the same one. Anything else is answering the new brief with words
+    #: said about the old one."* It did not apply it to what a **person** said. Measured: a
+    #: finished high-risk run, all eight gates answered, re-walked on one attached file and
+    #: re-spent all eight — through `acceptance` and `merge` — with no stop, reporting "nothing
+    #: further was asked for" (CHG-20260906-03).
+    #:
+    #: ``None`` means "any brief", which is right for an approval given up-front on the command
+    #: line and is what every existing caller passes.
+    brief: Optional[tuple] = None
 
     def __str__(self) -> str:
         where = f" at {self.node_id}" if self.node_id else ""
