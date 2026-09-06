@@ -1112,6 +1112,27 @@ def test_an_incomplete_stop_is_not_a_gate_to_approve():
     assert "flow" in try_it("incomplete", False), "and say what is missing"
 
 
+def test_a_run_started_on_nothing_counts_its_first_stop():
+    """`POST /run` accepts an empty instruction; `POST /run/instruct` refuses the same text with
+    *"an empty instruction says nothing"*. Accepting it built `instructions=[]`, so `told` was 0,
+    the mark defaulted to 0, and `told > mark` was `0 > 0` — the first stop went uncounted and
+    every later count was one short for the life of the run.
+
+    That made CHG-20260904-05's own task 3 — *the first stop is always an ask* — false whenever
+    the run began on nothing, which is what the console's start button sends with an empty box.
+
+    The mark is `-1` rather than `or not self.intake_history`. The two produce identical counts
+    over every sequence; the difference is that under the second, CHG-20260904-09's mutation
+    stays green, so an existing guard becomes a test that cannot fail.
+    """
+    assert server.RunState().instructions_when_last_asked == -1, (
+        "a run that begins on nothing has not been asked anything yet, and 0 says it has")
+
+    told = 0                                    # `start("")` -> instructions == []
+    assert told > server.RunState().instructions_when_last_asked, (
+        "the first stop of a run started on nothing is not counted")
+
+
 def test_an_unsafe_stop_is_not_a_gate_to_approve_either(monkeypatch):
     """The fourth shape, refused the way the third is and for the same measured reason.
 

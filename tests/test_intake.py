@@ -16,6 +16,9 @@ not deciding while looking diligent.
 """
 import pathlib
 
+import json
+import os
+
 import pytest
 
 from ai_sdlc_runner import engine, graph, intake, policy
@@ -131,6 +134,85 @@ def test_three_things_nobody_can_read_are_not_three_options():
     with pytest.raises(intake.IntakeError, match="which is not text") as caught:
         intake.read_options({"options": [{"a": 1}, {"b": 2}, {"c": 3}]}, "ui")
     assert "the options offered for 'ui'" in str(caught.value)
+
+
+def _walk_with_journal(journal, options, resume, history=None):
+    """A walk already past `ASK_LIMIT`, so the option ask fires, with a journal that persists."""
+    dispatched = []
+
+    def dispatch(order):
+        dispatched.append(order["node_id"])
+        if order["node_id"] == "intake_review":
+            if order.get("seat"):
+                return {"missing": ["flow"], "problems": [], "unsafe": []}
+            return {"options": list(options)}
+        if order.get("seat"):
+            return {"verdict": "pass"}
+        return {"ok": True}
+
+    cfg = engine.RunConfig(
+        node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+        decisions={"next_module": engine.FRONTIER, "feedback": "done"},
+        risk="low", undeclared="allow", journal=journal, resume=resume,
+        intake_history=list(history if history is not None else [{"missing": ["flow"]}] * 3))
+    try:
+        return engine.walk(cfg, dispatch, enabled=True), dispatched, None
+    except Exception as exc:                    # noqa: BLE001 - the refusal is the subject
+        return None, dispatched, exc
+
+
+def test_a_refused_option_answer_is_journaled_as_refused_and_re_asked(tmp_path):
+    """The escalation could be entered and never left.
+
+    `_ask` wrote `journal.answered(...)` before any caller judged the answer, and `read_options`
+    refused afterwards -- so a model that offered two options where three are required left a
+    reusable record of the thing that caused the refusal. `--resume` replayed it, because an
+    option order does not carry the brief and so compares equal, and refused it again. The ways
+    out were dropping `--resume`, which re-asks everything, or changing the brief -- which is the
+    thing the escalation exists for a person *not* having to do.
+    """
+    journal = engine.AskJournal(tmp_path / "asks")
+
+    report, sent, exc = _walk_with_journal(journal, ["one", "two"], resume=False)
+    assert isinstance(exc, intake.IntakeError), "two options where three are required"
+    status = {e["ask_id"]: e.get("status") for e in journal.entries()}
+    option = next(k for k in status if "options" in k)
+    assert status[option] == "refused", "an answer the walk refused is not `answered`"
+
+    report, sent, exc = _walk_with_journal(journal, ["one", "two", "three"], resume=True)
+    assert exc is None, "the resume is stuck on the answer that was already refused"
+    assert sent == ["intake_review"], "the option ask was not put again"
+    assert report.suspended["options"] == {"flow": ["one", "two", "three"]}
+
+
+def test_a_journal_poisoned_before_this_change_recovers_on_the_next_walk(tmp_path):
+    """**The half that matters to somebody already stuck.**
+
+    Validating only before writing would fix new runs and leave every existing journal poisoned.
+    This writes the entry the old code wrote -- status `answered`, holding the refused answer --
+    and asserts the next walk gets out. The check is at the **reuse decision**, so the entry is
+    not handed back, the ask is put again, and `journal.record` overwrites it.
+    """
+    journal = engine.AskJournal(tmp_path / "asks")
+    _walk_with_journal(journal, ["one", "two"], resume=False)
+
+    for name in os.listdir(journal.dir):
+        if "options" not in name:
+            continue
+        path = journal.dir / name
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        # Exactly what shipped before this change: status `answered`, holding the very answer
+        # that was refused. `answers()` requires a `result`, so a payload without one is never
+        # reused and a test built on it proves nothing -- which is how the first version of this
+        # test passed under the mutation it was written to catch.
+        payload["status"] = "answered"
+        payload["result"] = {"options": ["one", "two"]}
+        payload.pop("reason", None)
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    report, sent, exc = _walk_with_journal(journal, ["one", "two", "three"], resume=True)
+    assert exc is None, "a journal written by the old code is still a trap"
+    assert report.suspended["options"] == {"flow": ["one", "two", "three"]}
 
 
 def test_a_seat_that_says_nothing_about_the_requirement_is_an_error():

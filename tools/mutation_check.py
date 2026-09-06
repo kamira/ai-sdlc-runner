@@ -118,6 +118,43 @@ MUTATIONS: List[Mutation] = [
         '''                    out = runner.attach(version, str(body.get("filename") or ""), raw)''',
         '''                    out = runner.attach(version, "attachment", raw)''',
         "tests/test_server.py"),
+    # ── intake-count / refused-answer (CHG-20260907-04) ─────────────────────────────────────────
+    # One count with two definitions, and a journal that keeps what the walk refused.
+    # The CLI writer recorded a stop on every walk that suspended incomplete, including a
+    # `--resume` where nothing was dispatched -- measured, three resumes took the count from
+    # 5 to 8 while each printed *4 ask(s) answered from the journal, not re-asked*. The server
+    # writer missed its FIRST stop whenever the run began on nothing, because the mark and
+    # `told` were both 0. And an option answer the walk refused was journaled as `answered`,
+    # so `--resume` replayed it and refused it again -- with no way out that did not mean
+    # abandoning the resume or changing the brief the escalation exists to avoid changing.
+    Mutation(
+        "intake-count", "a run that started on nothing goes back to not counting its first stop",
+        SRC / "server.py",
+        '''    instructions_when_last_asked: int = -1''',
+        '''    instructions_when_last_asked: int = 0''',
+        "tests/test_server.py"),
+
+    Mutation(
+        "intake-count", "a resume that asked nobody is counted as an ask again",
+        SRC / "cli.py",
+        '''            and len(report.resumed) < len(report.asks)):''',
+        '''            and True):''',
+        "tests/test_cli.py"),
+
+    Mutation(
+        "refused-answer", "an answer the walk refused is reused from the journal again",
+        SRC / "engine.py",
+        '''                and _acceptable(accept, answered[ask_id])):''',
+        '''                and True):''',
+        "tests/test_intake.py"),
+
+    Mutation(
+        "refused-answer", "a refused answer stays journaled as answered",
+        SRC / "engine.py",
+        '''                journal.refuse(ask_id, f"{type(exc).__name__}: {exc}", result)''',
+        '''                pass''',
+        "tests/test_intake.py"),
+
     # ── non-text-answer (CHG-20260907-03) ─────────────────────────────────────────
     # `_strings` read a truthy value that was not text with `str()`, in BOTH branches:
     # `{"problems": true}` became a problem named `True`, and `{"unsafe": [{...}]}` became a

@@ -1115,7 +1115,19 @@ def cmd_run(args: argparse.Namespace) -> int:
     # stop here, where the report says whether there was one. Written after the walk rather than
     # inside it, so the engine still takes its whole world through `RunConfig` and gives it back
     # through the report (CHG-20260901-17).
-    if journal and report.suspended and report.suspended.get("missing"):
+    if (journal and report.suspended and report.suspended.get("missing")
+            # **A walk nobody was asked is not an ask** — the rule `server._walk_once` already
+            # applies, written the way this entry point can know it. `report.resumed` is appended
+            # at the reuse decision rather than on journal membership (CHG-20260901-14), so this
+            # reads "at least one intake ask was dispatched this lap". Measured before the change:
+            # three `--resume` runs each printed *4 ask(s) answered from the journal, not
+            # re-asked* and each advanced the count, 5 -> 8. The run said nobody was asked and
+            # counted it as an ask in the same breath.
+            #
+            # `report.asks` at an incomplete intake stop is exactly the survey's asks and any
+            # option ask: `intake_review` is the first asking node and nothing routes a rejection
+            # back to it, so the walk cannot have asked anywhere else yet.
+            and len(report.resumed) < len(report.asks)):
         journal.record_intake_stop(report.suspended.get("missing") or ())
     if journal and report.suspended and report.suspended.get("unsafe"):
         # Written after the printing below has put them on the terminal — the marker's whole

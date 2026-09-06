@@ -230,7 +230,13 @@ class RunState:
     #: `instructions=[instruction]`, so a mark that outlived it made `told > mark` false for every
     #: run after the first in a process, and `intake_history` above stayed empty — the field whose
     #: own comment says the escalation depends on it being counted.
-    instructions_when_last_asked: int = 0
+    #: -1, not 0, so that the **first** stop is always an ask — which is CHG-20260904-05's own
+    #: task 3, and was false whenever the run began on nothing. `start("")` builds `instructions=[]`,
+    #: so `told > mark` was `0 > 0` and the first stop went uncounted; every later count was one
+    #: short for the life of the run. `or not self.intake_history` produces identical counts, and
+    #: was rejected for a reason that is not about behaviour: under it CHG-20260904-09's mutation
+    #: stays **green**, so the existing guard becomes a test that cannot fail.
+    instructions_when_last_asked: int = -1
     log: List[Dict[str, object]] = field(default_factory=list)
     #: What the operator handed over, and anything the store has since lost. A brief that has
     #: quietly lost a document is worse than one that says so.
