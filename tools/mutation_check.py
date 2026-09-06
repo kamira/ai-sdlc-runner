@@ -118,6 +118,25 @@ MUTATIONS: List[Mutation] = [
         '''                    out = runner.attach(version, str(body.get("filename") or ""), raw)''',
         '''                    out = runner.attach(version, "attachment", raw)''',
         "tests/test_server.py"),
+    # ── phantom-flag (CHG-20260906-06) ─────────────────────────────────────────────
+    # `NOT_ON_THE_CONSOLE` gives, for each field it excludes, the reason a reader would
+    # argue with. One of those reasons named `--json` — a flag no commit of this
+    # repository has ever declared. The guard asks the parser, so a reason that names a
+    # flag must name one that exists.
+    Mutation(
+        "phantom-flag", "an exclusion is justified by a flag that does not exist",
+        REPO / "tests" / "test_server.py",
+        '''    "risk_settled": "the grade the run was governed by — reaches the terminal only",''',
+        '''    "risk_settled": "the grade the run was governed by — reaches `--json` and the terminal only",''',
+        "tests/test_server.py"),
+
+    Mutation(
+        "phantom-flag", "the guard only knows the one field it was written for",
+        REPO / "tests" / "test_server.py",
+        '''    "relaxations": "the runner's own relaxations — `--undeclared allow` and the like",''',
+        '''    "relaxations": "the runner's own relaxations — `--store-remote allow` and the like",''',
+        "tests/test_server.py"),
+
     # ── attachment-provenance (CHG-20260906-04) ───────────────────────────────────────────────────────
     # `Attachment.instruction` was written, validated, sorted on and serialised, and read by
     # nothing that shows it to a person — while its own comment claimed it existed so a later

@@ -2135,12 +2135,12 @@ def test_the_rule_looks_at_the_three_methods_that_exist():
 NOT_ON_THE_CONSOLE = {
     # the grade a panel settled on
     "risk_proposed": "the per-model grades behind `risk_agreed`; the console shows neither yet",
-    "risk_settled": "the grade the run was governed by — reaches `--json` and the terminal only",
+    "risk_settled": "the grade the run was governed by — reaches the terminal only",
     "risk_agreed": "whether a panel agreed it, as against a grade carried from the plan",
     # the class, and what it dissolved
     "change_class": "which class governed the run, as a sentence for a person",
     "class_authorised_by": "who declared it, as a name",
-    "relaxations": "the runner's own relaxations — `--store-remote allow` and the like",
+    "relaxations": "the runner's own relaxations — `--undeclared allow` and the like",
     "relaxations_by_class": "the gates a class dissolved, each named",
     "relaxation_authorisers": "who authorised each of those, per note",
     # what the run did
@@ -2210,6 +2210,50 @@ def test_every_report_field_is_rendered_or_written_down():
     rendered_but_listed = sorted(f for f in NOT_ON_THE_CONSOLE if _reaches_console(f, page))
     assert rendered_but_listed == [], (
         f"these are listed as absent and the console renders them: {rendered_but_listed}")
+
+
+def test_no_exclusion_is_justified_by_a_flag_the_runner_does_not_have():
+    """Every entry above carries the reason its field is not on the page. One of them justified
+    `risk_settled` with *"reaches `--json` and the terminal only"* — and `--json` has never been
+    an argparse flag in any commit of this repository. `git log -S` over all branches finds zero.
+
+    Half the stated reason named a surface that does not exist, and because the other half was
+    true the sentence read as a measurement for fifteen days. It mattered beyond wording: the
+    fields said to reach `--json` reached `RunReport.as_dict()`, which nothing in `src/` calls.
+    The recorded defect was wider than the record of it.
+
+    Asked of the **parser**, the way
+    `test_the_locality_flags_went_with_the_backend_that_needed_them` asks it, and never of the
+    source text. A check that reads vocabulary instead of the thing it claims is this
+    repository's recurring defect; this one exists because an instance of it was living inside
+    an inventory whose whole purpose is to be argued with.
+    """
+    from ai_sdlc_runner import cli
+
+    declared = set()
+    stack = [cli.build_parser()]
+    while stack:
+        parser = stack.pop()
+        for action in getattr(parser, "_actions", []):
+            declared |= {o for o in action.option_strings if o.startswith("--")}
+            choices = getattr(action, "choices", None)
+            # Only a subparser action carries a mapping here; `choices=("refuse", "allow")`
+            # is a tuple, and calling `.values()` on it is how the first version of this
+            # guard failed.
+            if isinstance(choices, dict):
+                stack.extend(s for s in choices.values() if hasattr(s, "_actions"))
+    assert "--undeclared" in declared, "the parser walk found nothing; the guard would pass empty"
+
+    named = {flag: field
+             for field, why in NOT_ON_THE_CONSOLE.items()
+             for flag in re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]+)", why)}
+    assert named, "no reason names a flag, so this guard is checking nothing"
+
+    phantom = sorted("%s (the reason given for %s)" % (flag, field)
+                     for flag, field in named.items() if flag not in declared)
+    assert phantom == [], (
+        "these reasons name flags the runner does not declare: %s. A reason a reader cannot "
+        "check is not a reason" % phantom)
 
 
 def test_the_inventory_is_fifteen_and_the_two_renamed_ones_are_not_in_it():
@@ -2827,7 +2871,7 @@ def test_a_retired_approval_is_kept_and_named_rather_than_deleted(tmp_path):
     said = " ".join(runner.state.retired_approvals)
     assert "brief" in said and any(g in said for g in gates), said
 
-    # Through the snapshot, which is the only thing the console and `--json` ever see. Asserting
+    # Through the snapshot, which is the only thing the console ever sees. Asserting
     # the field alone left "the operator is never told" NOT CAUGHT — the same reaches-one-layer-
     # and-stops shape this round has been about, one level up from where it usually appears.
     snapshot = runner.state.snapshot()
