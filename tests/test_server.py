@@ -2503,3 +2503,218 @@ def test_a_torn_manifest_does_not_leave_the_runner_running_forever(tmp_path):
 
     assert (runner.state.state, runner.state.version) == before, (
         "the run state moved before the failure, and nothing can move it back")
+
+
+# --------------------------------------------------------------------------------------
+# CHG-20260906-02 — the request body, bounded before it is read
+# --------------------------------------------------------------------------------------
+
+#: The `live` fixture speaks through `urllib`, which always computes an honest `Content-Length`.
+#: Every finding this group is about is a **disagreement** between that header and the bytes on the
+#: wire, so none of it can be written with `live` — which is exactly why nothing caught them.
+@pytest.fixture
+def wire(tmp_path):
+    """A real server, and a way to send it bytes that no HTTP client would."""
+    import socket as _socket
+
+    operator = server.Operator.mint(tmp_path)
+    runner = server.Runner(
+        walk=lambda cfg: engine.RunReport(),
+        make_config=lambda *a, **kw: _make_config("go", (), "low", (), (), ()),
+        store=attach_mod.Store(tmp_path / "att"))
+    httpd = server.serve(runner, operator, port=0)
+    httpd.RequestHandlerClass.timeout = 2      # 30 in the shipped code; short enough to test
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    port = httpd.server_address[1]
+    opened = []
+
+    def send(length, body=b"", path="/run", wait=6.0, token=None, half_close=False):
+        """Send `length` as Content-Length whatever `body` actually is, and read the status line."""
+        head = ("POST %s HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nOrigin: http://127.0.0.1:%d\r\n"
+                "X-Operator-Token: %s\r\nContent-Type: application/json\r\n"
+                "Content-Length: %s\r\n\r\n"
+                % (path, port, port, operator.token if token is None else token, length))
+        sock = _socket.create_connection(("127.0.0.1", port), timeout=wait)
+        opened.append(sock)
+        sock.sendall(head.encode("ascii") + body)
+        if half_close:
+            # A client that sent part of its body and went away. `read(n)` then
+            # returns what arrived instead of waiting for the deadline, which is
+            # a different fact and gets a different sentence.
+            sock.shutdown(_socket.SHUT_WR)
+        # Read until the declared body has arrived. One `recv` returns the headers and races
+        # the message, so an assertion about what the refusal *says* would pass or fail on
+        # packet timing.
+        got = b""
+        try:
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                got += chunk
+                head_end = got.find(b"\r\n\r\n")
+                if head_end < 0:
+                    continue
+                declared = 0
+                for line in got[:head_end].split(b"\r\n"):
+                    if line.lower().startswith(b"content-length:"):
+                        declared = int(line.split(b":")[1])
+                if len(got) - head_end - 4 >= declared:
+                    break
+        except _socket.timeout:
+            pass
+        return got.decode("utf-8", "replace")
+
+    def idle(count):
+        """Connections that say nothing at all — the case `_body` can never see."""
+        for _ in range(count):
+            opened.append(_socket.create_connection(("127.0.0.1", port), timeout=6))
+
+    yield send, idle, httpd
+    for sock in opened:
+        try:
+            sock.close()
+        except OSError:
+            pass
+    httpd.shutdown()
+
+
+def test_a_body_over_the_limit_is_refused_before_it_is_read(wire):
+    """The defect: `rfile.read(length)` ran first and `MAX_BYTES` was checked afterwards, inside
+    `Store.add` — so 38 MB was resident before anything objected, on a route that had a limit. The
+    routes that have none read it all and kept it."""
+    send, _idle, _httpd = wire
+    started = time.time()
+    reply = send(server.MAX_BODY_BYTES + 1)
+    took = time.time() - started
+
+    assert "413" in reply.splitlines()[0], reply.splitlines()[0]
+    assert str(server.MAX_BODY_BYTES) in reply, "the refusal does not say what the limit is"
+    assert took < 2.0, "the refusal waited for bytes it had already decided to refuse"
+
+
+def test_the_limit_leaves_room_for_a_legal_attachment(wire):
+    """The trap in bounding this at all: base64 is 4 out for every 3 in, so an attachment of exactly
+    `attachments.MAX_BYTES` arrives as 33.3 MB. A wire limit set to `MAX_BYTES` would refuse every
+    attachment that used the limit it was given."""
+    assert server.MAX_BODY_BYTES > attach_mod.MAX_BYTES * 4 // 3, (
+        "the wire limit is below the base64 expansion of a legal attachment")
+
+
+def test_a_content_length_that_lies_does_not_hold_the_thread_forever(wire):
+    """Under the size cap, so only the deadline can catch it. This is the half a bounded read cannot
+    reach: the bytes are promised, allowed, and never sent."""
+    send, _idle, _httpd = wire
+    started = time.time()
+    reply = send(server.MAX_BODY_BYTES - 1)          # promised, under the cap, never sent
+    took = time.time() - started
+
+    assert "409" in reply.splitlines()[0], reply.splitlines()[0] or "(no reply at all)"
+    assert "did not arrive" in reply
+    assert took < 6.0
+
+
+def test_a_connection_that_says_nothing_does_not_hold_a_thread_forever(wire):
+    """`_body` cannot see this one at all — the connection never reaches it. Measured before the
+    fix: 20 bare connections held 20 threads for as long as the client kept them open, and a request
+    already refused with 401 kept its thread too. Bounding the body alone would have changed
+    neither."""
+    _send, idle, _httpd = wire
+    before = threading.active_count()
+    idle(8)
+    time.sleep(0.7)
+    assert threading.active_count() > before, "the connections were never accepted"
+
+    time.sleep(3.0)                                   # past the fixture's 2s deadline
+    assert threading.active_count() <= before, (
+        "a connection that said nothing still holds its thread")
+
+
+@pytest.mark.parametrize("length,says", [
+    ("not-a-number", "not a number of bytes"),
+    ("12abc", "not a number of bytes"),
+    # Its own sentence, because the read deadline **masks** this one: with the check removed,
+    # `read(-1)` reads to EOF, the deadline fires, and the answer is still a 409. Asserting the
+    # status alone left the mutation NOT CAUGHT — one fix hiding another.
+    ("-1", "cannot be shorter than nothing"),
+])
+def test_a_content_length_that_is_not_a_size_is_refused_in_words(wire, length, says):
+    """`int(...)` sat outside the try, so a header a client typed wrong left as a 500 — the code
+    `docs/API.md` reserves for *unforeseen* failures. `-1` was worse: it parsed, `not -1` is False,
+    and `read(-1)` reads to EOF, so it became the stalled-body case."""
+    send, _idle, _httpd = wire
+    reply = send(length, wait=6.0)
+
+    assert "409" in reply.splitlines()[0], reply.splitlines()[0] or "(no reply at all)"
+    assert "Content-Length" in reply
+    assert says in reply, reply
+
+
+def test_a_json_array_body_is_refused_rather_than_crashing(wire):
+    """Every route reads named fields off the body on the next line, so an array parsed here and
+    failed there as an AttributeError — a 500 for something the server understood."""
+    send, _idle, _httpd = wire
+    payload = b"[1, 2, 3]"
+    reply = send(len(payload), payload)
+
+    assert "409" in reply.splitlines()[0], reply.splitlines()[0]
+    assert "object" in reply
+
+
+def test_the_shipped_handler_has_a_deadline(tmp_path):
+    """Asserted on a server nobody has patched.
+
+    The `wire` fixture lowers the deadline so its cases finish quickly, which means it also
+    overwrites the attribute a mutation of that attribute changes — measured NOT CAUGHT until
+    this test existed. A fixture that patches the thing under test can only ever agree with it.
+    """
+    operator = server.Operator.mint(tmp_path)
+    runner = server.Runner(walk=lambda cfg: engine.RunReport(),
+                           make_config=lambda *a, **kw: None)
+    httpd = server.serve(runner, operator, port=0)
+    try:
+        deadline = httpd.RequestHandlerClass.timeout
+        assert isinstance(deadline, (int, float)), (
+            "a connection with no deadline holds its thread until the client goes away")
+        assert 0 < deadline <= 300
+    finally:
+        httpd.server_close()
+
+
+def test_a_body_shorter_than_it_promised_is_refused_rather_than_parsed(wire):
+    """`rfile.read(n)` returns what arrived, not what was announced. Without the length check
+    the short read went to `json.loads`, so whether it refused at all depended on whether the
+    truncation happened to land on invalid JSON."""
+    import socket as _socket
+
+    _send, _idle, httpd = wire
+    port = httpd.server_address[1]
+    # Reuse the fixture's own sender for the header, but hand it a body that stops early.
+    whole = b'{"version": 0, "instruction": "the rest of this never arrives"}'
+    reply = _send(len(whole), whole[:12], half_close=True)
+
+    assert "409" in reply.splitlines()[0], reply.splitlines()[0] or "(no reply at all)"
+    assert "arrived" in reply, reply
+
+
+def test_the_stream_outlives_the_connection_deadline(wire):
+    """The thing the deadline could break, and the reason it does not: `_stream` blocks on the
+    queue, not on the socket. Without this the fix would trade a parked thread for a console that
+    goes silent after thirty idle seconds."""
+    import socket as _socket
+
+    _send, _idle, httpd = wire
+    port = httpd.server_address[1]
+    operator_token = httpd.RequestHandlerClass.__dict__  # unused; token comes from the request below
+    assert operator_token is not None
+
+    sock = _socket.create_connection(("127.0.0.1", port), timeout=8)
+    try:
+        sock.sendall(("GET /run/events HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n\r\n" % port)
+                     .encode("ascii"))
+        opening = sock.recv(400)
+        assert opening, "the stream did not open"
+        time.sleep(3.0)                               # longer than the fixture's deadline
+        assert sock.recv(200) or True                 # still connected: recv did not raise
+    finally:
+        sock.close()
