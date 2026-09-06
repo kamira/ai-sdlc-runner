@@ -118,6 +118,47 @@ MUTATIONS: List[Mutation] = [
         '''                    out = runner.attach(version, str(body.get("filename") or ""), raw)''',
         '''                    out = runner.attach(version, "attachment", raw)''',
         "tests/test_server.py"),
+    # ── unsafe-stop (CHG-20260906-07) ─────────────────────────────────────────────
+    # A seat answering {"unsafe": [...], "missing": []} gave complete=True, no suspension,
+    # and the run walked to `merge` with the words the seat used printed on no surface at
+    # all. Two of these pin the mechanism; two pin the **rule the operator chose** — that a
+    # flag given before anything was shown decides nothing — which the mechanism alone would
+    # let through silently.
+    Mutation(
+        "unsafe-stop", "a seat's unsafe finding no longer stops the run",
+        SRC / "engine.py",
+        '''                if not survey.complete or unsafe:''',
+        '''                if not survey.complete:''',
+        "tests/test_intake.py"),
+
+    Mutation(
+        "unsafe-stop", "the flag decides without the findings having been shown",
+        SRC / "engine.py",
+        '''                    if intake_mod.shown_digest(survey.safety) in tuple(cfg.unsafe_shown):''',
+        '''                    if True:''',
+        "tests/test_intake.py"),
+
+    Mutation(
+        "unsafe-stop", "a first run carrying the flag is allowed to walk",
+        SRC / "cli.py",
+        '''    if getattr(args, "proceed_unsafe", False) and not (journal and journal.unsafe_shown()):''',
+        '''    if False:''',
+        "tests/test_cli.py"),
+
+    Mutation(
+        "unsafe-stop", "the terminal says nothing about what a seat called unsafe",
+        SRC / "cli.py",
+        '''        elif stop.get("unsafe"):''',
+        '''        elif False and stop.get("unsafe"):''',
+        "tests/test_cli.py"),
+
+    Mutation(
+        "unsafe-stop", "an unsafe stop is answerable as if it were a gate",
+        SRC / "server.py",
+        '''        is_unsafe = bool(report.suspended.get("unsafe"))''',
+        '''        is_unsafe = False''',
+        "tests/test_server.py"),
+
     # ── phantom-flag (CHG-20260906-06) ─────────────────────────────────────────────
     # `NOT_ON_THE_CONSOLE` gives, for each field it excludes, the reason a reader would
     # argue with. One of those reasons named `--json` — a flag no commit of this
@@ -192,8 +233,14 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "approval-lifetime", "a retired approval is deleted from the ledger instead of kept",
         SRC / "server.py",
-        """                if note not in self.state.retired_approvals:""",
-        """                self.state.approvals.remove(approval)
+        # Anchored on the line above the check as well, since CHG-20260906-07 gave
+        # `retired_approvals` a second writer — a decision about unsafe findings that the brief
+        # outgrew — whose dedupe-and-append is textually identical. One list, two things retired
+        # into it; this entry means the approval one.
+        """                        f"and this gate asks again")
+                if note not in self.state.retired_approvals:""",
+        """                        f"and this gate asks again")
+                self.state.approvals.remove(approval)
                 if note not in self.state.retired_approvals:""",
         "tests/test_server.py"),
 
@@ -2218,8 +2265,8 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         'readers', 'the page puts `reason` back inside one question group',
         REPO / 'docs' / 'API.md',
-        '  // Carried by TWO of the three questions, so it belongs to neither group below: the tie, and',
-        '  // meaningful when `incomplete` and nothing else, and',
+        '  // Carried by TWO of the four questions each, so these belong to neither group below.',
+        '  // meaningful when `incomplete` and nothing else.',
         'tests/test_server.py'),
 
     # Three `prose-guards` mutations were retired rather than faked (CHG-20260904-19). Reverting
@@ -2400,7 +2447,7 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         'contract', 'the page goes back to calling six of the fifteen conditional',
         REPO / 'docs' / 'API.md',
-        '**All 15 keys are on every suspension**',
+        '**All 16 keys are on every suspension**',
         '**Nine keys are on every suspension**',
         'tests/test_api_schema.py'),
 

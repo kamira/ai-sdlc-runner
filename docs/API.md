@@ -1,6 +1,6 @@
 # The server's HTTP API
 
-The console's back end. **Eighteen routes** — eight `GET`, ten `POST` — every one crossing a process
+The console's back end. **Nineteen routes** — eight `GET`, eleven `POST` — every one crossing a process
 boundary to a browser, and until now none of them written down. An independent seat called this the
 largest omission in [`SCHEMAS.md`](SCHEMAS.md); this is that entry.
 
@@ -167,6 +167,7 @@ If the version does not match the run's current one:
 | `POST /run/gate` | `{version, gate, node_id?}` | the run is not suspended, or is suspended on a **tie** rather than a gate |
 | `POST /run/reject` | `{version, gate, node_id?, reason?}` | as above, or the node has no `rejects_to` |
 | `POST /run/decide` | `{version, node_id, branch}` | the run is not suspended, or is suspended on a **gate** rather than a tie |
+| `POST /run/proceed` | `{version, node_id?}` | the run is not suspended on findings a seat called **unsafe**, or `node_id` names a different stop. There is no gate to confirm here: the answer is a decision about what was shown, so it is refused at every other shape rather than treated as one |
 | `POST /config/nodes` | `{version, node_id, models: [...]}` | no such node; a node whose **mode ignores** a model list; a model the registry does not have; `models` not a list |
 | `POST /config/seats` | `{version, seat, model_id}` | no such seat; a model the registry does not have |
 | `POST /config/halts` | `{version, kind, recipient?}` | a `kind` that is not one of the six permanent halts. A `recipient` is **never** refused — an organisation names its own functions, and an unrecognised one still reaches somebody because the operator is on every halt. A blank or missing `recipient` clears the route |
@@ -261,11 +262,12 @@ console's list of who was asked.
 
 ## 4 · The suspension
 
-`null` unless `state == "suspended"`. **All 15 keys are on every suspension** — a gate has no
+`null` unless `state == "suspended"`. **All 16 keys are on every suspension** — a gate has no
 branches to choose between and a tie has no gate to confirm, and each says so rather than omitting
 the field, because *a missing key and a false one read the same way only until they do not*. Five of
-them are **meaningful** for exactly one of the three questions, and one — `reason` — for **two**;
-the rest carry their empty value otherwise, and the two booleans below say which question this is.
+them are **meaningful** for exactly one of the four questions, and two — `reason` and `safety` — for
+**two**; the rest carry their empty value otherwise, and the three booleans below say which question
+this is.
 
 `reason` was documented as tie-only until CHG-20260904-13. It is also what an incomplete stop
 carries — the sentence naming the aspect and how many times it has been asked, which is the only
@@ -286,6 +288,10 @@ L-36).
 { "node_id":    "<node id>",
   "undecided":  false,      // true = a tie, answer with POST /run/decide
   "incomplete": false,      // true = the requirement is incomplete, answer with POST /run/instruct
+  "unsafe":     false,      // true = a seat called the requirement unsafe and a person has
+                            // not decided yet; answer with POST /run/proceed. Never true at
+                            // the same time as `incomplete`: a seat cannot weigh a
+                            // requirement it says it has not been told
   "gate":       "<gate>" | null,
   "gate_when":  "before" | "after",
   "verdict":    "halt" | "confirm" | "halt_independent" | …,
@@ -293,33 +299,43 @@ L-36).
   "branches":   [ "<branch>", … ],     // empty for a gate; the choices for a tie
   "run_id":     "<absolute journal path>" | null,
 
-  // Carried by TWO of the three questions, so it belongs to neither group below: the tie, and
-  // the incomplete requirement — where it is the sentence naming the aspect and how many times
-  // it has been asked, and the only ask text the console renders. Empty at a gate.
+  // Carried by TWO of the four questions each, so these belong to neither group below.
+  //
+  // `reason`: the tie, and the incomplete requirement — where it is the sentence naming the
+  // aspect and how many times it has been asked, and the only ask text the console renders.
+  // At an unsafe stop it is the sentence naming the seats and how many findings. Empty at a gate.
   "reason":     "<why this is being asked>",
+  // `safety`: the unsafe stop, and the incomplete one. A requirement can be both underspecified
+  // and dangerous, and the incomplete stop carries the findings so that asking for the missing
+  // aspect first does not hide them. Keyed by SEAT, not aspect: `intake.collect` writes
+  // `survey.safety[seat] = unsafe`, and a caller keying by aspect matched nothing, ever
+  // (CHG-20260903-37). It sat under the `incomplete` group until CHG-20260906-07 gave it a
+  // second question, and the rule this page already applies to `reason` applies to it too.
+  "safety":     { "<seat>": [ … ] },
 
-  // meaningful when `incomplete` — the intake survey. Present either way: `[]`, `{}`, `[]`, `{}`
+  // meaningful when `incomplete` — the intake survey. Present either way: `[]`, `{}`, `[]`
   "missing":    [ "<aspect>", … ],
   "options":    { "<aspect>": [ …≥3… ] },
   "problems":   [ "<problem>", … ],    // what the seats found wrong with the requirement
-  "safety":     { "<seat>": [ … ] },   // what they found that is a safety question.
-                                       // Keyed by SEAT, not aspect: `intake.collect`
-                                       // writes `survey.safety[seat] = unsafe`, and a
-                                       // caller keying by aspect matched nothing, ever
-                                       // (CHG-20260903-37)
-
 
   // meaningful when `undecided` — the tie. Present either way: `{}`
   "verdicts":   { "<voice>": "<verdict>", … } }   // who said what, so a tie can be read
 ```
 
-Three questions, told apart by two booleans:
+Four questions, told apart by three booleans. Exactly one is true:
 
-| `undecided` | `incomplete` | The run is waiting for | Answer with |
-|---|---|---|---|
-| `false` | `false` | a gate to be approved or refused | `POST /run/gate` · `POST /run/reject` |
-| `true` | `false` | a tie to be broken | `POST /run/decide` |
-| `false` | `true` | a requirement that is not complete | `POST /run/instruct` |
+| `undecided` | `incomplete` | `unsafe` | The run is waiting for | Answer with |
+|---|---|---|---|---|
+| `false` | `false` | `false` | a gate to be approved or refused | `POST /run/gate` · `POST /run/reject` |
+| `true` | `false` | `false` | a tie to be broken | `POST /run/decide` |
+| `false` | `true` | `false` | a requirement that is not complete | `POST /run/instruct` |
+| `false` | `false` | `true` | a person to read what a seat called unsafe, and decide | `POST /run/proceed` |
+
+The fourth is not a fourth kind of *incomplete*. An incomplete requirement is answered by
+**saying more**, which is why its answer is the instruction box and not a button. An unsafe
+one is answered by **deciding**, which is why its answer is a button and not the box. Folding
+the second into `Survey.complete` would send a person to the box to answer a question the box
+cannot answer.
 
 ---
 

@@ -138,6 +138,12 @@ class AskJournal:
 
     #: Intake stops live beside the asks, in files this prefix keeps out of `entries()`.
     _INTAKE = "intake-stop-"
+    #: So do the unsafe findings that have been shown to a person.
+    _UNSAFE = "unsafe-shown-"
+    #: Every prefix that is **not** an ask. `entries()` excluded one prefix by name and a second
+    #: kind of file would have been swept into `pending()` and `answers()` as a malformed ask —
+    #: which is the failure its own docstring describes. One list, so a third kind cannot forget.
+    _NOT_ASKS = (_INTAKE, _UNSAFE)
 
     def record_intake_stop(self, missing: Sequence[str]) -> None:
         """Write down that this run stopped at intake with these aspects still missing.
@@ -159,6 +165,21 @@ class AskJournal:
         stops = len(self._intake_files())
         self._write(f"{self._INTAKE}{stops:03d}", {"missing": [str(m) for m in missing]})
 
+    def record_unsafe_shown(self, digest: str) -> None:
+        """Write down that these unsafe findings were put in front of a person.
+
+        **Named by the digest, not by a count.** `record_intake_stop` above names its files by how
+        many already exist, which loses one when an earlier file is deleted — the defect seat
+        measured the count going 3 -> 2 that way this round. A name that is the content cannot
+        collide, and showing the same findings twice writes the same file rather than a second one.
+        """
+        self._write(f"{self._UNSAFE}{digest}", {"digest": digest})
+
+    def unsafe_shown(self) -> List[str]:
+        """Every digest already shown — what `RunConfig.unsafe_shown` wants."""
+        return sorted(n[len(self._UNSAFE):-len(".json")] for n in paths.listdir(self.dir)
+                      if n.startswith(self._UNSAFE) and n.endswith(".json"))
+
     def intake_stops(self) -> List[Dict[str, object]]:
         """The stops so far, oldest first — what `RunConfig.intake_history` wants."""
         return [json.loads(paths.read_text(self.dir / name)) for name in self._intake_files()]
@@ -176,7 +197,8 @@ class AskJournal:
         """
         return [json.loads(paths.read_text(self.dir / name))
                 for name in sorted(n for n in paths.listdir(self.dir)
-                                   if n.endswith(".json") and not n.startswith(self._INTAKE))]
+                                   if n.endswith(".json")
+                                   and not n.startswith(self._NOT_ASKS))]
 
     def answers(self) -> Dict[str, Mapping[str, object]]:
         """``ask_id -> result`` for everything already answered.
@@ -597,6 +619,16 @@ class RunConfig:
     #: missing each time. Carried across walks so "asked three times" is a fact rather than a
     #: feeling — the escalation to options depends on it being counted, not remembered.
     intake_history: Sequence[Mapping[str, object]] = ()
+    #: Digests of unsafe findings that have already been put in front of a person, from
+    #: `intake.shown_digest`. Read from the journal *before* the walk and handed in here, because
+    #: `cli.cmd_run`'s own comment at the `record_intake_stop` call says why: the engine takes its
+    #: whole world through `RunConfig` and gives it back through the report (CHG-20260901-17). An
+    #: engine that reached into the journal to check this would be the exception that ends that.
+    unsafe_shown: Sequence[str] = ()
+    #: Non-empty when somebody said to continue past what a seat called unsafe, and what said it —
+    #: `"--proceed-unsafe"` or `"POST /run/proceed"`. It is the authoriser recorded against the
+    #: relaxation, so an empty string is not merely false, it is *nobody said so*.
+    proceed_unsafe: str = ""
     #: Gates a person refused — see ``Rejection``.
     rejections: Sequence["Rejection"] = ()
     #: A person's answers to ties — see ``Ruling``. Empty by default: a run with no rulings stops
@@ -1977,8 +2009,12 @@ def _finish(report: "RunReport", confirmations: Dict[str, int],
 #: never reached the terminal — in the surface that record exists because nobody had swept it.
 SUSPENSION_FIELDS = {
     "node_id": None, "gate": None, "gate_when": None, "verdict": None, "risk": None,
-    "incomplete": False, "undecided": False, "branches": (), "run_id": None,
-    "reason": "", "verdicts": {}, "missing": (), "options": {}, "problems": (), "safety": (),
+    "incomplete": False, "undecided": False, "unsafe": False, "branches": (), "run_id": None,
+    # `safety` was `()` — the only dict-valued field here whose empty was a tuple, so
+    # `_suspension` rendered it `[]` on every shape that does not set it, while its type is
+    # `Dict[str, List[str]]` and `docs/API.md` documented `{}`. Nothing noticed because the
+    # schema guard checks that each key is *named* on the page, never what its value is.
+    "reason": "", "verdicts": {}, "missing": (), "options": {}, "problems": (), "safety": {},
 }
 
 
@@ -2576,7 +2612,27 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                 survey = intake_mod.collect(said)
                 report.survey = survey.as_dict()
 
-                if not survey.complete:
+                # **A fourth question, not a fourth kind of incomplete.** `Survey.complete` still
+                # answers only "is the requirement fully specified?" — folding safety into it would
+                # make the run say the brief is missing something when nothing is missing, and send
+                # a person to the instruction box to answer a question the box cannot answer.
+                #
+                # `missing` first when both are true: a seat cannot decide what it thinks of a
+                # requirement it says it has not been told. The findings are carried on that stop
+                # too, so nothing is hidden by the ordering — only deferred.
+                unsafe = bool(survey.safety) and survey.complete
+                if unsafe and cfg.proceed_unsafe:
+                    # Spent only against the findings it was given for. A person who read one list
+                    # has not read a different one, and a seat that raises something new on a later
+                    # lap is a different list (CHG-20260906-03 gives approvals the same guarantee,
+                    # by version; this does it by content, because the journal has no run id).
+                    if intake_mod.shown_digest(survey.safety) in tuple(cfg.unsafe_shown):
+                        note = intake_mod.proceeded_note(survey)
+                        report.relaxations.append(note)
+                        report.relaxation_authorisers[note] = cfg.proceed_unsafe
+                        unsafe = False
+
+                if not survey.complete or unsafe:
                     # Asking again is the right first move; asking forever is not. Past the limit
                     # the runner stops asking and puts options on the table -- authored by a MODEL,
                     # recorded as an ask, because a runner that quietly writes requirements has
@@ -2603,11 +2659,13 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                     # assigned to `halt_reason` eleven lines below, so the suspension could not
                     # carry it and `cli.cmd_run` printed a placeholder where the console printed
                     # the sentence. The shape says what it says it says.
-                    said = intake_mod.stop_reason(survey, cfg.intake_history)
+                    said = (intake_mod.stop_reason(survey, cfg.intake_history)
+                            if not survey.complete else intake_mod.unsafe_reason(survey))
                     report.suspended = _suspension(
                         node_id=node.id,
                         undecided=False,
-                        incomplete=True,
+                        incomplete=not survey.complete,
+                        unsafe=unsafe,
                         reason=said,
                         gate=node.gate,
                         gate_when=node.gate_when,

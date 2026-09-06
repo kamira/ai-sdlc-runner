@@ -37,6 +37,8 @@ them, because a runner that quietly authors requirements has stopped being a run
 """
 from __future__ import annotations
 
+import hashlib
+
 from dataclasses import dataclass, field
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -225,6 +227,47 @@ def read_options(answer: Mapping[str, object], aspect: str) -> List[str]:
             f"is a false choice and one is a decision wearing a question mark; the point of asking "
             f"was to widen the decision, not to narrow it.")
     return options
+
+
+def shown_digest(safety: Mapping[str, Sequence[str]]) -> str:
+    """A name for **what was put in front of a person**, so a later flag can say it read this.
+
+    Not a run id and not a brief hash. The ask journal's files carry neither, so a journal
+    directory shared by two runs lets one brief's history answer for another's — measured by the
+    risk seat this round. Digesting the findings themselves sidesteps that: an answer is accepted
+    only against the findings it was given for, whichever run produced them.
+
+    The seats are sorted and each seat's lines keep the order it gave them, because that is the
+    order they were printed in. Two seats raising the same concern is not one concern.
+    """
+    shown = tuple(sorted((str(seat), tuple(str(line) for line in lines))
+                         for seat, lines in safety.items()))
+    return hashlib.sha256(repr(shown).encode("utf-8")).hexdigest()[:16]
+
+
+def unsafe_reason(survey: Survey) -> str:
+    """One plain sentence for a person, when a seat calls an otherwise complete requirement unsafe.
+
+    Deliberately not `stop_reason`'s sentence. That one says the requirement does not *say* enough,
+    and the answer to it is to say more. This one says the requirement says something a seat thinks
+    is dangerous, and the answer to it is a decision — the two want different things from a person,
+    which is what `Survey.safety`'s own docstring says.
+    """
+    seats = ", ".join(sorted(survey.safety))
+    count = sum(len(lines) for lines in survey.safety.values())
+    what, verb = ("finding", "says") if count == 1 else ("findings", "say")
+    read = "Read it and decide." if count == 1 else "Read them and decide."
+    return (f"{count} {what} from {seats} {verb} this requirement is unsafe. Nothing has been "
+            f"planned or built — this stopped before any of that. {read}")
+
+
+def proceeded_note(survey: Survey) -> str:
+    """What goes in the relaxation ledger when a person read the findings and continued anyway."""
+    seats = ", ".join(sorted(survey.safety))
+    count = sum(len(lines) for lines in survey.safety.values())
+    what = "finding" if count == 1 else "findings"
+    return (f"intake_review ran past {count} unsafe {what} from {seats}: they were shown to a "
+            f"person, who chose to continue")
 
 
 def stop_reason(survey: Survey, history: Sequence[Mapping[str, object]]) -> str:

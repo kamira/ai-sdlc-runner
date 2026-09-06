@@ -192,6 +192,86 @@ def _walk(seat_answers, **cfg_kw):
     return engine.walk(engine.RunConfig(**base), dispatch, enabled=True)
 
 
+# ── a seat calling something unsafe is a question for a person (CHG-20260906-07) ──────────────
+
+
+def test_an_unsafe_finding_stops_the_run_even_when_nothing_is_missing():
+    """Measured before the change: `complete=True`, no suspension, and the walk reached `merge`
+    with the words *"it deletes user data"* printed on no surface at all — not the terminal, not
+    the snapshot, not the console. `Survey.complete` reads only `missing`, and the suspension was
+    entered only when it was false, so the one answer the seats have for "this should not be done"
+    was the one answer that stopped nothing.
+    """
+    report = _walk({"risk": {"missing": [], "unsafe": ["it deletes user data"]}})
+
+    assert report.state == engine.SUSPENDED
+    assert report.halted_at == "intake_review"
+    assert report.suspended["unsafe"] is True
+    assert report.suspended["incomplete"] is False, "nothing is missing; it is not that question"
+    assert report.suspended["safety"] == {"risk": ["it deletes user data"]}
+    assert "it deletes user data" in report.suspended["reason"] or "risk" in \
+        report.suspended["reason"], "the sentence has to name who said it"
+    assert "pm_plan" not in report.visited, "nothing was planned"
+    assert "merge" not in report.visited
+
+
+def test_the_requirement_being_incomplete_is_asked_first_and_hides_nothing():
+    """Both questions at once. A seat cannot weigh a requirement it says it has not been told, so
+    the missing aspect is asked first — but the findings ride along on that stop, because deferring
+    a question is not the same as dropping it.
+    """
+    report = _walk({"risk": {"missing": ["ui"], "unsafe": ["it deletes user data"]}})
+
+    assert report.suspended["incomplete"] is True
+    assert report.suspended["unsafe"] is False, "one question at a time, and this is the other one"
+    assert report.suspended["safety"] == {"risk": ["it deletes user data"]}, \
+        "deferred, not dropped"
+
+
+def test_the_flag_alone_decides_nothing():
+    """**The operator's rule.** A decision is about findings somebody read; a flag passed before
+    anything was shown answers a question nobody was asked. `unsafe_shown` is empty here, which is
+    what a first run looks like.
+    """
+    report = _walk({"risk": {"missing": [], "unsafe": ["it deletes user data"]}},
+                   proceed_unsafe="--proceed-unsafe")
+
+    assert report.suspended is not None and report.suspended["unsafe"] is True
+    assert "merge" not in report.visited
+
+
+def test_a_decision_answers_the_findings_it_was_shown_and_no_others():
+    """The digest is of the findings themselves, not of the run or the brief.
+
+    The ask journal's files carry no run id and no brief hash — the risk seat measured that a
+    shared journal directory therefore lets one brief's history answer for another's. Pinning the
+    decision to what was displayed sidesteps that: a seat that raises something new on a later lap
+    has produced a different list, and a decision about the old one does not cover it.
+    """
+    shown = _walk({"risk": {"missing": [], "unsafe": ["it deletes user data"]}})
+    digest = intake.shown_digest(shown.suspended["safety"])
+
+    same = _walk({"risk": {"missing": [], "unsafe": ["it deletes user data"]}},
+                 proceed_unsafe="--proceed-unsafe", unsafe_shown=(digest,))
+    assert "merge" in same.visited, "the findings that were read are the findings that were answered"
+    spoken = [line for line in same.relaxations if "unsafe" in line]
+    assert len(spoken) == 1, "continuing past it is a relaxation, and is written down"
+    assert same.relaxation_authorisers[spoken[0]] == "--proceed-unsafe", "and by whom"
+
+    other = _walk({"risk": {"missing": [], "unsafe": ["it drops the audit table"]}},
+                  proceed_unsafe="--proceed-unsafe", unsafe_shown=(digest,))
+    assert other.suspended is not None and other.suspended["unsafe"] is True, \
+        "a different finding is a different question"
+    assert "merge" not in other.visited
+
+
+def test_a_clean_survey_is_untouched_by_any_of_this():
+    """The floor. Nothing unsafe, nothing missing, and the run is exactly what it was."""
+    report = _walk({"risk": {"missing": [], "unsafe": []}})
+    assert report.halted_at == "done"
+    assert "merge" in report.visited
+
+
 def test_an_incomplete_requirement_stops_before_anything_is_planned():
     report = _walk({"conformance": {"missing": ["ui", "inputs"],
                                     "problems": ["no screen is described"]}})

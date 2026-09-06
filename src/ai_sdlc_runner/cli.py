@@ -920,6 +920,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 2
 
     journal = engine.AskJournal(args.ask_journal) if args.ask_journal else None
+    if getattr(args, "proceed_unsafe", False) and not (journal and journal.unsafe_shown()):
+        # **The operator's rule**: a first run carrying this flag is an error, not a quiet pass.
+        # The flag is an answer, and an answer to a question nobody has been asked is not one. The
+        # run below would stop anyway — the engine spends the flag only against findings it can
+        # show were shown — but stopping silently would let a person believe they had decided
+        # something. Say it here instead, before any seat is paid for.
+        print("--proceed-unsafe answers findings a person has read, and this journal records "
+              "none having been shown. Run it without the flag first: it will stop at "
+              "`intake_review` and print what the seats said.", file=sys.stderr)
+        return 2
 
     # The assignment store, read the same way `serve` reads it: the plan wins where it speaks, the
     # store fills where it is silent. `--assignment-store none` opts out for a run that must depend
@@ -1040,6 +1050,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         # fifth re-run (CHG-20260901-17, defect seat). Read from the journal because that is
         # already this command's memory across invocations.
         intake_history=journal.intake_stops() if journal else (),
+        # Read here, before the walk, for the reason the `record_intake_stop` call below states:
+        # the engine takes its whole world through `RunConfig`.
+        unsafe_shown=tuple(journal.unsafe_shown()) if journal else (),
+        proceed_unsafe="--proceed-unsafe" if getattr(args, "proceed_unsafe", False) else "",
     )
     seat_models = dict(resolved_assignments.get("seat_models") or {})
     for pair in args.seat_model or ():
@@ -1103,6 +1117,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     # through the report (CHG-20260901-17).
     if journal and report.suspended and report.suspended.get("missing"):
         journal.record_intake_stop(report.suspended.get("missing") or ())
+    if journal and report.suspended and report.suspended.get("unsafe"):
+        # Written after the printing below has put them on the terminal — the marker's whole
+        # claim is that a person was shown this, so it is recorded on the path that shows it.
+        journal.record_unsafe_shown(
+            intake_mod.shown_digest(report.suspended.get("safety") or {}))
 
     # Which mechanism bounded this run, or why none (CHG-20260827-23 task 1). Printed always: an
     # operator who cannot see whether the work was bounded has to guess, and the guess is optimistic.
@@ -1211,6 +1230,17 @@ def cmd_run(args: argparse.Namespace) -> int:
                 print(f"               {voice}: {verdict}")
             print(f"continue with: --resume --rule {stop['node_id']}="
                   f"{'|'.join(stop.get('branches') or [])}")
+        elif stop.get("unsafe"):
+            # **A fourth shape** (CHG-20260906-07). Without this branch it would fall to the `else`
+            # below and print `--resume --confirm None`, because `intake_review.gate` is `None` —
+            # which is exactly what CHG-20260904-02 fixed for the incomplete shape at this same
+            # node. The engine answers `--confirm None` with *"confirmed gate 'None' does not
+            # exist"*, so the terminal would be offering a control that cannot answer the question.
+            print(f"waiting for:   a person to read what the seats called unsafe "
+                  f"at {stop['node_id']}")
+            print(f"               {stop['reason']}")
+            print("continue with: --resume --proceed-unsafe, having read the lines above — "
+                  "there is no gate here to confirm")
         elif stop.get("incomplete"):
             # **Three shapes, not two** (CHG-20260904-02, defect seat L-17). A gate, a tie, and a
             # requirement nobody has finished. This branch read the first two and printed the
@@ -1237,6 +1267,12 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"waiting for:   a decision on {stop['gate']} at {stop['node_id']}")
             print(f"continue with: --resume --confirm {stop['gate']}"
                   + (f"  (run {stop['run_id']})" if stop.get("run_id") else ""))
+    # Printed after whichever branch ran, not inside one: `safety` is meaningful for two of the
+    # four questions — a requirement can be both underspecified and dangerous — and a loop inside
+    # the `unsafe` branch would have hidden the findings on the incomplete stop that carries them.
+    for seat, lines in sorted((report.suspended or {}).get("safety", {}).items() or ()):
+        for line in lines:
+            print(f"unsafe:        {seat}: {line}")
     for line in report.dispatches:
         print(f"dispatched:    {line}")
     for line in report.rulings:
@@ -1477,6 +1513,17 @@ def cmd_serve(args: argparse.Namespace) -> int:
             operations=plan.get("operations", {}),
             confirmed=approvals,
             rulings=rulings,
+            # True at the moment `serve` starts, and only then: nobody has been shown findings a
+            # seat called unsafe, and nobody has decided about them. `Runner._walk_once` sets both
+            # per walk, from what the run is actually suspended on and what somebody clicked.
+            #
+            # Written out rather than left to the defaults so that `cmd_run` and `cmd_serve` build
+            # the same config. `test_both_ways_to_start_a_run_take_the_same_governance` keeps an
+            # exemption list for what one command genuinely cannot supply, and that list is empty
+            # — a state the repository worked to reach (CHG-20260903-22). Two empty values are a
+            # smaller price than reopening it.
+            unsafe_shown=(),
+            proceed_unsafe="",
             # **The current** assignment, not the plan's — resolved on every walk.
             #
             # This read `plan.get("node_models")`, so an assignment edited through the console
@@ -1772,6 +1819,12 @@ def build_parser() -> argparse.ArgumentParser:
              "where this machine can (Linux bwrap, macOS seatbelt) and RECORDED as unsandboxed "
              "where it cannot; with it, a machine that cannot enforce the policy refuses to "
              "dispatch instead. See CHG-20260827-23.")
+    pr.add_argument("--proceed-unsafe", action="store_true",
+                    help="continue past findings a seat called unsafe at `intake_review`. Refused "
+                         "unless a previous run of this journal actually put those findings in "
+                         "front of somebody: the flag answers a list, and a list nobody has been "
+                         "shown has not been answered. Recorded as a relaxation, with this flag "
+                         "named as the authoriser.")
     pr.add_argument("--undeclared", choices=("refuse", "allow"), default="refuse",
                     help="what to do when this runner could not verify what a node does — it "
                          "declares no operations, or names targets nothing recognises. `refuse` "

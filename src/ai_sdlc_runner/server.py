@@ -36,6 +36,7 @@ double-click spends a second approval — which is the "advance twice" an indepe
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import queue
@@ -219,6 +220,11 @@ class RunState:
     #: append-only and three docstrings rely on it — so a superseded decision stays in the
     #: ledger as history and is named here instead of being spent (CHG-20260906-03).
     retired_approvals: List[str] = field(default_factory=list)
+    #: `(node_id, digest, brief)` once somebody has read what a seat called unsafe and said to
+    #: continue. The digest is `intake.shown_digest` of the findings they were shown, so a decision
+    #: cannot answer findings nobody put in front of them; the brief retires it the way
+    #: `_live_approvals` retires an approval the brief outgrew (CHG-20260906-03).
+    proceeded: Optional[tuple] = None
     #: How many instructions had been given when the last intake ask was counted (CHG-20260904-05).
     #: **On the run, not on the runner** (CHG-20260904-09): `start` builds a fresh `RunState` with
     #: `instructions=[instruction]`, so a mark that outlived it made `told > mark` false for every
@@ -522,6 +528,32 @@ class Runner:
             self._publish()
         return self._advance()
 
+    def proceed(self, version: int, node_id: Optional[str]) -> Dict[str, object]:
+        """A person read what the seats called unsafe, and said to continue anyway.
+
+        There is no journal marker here, unlike the command line's `--proceed-unsafe`. There does
+        not need to be: this route is reachable only while the run is suspended *showing* those
+        findings, so being shown them is the route's precondition rather than something to record
+        and check afterwards. The digest is still taken, because what is being answered has to be
+        pinned to what was displayed — a later walk whose seats say something new is a different
+        list, and this decision does not cover it.
+        """
+        with self._lock:
+            self._require_version(version)
+            # Through the same gate every other answer uses, rather than a second state check
+            # of its own: `test_only_attach_reaches_advance_without_a_state_gate` exists to catch
+            # exactly the parallel mechanism the first version of this method wrote.
+            self._require_suspension(undecided=False, unsafe=True)
+            report = self.state.report
+            waiting = self._answering(node_id=node_id)
+            self.state.proceeded = (waiting.get("node_id"),
+                                    intake_mod.shown_digest(report.suspended.get("safety") or {}),
+                                    self._brief_now())
+            self.state.state = "running"
+            self.state.version += 1
+            self._publish()
+        return self._advance()
+
     def reject(self, version: int, gate: str, node_id: Optional[str],
                reason: str) -> Dict[str, object]:
         """Refuse a gate. Where the run then goes is the graph's to say, never the refuser's."""
@@ -592,7 +624,7 @@ class Runner:
                 f"Something moved — another tab, or a click that already landed. Reload and look at "
                 f"what it is actually waiting for before answering again.")
 
-    def _require_suspension(self, undecided: bool) -> None:
+    def _require_suspension(self, undecided: bool, unsafe: bool = False) -> None:
         report = self.state.report
         if self.state.state != engine.SUSPENDED or report is None or report.suspended is None:
             raise ServerError(
@@ -609,6 +641,21 @@ class Runner:
         # approve"*. It is waiting for a requirement somebody has to finish.
         is_tie = bool(report.suspended.get("undecided"))
         is_incomplete = bool(report.suspended.get("incomplete"))
+        # **A fourth shape** (CHG-20260906-07). Refused here for the reason the comment above
+        # gives about the incomplete one: `intake_review` has no gate, so an answer that reached
+        # `approve()` would store `Approval(gate=None, …)`, which `walk` refuses on every later
+        # walk — and `state.approvals` is append-only, so `_live_approvals` retires it only when
+        # the brief changes. The run would be stuck on a decision the person did make.
+        is_unsafe = bool(report.suspended.get("unsafe"))
+        if is_unsafe != unsafe:
+            said = "; ".join(f"{seat}: {line}"
+                             for seat, lines in sorted(
+                                 (report.suspended.get("safety") or {}).items())
+                             for line in lines)
+            raise ServerError(
+                f"this run is waiting for a person to read what a seat called unsafe"
+                f"{' — ' + said if said else ''}, and that is not what you sent. "
+                f"Answer it with POST /run/proceed.")
         if is_incomplete:
             missing = ", ".join(str(a) for a in report.suspended.get("missing") or ())
             raise ServerError(
@@ -713,13 +760,30 @@ class Runner:
                         f"and this gate asks again")
                 if note not in self.state.retired_approvals:
                     self.state.retired_approvals.append(note)
-            report = self._walk(self._make_config(tuple(self.state.instructions),
-                                                  tuple(live),
-                                                  tuple(self.state.rulings),
-                                                  tuple(self._store.order_paths())
-                                                  if self._store else (),
-                                                  tuple(self.state.rejections),
-                                                  tuple(self.state.intake_history)))
+            cfg = self._make_config(tuple(self.state.instructions),
+                                    tuple(live),
+                                    tuple(self.state.rulings),
+                                    tuple(self._store.order_paths())
+                                    if self._store else (),
+                                    tuple(self.state.rejections),
+                                    tuple(self.state.intake_history))
+            # Set on the config rather than passed through `_make_config`. Twenty callers build
+            # that one, and several are `lambda *a, **k:` — which would accept a seventh argument
+            # and drop it, leaving the server believing it had said "a person decided this" when
+            # it had said nothing. A field that cannot be silently ignored, for a fact whose whole
+            # job is to not be assumed.
+            proceeded = self.state.proceeded
+            if proceeded and proceeded[2] == self._brief_now():
+                cfg = dataclasses.replace(cfg, unsafe_shown=(proceeded[1],),
+                                          proceed_unsafe="POST /run/proceed")
+            elif proceeded:
+                note = ("what a seat called unsafe was read against an earlier brief "
+                        f"({proceeded[2][0]} instruction(s), {len(proceeded[2][1])} "
+                        "attachment(s)); the brief has changed, so that decision is retired and "
+                        "the findings are shown again")
+                if note not in self.state.retired_approvals:
+                    self.state.retired_approvals.append(note)
+            report = self._walk(cfg)
         except Exception as exc:                   # the run failed; say so rather than look idle
             with self._lock:
                 self.state.state = engine.STOPPED
@@ -1147,6 +1211,8 @@ def make_handler(runner: Runner, operator: Operator,
                     out = {**reg.as_dict(), "leaving": [m.id for m in reg.leaving()]}
                   runner.publish_config_change()
                   out = {**out, "version": runner.state.version}
+                elif self.path == "/run/proceed":
+                    out = runner.proceed(version, body.get("node_id"))
                 elif self.path == "/run/reject":
                     out = runner.reject(version, str(body.get("gate") or ""),
                                         body.get("node_id"), str(body.get("reason") or ""))
