@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import socket
 import secrets
 import threading
 from dataclasses import dataclass, field
@@ -957,7 +958,11 @@ def make_handler(runner: Runner, operator: Operator,
                 return {}
             try:
                 data = self.rfile.read(length)
-            except TimeoutError:
+            # Both spellings on purpose: `socket.timeout` only became an alias of
+            # `TimeoutError` in Python 3.10, and CI runs 3.9. Naming only the modern one made
+            # this fall through to the 500 handler on 3.9 while passing on 3.13 — a difference
+            # the local suite could not show, because it runs one interpreter.
+            except (TimeoutError, socket.timeout):
                 self.close_connection = True
                 raise ServerError(
                     f"Content-Length promised {length} bytes and they did not arrive")
