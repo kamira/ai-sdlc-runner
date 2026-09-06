@@ -625,7 +625,7 @@ src/ai_sdlc_runner/
   cli.py          flow · policy · settings · run · serve · conversations · export
 docs/
   SCHEMAS.md      all sixteen schemas, and which a machine enforces
-  API.md          the seventeen HTTP routes, and the guard that runs before every one
+  API.md          the nineteen HTTP routes, and the guard that runs before every one
   DATABASE.md     the SQLite schema, and every column that is deliberately not in it
   MODELS.md       the rules that govern a model: refusals, reach, assignment
   changes/        one record per change, with done-whens and what is not claimed
@@ -793,7 +793,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 2238 tests
+pytest -q          # 2246 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

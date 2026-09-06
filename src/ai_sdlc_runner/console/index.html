@@ -528,6 +528,24 @@ function drawBrief() {
   box.appendChild(el);
 }
 
+// Two stops carry findings a seat called unsafe: the one that is *about* them, and the
+// incomplete one, which asks for the missing aspect first and must not hide them while it does.
+// Written once so the second cannot quietly lose them — this whole round has been about fields
+// that reach one place and stop.
+function drawUnsafe(el, safety) {
+  Object.keys(safety || {}).sort().forEach(function (seat) {
+    (safety[seat] || []).forEach(function (line) {
+      var d = document.createElement("div"); d.className = "raised";
+      d.style.color = "var(--stop)";
+      var b = document.createElement("b"); b.textContent = seat + " (unsafe)";
+      b.style.color = "var(--stop)";
+      d.appendChild(b);
+      d.appendChild(document.createTextNode("  " + line));
+      el.appendChild(d);
+    });
+  });
+}
+
 function drawAsk() {
   var box = $("#ask"); box.innerHTML = "";
   if (!state || state.state !== "suspended" || !state.suspended) return;
@@ -577,17 +595,7 @@ function drawAsk() {
       el.appendChild(d);
     });
 
-    Object.keys(s.safety || {}).forEach(function (seat) {
-      (s.safety[seat] || []).forEach(function (line) {
-        var d = document.createElement("div"); d.className = "raised";
-        d.style.color = "var(--stop)";
-        var b = document.createElement("b"); b.textContent = seat + " (unsafe)";
-        b.style.color = "var(--stop)";
-        d.appendChild(b);
-        d.appendChild(document.createTextNode("  " + line));
-        el.appendChild(d);
-      });
-    });
+    drawUnsafe(el, s.safety);
 
     var how = document.createElement("p");
     how.className = "muted";
@@ -595,6 +603,30 @@ function drawAsk() {
     how.textContent = "Answer in the box below and press \u201cadd to the brief\u201d, or attach a "
                     + "file. Every work order from then on carries it.";
     el.appendChild(how);
+    box.appendChild(el);
+    return;
+  }
+
+  if (s.unsafe) {
+    // A fourth kind of stop. Unlike the incomplete one above, this **has** a button: that stop is
+    // answered by saying more, and this one by deciding. Nothing has been planned or built yet;
+    // the seats read the requirement and one of them said this should not be done.
+    el.innerHTML = "<h3>A seat says this is unsafe</h3><p></p><div class='row'></div>";
+    el.querySelector("p").textContent = s.reason;
+    drawUnsafe(el, s.safety);
+
+    var go = document.createElement("button");
+    go.textContent = "continue anyway";
+    go.onclick = function () { act("/run/proceed", { node_id: s.node_id }); };
+    el.querySelector(".row").appendChild(go);
+
+    var other = document.createElement("p");
+    other.className = "muted";
+    other.style.marginTop = "10px";
+    other.textContent = "Or change the requirement in the box below and press \u201cadd to the "
+                      + "brief\u201d \u2014 the seats read it again, and this decision does not "
+                      + "carry over to what they say next.";
+    el.appendChild(other);
     box.appendChild(el);
     return;
   }

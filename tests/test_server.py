@@ -1100,6 +1100,45 @@ def test_an_incomplete_stop_is_not_a_gate_to_approve():
     assert "flow" in try_it("incomplete", False), "and say what is missing"
 
 
+def test_an_unsafe_stop_is_not_a_gate_to_approve_either(monkeypatch):
+    """The fourth shape, refused the way the third is and for the same measured reason.
+
+    `intake_review` has no gate, so an unsafe stop reaching `approve()` would store
+    `Approval(gate=None, …)` — which `walk` refuses on every later walk. `_live_approvals` retires
+    an approval only when the **brief** changes (CHG-20260906-03), so against an unchanged brief
+    that entry stays live and the run is stuck on a decision the person did make.
+
+    `proceed` is checked through the same gate rather than a second state check of its own: the
+    first version of it wrote a parallel one, and `test_only_attach_reaches_advance_without_a_state_gate`
+    caught it.
+    """
+    runner = server.Runner.__new__(server.Runner)
+    runner.state = server.RunState(state=engine.SUSPENDED)
+    runner.state.report = engine.RunReport(state=engine.SUSPENDED)
+
+    unsafe = {"incomplete": False, "undecided": False, "unsafe": True, "gate": None,
+              "safety": {"risk": ["it deletes user data"]}}
+    gate = {"incomplete": False, "undecided": False, "unsafe": False, "gate": "merge"}
+
+    def try_it(shape, **kw):
+        runner.state.report.suspended = dict(shape)
+        try:
+            server.Runner._require_suspension(runner, **kw)
+            return "accepted"
+        except server.ServerError as exc:
+            return str(exc)
+
+    assert try_it(unsafe, undecided=False, unsafe=True) == "accepted", "this is what answers it"
+    assert "POST /run/proceed" in try_it(unsafe, undecided=False), "an unsafe stop is not a gate"
+    assert "POST /run/proceed" in try_it(unsafe, undecided=True), "and it is not a tie"
+    assert "it deletes user data" in try_it(unsafe, undecided=False), (
+        "the refusal has to say what the run is waiting to be told about")
+
+    assert try_it(gate, undecided=False) == "accepted", "an ordinary gate still answers"
+    assert "unsafe" in try_it(gate, undecided=False, unsafe=True), (
+        "and `proceed` must not be accepted at a stop that is not about safety")
+
+
 def test_the_refusal_names_what_the_run_is_actually_waiting_for():
     """The text was wrong as well as the check: at an incomplete stop it said *"waiting for a gate
     to approve"*. It is waiting for a requirement somebody has to finish."""

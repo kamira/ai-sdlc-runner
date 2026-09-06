@@ -1213,6 +1213,78 @@ def test_the_terminal_names_the_frontier_and_what_is_out_of_order(tmp_path, py_s
         "the line names the state but not which effect is in it")
 
 
+# --------------------------------------------------------------------------------------
+# CHG-20260906-07 - a seat calling something unsafe is a question for a person
+# --------------------------------------------------------------------------------------
+
+
+def test_the_terminal_lists_what_a_seat_called_unsafe_and_who_said_it(
+        tmp_path, py_stub, capsys, monkeypatch):
+    """Measured before the change: a seat answered *"it deletes user data"*, the run walked to
+    `merge`, and `grep -c safety cli.py` was 1 — a comment about `attachments.py`. The words the
+    seats used reached the terminal on no path at all.
+
+    Also pinned: the sentence it offers. `intake_review.gate` is `None`, so without a branch of its
+    own this stop falls to the gate `else` and prints `--resume --confirm None`, which the engine
+    answers with *"confirmed gate 'None' does not exist"* — the same defect CHG-20260904-02 fixed
+    for the incomplete stop at this very node.
+    """
+    import json as _json
+
+    report = engine.RunReport()
+    report.halted_at = "intake_review"
+    report.state = engine.SUSPENDED
+    report.suspended = engine._suspension(
+        node_id="intake_review", incomplete=False, undecided=False, unsafe=True,
+        reason="1 finding from risk says this requirement is unsafe.",
+        safety={"risk": ["it deletes user data"]})
+    monkeypatch.setattr(engine, "walk", lambda *a, **kw: report)
+
+    argv = py_stub(AGENT)
+    config = tmp_path / "runner.yaml"
+    config.write_text(f"agent_command: {_json.dumps(argv)}\n", encoding="utf-8")
+    capsys.readouterr()
+
+    cli.main(["--config", str(config), "run", "--undeclared", "allow",
+              "--plan", _plan_file(tmp_path), "--ask-journal", str(tmp_path / "asks")])
+
+    said = capsys.readouterr().out
+    assert "risk" in said and "it deletes user data" in said, (
+        "the words a seat used to say this should not be done reach nobody")
+    assert "--proceed-unsafe" in said, "the terminal does not say how a person answers it"
+    assert "--confirm None" not in said, (
+        "offering a gate that does not exist, at the one node this was already fixed at")
+
+
+def test_proceed_unsafe_is_refused_when_nothing_has_been_shown(
+        tmp_path, py_stub, capsys, monkeypatch):
+    """**The operator's rule, and the only test that pins it.**
+
+    The flag answers findings a person read. A run carrying it the first time answers a question
+    nobody was asked — and the terminal cannot tell that from a person who read the list and came
+    back, so the journal has to. Refused before any seat is paid for, rather than by walking and
+    quietly stopping again, because a silent stop lets somebody believe they decided something.
+    """
+    import json as _json
+
+    walked = []
+    monkeypatch.setattr(engine, "walk", lambda *a, **kw: walked.append(1))
+
+    argv = py_stub(AGENT)
+    config = tmp_path / "runner.yaml"
+    config.write_text(f"agent_command: {_json.dumps(argv)}\n", encoding="utf-8")
+    capsys.readouterr()
+
+    rc = cli.main(["--config", str(config), "run", "--undeclared", "allow",
+                   "--plan", _plan_file(tmp_path), "--ask-journal", str(tmp_path / "asks"),
+                   "--proceed-unsafe"])
+
+    out = capsys.readouterr()
+    assert rc == 2, "a flag that cannot mean anything yet is an error, not a quiet pass"
+    assert "--proceed-unsafe" in out.err and "none having been shown" in out.err
+    assert walked == [], "refused before the walk, so no seat was paid to be overruled in advance"
+
+
 def test_a_store_under_a_red_line_directory_is_refused_at_startup(
         tmp_path, py_stub, capsys, monkeypatch):
     """The store directory travels on every work order.
