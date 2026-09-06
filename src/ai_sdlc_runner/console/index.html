@@ -498,7 +498,14 @@ function drawBrief() {
     var b = document.createElement("div"); b.className = "cw";
     // The filename, because that is what a person recognises. It is data here and nowhere near a
     // path -- the runner only ever handles the content hash.
-    b.textContent = f.filename + "  (" + f.media_type + ", " + f.size + " bytes)";
+    // Where the document came from. The comment on `Attachment.instruction` in attachments.py
+    // promises exactly this sentence, and nothing said it. The number is the same 1-based
+    // count the instruction rows above
+    // are labelled with, so "with instruction 2" points at the row marked `2.` without
+    // translation; zero is spelt out because no row is labelled `0.` (CHG-20260906-04).
+    var when = f.instruction ? "with instruction " + f.instruction
+                             : "before the first instruction";
+    b.textContent = f.filename + "  (" + f.media_type + ", " + f.size + " bytes; " + when + ")";
     row.appendChild(a); row.appendChild(b); el.appendChild(row);
   });
   ((state && state.attachments_missing) || []).forEach(function (id) {

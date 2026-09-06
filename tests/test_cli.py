@@ -1260,3 +1260,33 @@ def test_an_ordinary_store_directory_is_not_refused(tmp_path):
 
     store = attach_mod.Store(tmp_path / "runner" / "attachments")
     assert policy.derive([str(store.dir)]) == ()
+
+
+# --------------------------------------------------------------------------------------
+# CHG-20260906-04 — where a document came from
+# --------------------------------------------------------------------------------------
+
+
+def test_the_console_says_which_instruction_each_attachment_arrived_with():
+    """`Attachment.instruction`'s own comment says it exists *"so a later brief can say where a
+    document came from"* — and nothing said it. The field was written, validated, sorted on and
+    serialised into `/run`, `/attachments` and the manifest, and read by nothing that shows it to a
+    person.
+
+    KN-8 is the rule: *"A comment describing behaviour is a claim … either make it true or delete
+    the sentence."* This makes it true. `test_the_attachment_records_which_instruction_it_arrived_
+    with` carries the same promise in its docstring and asserts only `first.instruction == 1` — it
+    proved the storage, which is the trap KN-8's own table names.
+    """
+    page = (pathlib.Path(cli.__file__).parent / "console" / "index.html").read_text(
+        encoding="utf-8")
+
+    # The **expression**, not the identifier. Asserting `"f.instruction" in page` was NOT CAUGHT:
+    # a mutation replacing the condition with `false` leaves the identifier sitting in the branch
+    # that no longer runs, so the substring is still there and the guard still agrees. Its subject
+    # was the text; the property is that the field decides what the row says.
+    assert "f.instruction ?" in page, (
+        "the console stopped reading the field that says where a document came from")
+    assert "before the first instruction" in page, (
+        "zero has to be spelt out — no instruction row is labelled `0.`")
+    assert "with instruction " in page
