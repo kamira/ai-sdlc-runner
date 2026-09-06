@@ -126,6 +126,34 @@ def test_dropping_it_instead_would_walk_a_safety_finding_to_merge():
         intake.collect({"risk": {"unsafe": [{"issue": "rm -rf /"}], "missing": [], "problems": []}})
 
 
+def test_one_label_repeated_is_not_three_options():
+    """The runner asks for *different* options and used to accept identical ones.
+
+    `option_request` is the text this runner actually sends a model:
+
+        Propose at least 3 concrete, **different** options a person could pick between.
+
+    `read_options`, twenty lines below it in the same module, counted the length of the list. So
+    three copies of one label answered a question that had asked for three different ones — one
+    option wearing a question mark three times, which is the thing the check exists to refuse.
+
+    Distinct by exact string, not case-folded: `Fast` and `fast` are two labels a person can tell
+    apart and may be two real things. Refusing those to catch a model repeating itself in a
+    different case would refuse more than it caught, and would still miss one repeating itself in
+    different words.
+    """
+    with pytest.raises(intake.IntakeError, match="different options") as caught:
+        intake.read_options({"options": ["a", "a", "a"]}, "ui")
+    assert "got 1 from 3 offered" in str(caught.value), (
+        "the refusal has to say how many it counted, or it reads as refusing three for being three")
+
+    with pytest.raises(intake.IntakeError, match="got 2 from 3 offered"):
+        intake.read_options({"options": ["a", "A", "a "]}, "ui")
+
+    assert intake.read_options({"options": ["fast", "slow", "none"]}, "ui") ==         ["fast", "slow", "none"]
+    assert intake.read_options({"options": ["Fast", "fast", "Slow"]}, "ui") ==         ["Fast", "fast", "Slow"], "two labels that differ visibly are two labels"
+
+
 def test_three_things_nobody_can_read_are_not_three_options():
     """`read_options` refuses fewer than three because *two is a false choice*. Three objects
     passed that count and reached a person as `["{'a': 1}", "{'b': 2}", "{'c': 3}"]`, which is
