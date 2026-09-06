@@ -469,9 +469,26 @@ function drawDecisions() {
            (who ? " [" + who + "]" : "");
   }));
   if (state.survey) {
-    block("surveyed", Object.keys(state.survey).sort().map(function (k) {
-      return k + ": " + String(state.survey[k]);
-    }));
+    // `String()` on a survey value gave `[object Object]` for `problems` and `safety`, which are
+    // both `seat -> [line]` maps. This block is drawn on **every** render, and the readable
+    // rendering (`drawUnsafe`) is drawn only inside a suspension — so on a finished run this was
+    // the only place the words a seat wrote appeared, and they appeared as `[object Object]`.
+    block("surveyed", Object.keys(state.survey).sort().reduce(function (out, k) {
+      var v = state.survey[k];
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        // Attributed, one line per thing said, the way `all_problems()` writes it for the
+        // terminal. An empty map says so rather than vanishing: a seat found nothing is a
+        // result, and a key that renders as nothing is indistinguishable from one that is absent.
+        var seats = Object.keys(v).sort();
+        if (!seats.length) return out.concat(k + ": none");
+        seats.forEach(function (seat) {
+          (v[seat] || []).forEach(function (line) { out.push(k + ": " + seat + ": " + line); });
+        });
+        return out;
+      }
+      if (Array.isArray(v)) return out.concat(k + ": " + (v.length ? v.join(", ") : "none"));
+      return out.concat(k + ": " + String(v));
+    }, []));
   }
 }
 

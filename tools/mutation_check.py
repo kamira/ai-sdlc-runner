@@ -118,6 +118,26 @@ MUTATIONS: List[Mutation] = [
         '''                    out = runner.attach(version, str(body.get("filename") or ""), raw)''',
         '''                    out = runner.attach(version, "attachment", raw)''',
         "tests/test_server.py"),
+    # ── surveyed-render (CHG-20260907-02) ─────────────────────────────────────────
+    # `problems` and `safety` are `seat -> [line]` maps, and the block drawing the survey
+    # handed each value to `String()` -- `[object Object]`. It is drawn on every render, and
+    # the readable rendering of `safety` is drawn only inside a suspension, so a finished run
+    # showed the words a seat wrote as `[object Object]` and nowhere else. No `node` here, so
+    # these pin the text; the guard asserts what each reversion removes.
+    Mutation(
+        "surveyed-render", "the survey goes back to being printed as [object Object]",
+        REPO / "src" / "ai_sdlc_runner" / "console" / "index.html",
+        '''      if (v && typeof v === "object" && !Array.isArray(v)) {''',
+        '''      if (false) {''',
+        "tests/test_server.py"),
+
+    Mutation(
+        "surveyed-render", "the lines stop saying which seat said them",
+        REPO / "src" / "ai_sdlc_runner" / "console" / "index.html",
+        '''          (v[seat] || []).forEach(function (line) { out.push(k + ": " + seat + ": " + line); });''',
+        '''          (v[seat] || []).forEach(function (line) { out.push(k + ": " + line); });''',
+        "tests/test_server.py"),
+
     # ── silent-seat (CHG-20260907-01) ─────────────────────────────────────────────
     # `engine.walk` refuses a model panel voice that names no answer — *a voice that said
     # nothing is not a voice that voted no*. The survey had no equivalent, so a seat

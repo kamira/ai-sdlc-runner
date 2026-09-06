@@ -1430,6 +1430,32 @@ def _console_code():
     return _without_comments(_console())
 
 
+def test_the_survey_block_names_the_seat_rather_than_printing_object_object():
+    """`problems` and `safety` are both `seat -> [line]` maps, and the block that draws the survey
+    handed each value to `String()`. In JavaScript that is `"[object Object]"`.
+
+    Where it mattered: `drawDecisions` and `drawAsk` both run on **every** render, and the
+    readable rendering of `safety` lives inside `drawAsk`'s suspension branches. So on a finished
+    run — when a person is reading back what the seats said — this block was the only place the
+    words appeared, and they appeared as `[object Object]`.
+
+    Asked of `_console_code()` rather than the page, so the comment explaining the repair cannot
+    satisfy the guard describing it. There is no `node` on this machine, so the rendering itself
+    cannot be executed here; the `surveyed-render` mutation is what pins the behaviour, and this
+    asserts the weaker but honest thing.
+    """
+    code = _console_code()
+
+    assert "String(state.survey[k])" not in code, (
+        "a survey value is being handed to `String()` again, which is `[object Object]` for the "
+        "two of them that are maps")
+    assert 'typeof v === "object"' in code, (
+        "the block does not distinguish a map from a scalar, so it cannot render one")
+    assert 'seat + ": " + line' in code, (
+        "the map is rendered without saying which seat said it — the attribution is the whole "
+        "reason `problems` and `safety` are keyed by seat (CHG-20260903-37)")
+
+
 def _without_comments(source):
     """`source` with every comment removed — `<!-- -->`, `//` to end of line, and `/* … */`.
 
