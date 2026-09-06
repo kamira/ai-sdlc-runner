@@ -93,6 +93,23 @@ class Mutation(NamedTuple):
 
 
 MUTATIONS: List[Mutation] = [
+    # ── attachment-provenance (CHG-20260906-04) ───────────────────────────────────────────────────────
+    # `Attachment.instruction` was written, validated, sorted on and serialised, and read by
+    # nothing that shows it to a person — while its own comment claimed it existed so a later
+    # brief could say where a document came from. KN-8: make the sentence true or delete it.
+    Mutation(
+        "attachment-provenance", "the console stops saying where a document came from",
+        REPO / "src" / "ai_sdlc_runner" / "console" / "index.html",
+        """    var when = f.instruction ? "with instruction " + f.instruction""",
+        """    var when = false ? "with instruction " + f.instruction""",
+        "tests/test_cli.py"),
+
+    Mutation(
+        "attachment-provenance", "an attachment that arrived before any instruction says nothing",
+        REPO / "src" / "ai_sdlc_runner" / "console" / "index.html",
+        """                             : "before the first instruction";""",
+        """                             : "";""",
+        "tests/test_cli.py"),
     # ── approval-lifetime (CHG-20260906-03) ────────────────────────────────────────────────
     # A finished high-risk run, all eight gates answered by a person, re-walked all 17 nodes on one
     # attached file — rebuild, re-review, re-open the PR, re-merge — spending all eight answers
