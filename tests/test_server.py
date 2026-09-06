@@ -61,19 +61,28 @@ def _dispatch(seat_verdicts=None):
     return dispatch
 
 
-def _runner(seat_verdicts=None, risk="high"):
+def _runner(seat_verdicts=None, risk="high", store=None):
+    """``store`` defaults to None, which is what every existing caller gets.
+
+    The `live` fixture had none, so `POST /attachments` answered *"this runner has no attachment
+    store"* from the only layer that speaks HTTP — which is why the route with a documented body, a
+    documented row and three documented refusals had nothing executable pinning any of them. The gap
+    was not that nobody wrote the test; it was that the fixture could not hold one
+    (CHG-20260906-05).
+    """
     dispatch = _dispatch(seat_verdicts)
     return server.Runner(
         walk=lambda cfg: engine.walk(cfg, dispatch, enabled=True),
         make_config=lambda i, a, r, art=(), rej=(), hist=(): _make_config(
-            i, a, r, art, rej, hist, seat_verdicts=seat_verdicts, risk=risk))
+            i, a, r, art, rej, hist, seat_verdicts=seat_verdicts, risk=risk),
+        store=store)
 
 
 @pytest.fixture
 def live(tmp_path):
     """A real server on a real loopback socket — the refusals are HTTP behaviour, not method calls."""
     operator = server.Operator.mint(tmp_path)
-    runner = _runner()
+    runner = _runner(store=attach_mod.Store(tmp_path / "att"))
     httpd = server.serve(runner, operator, port=0)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
@@ -2848,3 +2857,63 @@ def test_an_approval_with_no_brief_answers_any_brief(tmp_path):
     live, retired = runner._live_approvals()
     assert [a.gate for a in live] == ["merge"]
     assert retired == []
+
+
+# --------------------------------------------------------------------------------------
+# CHG-20260906-05 — the route docs/API.md documents and nothing posted to
+# --------------------------------------------------------------------------------------
+
+
+def test_an_attachment_posted_over_http_comes_back_in_the_snapshot(live):
+    """`grep -rln '"/attachments"' tests` was empty before this.
+
+    Every other POST route in `docs/API.md` has a test that goes through HTTP; this one had its
+    request body, its refusals and its row shape documented and pinned by nothing executable. The
+    upload path was exercised only by calling `Runner.attach` directly, which skips base64, the
+    body reader and the route.
+    """
+    import base64
+
+    call, _runner, _operator = live
+    payload = base64.b64encode(b"# the brief, and what it is for\n").decode("ascii")
+
+    status, snapshot = call("POST", "/attachments",
+                            {"version": 0, "filename": "brief.md", "data": payload})
+
+    assert status == 200, snapshot
+    rows = snapshot["attachments"]
+    assert len(rows) == 1, rows
+    row = rows[0]
+    # The five fields `docs/API.md` documents for a row, and no others.
+    assert set(row) == {"id", "filename", "media_type", "size", "instruction"}, sorted(row)
+    assert row["filename"] == "brief.md"
+    assert row["media_type"] == "text/markdown"
+    assert row["size"] == len(b"# the brief, and what it is for\n")
+    assert len(row["id"]) == 64, "the id is the full digest, not the stored name"
+    assert row["id"] not in str(snapshot.get("attachments_missing") or [])
+
+
+def test_the_route_refuses_a_body_that_is_not_base64(live):
+    """One of the three refusals the route table names, and the only one that lives in the route
+    itself rather than in `attachments.py`."""
+    call, _runner, _operator = live
+
+    status, payload = call("POST", "/attachments",
+                           {"version": 0, "filename": "brief.md", "data": "not base64!!"})
+
+    assert status == 409, payload
+    assert "base64" in payload["error"]
+
+
+def test_the_route_refuses_a_type_the_store_will_not_hold(live):
+    """The second refusal, which comes from `attachments.py` through the route."""
+    import base64
+
+    call, _runner, _operator = live
+    payload = base64.b64encode(b"MZ\x90\x00").decode("ascii")
+
+    status, said = call("POST", "/attachments",
+                        {"version": 0, "filename": "installer.exe", "data": payload})
+
+    assert status == 409, said
+    assert ".exe" in said["error"]
