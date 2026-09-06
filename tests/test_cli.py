@@ -1033,7 +1033,7 @@ def test_the_terminal_and_the_console_name_the_same_thing():
 
 
 def test_the_settled_grade_reaches_a_terminal_line():
-    """`risk_settled` reached `--json` and the console and no terminal line at all — `cli.py` named
+    """`risk_settled` reached no operator-facing surface at all — `cli.py` named
     `risk_agreed`, `risk_settled` and `risk_proposed` zero times (CHG-20260903-48).
 
     **Checked as the condition, not as the text.** The first version of this asserted
@@ -1168,7 +1168,7 @@ else:
 
 
 # --------------------------------------------------------------------------------------
-# CHG-20260905-01 — the two effect fields that reached `--json` and stopped there
+# CHG-20260905-01 — the two effect fields that reached only `RunReport.as_dict()`
 # --------------------------------------------------------------------------------------
 
 
@@ -1176,7 +1176,8 @@ def test_the_terminal_names_the_frontier_and_what_is_out_of_order(tmp_path, py_s
                                                                   monkeypatch):
     """Through `cli.main`, so the assertion is about what an operator sees, not about a helper.
 
-    `EffectOutcome` carries four fields. Two of them reached `--json` and no other surface: the
+    `EffectOutcome` carries four fields. Two of them reached only `RunReport.as_dict()`, which
+    nothing in `src/` calls, and so no operator-facing surface at all: the
     console renders nothing for effects at all, and the terminal printed `applied` and
     `already_met` only. `out_of_order` is the field whose own docstring says the state it names is
     *worth a human's attention rather than a silent redo or a silent pass* — and no human was ever

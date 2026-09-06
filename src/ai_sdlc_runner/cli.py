@@ -1151,7 +1151,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"panel:         {decision['node_id']} → {said} ({seat_line})")
     if report.risk_settled and report.risk_settled != (args.risk or plan.get("risk", "high")):
         # The grade the run ended up governed by, when a panel moved it off the one asked for.
-        # `risk_settled` reached `--json` and the console and no terminal line (CHG-20260903-48).
+        # `risk_settled` reached no operator-facing surface at all before CHG-20260903-48: it
+        # was in `RunReport.as_dict()`, which nothing in `src/` calls, and in neither the
+        # snapshot nor the console. That record says "`--json` and the console"; there has
+        # never been a `--json` flag in any commit, so the defect was wider than it recorded.
         print(f"risk:          settled at {report.risk_settled} "
               f"(asked for {args.risk or plan.get('risk', 'high')})"
               + (f", agreed by the panel" if report.risk_agreed else ""))
@@ -1161,7 +1164,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     for node_id, outcome in report.effects.items():
         print(f"effects:       {node_id} applied={outcome['applied']} "
               f"already_met={outcome['already_met']}")
-        # The other two fields `EffectOutcome` carries. They reached `--json` and stopped there,
+        # The other two fields `EffectOutcome` carries. They reached `RunReport.as_dict()` and
+        # stopped there — and nothing in `src/` calls it, so that was no surface at all,
         # which is the defect the `risk_settled` line four lines above this one was written to
         # fix (CHG-20260903-48) — repeated in the next loop down. `out_of_order` is the field
         # whose own docstring says the state it names is worth a human's attention.

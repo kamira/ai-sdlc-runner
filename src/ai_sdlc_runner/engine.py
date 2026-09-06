@@ -459,7 +459,7 @@ class RunReport:
             "survey": dict(self.survey) if self.survey else None,
             "options": {k: list(v) for k, v in self.options.items()},
             # Declared, written, and emitted nowhere until CHG-20260901-16. Six fields lived only in
-            # `cmd_run`'s stdout footer — so they reached no `--json`, no `docs/SCHEMAS.md` entry,
+            # `cmd_run`'s stdout footer — so they reached no `docs/SCHEMAS.md` entry
             # and no console. Two of them say the opposite in their own docstrings above: `halts` is
             # "recorded rather than only printed, because … a message on somebody's terminal is not
             # a record", and `relaxations_by_class` is "a relaxation nobody can enumerate afterwards
