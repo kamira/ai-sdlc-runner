@@ -1291,6 +1291,55 @@ def test_proceed_unsafe_is_refused_when_nothing_has_been_shown(
     assert walked == [], "refused before the walk, so no seat was paid to be overruled in advance"
 
 
+# --------------------------------------------------------------------------------------
+# CHG-20260907-04 - a walk nobody was asked is not an ask
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("resumed,asks,counts", [
+    ([], ["a", "b", "c"], True),                 # three seats asked
+    (["a"], ["a", "b", "c"], True),              # one replayed, two asked
+    (["a", "b", "c"], ["a", "b", "c"], False),   # every one replayed: nobody was asked
+])
+def test_a_resume_that_asked_nobody_does_not_count_as_an_ask(
+        tmp_path, py_stub, capsys, monkeypatch, resumed, asks, counts):
+    """Measured through the real CLI before this change: five plain invocations took the count
+    from 1 to 5, and then three `--resume` runs took it to 8 — each of them printing
+    *4 ask(s) answered from the journal, not re-asked* in the same output that advanced it. The
+    run said nobody was asked and counted it as an ask in the same breath.
+
+    `server._walk_once` has always guarded its writer (`told > mark`, CHG-20260904-05: *a walk is
+    not an ask*). The command line's writer had no guard at all, and no executable pin either —
+    `test_the_command_line_can_reach_the_escalation_it_documents` drives `AskJournal` directly and
+    never calls `cmd_run`, so `cli.py`'s condition was unpinned until this test.
+    """
+    import json as _json
+
+    report = engine.RunReport()
+    report.halted_at = "intake_review"
+    report.state = engine.SUSPENDED
+    report.resumed = list(resumed)
+    report.asks = [engine.Ask("intake_review", "seat", str(a), {}) for a in asks]
+    report.suspended = engine._suspension(
+        node_id="intake_review", incomplete=True, undecided=False, unsafe=False,
+        reason="the requirement does not say what the flow is", missing=["flow"])
+    monkeypatch.setattr(engine, "walk", lambda *a, **kw: report)
+
+    journal = tmp_path / "asks"
+    argv = py_stub(AGENT)
+    config = tmp_path / "runner.yaml"
+    config.write_text(f"agent_command: {_json.dumps(argv)}\n", encoding="utf-8")
+    capsys.readouterr()
+
+    cli.main(["--config", str(config), "run", "--undeclared", "allow",
+              "--plan", _plan_file(tmp_path), "--ask-journal", str(journal)])
+
+    stops = len(engine.AskJournal(journal).intake_stops())
+    assert stops == (1 if counts else 0), (
+        f"{len(resumed)} of {len(asks)} asks were replayed and the count "
+        f"{'did not move' if counts else 'moved anyway'}")
+
+
 def test_a_store_under_a_red_line_directory_is_refused_at_startup(
         tmp_path, py_stub, capsys, monkeypatch):
     """The store directory travels on every work order.

@@ -132,6 +132,31 @@ class AskJournal:
         payload["result"] = dict(result)
         self._write(ask_id, payload)
 
+    def refuse(self, ask_id: str, reason: str, result: Mapping[str, object]) -> None:
+        """Write down that the walk would not accept this answer, keeping what was said.
+
+        A third status, because two could not tell "not asked yet" from "asked, and the answer was
+        no good". `answers()` and `pending()` both filter on status, so a refused entry is neither
+        replayed nor listed as still-to-ask — which is the whole repair: an answer the walk refused
+        used to sit in the journal as `answered`, and `--resume` handed it back to be refused
+        again, forever.
+
+        The result is kept rather than dropped. What a model said is evidence even when it was not
+        usable, and a record that says only "refused" cannot be read by the person deciding
+        whether the model or the question was wrong.
+        """
+        payload = json.loads(paths.read_text(self._path(ask_id)))
+        payload["status"] = "refused"
+        payload["reason"] = reason
+        # Written here rather than relying on `answered` having run: it has not. `_ask` validates
+        # before it journals an answer, so the file at this moment is the one `record` wrote —
+        # status `pending`, and no `result` at all. The first version of this method said the
+        # result was kept and did not keep it, which the `refused-answer` mutation reported as
+        # NOT CAUGHT: `answers()` requires a `result`, so nothing was ever reused and the test
+        # meant to prove the reuse check was hollow.
+        payload["result"] = dict(result)
+        self._write(ask_id, payload)
+
     def pending(self) -> List[Dict[str, object]]:
         """Every ask written down but never answered — the re-ask list, in order."""
         return [e for e in self.entries() if e.get("status") == "pending"]
@@ -968,6 +993,7 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
          model: Optional[str] = None,
          asked_before: Optional[Mapping[str, Mapping[str, object]]] = None,
          conversation=None, role: str = "", workspace: str = "",
+         accept: Optional[Callable[[Mapping[str, object]], object]] = None,
          resumed: Optional[List[str]] = None):
     """Open a session, ask once, close it — the close guaranteed even if the ask raises.
 
@@ -983,7 +1009,14 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
         # Reuse the answer only if the question is the same one. Anything else is answering the new
         # brief with words said about the old one.
         previous = (asked_before or {}).get(ask_id)
-        if previous is None or dict(previous) == dict(order):
+        # **And an answer the walk would refuse is not reused.** Validating only before writing
+        # would fix new runs and leave every already-poisoned journal poisoned: measured on a
+        # server, one refused option answer made every later `instruct` re-dispatch and stop, and
+        # a brand-new run on the same process hit the same file, because the journal has no run id
+        # and an option order does not carry the brief. Checking here is what lets the next walk
+        # re-ask and overwrite it.
+        if ((previous is None or dict(previous) == dict(order))
+                and _acceptable(accept, answered[ask_id])):
             # **Recorded here, where the decision is made.** The walk used to append to
             # `report.resumed` on `ask_id in already` — journal *membership* — while reuse also
             # requires the order to match. So a resume with a changed brief re-asked everything and
@@ -1044,11 +1077,35 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
         except Exception as exc:      # noqa: BLE001 - a close that raises is still a failed ask
             _failed(exc)
             raise
+    if accept is not None:
+        # Validated before it becomes reusable. `read_options` used to run in the caller, after
+        # `_ask` had already written `answered`, so a refusal left a reusable record of the thing
+        # that caused it. Measured outside intake too: a `pm_confirm` answer naming no branch is
+        # journaled, replayed on `--resume` with nothing dispatched, and refused again — so this
+        # is a class, and the option ask is where it is closed first.
+        try:
+            accept(result)
+        except Exception as exc:
+            if journal is not None and ask_id is not None:
+                journal.refuse(ask_id, f"{type(exc).__name__}: {exc}", result)
+            _failed(exc)
+            raise
     if journal is not None and ask_id is not None:
         journal.answered(ask_id, result)
     if conversation is not None:
         conversation.answer(ask_id or "", result, model, backend=backend)
     return result
+
+
+def _acceptable(accept, answer) -> bool:
+    """Would the walk take this answer? `None` means nobody said, so anything goes."""
+    if accept is None:
+        return True
+    try:
+        accept(answer)
+    except Exception:                 # noqa: BLE001 - any refusal is a refusal
+        return False
+    return True
 
 
 def _describe(session) -> Optional[str]:
@@ -2650,7 +2707,8 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
                             opened, journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                             answered=already, asked_before=asked_before,
                             conversation=cfg.conversation, role=node.role, resumed=report.resumed,
-                                  workspace=_workspace(node, build_cycles))
+                                  workspace=_workspace(node, build_cycles),
+                            accept=lambda a, _for=aspect: intake_mod.read_options(a, _for))
                         report.asks.append(Ask(node.id, node.role, None, answer))
                         report.options[aspect] = intake_mod.read_options(answer, aspect)
 
