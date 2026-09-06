@@ -958,17 +958,33 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         'probes', 'an unreachable remote is reported as "not pushed"',
         SRC / 'probes.py',
-        '''    proc = _run(["git", "ls-remote", "--heads", remote, branch], cwd=repo)
+        '''    proc = _run(["git", "ls-remote", "--heads", remote, ref], cwd=repo)
     if proc.returncode != 0:''',
-        '''    proc = _run(["git", "ls-remote", "--heads", remote, branch], cwd=repo)
+        '''    proc = _run(["git", "ls-remote", "--heads", remote, ref], cwd=repo)
     if False:''',
         'tests/test_probes.py'),
 
     Mutation(
         'probes', 'the push probe reads a local ref, which is stale in both directions',
         SRC / 'probes.py',
-        '''    proc = _run(["git", "ls-remote", "--heads", remote, branch], cwd=repo)''',
+        '''    proc = _run(["git", "ls-remote", "--heads", remote, ref], cwd=repo)''',
         '''    proc = _run(["git", "rev-parse", "--verify", f"refs/remotes/{remote}/{branch}"], cwd=repo)''',
+        'tests/test_probes.py'),
+
+    Mutation(
+        'probes', 'a remote that answers with more than one ref is guessed at',
+        SRC / 'probes.py',
+        '''    if len(rows) > 1:''',
+        '''    if False:''',
+        'tests/test_probes.py'),
+
+    Mutation(
+        'probes', 'a remote holding a branch this repository lacks is answered rather than refused',
+        SRC / 'probes.py',
+        '''    local = _run(["git", "rev-parse", "--verify", ref], cwd=repo)
+    if local.returncode != 0:''',
+        '''    local = _run(["git", "rev-parse", "--verify", ref], cwd=repo)
+    if False:''',
         'tests/test_probes.py'),
 
     Mutation(
@@ -983,8 +999,22 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         'probes', 'a CHG id is treated as a regular expression when searching commits',
         SRC / 'probes.py',
-        '''    argv = ["git", "log", "--fixed-strings", f"--grep={needle}", "--format=%H"]''',
-        '''    argv = ["git", "log", f"--grep={needle}", "--format=%H"]''',
+        '''    argv = ["git", "log", "--fixed-strings", f"--grep={needle}", "--format=%s"]''',
+        '''    argv = ["git", "log", f"--grep={needle}", "--format=%s"]''',
+        'tests/test_probes.py'),
+
+    Mutation(
+        'probes', 'a commit that merely cites an id counts as that change\'s commit again',
+        SRC / 'probes.py',
+        '''    return any(needle in subject for subject in proc.stdout.splitlines())''',
+        '''    return bool(proc.stdout.strip())''',
+        'tests/test_probes.py'),
+
+    Mutation(
+        'probes', 'the push probe goes back to asking whether a branch of that name exists',
+        SRC / 'probes.py',
+        '''    return parts[0] == local.stdout.strip()''',
+        '''    return True''',
         'tests/test_probes.py'),
 
     Mutation(

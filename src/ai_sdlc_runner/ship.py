@@ -83,7 +83,7 @@ def effects_for(
             name="push",
             probe=lambda: probes.branch_on_remote(repo, branch, remote),
             apply=lambda: _git(repo, "push", "-q", remote, branch),
-            postcondition=f"{remote} has {branch}",
+            postcondition=f"{remote}/{branch} points at the local {branch} tip",
         ),
         effects.Effect(
             name="pr",

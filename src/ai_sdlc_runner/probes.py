@@ -96,34 +96,93 @@ def branch_exists_locally(repo: str | Path, branch: str) -> bool:
 
 
 def branch_on_remote(repo: str | Path, branch: str, remote: str = "origin") -> bool:
-    """Does the remote have this branch? The push postcondition.
+    """Does the remote hold what was committed? The push postcondition.
 
     Asks the remote, not a local ref: `refs/remotes/origin/<branch>` can be stale in both directions
     — present after the branch was deleted upstream, absent until someone fetches. The question is
     about the remote's state, so the probe asks the remote.
+
+    **The tip, not the name.** This returned `bool(ls-remote output)` — whether a branch of that
+    name exists upstream — while `ls-remote` hands back the SHA it was discarding. So a remote
+    sitting at an older tip read as pushed. Measured end to end: a run killed after `push`, then a
+    tree dirtied by so much as one stray file, resumes by committing the rest and then *skips*
+    the push, because this said met at the old tip. The next run reports `frontier: None` — nothing
+    left to do — with a commit under the change's id living only in the local tree
+    (CHG-20260906-01).
+
+    `effects.py` states the rule this broke: *a probe must describe the postcondition, not the
+    action*. "Does the remote have this branch?" reads like a postcondition and is not one — the
+    push's postcondition is that the remote has **what was committed**, and a name cannot say that.
+
+    A remote ahead of, behind, or divergent from local therefore reads `False`, and the ordinary
+    non-force push that follows fast-forwards a remote that is behind and is refused by one that
+    is ahead — which halts the run. That is the intended outcome: a remote somebody else moved is
+    evidence to reconcile, not permission to overwrite. Ancestry is deliberately not guessed;
+    `ls-remote` gives a SHA and nothing that could prove the remote already contains ours.
     """
-    proc = _run(["git", "ls-remote", "--heads", remote, branch], cwd=repo)
+    ref = f"refs/heads/{branch}"
+    proc = _run(["git", "ls-remote", "--heads", remote, ref], cwd=repo)
     if proc.returncode != 0:
         raise ProbeError(
             f"could not reach {remote} to check for {branch!r}: {proc.stderr.strip()}. Refusing to "
             f"report 'not pushed' — an unreachable remote is not an empty one, and treating it as "
             f"one would push again over something that may already be there.")
-    return bool(proc.stdout.strip())
+    rows = [line for line in proc.stdout.splitlines() if line.strip()]
+    if not rows:
+        return False                    # the remote does not have the branch at all
+    if len(rows) > 1:
+        # The full ref is asked for, so more than one answer means the remote said something
+        # this probe cannot read. Refusing is the only honest answer: picking a row would be a
+        # guess about which branch the run is shipping.
+        raise ProbeError(
+            f"{remote} answered with {len(rows)} refs for {ref}, and this probe reads one: "
+            f"{proc.stdout.strip()!r}")
+    parts = rows[0].split()
+    if len(parts) < 2:
+        raise ProbeError(
+            f"{remote} answered {rows[0]!r} for {ref}, which is not a <sha> <ref> record")
+    # The local tip is read **after** the remote, and only when there is something to
+    # compare it against. Asking for it first made an unreachable remote fail on the local
+    # refusal instead of its own, which is a different fact and sends an operator looking in
+    # the wrong place — the test for that case never creates the branch locally.
+    local = _run(["git", "rev-parse", "--verify", ref], cwd=repo)
+    if local.returncode != 0:
+        raise ProbeError(
+            f"{remote} has {ref} and this repository does not, so there is nothing to "
+            f"compare it against: {local.stderr.strip()}")
+    return parts[0] == local.stdout.strip()
 
 
 def commit_exists_for(repo: str | Path, needle: str, branch: Optional[str] = None) -> bool:
-    """Is there a commit whose message contains ``needle`` (usually the CHG id)?
+    """Is there a commit whose **subject** contains ``needle`` (usually the CHG id)?
 
     The commit postcondition, and it is one this repo already relies on: every commit message
     carries its CHG id, which is what makes a commit findable by intent rather than by hash.
+
+    **The subject, not the whole message.** `git log --grep` searches the body too, and a commit
+    body citing another change is this repository's normal way of explaining a reversal or a
+    supersession — 232 of 378 commits on `main` do it. So an id merely *mentioned* by somebody
+    else's commit read as committed. Measured live: `a46de7b` cited `CHG-20260905-05` in its body
+    at 17:36, and `-05` itself did not land until 02:32 the next day; for those nine hours this
+    probe answered True for a change that had no commit at all (CHG-20260906-01).
+
+    What that costs is the module's own justification, quoted above: *findable by intent*. A
+    citation is not the cited change's commit, and the engine's post-apply re-probe — the one
+    thing enforcing "every commit carries its id" — passes on it, so a commit that carries no id
+    at all can land and be pushed.
+
+    `--grep --fixed-strings` stays as git's **prefilter**: it cannot admit anything the subject
+    check then rejects, and dropping it would read the whole log into Python on every resume, on
+    a history that only grows. `%s` is git's folded first paragraph, so an id on the second line
+    of a wrapped subject is still found.
     """
-    argv = ["git", "log", "--fixed-strings", f"--grep={needle}", "--format=%H"]
+    argv = ["git", "log", "--fixed-strings", f"--grep={needle}", "--format=%s"]
     if branch:
         argv.append(branch)
     proc = _run(argv, cwd=repo)
     if proc.returncode != 0:
         raise ProbeError(f"git log failed in {repo}: {proc.stderr.strip()}")
-    return bool(proc.stdout.strip())
+    return any(needle in subject for subject in proc.stdout.splitlines())
 
 
 def working_tree_clean(repo: str | Path) -> bool:

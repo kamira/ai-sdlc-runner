@@ -210,7 +210,14 @@ def test_a_chg_id_is_matched_literally_and_not_as_a_pattern(repo):
     _git("config", "grep.patternType", "basic", cwd=repo)
 
     assert probes.commit_exists_for(repo, "axb") is True, "the literal string is there"
-    assert probes.commit_exists_for(repo, "a.b") is False, (
+    assert probes.commit_exists_for(repo, "a.b") is False
+
+    # `a.b` alone stopped discriminating the flag when CHG-20260906-01 put a literal
+    # Python check after the grep: the prefilter finds the commit either way and the
+    # literal check rejects it either way. `^x` still does, because with the flag the
+    # prefilter finds nothing and without it the anchor matches.
+    _git("commit", "-q", "--allow-empty", "-m", "feat: see ^x here", cwd=repo)
+    assert probes.commit_exists_for(repo, "^x") is True, (
         "the needle was read as a pattern: `a.b` matched a message containing `axb`")
 
 
@@ -293,3 +300,145 @@ def test_the_branch_probe_still_answers_when_git_can(tmp_path):
 
     assert probes.branch_exists_locally(repo, here) is True
     assert probes.branch_exists_locally(repo, "no-such-branch") is False
+
+
+# --------------------------------------------------------------------------------------
+# CHG-20260906-01 — two probes that answered a different question than the one asked
+# --------------------------------------------------------------------------------------
+
+
+def _tip(repo, ref="refs/heads/feature"):
+    return subprocess.run(["git", "-C", str(repo), "rev-parse", ref],
+                          capture_output=True, encoding="utf-8", check=True).stdout.strip()
+
+
+def test_a_remote_sitting_at_an_older_tip_is_not_pushed(repo):
+    """The push postcondition is that the remote has **what was committed**, not that a branch of
+    that name exists. `ls-remote` returns the SHA; the probe used to discard it."""
+    _git("checkout", "-q", "-b", "feature", cwd=repo)
+    _git("push", "-q", "origin", "feature", cwd=repo)
+    assert probes.branch_on_remote(repo, "feature") is True
+
+    (Path(repo) / "more.txt").write_text("the rest of the change\n", encoding="utf-8")
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-q", "-m", "feat: the rest", cwd=repo)
+
+    assert probes.branch_on_remote(repo, "feature") is False, (
+        "a remote holding an older tip read as pushed")
+    _git("push", "-q", "origin", "feature", cwd=repo)
+    assert probes.branch_on_remote(repo, "feature") is True
+
+
+def test_a_remote_ahead_of_local_is_not_reported_as_pushed(repo):
+    """New behaviour this change introduces, pinned so it is a decision rather than a surprise.
+
+    A remote somebody else moved is evidence to reconcile, not permission to overwrite: the probe
+    reads False, the ordinary non-force push that follows is refused, and the run halts. Ancestry is
+    deliberately not guessed — `ls-remote` gives a SHA and nothing that could prove the remote
+    already contains ours.
+    """
+    _git("checkout", "-q", "-b", "feature", cwd=repo)
+    _git("push", "-q", "origin", "feature", cwd=repo)
+
+    other = Path(repo).parent / "other"
+    subprocess.run(["git", "clone", "-q", str(Path(repo).parent / "remote.git"), str(other)],
+                   check=True)
+    _git("config", "user.email", "o@example.com", cwd=other)
+    _git("config", "user.name", "o", cwd=other)
+    _git("checkout", "-q", "feature", cwd=other)
+    (other / "theirs.txt").write_text("somebody else\n", encoding="utf-8")
+    _git("add", "-A", cwd=other)
+    _git("commit", "-q", "-m", "feat: theirs", cwd=other)
+    _git("push", "-q", "origin", "feature", cwd=other)
+
+    assert probes.branch_on_remote(repo, "feature") is False, (
+        "a remote ahead of local read as holding what we committed")
+
+
+def test_an_unreachable_remote_is_still_refused_rather_than_answered(repo):
+    """Unchanged by this change, and asserted unchanged: fail closed."""
+    _git("checkout", "-q", "-b", "feature", cwd=repo)
+    _git("remote", "set-url", "origin", str(Path(repo).parent / "gone.git"), cwd=repo)
+    with pytest.raises(probes.ProbeError):
+        probes.branch_on_remote(repo, "feature")
+
+
+def test_a_branch_absent_from_both_sides_is_simply_not_pushed(repo):
+    """The remote is asked first, so a branch that exists nowhere is `False` rather than an error.
+
+    Ordering it the other way made `test_an_unreachable_remote_is_not_reported_as_not_pushed` fail
+    on the local refusal instead of its own — measured, not predicted.
+    """
+    assert probes.branch_on_remote(repo, "no-such-branch-anywhere") is False
+
+
+def test_a_remote_that_has_what_this_repository_does_not_is_unanswerable(repo):
+    """The comparison needs both ends. Answering False here would say "not pushed" about a branch
+    this repository never created, which is a different fact."""
+    _git("checkout", "-q", "-b", "feature", cwd=repo)
+    _git("push", "-q", "origin", "feature", cwd=repo)
+    _git("checkout", "-q", "main", cwd=repo)
+    _git("branch", "-q", "-D", "feature", cwd=repo)
+
+    with pytest.raises(probes.ProbeError) as caught:
+        probes.branch_on_remote(repo, "feature")
+    assert "nothing to compare" in str(caught.value)
+
+
+def test_a_remote_answering_with_more_than_one_ref_is_refused(repo, monkeypatch):
+    """The probe asks for a full ref and reads one record. A remote answering with several has
+    said something this probe cannot read, and picking a row would be a guess about which branch
+    the run is shipping.
+
+    Driven through a stubbed `_run` because a well-behaved remote cannot produce this: the
+    refusal exists for the case where the assumption behind the parse stops holding, and a guard
+    with nothing behind it is the shape this repository keeps finding.
+    """
+    real = probes._run
+    two = "aaaa" + chr(9) + "refs/heads/feature" + chr(10) + \
+          "bbbb" + chr(9) + "refs/heads/feature" + chr(10)
+
+    class _Answer:
+        returncode = 0
+        stdout = two
+        stderr = ""
+
+    def two_rows(argv, cwd=None, **kw):
+        if argv[:2] == ["git", "ls-remote"]:
+            return _Answer()
+        return real(argv, cwd=cwd, **kw)
+
+    monkeypatch.setattr(probes, "_run", two_rows)
+    with pytest.raises(probes.ProbeError) as caught:
+        probes.branch_on_remote(repo, "feature")
+    assert "2 refs" in str(caught.value)
+
+
+def test_a_commit_that_only_cites_a_chg_id_in_its_body_is_not_a_commit_for_it(repo):
+    """`git log --grep` searches the body, and citing another change in a body is how this
+    repository explains a reversal — 232 of 378 commits on `main` do it.
+
+    Measured live before the fix: `a46de7b` cited `CHG-20260905-05` in its body at 17:36, and `-05`
+    itself did not land until 02:32 the next day. For those nine hours the probe answered True for
+    a change with no commit at all.
+    """
+    (Path(repo) / "f.txt").write_text("x\n", encoding="utf-8")
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-q", "-m",
+         "feat: reverse it (CHG-20260101-01)\n\nThis reverses the decision CHG-20260101-02 made.",
+         cwd=repo)
+
+    assert probes.commit_exists_for(repo, "CHG-20260101-01") is True
+    assert probes.commit_exists_for(repo, "CHG-20260101-02") is False, (
+        "an id cited in somebody else's commit body read as that change's own commit")
+
+
+def test_an_id_on_a_wrapped_subject_is_still_found(repo):
+    """`%s` is git's folded first paragraph, so the fix must not lose an id that wrapped onto the
+    second line of the subject — which is the shape a long change title takes."""
+    (Path(repo) / "g.txt").write_text("y\n", encoding="utf-8")
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-q", "-m", "feat: a title long enough to wrap\nonto a second line (CHG-20260101-09)",
+         cwd=repo)
+
+    assert probes.commit_exists_for(repo, "CHG-20260101-09") is True
