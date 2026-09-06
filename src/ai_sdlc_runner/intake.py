@@ -272,14 +272,31 @@ def read_options(answer: Mapping[str, object], aspect: str) -> List[str]:
     Fewer than three is refused rather than shown. Two is a false choice and one is a decision
     wearing a question mark — and the point of reaching this stage at all was to stop the runner
     narrowing somebody else's decision.
+
+    **Counted distinct, because the question asked for distinct.** `option_request`, twenty lines
+    up, is the text this runner actually sends a model:
+
+        Propose at least 3 concrete, *different* options a person could pick between.
+
+    This counted the length of the list, so three copies of one label answered a question that had
+    asked for three different ones — one option wearing a question mark three times. The runner
+    asked for different and accepted identical, in the same module.
+
+    Distinct by exact string, after the strip `_strings` already does. Not case-folded: `Fast` and
+    `fast` are two labels a person can tell apart, and they may be two real things — identifiers,
+    flags, filenames on a store that distinguishes them. Refusing those to catch a model repeating
+    itself in different case would refuse more than it caught, and it could not detect a model
+    repeating itself in different words anyway.
     """
     options = _strings((answer or {}).get("options"),
                        f"the options offered for {aspect!r}")
-    if len(options) < MIN_OPTIONS:
+    distinct = len(set(options))
+    if distinct < MIN_OPTIONS:
         raise IntakeError(
-            f"asked for at least {MIN_OPTIONS} options for {aspect!r} and got {len(options)}. Two "
-            f"is a false choice and one is a decision wearing a question mark; the point of asking "
-            f"was to widen the decision, not to narrow it.")
+            f"asked for at least {MIN_OPTIONS} different options for {aspect!r} and got "
+            f"{distinct} from {len(options)} offered. Two is a false choice and one is a decision "
+            f"wearing a question mark; the point of asking was to widen the decision, not to "
+            f"narrow it.")
     return options
 
 

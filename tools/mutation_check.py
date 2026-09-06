@@ -118,6 +118,18 @@ MUTATIONS: List[Mutation] = [
         '''                    out = runner.attach(version, str(body.get("filename") or ""), raw)''',
         '''                    out = runner.attach(version, "attachment", raw)''',
         "tests/test_server.py"),
+    # ── option-distinctness (CHG-20260907-05) ───────────────────────────────────────
+    # `option_request` asks a model for *different* options; `read_options` counted the
+    # length of the list, so three copies of one label passed the check that exists because
+    # one option is a decision wearing a question mark. The request and the check disagreed,
+    # twenty lines apart in one module.
+    Mutation(
+        "option-distinctness", "one label repeated goes back to counting as three choices",
+        SRC / "intake.py",
+        '''    distinct = len(set(options))''',
+        '''    distinct = len(options)''',
+        "tests/test_intake.py"),
+
     # ── intake-count / refused-answer (CHG-20260907-04) ─────────────────────────────────────────
     # One count with two definitions, and a journal that keeps what the walk refused.
     # The CLI writer recorded a stop on every walk that suspended incomplete, including a
