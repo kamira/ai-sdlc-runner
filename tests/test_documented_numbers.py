@@ -58,6 +58,11 @@ DOCS = (
     # sentence CHG-20260903-37 corrected here while leaving the same sentence standing
     # in `SCHEMAS.md` -- one guard, one file, two places to be wrong.
     ROOT / "docs" / "DATABASE.md",
+    # Added by CHG-20260907-14. It is the page that owns the model registry, and it
+    # enumerated two computed fields for the four days after a third joined the tuple.
+    # Measured before adding: one rule fires, on the true sentence "Eight fields persist",
+    # which now names `models.Model` and resolves.
+    ROOT / "docs" / "MODELS.md",
     ROOT / "docs" / "structure" / "design.md",
     ROOT / "docs" / "structure" / "data.md",
     ROOT / "docs" / "structure" / "directory.md",
@@ -67,6 +72,10 @@ DOCS = (
     ROOT / "src" / "ai_sdlc_runner" / "graph.py",
     ROOT / "src" / "ai_sdlc_runner" / "engine.py",
     ROOT / "src" / "ai_sdlc_runner" / "settings.py",
+    # Added by CHG-20260907-14. Its `_prune` docstring described `models.COMPUTED` as two
+    # fields and quoted a comment `models.py` no longer carries — a documentation defect
+    # inside `src/`, where no documentation sweep was looking.
+    ROOT / "src" / "ai_sdlc_runner" / "store.py",
 )
 
 
@@ -148,9 +157,6 @@ FIELD_MENTIONS = {
     ('design.md',
      "Curating was the same mistake twice: first only the operation's description while the giveaway sat in `instructions`, then three fields while it could sit in `done_criteria`."):
         'the same refused alternative, in the row that records why curating lost',
-    ('data.md',
-     'This said *"Two fields, both about the seat floor"* over a table of two until CHG-20260902-20.'):
-        'a quotation of the sentence this document replaced, kept so the record says why',
     ('engine.py',
      "Six fields lived only in # `cmd_run`'s stdout footer — so they reached no `docs/SCHEMAS.md` entry # and no console."):
         'past tense: what was true before CHG-20260901-16, not a count of anything now',
@@ -161,7 +167,7 @@ FIELD_MENTIONS = {
      '**Two of the three fields do change whether a stop happens**, and this paragraph used to deny it (CHG-20260903-47, defect seat L-13).'):
         'a real claim, and counted by `test_settings.COUNTS_SETTINGS` -- widened in CHG-20260907-12 to see it, because the pattern said `settings` and this sentence says `fields`',
     ('settings.py',
-     'ses an unrecognised target by telling the operator to *"Vouch for the command in settings (`ordinary_commands`)"*, and the screen this repository built for that requirement had no row for it — two of three fields, in the module whose premise is 「在 GUI 上設定」.'):
+     '`engine.py` refuses an unrecognised target by telling the operator to  , and the screen this repository built for that requirement had no row for it — two of three fields, in the module whose premise is 「在 GUI 上設定」.'):
         'the same claim, and now counted by the same widened guard',
 }
 
@@ -171,7 +177,7 @@ _CLAIMABLE = ("workorder", "graph", "policy", "store", "models", "conversations"
                "settings", "plan")
 
 
-def _prose(raw):
+def _prose(raw, keep_quotations=False):
     """Live prose: fenced code, blockquotes and the withdrawn-sentence form removed.
 
     This repository keeps sentences that were wrong, quoted, so the record says why they were
@@ -191,7 +197,13 @@ def _prose(raw):
         if fenced or line.lstrip().startswith(">"):
             continue
         kept.append(line)
-    return re.sub(r'\*"[^"]*"\*', " ", " ".join(" ".join(kept).split()))
+    flat = " ".join(" ".join(kept).split())
+    # `keep_quotations` is for the one rule that reads the `*"…"*` form as a **live**
+    # quotation rather than a withdrawn sentence. The marker means both things, and
+    # only the attribution tells them apart, so that rule keeps the italics and still
+    # wants the `>` blocks gone -- a record of what a source used to say is not a
+    # claim about what it says now (CHG-20260907-14).
+    return flat if keep_quotations else re.sub(r'\*"[^"]*"\*', " ", flat)
 
 
 #: Counts of tables or routes that are **not** claims about the whole repository. Keyed on the
@@ -200,6 +212,9 @@ COUNT_MENTIONS = {
     ('DATABASE.md',
      '--- ## 2 · The tables **The five tables in this section** are all built (CHG-20260823-41); `halt_routing` is in §0.2, and the page-wide count is the six of line 3.'):
         'explicitly scoped to one section, which is why it is not compared with `store._EXPECTED` -- a bare noun names the global authority only where the sentence does not narrow it',
+    ('MODELS.md',
+     'The user ruled that 「模型配置」 means both halves, so [`store.py`](../src/ai_sdlc_runner/store.py) now holds them: two tables and two routes for the assignment halves — `node_assignments` and `seat_assignments`, `POST /config/nodes` and `POST /config/seats`.'):
+        'scoped to what one ruling added, and it names all four; the totals are elsewhere',
 }
 
 
@@ -235,6 +250,14 @@ def test_a_count_of_tables_or_routes_matches_the_thing_there_is_one_of():
         for match in re.finditer(
                 r"\b(\w+) of (?:its |the )?(\w+) (?:HTTP )?(tables|routes)\b", body, re.I):
             said_built, said_total, noun = match.groups()
+            # A sentence that narrows its own scope is not a claim about the whole repository, and
+            # it is pinned rather than compared -- so the grammars have to let it through before
+            # they assert, not after. Measured: `MODELS.md`'s "two tables and two routes for the
+            # assignment halves" was read as a claim that the server answers two routes.
+            if (name, _sentence(body, match.start(), match.end())) in COUNT_MENTIONS:
+                mentions[(name, _sentence(body, match.start(), match.end()))] = None
+                spans.append(match.span())
+                continue
             real = tables if noun.lower() == "tables" else routes
             assert _count(said_total) == real, (
                 f"{name} says {said_total} {noun}; there are {real}")
@@ -251,6 +274,10 @@ def test_a_count_of_tables_or_routes_matches_the_thing_there_is_one_of():
             if _count(match.group(1)) is None:
                 continue
             sentence = _sentence(body, match.start(), match.end())
+            if (name, sentence) in COUNT_MENTIONS:
+                mentions[(name, sentence)] = None
+                spans.append(match.span())
+                continue
             assert _count(match.group(1)) == routes, (
                 f"{name} says {match.group(1)} routes; the server answers {routes}")
             for verb, real in (("GET", gets), ("POST", posts)):
@@ -350,9 +377,13 @@ def test_a_field_count_in_prose_is_checked_against_the_thing_it_counts():
     checked = 0
     mentions = {}
     for name, raw_body in _text().items():
-        # Normalised first, so a claim that wraps across lines is still one sentence and a
-        # mention's key does not change when the paragraph is rewrapped.
-        body = " ".join(raw_body.split())
+        # `_prose` rather than a bare normalise: it wraps the same whitespace collapsing, so a
+        # claim that spans lines is still one sentence, and it also drops fenced code, `>` blocks
+        # and the withdrawn-sentence form. This rule was written one change before `_prose` was
+        # (CHG-20260907-12, then -13), and kept scanning fences until a repair to `docs/API.md`'s
+        # payload sketch made it report a field count inside a JSON block. A helper that exists
+        # for exactly this and is used by two rules out of three is a third way to be wrong.
+        body = _prose(raw_body)
         spans = []
 
         # "Seventeen fields, listed in `workorder.WORK_ORDER_FIELDS`"
@@ -1328,6 +1359,62 @@ def test_a_withdrawn_sentence_is_ignored_only_where_it_is_marked_as_one():
     # And the boundary that keeps the stripping honest: an ordinary inline quotation can carry a
     # live claim, so only the marked forms go.
     assert "not created" in _prose('The page says "not created" in an ordinary quotation.')
+
+
+#: Sources a document may quote, and how to reach them. A quotation names its source in the
+#: sentence that carries it — `save()`, `models.py` — which is what tells this rule apart from
+#: `_prose`'s reading of the same `*"…"*` marker. That marker means *withdrawn* to the denial rule
+#: and *live quotation* here, and the marker alone cannot say which: **the attribution is what
+#: distinguishes them**, so it has to be structural rather than guessed (CHG-20260907-14).
+_QUOTABLE = {
+    "save()": ("models", "save"),
+    "`models.py`": ("models", None),
+    "`store.py`": ("store", None),
+}
+
+
+def test_a_document_quoting_the_source_quotes_what_the_source_says():
+    """Three documents quoted a comment `models.py` had stopped carrying.
+
+    *"both are computed; storing them would let a stale label outlive the truth"* — the real line
+    is *"Storing one would let a stale label outlive the truth"*, singular, since the exclusion
+    moved into `models.COMPUTED` (CHG-20260903-39). So the quotations were stale in their **words**
+    and not only in the count of fields they described, and nothing looked: a fence is not prose,
+    and the italic form is what `_prose` strips.
+
+    Matched on the flattened text rather than the layout, so rewrapping a page does not fail it.
+    """
+    import importlib
+    import inspect
+
+    for name, raw_body in _text().items():
+        flat = _prose(raw_body, keep_quotations=True)
+        for match in re.finditer(r'\*"([^"]{20,})"\*', flat):
+            quoted = match.group(1)
+            around = flat[max(0, match.start() - 160):match.end() + 40]
+            # **Any** source the sentence names, not the first one found. A sentence may say
+            # what a function does and where the reason is written — "`save()` strips them, and
+            # `models.py` says why on `models.COMPUTED`'s own line" names two, and the quotation
+            # belongs to one of them. Taking the first was measured against exactly that sentence
+            # and reported it wrong.
+            named = [p for p in _QUOTABLE if p in around]
+            if not named:
+                continue
+            texts = []
+            for phrase in named:
+                module, attr = _QUOTABLE[phrase]
+                source = importlib.import_module(f"ai_sdlc_runner.{module}")
+                body = (inspect.getsource(getattr(source, attr)) if attr
+                        else inspect.getsource(source))
+                # The comment markers go before the flattening, not after. `models.py` carries the
+                # quoted sentence across two `#:` lines, so a plain `" ".join(...split())` leaves
+                # `#:` inside it and a **true** quotation does not match -- the same shape as
+                # `_plain` stripping underscores out of gate names one change ago.
+                texts.append(" ".join(re.sub(r"(?m)^\s*#:?\s?", " ", body).split()))
+            assert any(quoted.rstrip(".") in text for text in texts), (
+                f"{name} attributes {quoted!r} to {named}, and none of them says it. A quotation "
+                f"that names its source has to be one — and if the sentence is a record of what "
+                f"the source used to say, it belongs in a `>` block.")
 
 
 def test_no_document_calls_a_built_table_uncreated():

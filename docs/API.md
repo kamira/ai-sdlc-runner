@@ -86,12 +86,12 @@ The registry, plus the one question a registry cannot answer for itself.
 
 ```jsonc
 { "models": [ { "id", "vendor", "name", "transport", "command", "endpoint", "key_env", "note",
-                "reach", "leaves_this_machine" } ],
+                "reach", "leaves_this_machine", "reach_guessed" } ],
   "leaving": [ "<model id>", … ] }
 ```
 
-**`reach` and `leaves_this_machine` appear here and are never persisted** — they are computed on
-every read from `(transport, endpoint)`. `leaving` is the same fact stated at the top level, because
+**Three fields, listed in `models.COMPUTED`, appear here and are never persisted** — `reach`,
+`leaves_this_machine` and `reach_guessed`, computed on every read from `(transport, endpoint)`. `leaving` is the same fact stated at the top level, because
 *"what goes out from here"* should not require a reader to scan a list and notice a hostname.
 
 ### `GET /attachments`

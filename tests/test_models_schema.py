@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from ai_sdlc_runner import models  # noqa: E402
+from test_documented_numbers import NUMBER_WORDS  # noqa: E402
 
 PAGE = (ROOT / "docs" / "MODELS.md").read_text(encoding="utf-8")
 FLAT = " ".join(PAGE.split())
@@ -42,8 +43,20 @@ def test_the_page_lists_exactly_the_fields_that_persist():
     persisted = set(_cli().as_dict()) - set(models.COMPUTED)
     for field in persisted:
         assert f'"{field}"' in PAGE, f"the page omits the persisted field {field!r}"
+    # The other half of the same derivation, which was never asserted here: this page enumerated
+    # **two** computed fields for the four days after `reach_guessed` joined the tuple. Subset
+    # rather than equality, because the page names field-like identifiers for other reasons.
+    absent = sorted(n for n in models.COMPUTED if n not in PAGE)
+    assert not absent, f"the page must name every computed field; it omits {absent}"
     assert len(persisted) == 8, f"the registry now persists {len(persisted)} fields, not eight"
-    assert "Eight fields persist" in FLAT
+    # The page's own sentence, read as a **number** rather than matched as a string. It said
+    # `"Eight fields persist" in FLAT`, so correcting the page — which CHG-20260907-14 had to do,
+    # to name `models.Model` — broke the guard. A guard that pins a sentence is a guard the page
+    # cannot be corrected past.
+    said = re.search(r"(\w+) fields, listed in `models.Model`, persist", FLAT)
+    assert said, "the page must say how many fields persist, and name what it counts"
+    assert NUMBER_WORDS[said.group(1).lower()] == len(persisted), (
+        f"the page says {said.group(1)} fields persist; {len(persisted)} do")
 
 
 def test_the_page_says_reach_is_computed_and_never_stored():

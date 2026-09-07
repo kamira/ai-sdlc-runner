@@ -37,7 +37,8 @@ startup, held in memory, exposed read-only. Through the console you could add a 
 assign it.
 
 The user ruled that 「模型配置」 means both halves, so [`store.py`](../src/ai_sdlc_runner/store.py)
-now holds them. Two tables, two routes.
+now holds them: two tables and two routes for the assignment halves — `node_assignments` and
+`seat_assignments`, `POST /config/nodes` and `POST /config/seats`.
 
 ### Precedence: the plan wins, and it is never silent
 
@@ -81,15 +82,20 @@ Only **registry model ids** can be assigned through the store. A raw command lin
   "note":      "" }
 ```
 
-Eight fields persist. Two more are **computed on every read and never stored**:
+Eight fields, listed in `models.Model`, persist. Three more are **computed on every read and never stored**:
 
 ```jsonc
 { "reach": "local" | "internal" | "external",
-  "leaves_this_machine": false }
+  "leaves_this_machine": false,
+  "reach_guessed": false }
 ```
 
-`save()` strips them, with the reason on the line that does it: *"both are computed; storing them
-would let a stale label outlive the truth."*
+`save()` strips them, and `models.py` gives the reason where `models.COMPUTED` is declared:
+*"Storing one would let a stale label outlive the truth."*
+
+> Until CHG-20260907-14 this quoted *"both are computed; storing them would…"*, a comment
+> `models.py` stopped carrying when the exclusion moved into `models.COMPUTED`
+> (CHG-20260903-39). The count was two and the words were a sentence nothing said.
 
 ### `command` is a list, not a string
 
