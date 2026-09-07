@@ -113,6 +113,10 @@ def _loopback_host(header: Optional[str]) -> bool:
     if not header:
         return False
     host = header.strip()
+    # `[::1]` is not a host this server accepts any more (CHG-20260907-20) and this branch is
+    # unfalsifiable by data: removing it changes no test. It is kept because it is what an IPv6
+    # build would need back, and because `_loopback_origin` normalises the other way — the pair
+    # is the thing to read together, not either half alone.
     if host.startswith("["):                       # [::1]:8765
         host = host.split("]")[0] + "]"
     elif ":" in host:
@@ -1362,14 +1366,18 @@ def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
         # Only what the errno establishes. This branch used to say "something is already there"
         # for every failure a socket can have, and `socket.gaierror` is an `OSError` — so the
         # `::1` this list used to permit produced a resolver answer reported as a port conflict.
-        # The live case on Windows is a port swallowed by a reserved range, where the same
-        # sentence sends a person hunting for a runner that is not running.
         #
         # Two branches and not four: `EADDRINUSE` is the one cause an errno establishes and the
-        # one this repository has a test for. A bespoke sentence for the resolver would describe
-        # a path narrowing `LOOPBACK` has just closed, and a bespoke one for `EACCES` would carry
-        # advice about excluded port ranges that was read and never measured here. Neither is a
-        # sentence anything requires.
+        # one this repository has a test for. The rest carry the operating system's own sentence
+        # and no diagnosis — and `EACCES` is the case that shows why. It is reported as a port
+        # reserved by something else on Windows and as a port below 1024 on Linux, so any advice
+        # this file wrote for it would be wrong on half the machines it runs on. Neither cause
+        # was reproducible here: `netsh interface ipv4 show excludedportrange protocol=tcp`
+        # lists nothing on the machine this was written on.
+        #
+        # `paths.plain_in(str(exc))` is the load-bearing half of that argument, not decoration:
+        # remove it and the branch says only which address failed. `bind` mutation 5 is there
+        # because removing it was caught by nothing when this shipped.
         if exc.errno == errno.EADDRINUSE:
             raise ServerError(
                 f"cannot listen on {host}:{port} — {paths.plain_in(str(exc))}. Something is "

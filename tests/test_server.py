@@ -120,17 +120,21 @@ def live(tmp_path):
 
 # --- local only ------------------------------------------------------------------------------
 
-def test_it_refuses_to_bind_anything_but_loopback():
+@pytest.mark.parametrize("host", ["0.0.0.0", "::1"])
+def test_it_refuses_to_bind_anything_but_loopback(host):
     """The refusal lives in the server so it cannot be 'temporarily' widened by a caller.
 
     It also has to name what it *will* take. The sentence said *"it listens on `{LOOPBACK[0]}`
     and nowhere else"* while the list had three members, so it told a person reaching for a
     permitted spelling that the spelling did not exist. Changing it was caught by nothing until
     this assertion existed (CHG-20260907-20).
+
+    `::1` is here beside `0.0.0.0` because it *used* to be permitted. Refused is a stronger thing
+    to say than absent from a tuple, and it is what a reader of the removal will look for.
     """
     with pytest.raises(server.ServerError, match="refusing to bind") as caught:
         server.serve(_runner(), server.Operator("t", "me", __import__("pathlib").Path(".")),
-                     host="0.0.0.0")
+                     host=host)
     said = str(caught.value)
     unnamed = [addr for addr in server.LOOPBACK if addr not in said]
     assert not unnamed, (
@@ -685,7 +689,9 @@ def test_an_ipv6_origin_is_refused_because_nothing_serves_one(live, origin):
     """`http://[::1]:8080` was in the list above until this server stopped promising `::1`.
 
     It was never a page this server served: `ThreadingHTTPServer.address_family` is `AF_INET` and
-    `serve` never changed it, so a bind of `::1` raised `gaierror` on every platform, always. The
+    `serve` never changed it, so a bind of `::1` raised `gaierror` -- measured on Windows, and by
+    CPython's address parsing everywhere, since a v6 literal fails `inet_pton(AF_INET)` and then
+    `getaddrinfo` with `ai_family=AF_INET`. The
     origin was accepted because `LOOPBACK_HOSTS` carried two IPv6 spellings for a listener that
     could not exist (CHG-20260907-20).
 
@@ -693,7 +699,7 @@ def test_an_ipv6_origin_is_refused_because_nothing_serves_one(live, origin):
     is a different origin from the one this server serves, and the day someone builds IPv6
     support this test is the one that has to be argued with.
     """
-    call, body = live[0], None
+    call = live[0]
     status, body = call("GET", "/run", origin=origin)
     assert status == 403, f"{origin} was accepted"
     assert "cross-origin" in body["error"]
@@ -3211,8 +3217,9 @@ def test_every_permitted_address_can_actually_be_bound(addr, tmp_path):
     """The one instrument the two tests above cannot be: a socket.
 
     `LOOPBACK`'s comment calls it *"the only addresses this server will bind"*, and for the whole
-    of this file's history one member could not be bound on any platform -- `address_family` is
-    `AF_INET`, and `AF_INET` refuses `::1` with a `gaierror`. Two tests read the list against the
+    of this file's history one member could not be bound -- `address_family` is `AF_INET`, and
+    `AF_INET` refuses `::1` with a `gaierror` (measured on Windows; read from CPython's address
+    parsing for the rest). Two tests read the list against the
     header set and neither could see it, because the list's claim is about the operating system
     and both of them stopped at Python (CHG-20260907-20).
 
@@ -3233,9 +3240,15 @@ def test_a_bind_failure_is_not_reported_as_a_port_conflict(tmp_path, monkeypatch
     """One `except OSError` said *"Something is already there"* for every way a bind can fail.
 
     `socket.gaierror` is an `OSError`, so the `::1` this list used to permit produced a resolver
-    answer told as a collision. The live case is not that one: on Windows a reserved range
-    (Hyper-V, WSL) takes a port and the bind fails with `WSAEACCES`, and the message sent the
-    person hunting for a runner that was not running.
+    answer told as a collision. `EACCES` is the shape used here because it is the one an errno
+    cannot diagnose: reported as a reserved port on Windows and as a port below 1024 on Linux,
+    which is why the branch names no cause at all. Neither was reproduced here -- this machine
+    lists no excluded port ranges -- so the exception is constructed rather than provoked.
+
+    Both halves are asserted. The message must not claim a conflict, **and** it must still carry
+    what the operating system said: removing `paths.plain_in(str(exc))` from that branch was
+    caught by nothing when this shipped, and the two-branch design is only defensible while the
+    OS text is there to carry the cause.
 
     `serve` builds its server subclass inside the call, so the name it resolves is patchable here
     (CHG-20260907-20).
@@ -3251,6 +3264,9 @@ def test_a_bind_failure_is_not_reported_as_a_port_conflict(tmp_path, monkeypatch
     assert "cannot listen on" in said
     assert "already there" not in said, said
     assert "runner serve" not in said, said
+    assert "permission denied" in said.lower(), (
+        f"the branch dropped what the operating system said and left only the address: {said!r}. "
+        f"That text is the whole reason this branch is allowed to name no cause of its own.")
 
 
 def test_a_port_that_is_taken_still_says_so(tmp_path, monkeypatch):

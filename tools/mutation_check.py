@@ -223,6 +223,25 @@ MUTATIONS: List[Mutation] = [
         '''f"on {LOOPBACK[0]} and nowhere else. If another machine needs to see it, put "''',
         "tests/test_server.py"),
 
+    # Both added in review of the build. The fifth is the one that matters: two branches are
+    # defensible only because the plain one carries the operating system's own sentence, and
+    # removing that sentence was caught by nothing. The sixth is the other kind of widening --
+    # `0.0.0.0` BINDS, so no bind test refuses it; what fails is local-only, and this is what
+    # makes the socket test's address assertion load-bearing rather than incidental.
+    Mutation(
+        "bind", "a failure may stop saying what the operating system said again",
+        SRC / "server.py",
+        '''        raise ServerError(f"cannot listen on {host}:{port} — {paths.plain_in(str(exc))}.")''',
+        '''        raise ServerError(f"cannot listen on {host}:{port}.")''',
+        "tests/test_server.py"),
+
+    Mutation(
+        "bind", "the permit list may take an address the whole network can reach again",
+        SRC / "server.py",
+        '''LOOPBACK = ("127.0.0.1", "localhost")''',
+        '''LOOPBACK = ("127.0.0.1", "localhost", "0.0.0.0")''',
+        "tests/test_server.py"),
+
     # ── loopback (CHG-20260907-19) ───────────────────────
     # One boundary written twice: `LOOPBACK` is what `serve` permits as a bind argument,
     # `LOOPBACK_HOSTS` is what a `Host` or `Origin` may say. No test named either constant.
