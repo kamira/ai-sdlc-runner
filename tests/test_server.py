@@ -3135,15 +3135,20 @@ def _authority(addr):
 #: Names whose loopback meaning is fixed by RFC 6761 6.3 rather than by a bind argument or by DNS.
 #:
 #: **Fixed by the standard, not by "the platform"** -- the distinction is measured. This machine's
-#: resolver also answers 127.0.0.1 for `localhost.localdomain` and for `LOCALHOST.`, and neither
-#: is a name a rebinding guard should accept; "whatever resolves to loopback here" is the
-#: attacker's precondition, not a rule. `foo.localhost` goes the other way: 6.3 covers it and the
-#: OS does not resolve it (`gaierror` here), so only a browser could ever send it, and accepting
-#: it would be a widening with its own record. That leaves exactly one member.
+#: resolver also answers 127.0.0.1 for `localhost.localdomain`, which no standard requires and a
+#: rebinding guard should not accept; "whatever resolves to loopback here" is the attacker's
+#: precondition, not a rule. `foo.localhost` goes the other way: 6.3 covers it and this OS does
+#: not resolve it (`gaierror` here), so only a browser could send it and accepting it would be a
+#: widening with its own record. That leaves exactly one member.
 #:
-#: This lives beside `_authority` on the test side on purpose. Both are test-side twins of a rule
-#: `server.py` states in code, and the record that derives `LOOPBACK_HOSTS` from `LOOPBACK` is the
-#: one that lifts the pair across the line (CHG-20260907-21).
+#: Not `LOCALHOST.` -- a seat caught that one being cited as drift when it is the RFC's own
+#: spelling, trailing dot and all, and DNS names are case-insensitive. Whether this guard should
+#: accept it is a separate question; it refuses it today.
+#:
+#: This lives beside `_authority` on the test side on purpose. `server.py` states the membership
+#: of `LOOPBACK_HOSTS`, not the reason for it, and the future record CHG-20260907-19 named -- the
+#: one that would derive the header set from the bind list -- is what would lift this pair across
+#: the line. This record (CHG-20260907-21) does not, and says so.
 RESOLVER_FIXED = frozenset({"localhost"})
 
 
@@ -3188,7 +3193,7 @@ def test_every_address_the_bind_list_permits_is_accepted_as_a_host():
 
 
 def test_the_header_set_is_the_bind_list_plus_the_one_name_a_standard_fixes():
-    """The other direction, which is about a rebinding surface rather than reachability.
+    """Both directions at set level, which is about a rebinding surface as well as reachability.
 
     **"Permits" means `serve` accepts it as a bind argument, not that a socket would succeed.**
     Those differed when this was written -- `serve` permitted `::1`, which an `AF_INET` server
@@ -3217,20 +3222,35 @@ def test_the_header_set_is_the_bind_list_plus_the_one_name_a_standard_fixes():
     `::1` was still permitted. This compares against `_authority`, brackets kept, and objects to
     exactly that.
 
-    It said that if the address-family defect were fixed by dropping `::1` from `LOOPBACK` rather
-    than by binding it, this test would require `"[::1]"` and `"::1"` to go with it. That is what
-    happened (CHG-20260907-20), and this test is what required it.
+    In its containment form it said that if the address-family defect were fixed by dropping `::1`
+    from `LOOPBACK` rather than by binding it, this test would require `"[::1]"` and `"::1"` to go
+    with it. That is what happened (CHG-20260907-20), and this test is what required it. The
+    equality does not inherit that sentence: it derives `_authority("::1") == "[::1]"`, so if an
+    IPv6 address ever returned to `LOOPBACK` this would **require** the bracketed form and
+    **forbid** the bare one, which is a position neither earlier record took and which the
+    derivation record has to match.
 
     Raised by an independent seat, which pointed out that the first record refuted only the
     literal reverse and then declined the whole direction (CHG-20260907-19).
     """
     for name in sorted(RESOLVER_FIXED):
+        # Three conditions, because the first draft was one and said less than it claimed: a seat
+        # measured that `ipaddress.ip_address` raises for `"[127.0.0.1]"`, `"[::1]"` and `""` too,
+        # so "must raise" admitted an address wearing authority brackets. An address's loopback
+        # meaning is IANA's and belongs in `LOOPBACK`; only a bare lowercase name belongs here.
+        # Lowercase because `_loopback_host` lowercases the header and looks it up in the table as
+        # written, so an uppercase member would be unreachable at runtime.
+        assert name and name == name.strip().lower(), name
+        assert not (name.startswith("[") or name.endswith("]")), name
         with pytest.raises(ValueError):
-            ipaddress.ip_address(name)          # an address's loopback meaning is IANA's, and it
-                                                # belongs in `LOOPBACK`; only a name belongs here
+            ipaddress.ip_address(name.strip("[]"))
 
+    # Lowercased on the bind side only. `_loopback_host` lowercases the header and compares it
+    # against the table **as written**, so a member spelled `LocalHost` is dead at runtime --
+    # normalising the accepted side here would assert a symmetry production does not have and
+    # would pass that member (a seat measured it).
     expected = {_authority(addr).lower() for addr in server.LOOPBACK} | RESOLVER_FIXED
-    accepted = {host.lower() for host in server.LOOPBACK_HOSTS}
+    accepted = set(server.LOOPBACK_HOSTS)
     assert accepted == expected, (
         f"unexplained and accepted: {sorted(accepted - expected)}; required and missing: "
         f"{sorted(expected - accepted)}. `LOOPBACK_HOSTS` is the authority form of everything "
