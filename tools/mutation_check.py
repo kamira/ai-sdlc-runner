@@ -188,6 +188,31 @@ MUTATIONS: List[Mutation] = [
         '''            if (key == "node_models" and owner in graph.BY_ID or True''',
         "tests/test_plan.py"),
 
+    # ── resolver-fixed (CHG-20260907-21) ────────────
+    # The reverse test asserted a containment and `localhost` satisfied it by being a bind
+    # spelling, which is not why it belongs. Equality states the relation instead, so every
+    # term is required rather than tolerated. The first two entries are the halves a
+    # subtraction could not have: a required name removed from the header set, and a bracketed
+    # IPv4 literal, which the old containment accepted because it stripped the brackets before
+    # comparing and found `127.0.0.1` permitted. Not registered, and it is the case that made
+    # this record: the bind list and the header set losing `localhost` TOGETHER. The harness
+    # applies one replacement per entry and the two constants are separate statements, so that
+    # state cannot be reached by any single anchor. It is measured in the record instead, and
+    # the first entry here is its reachable half.
+    Mutation(
+        "resolver-fixed", "the header set may lose a name a standard fixes again",
+        SRC / "server.py",
+        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})''',
+        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1"})''',
+        "tests/test_server.py"),
+
+    Mutation(
+        "resolver-fixed", "an authority form nothing derives may be accepted again",
+        SRC / "server.py",
+        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})''',
+        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "[127.0.0.1]", "localhost"})''',
+        "tests/test_server.py"),
+
     # ── bind (CHG-20260907-20) ───────────────────────────
     # `LOOPBACK` called itself "the only addresses this server will bind" and named one the
     # socket has never opened: `address_family` is `AF_INET` and `AF_INET` refuses `::1`. The
@@ -266,11 +291,17 @@ MUTATIONS: List[Mutation] = [
         '''LOOPBACK_HOSTS = frozenset({"127.0.0.1"})''',
         "tests/test_server.py"),
 
+    # Re-anchored by CHG-20260907-21, and the word that was missing is `address`. Dropping
+    # `localhost` from the bind list stopped being a defect when the reverse test stopped
+    # justifying that name by its membership there: RFC 6761 fixes what `localhost` means, so
+    # it may stay in the header set without being a bind spelling. Losing `127.0.0.1` is still
+    # a defect, and that is what this now says. The old form is NOT CAUGHT after -21 and that
+    # is the point of -21, not a hole in it.
     Mutation(
         "loopback", "the bind list may lose an address the header check still accepts again",
         SRC / "server.py",
         '''LOOPBACK = ("127.0.0.1", "localhost")''',
-        '''LOOPBACK = ("127.0.0.1",)''',
+        '''LOOPBACK = ("localhost",)''',
         "tests/test_server.py"),
 
     Mutation(

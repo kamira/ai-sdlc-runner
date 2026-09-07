@@ -23,6 +23,7 @@ down and called enforcement" that an independent seat refused.
 import errno
 import ast
 import inspect
+import ipaddress
 import json
 import pathlib
 import re
@@ -3131,6 +3132,21 @@ def _authority(addr):
     return f"[{addr}]" if ":" in addr else addr
 
 
+#: Names whose loopback meaning is fixed by RFC 6761 6.3 rather than by a bind argument or by DNS.
+#:
+#: **Fixed by the standard, not by "the platform"** -- the distinction is measured. This machine's
+#: resolver also answers 127.0.0.1 for `localhost.localdomain` and for `LOCALHOST.`, and neither
+#: is a name a rebinding guard should accept; "whatever resolves to loopback here" is the
+#: attacker's precondition, not a rule. `foo.localhost` goes the other way: 6.3 covers it and the
+#: OS does not resolve it (`gaierror` here), so only a browser could ever send it, and accepting
+#: it would be a widening with its own record. That leaves exactly one member.
+#:
+#: This lives beside `_authority` on the test side on purpose. Both are test-side twins of a rule
+#: `server.py` states in code, and the record that derives `LOOPBACK_HOSTS` from `LOOPBACK` is the
+#: one that lifts the pair across the line (CHG-20260907-21).
+RESOLVER_FIXED = frozenset({"localhost"})
+
+
 def test_every_address_the_bind_list_permits_is_accepted_as_a_host():
     """Two spellings of one boundary, and nothing required them to agree.
 
@@ -3171,45 +3187,55 @@ def test_every_address_the_bind_list_permits_is_accepted_as_a_host():
         f"needs the bracketed form as well as the bare one for an IPv6 address.")
 
 
-def test_no_host_is_accepted_that_the_bind_list_does_not_permit():
+def test_the_header_set_is_the_bind_list_plus_the_one_name_a_standard_fixes():
     """The other direction, which is about a rebinding surface rather than reachability.
 
-    **"Does not permit" means `serve` refuses it, not that a socket would fail.** Those differed
-    when this was written -- `serve` permitted `::1`, which an `AF_INET` server cannot bind -- and
-    this test read the list on purpose so it would not fail on a defect it was not about. That
-    defect is fixed (CHG-20260907-20) and the distinction still stands: the socket is read by
-    `test_every_permitted_address_can_actually_be_bound`, and this one is about two lists.
+    **"Permits" means `serve` accepts it as a bind argument, not that a socket would succeed.**
+    Those differed when this was written -- `serve` permitted `::1`, which an `AF_INET` server
+    cannot bind -- and this test read the list on purpose so it would not fail on a defect it was
+    not about. That defect is fixed (CHG-20260907-20) and the distinction still stands: the socket
+    is read by `test_every_permitted_address_can_actually_be_bound`, and this one is about two
+    lists.
 
-    Not literal containment -- `"[::1]"` is a header form and not a bind argument, so
-    `LOOPBACK_HOSTS <= LOOPBACK` is false by design. Normalised, the two sets are equal today, and
-    an entry that survives normalisation and is not permitted as a bind address is a name this
-    server accepts for a socket it will never be asked to open. `LOOPBACK_HOSTS`' own comment
-    calls anything else *"a rebinding attempt or a proxy"*, which is a reason to make the addition
-    deliberate.
+    The relation, stated closed rather than as a bound:
 
-    Equality was the form one seat proposed and then withdrew on measuring it: normalised equality
-    holds with `"[::1]"` deleted, so it is blind to the bracket split this file exists to hold.
-    Behaviour forwards plus containment backwards is strictly stronger.
+        LOOPBACK_HOSTS == the authority form of every address serve permits
+                          | names whose loopback meaning RFC 6761 fixes
 
-    It said that if the address-family defect were fixed by dropping `::1` from `LOOPBACK`
-    rather than by binding it, this test would require `"[::1]"` and `"::1"` to go with it. That
-    is what happened (CHG-20260907-20), and this test is what required it.
+    Equality and not containment, and that is this record's subject. The first version subtracted:
+    an accepted authority that is not a permitted bind argument was the failure. `localhost`
+    passed it because it *happens* to be a bind spelling, which is not why it belongs -- a browser
+    at `http://localhost:8765` reaches a server bound to `127.0.0.1` because the standard says so,
+    whether or not `localhost` is a spelling `serve` accepts. Subtraction cannot say that: a set
+    that only subtracts permits a member to vanish, so with `localhost` gone from both constants
+    the containment passed while `Host: localhost:8765` was refused. An equality **requires** each
+    term, so `RESOLVER_FIXED` forbids as well as permits and is a definition rather than an
+    exception list (CHG-20260907-21).
 
-    One member is here on grounds this containment does not state: `localhost` belongs in the
-    header set because RFC 6761 fixes its loopback meaning in the resolver, not because it is a
-    bind spelling. Today it is both, so the containment holds for the wrong reason as well as the
-    right one; that is a defect in this test's justification, not its assertion, and it has its
-    own record.
+    Not the equality one seat proposed and withdrew in CHG-20260907-19: that was *normalised*
+    equality, brackets stripped on the header side, and it was blind to `"[::1]"` deleted while
+    `::1` was still permitted. This compares against `_authority`, brackets kept, and objects to
+    exactly that.
+
+    It said that if the address-family defect were fixed by dropping `::1` from `LOOPBACK` rather
+    than by binding it, this test would require `"[::1]"` and `"::1"` to go with it. That is what
+    happened (CHG-20260907-20), and this test is what required it.
 
     Raised by an independent seat, which pointed out that the first record refuted only the
     literal reverse and then declined the whole direction (CHG-20260907-19).
     """
-    permitted = {addr.lower() for addr in server.LOOPBACK}
-    extra = sorted({host.strip("[]").lower() for host in server.LOOPBACK_HOSTS} - permitted)
-    assert not extra, (
-        f"{extra} are in the set `Host` and `Origin` are checked against, and are not addresses "
-        f"`serve` permits. If one is deliberate, it belongs in `LOOPBACK` too, or in a sentence "
-        f"here saying why a name this server never answers on is accepted anyway.")
+    for name in sorted(RESOLVER_FIXED):
+        with pytest.raises(ValueError):
+            ipaddress.ip_address(name)          # an address's loopback meaning is IANA's, and it
+                                                # belongs in `LOOPBACK`; only a name belongs here
+
+    expected = {_authority(addr).lower() for addr in server.LOOPBACK} | RESOLVER_FIXED
+    accepted = {host.lower() for host in server.LOOPBACK_HOSTS}
+    assert accepted == expected, (
+        f"unexplained and accepted: {sorted(accepted - expected)}; required and missing: "
+        f"{sorted(expected - accepted)}. `LOOPBACK_HOSTS` is the authority form of everything "
+        f"`serve` will bind, plus `RESOLVER_FIXED`. A name that is neither is a rebinding "
+        f"surface; one that is either and absent is a request this server refuses for no reason.")
 
 
 @pytest.mark.parametrize("addr", server.LOOPBACK)
@@ -3283,3 +3309,25 @@ def test_a_port_that_is_taken_still_says_so(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "ThreadingHTTPServer", _Taken)
     with pytest.raises(server.ServerError, match="already there"):
         server.serve(_runner(), server.Operator.mint(tmp_path), port=0)
+
+
+@pytest.mark.parametrize("authority", [n for name in sorted(RESOLVER_FIXED)
+                                       for n in (name, f"{name}:8765")])
+def test_the_name_a_standard_fixes_is_accepted_as_a_live_host_header(live, authority):
+    """The request the record says a real person makes, made.
+
+    `Host: localhost` was accepted only through the table: the `call` fixture defaults the header
+    to `127.0.0.1:{port}`, and the only explicit hosts in this file are ones being refused. Every
+    objector to removing `localhost` from `LOOPBACK_HOSTS` was on the `Origin` side or read the
+    table, so the header this test is named for had no live case at all (CHG-20260907-21).
+
+    Both authority forms, and the port is deliberately not this server's: `_loopback_host` strips
+    whatever follows the last colon before it compares, so the number is not what is under test
+    and a real one would suggest it was. What is under test is the name.
+    """
+    call = live[0]
+    status, _ = call("GET", "/run", host=authority)
+    assert status == 200, (
+        f"`Host: {authority}` was refused. That name is in `RESOLVER_FIXED` because a browser "
+        f"sent there reaches this server, and a guard that refuses it refuses a person rather "
+        f"than an attacker.")
