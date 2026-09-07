@@ -507,12 +507,18 @@ def validate() -> None:
                 raise GraphError(
                     f"node {node.id!r} follows unknown node {node.follows!r} — `follows` is a node "
                     f"id, not a role, because a role names no single answer to follow")
+            # **This one first.** A node following itself is a chain of follows, so the rule
+            # below used to fire on it and the rule written for it never ran at all — and the
+            # message a reader got said the node "follows something else", pointing at itself.
+            # `test_a_node_cannot_follow_itself` matched `follows itself|follows something else`,
+            # so it passed on the wrong rule's wrong sentence and its name was the only thing
+            # claiming otherwise (CHG-20260907-07).
+            if node.follows == node.id:
+                raise GraphError(f"node {node.id!r} follows itself")
             if BY_ID[node.follows].mode == FOLLOWS:
                 raise GraphError(
                     f"node {node.id!r} follows {node.follows!r}, which follows something else — a "
                     f"chain of follows has no model at the end of it")
-            if node.follows == node.id:
-                raise GraphError(f"node {node.id!r} follows itself")
         elif node.follows:
             raise GraphError(f"node {node.id!r} is mode {node.mode!r} and has no use for a follows")
 

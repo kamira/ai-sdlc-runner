@@ -118,6 +118,125 @@ MUTATIONS: List[Mutation] = [
         '''                    out = runner.attach(version, str(body.get("filename") or ""), raw)''',
         '''                    out = runner.attach(version, "attachment", raw)''',
         "tests/test_server.py"),
+    # ── graph-validation (CHG-20260907-07) ───────────────────────────────────────
+    # `validate()` is the only guard over the flow, and nineteen of its thirty-two rules had
+    # no reverse test: each could be deleted with every likely test file still green. The one
+    # CHG-20260901-11 added to close a defect was among them -- the check a repair installs is
+    # itself somewhere the next defect can hide. One entry per rule now pinned.
+    Mutation(
+        "graph-validation", "two nodes may share an id again",
+        SRC / "graph.py",
+        '''    if len(BY_ID) != len(NODES):''',
+        '''    if False:''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "graph-validation", "an edge may name a node that does not exist again",
+        SRC / "graph.py",
+        '''            if target not in ids:''',
+        '''            if False:''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "graph-validation", "a terminal may have an outgoing edge again",
+        SRC / "graph.py",
+        '''        if node.kind == TERMINAL and targets:''',
+        '''        if False:''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "graph-validation", "a decision may offer fewer than two branches again",
+        SRC / "graph.py",
+        '''        if node.kind in (DECISION, LOOP) and len(node.branches) < 2:''',
+        '''        if False:''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "graph-validation", "a step may have no successor again",
+        SRC / "graph.py",
+        '''        if node.kind == STEP and not node.next:''',
+        '''        if False:''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "graph-validation", "a node may name a gate policy does not have again",
+        SRC / "graph.py",
+        '''        if node.gate and node.gate not in policy.GATES:''',
+        '''        if False:''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "graph-validation", "a node may name a role policy does not have again",
+        SRC / "graph.py",
+        '''        if node.role and node.role not in policy.BY_ROLE:''',
+        '''        if False:''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "graph-validation", "a gate phase outside the two words is accepted again",
+        SRC / "graph.py",
+        '''        if node.gate_when not in ("before", "after"):''',
+        '''        if False:''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "graph-validation", "an after phase may name no gate again",
+        SRC / "graph.py",
+        '''        if node.gate_when == "after" and not node.gate:''',
+        '''        if False:''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "graph-validation", "an answer may decide where nobody is asked again",
+        SRC / "graph.py",
+        '''        if node.answer_decides and not node.role:''',
+        '''        if False:''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "graph-validation", "a rejection may be declared where there is no gate to refuse again",
+        SRC / "graph.py",
+        '''            if not node.gate:''',
+        '''            if False:''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "graph-validation", "a rejection may name a node that does not exist again",
+        SRC / "graph.py",
+        '''            if node.rejects_to not in ids:''',
+        '''            if False:''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "graph-validation", "a rejection may return to the node that was refused again",
+        SRC / "graph.py",
+        '''            if node.rejects_to == node.id:''',
+        '''            if False:''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "graph-validation", "an unreachable node is accepted again",
+        SRC / "graph.py",
+        '''    if unreachable:''',
+        '''    if False:''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "graph-validation", "a node that is not a terminal may be permanent again",
+        SRC / "graph.py",
+        '''        if n.permanent and n.kind != TERMINAL:''',
+        '''        if False:''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "graph-validation", "a node may follow itself and be told it follows something else again",
+        SRC / "graph.py",
+        '''            if node.follows == node.id:
+                raise GraphError(f"node {node.id!r} follows itself")
+            if BY_ID[node.follows].mode == FOLLOWS:''',
+        '''            if BY_ID[node.follows].mode == FOLLOWS:''',
+        "tests/test_execution_mode.py"),
+
     # ── effect-state (CHG-20260907-06) ─────────────────────────────────────────────
     # `STOPPED`'s own definition says it covers *a permanent halt, or an effect that
     # failed*. The second clause was never implemented: the except block set `halted_at`
