@@ -126,17 +126,60 @@ def test_a_gate_phase_outside_the_two_words_is_refused():
         _validate_with(_mutate(gated.id, gate_when="whenever"))
 
 
-def test_an_after_phase_may_not_name_no_gate():
-    """The half of the documented contract that is actually enforced. The other half — an ungated
-    node carrying the default `before` — is not, and `CHG-20260907-07` does not change that: three
-    gated nodes rely on the default, and the documentation is what is being narrowed to match."""
+def test_a_phase_without_a_gate_is_refused():
+    """Half of a contract that used to be stated whole and enforced half.
+
+    The old message said *"has a gate phase but no gate"* while the condition refused only the
+    `after` half — and since `before` was the **default**, that sentence was true of the
+    twenty-one ungated nodes it accepted. Round fourteen's conformance seat vetoed it, and the
+    repair was the type: with `gate_when` optional there is a "no phase" state, so both halves are
+    sayable (CHG-20260907-11).
+    """
     ungated = next(n for n in graph.NODES if not n.gate)
-    # The message is *"has a gate phase but no gate"* — the documented contract in full, while
-    # the condition above it implements half: an ungated node carrying the default `before` also
-    # has a phase and no gate, and is accepted. Round fourteen's conformance seat holds its veto
-    # on that; this test pins the half that is enforced, and says which half that is.
-    with pytest.raises(graph.GraphError, match="has a gate phase but no gate"):
-        _validate_with(_mutate(ungated.id, gate_when="after"))
+    for phase in ("after", "before"):
+        with pytest.raises(graph.GraphError, match="neither means anything without the other"):
+            _validate_with(_mutate(ungated.id, gate_when=phase))
+
+
+def test_a_gate_without_a_phase_is_refused():
+    """The half that could not be said before, and the one that matters.
+
+    Seven of the ten gated nodes are `after`, so the old default was the **minority** value: a
+    gated node whose author forgot the phase silently got `before` — a gate consulted in front of
+    the work it grades, which the field's own comment calls a defect an independent verifier
+    found. Omission is a build error now.
+    """
+    gated = _first(gate="merge")
+    with pytest.raises(graph.GraphError, match="neither means anything without the other"):
+        _validate_with(_mutate(gated.id, gate_when=None))
+
+
+def test_which_gate_is_consulted_when_is_pinned():
+    """A validator cannot choose between two valid values; only this can.
+
+    Measured before it existed: `pm_signoff` moved to `before` and `engineer_selfverify` moved to
+    `after` keeps `test_documented_numbers`' count at ten and three, and the **whole suite** stays
+    green — 2292 passed, nothing failed. Three of the ten phases were held by a count and by
+    nothing else.
+
+    Written as one equality rather than ten assertions so that a *new* gated node fails it too and
+    has to be entered here deliberately. `design.md` states the rule this table follows: before,
+    where the work is the risk; after, where the point is to hold the result.
+    """
+    assert {n.id: n.gate_when for n in graph.NODES if n.gate} == {
+        # after — the point is to hold the result and stop with it in hand
+        "pm_confirm": "after",
+        "lead_assess": "after",
+        "pm_signoff": "after",
+        "lead_task_review": "after",
+        "lead_review": "after",
+        "qa_verify": "after",
+        "qa_accept": "after",
+        # before — the work itself is the risk
+        "engineer_selfverify": "before",
+        "pr": "before",
+        "merge": "before",
+    }
 
 
 def test_only_a_terminal_may_be_permanent():

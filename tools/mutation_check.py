@@ -168,6 +168,27 @@ MUTATIONS: List[Mutation] = [
         '''    return worktree.key_for(cycle) if node.id in frozenset(["engineer_build", "engineer_selfverify", "fix_pass", "lead_task_review", "re_review"]) else ""''',
         "tests/test_module_built.py"),
 
+    # ── gate-phase (CHG-20260907-11) ────────────────────────────────
+    # A validator cannot choose between two valid values, so these two pin the
+    # assignment rather than the rule. Measured before they existed: moving
+    # `pm_signoff` to `before` and `engineer_selfverify` to `after` keeps the count
+    # test at ten and three and leaves the **whole suite** green -- 2292 passed. The
+    # first names `test_flow.py` on purpose: the phase is only observable in who gets
+    # asked, and every test that pinned that node checked where the run stopped.
+    Mutation(
+        "gate-phase", "a sign-off may be reached without anyone being asked again",
+        SRC / "graph.py",
+        '''         gate="before_dispatch", gate_when="after", answer_decides=True, mode=MODEL_PANEL,''',
+        '''         gate="before_dispatch", gate_when="before", answer_decides=True, mode=MODEL_PANEL,''',
+        "tests/test_flow.py"),
+
+    Mutation(
+        "gate-phase", "which gate is consulted when may change unnoticed again",
+        SRC / "graph.py",
+        '''         gate="self_verify", gate_when="before", next="lead_task_review", mode=FOLLOWS,''',
+        '''         gate="self_verify", gate_when="after", next="lead_task_review", mode=FOLLOWS,''',
+        "tests/test_graph_validation.py"),
+
     # ── kind-and-edges (CHG-20260907-09) ──────────────────────────────
     # `MODES` was closed from the day it was written; `kind` was not, and the difference was
     # worth 23 of 31 nodes accepting nonsense -- with `done` reaching the engine's terminal
@@ -260,14 +281,18 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "graph-validation", "a gate phase outside the two words is accepted again",
         SRC / "graph.py",
-        '''        if node.gate_when not in ("before", "after"):''',
+        '''        if node.gate_when is not None and node.gate_when not in ("before", "after"):''',
         '''        if False:''',
         "tests/test_graph_validation.py"),
 
+    # Re-anchored by CHG-20260907-11, which rewrote both lines. The guarantee above is the same
+    # one; the guarantee below is **larger** than the entry it replaces -- "an after phase may
+    # name no gate" was half a contract, and the type change made the other half sayable.
+    # Re-anchoring is not evidence: the whole group was run again.
     Mutation(
-        "graph-validation", "an after phase may name no gate again",
+        "graph-validation", "a gate and its phase may go without each other again",
         SRC / "graph.py",
-        '''        if node.gate_when == "after" and not node.gate:''',
+        '''        if (node.gate is None) != (node.gate_when is None):''',
         '''        if False:''',
         "tests/test_graph_validation.py"),
 
