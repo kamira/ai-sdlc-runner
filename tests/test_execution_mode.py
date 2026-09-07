@@ -165,8 +165,10 @@ def test_the_engine_decides_a_panel_from_the_mode_not_the_role():
     import inspect
 
     from ai_sdlc_runner import engine
+    # `_walk` is the body; `walk` is the wrapper that closes the durable record when the
+    # body does not return (CHG-20260907-15). The property below is the body's.
 
-    source = inspect.getsource(engine.walk)
+    source = inspect.getsource(engine._walk)
     assert 'node.role == "seat"' not in source, (
         "the walk is keying its panel decision off the role again — the mode is then a field "
         "nothing reads, which is the decorative-data failure task 12 exists to prevent")

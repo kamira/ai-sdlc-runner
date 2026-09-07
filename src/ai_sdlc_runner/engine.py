@@ -282,7 +282,10 @@ class Ask:
 #: task 1 rests on did not exist.
 FINISHED = "finished"    #: reached a terminal node; the flow ended where it was designed to
 SUSPENDED = "suspended"  #: stopped at a gate, and a decision can continue it
-STOPPED = "stopped"      #: stopped, and nothing continues it — a permanent halt, or an effect that failed
+#: Stopped, and nothing continues it: a permanent halt, an effect that failed, or a walk
+#: that died. The third was added by CHG-20260907-15, which gave a crashed walk a closing
+#: turn; `server._walk_once` had already chosen this word for the same thing.
+STOPPED = "stopped"
 STATES = (FINISHED, SUSPENDED, STOPPED)
 
 
@@ -1572,7 +1575,11 @@ def _run_effects(node: graph.Node, cfg: "RunConfig", report: "RunReport"):
         # `RunReport.state` at its `FINISHED` default. So a run that stopped because `pr`'s
         # effects half-landed — branch made, commit written, push done, the pull request not —
         # reported `finished` to the terminal, to `RunState.state` and to the console through it,
-        # and to `conversation.close("finished", …)`, which is the durable record.
+        # and to `conversation.close("finished", …)`, which is the durable record. **Both halves
+        # of that sentence were wrong**: CHG-20260907-06 corrected the state, and the close never
+        # happened at all, because this path's `_finish` was the one of eight that did not carry
+        # `cfg.conversation`. Corrected in CHG-20260907-15; the sentence is kept because what it
+        # claimed is what a reader was entitled to assume.
         #
         # CHG-20260827-22 made exactly this decision for the other half of that sentence: a
         # permanent terminal used to report a normal finish, and it was changed *"because that is
@@ -2130,14 +2137,54 @@ def _suspension(**said):
 
 
 def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunReport:
-    """Walk the flow from ``intake``, dispatching one work order per ask.
+    """Walk the flow from ``intake``, and close the durable record however the walk ends.
 
     ``enabled`` is the opt-in flag. It refuses rather than quietly doing nothing, so a caller cannot
-    mistake "flag off" for "ran and found nothing to do".
+    mistake "flag off" for "ran and found nothing to do". It is checked **before** the record is
+    opened, so a refused call closes nothing.
+
+    **The closing turn used to be written on seven of the eight return paths and on no exceptional
+    one.** `conversation.close` lives in `_finish` alone, and every `_finish` call is on a `return`,
+    so any exception escaping the walk left the record open. Measured on this graph, turns written
+    and whether a `CLOSED` turn exists (CHG-20260907-15):
+
+    ```
+    a run that finishes                    50   closed
+    a decision naming a branch that is not offered   36   NOT closed
+    an effects provider raising            21   NOT closed
+    a dispatcher raising                   17   NOT closed
+    a KeyboardInterrupt in the dispatcher  16   NOT closed
+    ```
+
+    **`except BaseException`, not `finally`.** `conversations.close` is deliberately not
+    deduplicated — its own docstring says so, because a walk ending suspended and later ending
+    finished are two things that happened — so a `finally` would write a second closing turn on
+    every normal run. And `BaseException` because the fifth row is the interruption, which is the
+    case a durable record exists for.
+
+    **`STOPPED`, not `report.state`.** `RunReport.state` defaults to `FINISHED` — see its own declaration — so closing with it
+    would record a crashed run as a clean one — the false green CHG-20260907-06 removed from the
+    other half of this same sentence.
     """
     if not enabled:
         raise EngineError(
             "the node engine is opt-in and is not enabled. Pass enabled=True — or --engine.")
+    where: Dict[str, str] = {}
+    try:
+        return _walk(cfg, dispatch, where)
+    except BaseException as exc:
+        if cfg.conversation is not None:
+            # `f"{type}: {exc}"` rather than `str(exc)`: `close` drops falsy values and
+            # `str(KeyboardInterrupt())` is empty, so the name is what keeps `why` readable.
+            cfg.conversation.close(
+                STOPPED, at_node=where.get("node"),
+                why=f"{type(exc).__name__}: {exc}",
+                risk=cfg.risk, change_class=cfg.change_class or None)
+        raise
+
+
+def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunReport:
+    """The walk itself. `walk` is the wrapper that closes the record when this does not."""
     if cfg.conversation is not None:
         # An instruction is a turn. It lives in `RunConfig` and reaches a work order only as merged
         # text, so nothing durable has ever recorded *when* it was asked for -- which is most of
@@ -2330,6 +2377,9 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
     for _ in range(cfg.max_steps):
         if node_id is None:
             break
+        # Where the walk is, for the handler in `walk` below. Explicit rather than read out of a
+        # traceback frame: a record of where a run died should not depend on introspection.
+        where["node"] = node_id
         node = graph.BY_ID[node_id]
         report.visited.append(node.id)
         if node.id == "engineer_build":
@@ -2855,7 +2905,14 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
 
         stop = _run_effects(node, cfg, report)
         if stop is not None:
-            return _finish(stop, confirmations)
+            # The conversation, the held ledgers and the sandbox note, which this one site of
+            # the eight did not pass. **What is demonstrated is the asymmetry, not a lost record**:
+            # every scenario I could drive through a failing effect left by the `after`
+            # gate's own stop instead, with the conversation passed and the record closed. So this
+            # is the seven other sites' argument list, given to the eighth because a difference
+            # nobody can explain is a difference nobody can rely on -- and not, on the evidence I
+            # have, a repair to a reachable defect (CHG-20260907-15).
+            return _finish(stop, confirmations, cfg.conversation, _held(), _unsandboxed)
 
         if node.kind == graph.TERMINAL:
             # A halt is not an ending. `done` finished; `halt_*` gave up, and nothing continues it,

@@ -637,7 +637,9 @@ def test_every_class_relaxation_carries_an_authoriser():
     import ast
 
     fn = next(n for n in ast.walk(ast.parse(pathlib.Path(engine.__file__).read_text(
-        encoding="utf-8"))) if isinstance(n, ast.FunctionDef) and n.name == "walk")
+        # `_walk` is the body; `walk` became the wrapper that closes the durable record when the
+        # body does not return (CHG-20260907-15). This rule counts calls in the body.
+        encoding="utf-8"))) if isinstance(n, ast.FunctionDef) and n.name == "_walk")
 
     appends = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
                and getattr(n.func, "attr", None) == "append"
@@ -945,7 +947,9 @@ def test_both_resolutions_record_through_one_function():
     import ast
 
     fn = next(n for n in ast.walk(ast.parse(pathlib.Path(engine.__file__).read_text(
-        encoding="utf-8"))) if isinstance(n, ast.FunctionDef) and n.name == "walk")
+        # `_walk` is the body; `walk` became the wrapper that closes the durable record when the
+        # body does not return (CHG-20260907-15). This rule counts calls in the body.
+        encoding="utf-8"))) if isinstance(n, ast.FunctionDef) and n.name == "_walk")
 
     # **Both halves of the call** (CHG-20260904-04, defect seat L-19). This read `n.args` only,
     # so a resolution written `resolve_verdict(node, grade, cfg.autonomy, change_class=here)` was
