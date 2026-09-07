@@ -188,52 +188,77 @@ MUTATIONS: List[Mutation] = [
         '''            if (key == "node_models" and owner in graph.BY_ID or True''',
         "tests/test_plan.py"),
 
-    # ── loopback (CHG-20260907-19) ───────────────────────
-    # One boundary written twice: `LOOPBACK` is what `serve` may bind, `LOOPBACK_HOSTS` is
-    # what a `Host` or `Origin` may say. No test named either constant. The first pair of
-    # entries here was refuted by both seats: they mutated the values, and the first draft
-    # of the test compared the two constants as sets, which is not what the server does.
-    # `_loopback_host` keeps the brackets and `_loopback_origin` strips them, so one bound
-    # IPv6 address is two different lookups. Entry 2 is the one that showed it - it was
-    # NOT CAUGHT before the test started calling the functions.
+    # ── bind (CHG-20260907-20) ───────────────────────────
+    # `LOOPBACK` called itself "the only addresses this server will bind" and named one the
+    # socket has never opened: `address_family` is `AF_INET` and `AF_INET` refuses `::1`. The
+    # two tests CHG-19 added read the list against the header set and neither could see it,
+    # because the claim is about the operating system and both stopped at Python. The third
+    # entry is the error branch that hid it: `gaierror` is an `OSError`, so a resolver answer
+    # was reported as a port conflict.
     Mutation(
-        "loopback", "the bind list may permit an address no request may name again",
+        "bind", "the permit list may name an address the socket cannot open again",
         SRC / "server.py",
+        '''LOOPBACK = ("127.0.0.1", "localhost")''',
         '''LOOPBACK = ("127.0.0.1", "::1", "localhost")''',
-        '''LOOPBACK = ("127.0.0.1", "127.0.0.2", "::1", "localhost")''',
         "tests/test_server.py"),
 
     Mutation(
-        "loopback", "a permitted IPv6 address may lose the bracketed form a browser sends again",
+        "bind", "the header set may accept an authority no listener can answer on again",
         SRC / "server.py",
+        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})''',
         '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})''',
-        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})''',
+        "tests/test_server.py"),
+
+    Mutation(
+        "bind", "every way a bind can fail may be called a port conflict again",
+        SRC / "server.py",
+        '''        if exc.errno == errno.EADDRINUSE:''',
+        '''        if True:''',
+        "tests/test_server.py"),
+
+    Mutation(
+        "bind", "the refusal may name one address for a list of several again",
+        SRC / "server.py",
+        '''f"on {' or '.join(LOOPBACK)} and nowhere else. If another machine needs to see it, put "''',
+        '''f"on {LOOPBACK[0]} and nowhere else. If another machine needs to see it, put "''',
+        "tests/test_server.py"),
+
+    # ── loopback (CHG-20260907-19) ───────────────────────
+    # One boundary written twice: `LOOPBACK` is what `serve` permits as a bind argument,
+    # `LOOPBACK_HOSTS` is what a `Host` or `Origin` may say. No test named either constant.
+    # Re-anchored by CHG-20260907-20, which took `"::1"` and its two header spellings out; one
+    # entry was DELETED there rather than re-anchored, because its guarantee went with them --
+    # there is no permitted IPv6 address left for a bracketed form to be lost from. Not
+    # registered, then or now: removing the bare "::1", which one seat proposed and measurement
+    # refused - `"[::1]".strip("[]")` supplied it to `_loopback_origin`, and `_loopback_host`
+    # reached it only through `Host: ::1:8765`, an unbracketed IPv6 authority no compliant
+    # client sends.
+    Mutation(
+        "loopback", "the bind list may permit an address no request may name again",
+        SRC / "server.py",
+        '''LOOPBACK = ("127.0.0.1", "localhost")''',
+        '''LOOPBACK = ("127.0.0.1", "127.0.0.2", "localhost")''',
         "tests/test_server.py"),
 
     Mutation(
         "loopback", "the header check may be tightened below what the bind list permits again",
         SRC / "server.py",
-        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})''',
-        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "[::1]", "::1"})''',
+        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})''',
+        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1"})''',
         "tests/test_server.py"),
 
-    # The bind list losing an entry is the one edit this group did not make, and the reverse
-    # test catches it for free. Not registered: removing the bare "::1" from LOOPBACK_HOSTS,
-    # which one seat proposed and measurement refused - `"[::1]".strip("[]")` already supplies
-    # it to `_loopback_origin`, and `_loopback_host` reaches it only through `Host: ::1:8765`,
-    # an unbracketed IPv6 authority no compliant client sends. Nothing should catch that.
     Mutation(
         "loopback", "the bind list may lose an address the header check still accepts again",
         SRC / "server.py",
-        '''LOOPBACK = ("127.0.0.1", "::1", "localhost")''',
-        '''LOOPBACK = ("127.0.0.1", "::1")''',
+        '''LOOPBACK = ("127.0.0.1", "localhost")''',
+        '''LOOPBACK = ("127.0.0.1",)''',
         "tests/test_server.py"),
 
     Mutation(
         "loopback", "the rebinding guard may accept a name this server never answers on again",
         SRC / "server.py",
-        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})''',
-        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1", "runner.local"})''',
+        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})''',
+        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "runner.local"})''',
         "tests/test_server.py"),
 
     # ── decisions (CHG-20260907-16) ────────────────────────────────

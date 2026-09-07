@@ -20,6 +20,7 @@ The third is also task 15's answer. The identity is what the caller **proved it 
 a name it typed into a body — which was the "button captioned Accept (as verifier), moved one layer
 down and called enforcement" that an independent seat refused.
 """
+import errno
 import ast
 import inspect
 import json
@@ -120,10 +121,21 @@ def live(tmp_path):
 # --- local only ------------------------------------------------------------------------------
 
 def test_it_refuses_to_bind_anything_but_loopback():
-    """The refusal lives in the server so it cannot be 'temporarily' widened by a caller."""
-    with pytest.raises(server.ServerError, match="refusing to bind"):
+    """The refusal lives in the server so it cannot be 'temporarily' widened by a caller.
+
+    It also has to name what it *will* take. The sentence said *"it listens on `{LOOPBACK[0]}`
+    and nowhere else"* while the list had three members, so it told a person reaching for a
+    permitted spelling that the spelling did not exist. Changing it was caught by nothing until
+    this assertion existed (CHG-20260907-20).
+    """
+    with pytest.raises(server.ServerError, match="refusing to bind") as caught:
         server.serve(_runner(), server.Operator("t", "me", __import__("pathlib").Path(".")),
                      host="0.0.0.0")
+    said = str(caught.value)
+    unnamed = [addr for addr in server.LOOPBACK if addr not in said]
+    assert not unnamed, (
+        f"the refusal does not name {unnamed}, which `serve` accepts. A refusal that lists fewer "
+        f"addresses than it takes reads as a narrower rule than the one enforced.")
 
 
 def test_binding_loopback_is_allowed(tmp_path):
@@ -659,13 +671,32 @@ def test_a_lookalike_origin_is_refused(live, origin):
 
 
 @pytest.mark.parametrize("origin", [
-    "http://localhost:8765", "http://127.0.0.1:9999", "https://127.0.0.1", "http://[::1]:8080",
+    "http://localhost:8765", "http://127.0.0.1:9999", "https://127.0.0.1",
 ])
 def test_our_own_origins_are_still_accepted(live, origin):
     """The fix must not refuse the page it serves."""
     call, _, _ = live
     status, _ = call("GET", "/run", origin=origin)
     assert status == 200, f"{origin} was refused"
+
+
+@pytest.mark.parametrize("origin", ["http://[::1]:8080", "http://[::1]", "https://[::1]:8765"])
+def test_an_ipv6_origin_is_refused_because_nothing_serves_one(live, origin):
+    """`http://[::1]:8080` was in the list above until this server stopped promising `::1`.
+
+    It was never a page this server served: `ThreadingHTTPServer.address_family` is `AF_INET` and
+    `serve` never changed it, so a bind of `::1` raised `gaierror` on every platform, always. The
+    origin was accepted because `LOOPBACK_HOSTS` carried two IPv6 spellings for a listener that
+    could not exist (CHG-20260907-20).
+
+    Refused rather than deleted, because that is the fact worth holding: a page at `http://[::1]`
+    is a different origin from the one this server serves, and the day someone builds IPv6
+    support this test is the one that has to be argued with.
+    """
+    call, body = live[0], None
+    status, body = call("GET", "/run", origin=origin)
+    assert status == 403, f"{origin} was accepted"
+    assert "cross-origin" in body["error"]
 
 
 # ── one walk at a time (CHG-20260823-43) ──────────────────────────────────────────────────────
@@ -3102,10 +3133,11 @@ def test_every_address_the_bind_list_permits_is_accepted_as_a_host():
     loopback alias added to the bind list alone -- `127.0.0.2` -- would start a server that then
     refuses its own requests, with the refusal blaming the header (CHG-20260907-19).
 
-    *Permits*, not *binds*, and the distinction is measured: `ThreadingHTTPServer.address_family`
-    is `AF_INET`, so `::1` is in this list and cannot be bound at all. That is a defect in the
-    list and has its own record; what this test asserts about `::1` -- that
-    `_loopback_host("[::1]")` is true -- is true today either way.
+    *Permits*, not *binds*: when this was written the two differed, because
+    `ThreadingHTTPServer.address_family` is `AF_INET` and `::1` was in the list and could not be
+    bound at all. `LOOPBACK` now names only what the socket opens (CHG-20260907-20), so the two
+    coincide again -- and the word stays, because it is the list this reads and the socket is
+    what `test_every_permitted_address_can_actually_be_bound` reads.
 
     **This asks the two functions rather than their table.** The first version compared the
     constants as sets and was refuted by reading `_loopback_host`: it keeps the brackets, so for a
@@ -3136,10 +3168,11 @@ def test_every_address_the_bind_list_permits_is_accepted_as_a_host():
 def test_no_host_is_accepted_that_the_bind_list_does_not_permit():
     """The other direction, which is about a rebinding surface rather than reachability.
 
-    **"Does not permit" means `serve` refuses it, not that a socket would fail.** Those differ
-    today: `serve` permits `::1` and an `AF_INET` server cannot bind it. Measuring the socket
-    instead of the list would make this test fail on a defect it is not about, so it reads the
-    list and says so; the socket is a separate record.
+    **"Does not permit" means `serve` refuses it, not that a socket would fail.** Those differed
+    when this was written -- `serve` permitted `::1`, which an `AF_INET` server cannot bind -- and
+    this test read the list on purpose so it would not fail on a defect it was not about. That
+    defect is fixed (CHG-20260907-20) and the distinction still stands: the socket is read by
+    `test_every_permitted_address_can_actually_be_bound`, and this one is about two lists.
 
     Not literal containment -- `"[::1]"` is a header form and not a bind argument, so
     `LOOPBACK_HOSTS <= LOOPBACK` is false by design. Normalised, the two sets are equal today, and
@@ -3152,8 +3185,15 @@ def test_no_host_is_accepted_that_the_bind_list_does_not_permit():
     holds with `"[::1]"` deleted, so it is blind to the bracket split this file exists to hold.
     Behaviour forwards plus containment backwards is strictly stronger.
 
-    If the address-family defect is fixed by dropping `::1` from `LOOPBACK` rather than by
-    binding it, this test requires `"[::1]"` and `"::1"` to go with it, which is right.
+    It said that if the address-family defect were fixed by dropping `::1` from `LOOPBACK`
+    rather than by binding it, this test would require `"[::1]"` and `"::1"` to go with it. That
+    is what happened (CHG-20260907-20), and this test is what required it.
+
+    One member is here on grounds this containment does not state: `localhost` belongs in the
+    header set because RFC 6761 fixes its loopback meaning in the resolver, not because it is a
+    bind spelling. Today it is both, so the containment holds for the wrong reason as well as the
+    right one; that is a defect in this test's justification, not its assertion, and it has its
+    own record.
 
     Raised by an independent seat, which pointed out that the first record refuted only the
     literal reverse and then declined the whole direction (CHG-20260907-19).
@@ -3164,3 +3204,66 @@ def test_no_host_is_accepted_that_the_bind_list_does_not_permit():
         f"{extra} are in the set `Host` and `Origin` are checked against, and are not addresses "
         f"`serve` permits. If one is deliberate, it belongs in `LOOPBACK` too, or in a sentence "
         f"here saying why a name this server never answers on is accepted anyway.")
+
+
+@pytest.mark.parametrize("addr", server.LOOPBACK)
+def test_every_permitted_address_can_actually_be_bound(addr, tmp_path):
+    """The one instrument the two tests above cannot be: a socket.
+
+    `LOOPBACK`'s comment calls it *"the only addresses this server will bind"*, and for the whole
+    of this file's history one member could not be bound on any platform -- `address_family` is
+    `AF_INET`, and `AF_INET` refuses `::1` with a `gaierror`. Two tests read the list against the
+    header set and neither could see it, because the list's claim is about the operating system
+    and both of them stopped at Python (CHG-20260907-20).
+
+    Cheap because it never calls `serve_forever`: no accept loop, no `shutdown` poll, just the
+    bind the constant is a promise about.
+    """
+    httpd = server.serve(_runner(), server.Operator.mint(tmp_path), host=addr, port=0)
+    try:
+        assert httpd.server_address[0] == "127.0.0.1", (
+            f"{addr!r} bound {httpd.server_address[0]!r}. Every member of `LOOPBACK` is a "
+            f"spelling of this machine under `AF_INET`; one that lands elsewhere is a different "
+            f"promise than the constant's comment makes.")
+    finally:
+        httpd.server_close()
+
+
+def test_a_bind_failure_is_not_reported_as_a_port_conflict(tmp_path, monkeypatch):
+    """One `except OSError` said *"Something is already there"* for every way a bind can fail.
+
+    `socket.gaierror` is an `OSError`, so the `::1` this list used to permit produced a resolver
+    answer told as a collision. The live case is not that one: on Windows a reserved range
+    (Hyper-V, WSL) takes a port and the bind fails with `WSAEACCES`, and the message sent the
+    person hunting for a runner that was not running.
+
+    `serve` builds its server subclass inside the call, so the name it resolves is patchable here
+    (CHG-20260907-20).
+    """
+    class _Refuses:
+        def __init__(self, *_a, **_k):
+            raise OSError(errno.EACCES, "permission denied")
+
+    monkeypatch.setattr(server, "ThreadingHTTPServer", _Refuses)
+    with pytest.raises(server.ServerError) as caught:
+        server.serve(_runner(), server.Operator.mint(tmp_path), port=0)
+    said = str(caught.value)
+    assert "cannot listen on" in said
+    assert "already there" not in said, said
+    assert "runner serve" not in said, said
+
+
+def test_a_port_that_is_taken_still_says_so(tmp_path, monkeypatch):
+    """The other half: the one cause an errno does establish keeps the sentence it had.
+
+    `test_a_second_runner_cannot_bind_the_same_port` proves this against a real held port. This
+    one proves the classification rather than the collision, so that a change to the branch
+    order is caught here and not only by an integration test (CHG-20260907-20).
+    """
+    class _Taken:
+        def __init__(self, *_a, **_k):
+            raise OSError(errno.EADDRINUSE, "address in use")
+
+    monkeypatch.setattr(server, "ThreadingHTTPServer", _Taken)
+    with pytest.raises(server.ServerError, match="already there"):
+        server.serve(_runner(), server.Operator.mint(tmp_path), port=0)

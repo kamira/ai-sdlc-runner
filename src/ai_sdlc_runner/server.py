@@ -37,6 +37,7 @@ double-click spends a second approval — which is the "advance twice" an indepe
 from __future__ import annotations
 
 import dataclasses
+import errno
 import json
 import os
 import queue
@@ -56,11 +57,25 @@ from . import engine, graph, intake as intake_mod, models as models_mod, policy,
 #: The only addresses this server will bind. Not a default — a rule. A runner that can merge
 #: branches has no business listening where anything but this machine can reach it, and making that
 #: configurable would turn a decision somebody argued about into a flag somebody flips.
-LOOPBACK = ("127.0.0.1", "::1", "localhost")
+#:
+#: `"::1"` was here from this file's first commit and **never bound once**: the server class is
+#: `ThreadingHTTPServer`, whose `address_family` is `AF_INET`, and `serve` has never changed it. A
+#: raw `AF_INET` bind of `::1` raises `gaierror`, which is an `OSError`, which the one handler below
+#: reported as a port conflict — so the list promised an address, the socket refused it, and the
+#: refusal blamed something else (CHG-20260907-20). Serving IPv6 is a capability nobody has asked
+#: for and it costs the guarantee `_OneRunner` exists for: `127.0.0.1:p` held, `[::1]:p` binds
+#: anyway, measured. So the promise is narrowed to what the socket does, not widened to match it.
+LOOPBACK = ("127.0.0.1", "localhost")
 
 #: `Host` values a loopback request can legitimately carry. Anything else is a rebinding attempt or
 #: a proxy, and both are reasons to refuse rather than to guess.
-LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})
+#:
+#: The two IPv6 spellings left with `"::1"` above. A browser sends `Host: [::1]` only from a URL
+#: that connects to `::1`, where this server is not; the bare `"::1"` was reachable only through an
+#: unbracketed authority RFC 7230 5.4 does not permit. Neither can arrive from the socket that
+#: exists, and a rebinding guard that accepts an authority no legitimate request can carry is
+#: surface without a use.
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})
 
 IDLE = "idle"
 
@@ -1320,8 +1335,8 @@ def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
     if host not in LOOPBACK:
         raise ServerError(
             f"refusing to bind {host!r}. This runner merges branches and answers gates; it listens "
-            f"on {LOOPBACK[0]} and nowhere else. If another machine needs to see it, put something "
-            f"in front of it that you have decided to trust — do not widen this.")
+            f"on {' or '.join(LOOPBACK)} and nowhere else. If another machine needs to see it, put "
+            f"something in front of it that you have decided to trust — do not widen this.")
     class _OneRunner(ThreadingHTTPServer):
         """One project, one runner — and now something enforces it.
 
@@ -1344,7 +1359,21 @@ def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
                                        db=db, plan_assignments=plan_assignments,
                                        assignment_source=assignment_source))
     except OSError as exc:
-        raise ServerError(
-            f"cannot listen on {host}:{port} — {paths.plain_in(str(exc))}. Something is already "
-            f"there. If it is another `runner serve`, stop it first: two runners on one port "
-            f"answer at random, and you would be reading one while driving the other.")
+        # Only what the errno establishes. This branch used to say "something is already there"
+        # for every failure a socket can have, and `socket.gaierror` is an `OSError` — so the
+        # `::1` this list used to permit produced a resolver answer reported as a port conflict.
+        # The live case on Windows is a port swallowed by a reserved range, where the same
+        # sentence sends a person hunting for a runner that is not running.
+        #
+        # Two branches and not four: `EADDRINUSE` is the one cause an errno establishes and the
+        # one this repository has a test for. A bespoke sentence for the resolver would describe
+        # a path narrowing `LOOPBACK` has just closed, and a bespoke one for `EACCES` would carry
+        # advice about excluded port ranges that was read and never measured here. Neither is a
+        # sentence anything requires.
+        if exc.errno == errno.EADDRINUSE:
+            raise ServerError(
+                f"cannot listen on {host}:{port} — {paths.plain_in(str(exc))}. Something is "
+                f"already there. If it is another `runner serve`, stop it first: two runners on "
+                f"one port answer at random, and you would be reading one while driving the "
+                f"other.")
+        raise ServerError(f"cannot listen on {host}:{port} — {paths.plain_in(str(exc))}.")
