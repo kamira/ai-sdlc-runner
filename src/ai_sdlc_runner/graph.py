@@ -440,6 +440,24 @@ def validate() -> None:
 
     if len(BY_ID) != len(NODES):
         raise GraphError("duplicate node id")
+    # The line above is a **length** check, and equal lengths is not the same graph. Both names are
+    # module attributes a caller may rebind — `policy.py` says the checks run "including one whose
+    # graph a caller has altered in memory", so that is a supported surface rather than a test
+    # artefact — and rebinding one of the two is enough. Measured: with `NODES` alone rebound so
+    # that `merge` routes back to `intake`, `validate` **passes**, because the per-node rules read
+    # the new `NODES` while the reachability walk reads the old `BY_ID`. `engine.walk` fetches the
+    # node it executes from `BY_ID`. So the run that follows was certified against a graph it is
+    # not the one running.
+    #
+    # A separate `if` rather than a longer condition on the line above: the two are different
+    # faults and a reader sent to "duplicate node id" for a stale index goes looking for the wrong
+    # repair. Refusing rather than repairing — rebuilding `BY_ID` here would leave `validate`
+    # writing shared state on every call, and would certify the index it had just replaced.
+    for node in NODES:
+        if BY_ID.get(node.id) is not node:
+            raise GraphError(
+                f"node {node.id!r} in NODES is not the node BY_ID holds for that id — the two "
+                f"views of the graph were rebound separately, and a run executes the second")
     ids = set(BY_ID)
     for node in NODES:
         targets = list(node.branches.values()) + ([node.next] if node.next else [])

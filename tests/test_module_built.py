@@ -131,5 +131,37 @@ def test_the_module_cycle_did_not_escape_through_the_new_edge():
     """
     assert graph.module_cycle() == ["engineer_build", "engineer_selfverify", "fix_pass",
                                     "lead_task_review", "re_review"]
-    assert "merge" not in engine._MODULE_CYCLE
-    assert "lead_review" not in engine._MODULE_CYCLE
+    # Was `engine._MODULE_CYCLE`, an import-time snapshot of this same derivation. It went
+    # stale for a node added in memory and the run put that node in the shared tree
+    # (CHG-20260907-10), so the engine asks per call now and there is one view to assert on.
+    assert "merge" not in graph.module_cycle()
+    assert "lead_review" not in graph.module_cycle()
+
+
+def test_which_tree_a_node_works_in_is_asked_of_the_graph_each_time():
+    """`_MODULE_CYCLE` was a `frozenset` captured at import, and it went stale.
+
+    A node inserted into the module loop in memory validates and runs. Under the snapshot it came
+    back `""` — the shared tree — while `engineer_selfverify` on either side of it got
+    `module-001`. One pass through the loop builds one module, and the isolation CHG-20260827-21
+    provides is that the pass has its own tree; a node the graph puts inside the loop and the
+    engine puts outside it breaks that quietly.
+    """
+    import dataclasses
+
+    extra = dataclasses.replace(
+        graph.BY_ID["engineer_selfverify"], id="engineer_lint", label="a lint pass",
+        next="lead_task_review", rejects_to=None, follows=None, mode=graph.SINGLE)
+    nodes = tuple(
+        dataclasses.replace(n, next="engineer_lint") if n.id == "engineer_selfverify" else n
+        for n in graph.NODES) + (extra,)
+
+    original_nodes, original_by_id = graph.NODES, graph.BY_ID
+    graph.NODES, graph.BY_ID = nodes, {n.id: n for n in nodes}
+    try:
+        graph.validate()
+        assert "engineer_lint" in graph.module_cycle()
+        assert engine._workspace(graph.BY_ID["engineer_lint"], 1) == \
+            engine._workspace(graph.BY_ID["engineer_selfverify"], 1) != ""
+    finally:
+        graph.NODES, graph.BY_ID = original_nodes, original_by_id

@@ -149,15 +149,27 @@ def test_a_panel_must_adjudicate_something():
 
 def _validate_one(node):
     """`validate()` walks the shipped NODES; this checks one node against the same rules by
-    swapping it in. Kept explicit rather than reaching into a private helper that may not exist."""
+    swapping it in. Kept explicit rather than reaching into a private helper that may not exist.
+
+    **Both** views are replaced. This used to rebind `g.NODES` alone, which left `validate`
+    reading the new node for its per-node rules and the shipped one everywhere it goes through
+    `BY_ID` — reachability, `follows`, `_reaches`. The two tests below were not passing for the
+    wrong reason (measured: the messages are identical either way), but the half-swap is the
+    hazard `validate` now refuses outright, so it could not stay.
+
+    `tests/test_graph_validation.py` and `tests/test_execution_mode.py` each carry a byte-identical
+    copy of this. Three implementations of one stateful operation is its own finding, recorded in
+    CHG-20260907-10 with `tests/conftest.py` as the agreed repair, and left to its own change so
+    that a forty-signature refactor is not folded into a rule."""
     import ai_sdlc_runner.graph as g
 
-    original = g.NODES
+    original_nodes, original_by_id = g.NODES, g.BY_ID
     try:
-        g.NODES = tuple(node if n.id == node.id else n for n in original)
+        g.NODES = tuple(node if n.id == node.id else n for n in original_nodes)
+        g.BY_ID = {n.id: n for n in g.NODES}
         g.validate()
     finally:
-        g.NODES = original
+        g.NODES, g.BY_ID = original_nodes, original_by_id
 
 
 def test_a_grading_node_that_is_not_a_panel_is_refused():

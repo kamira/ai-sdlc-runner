@@ -147,6 +147,27 @@ MUTATIONS: List[Mutation] = [
         '''    return ("review_failed", "acceptance_failed")''',
         "tests/test_graph_validation.py"),
 
+    # ── two-views (CHG-20260907-10) ─────────────────────────────────
+    # `validate` opened with a length check over two module attributes either of which a
+    # caller may rebind, and `policy.py` says an in-memory-altered graph is a supported
+    # surface. Rebinding one was enough to certify a graph that is not the one a run then
+    # executes. The second entry is the same fault one module over: a derivation captured
+    # at import, measured putting a node the graph places inside the module loop into the
+    # shared tree.
+    Mutation(
+        "two-views", "the two views of the graph may disagree again",
+        SRC / "graph.py",
+        '''        if BY_ID.get(node.id) is not node:''',
+        '''        if False:''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "two-views", "which tree a node works in may be read from a snapshot again",
+        SRC / "engine.py",
+        '''    return worktree.key_for(cycle) if node.id in graph.module_cycle() else ""''',
+        '''    return worktree.key_for(cycle) if node.id in frozenset(["engineer_build", "engineer_selfverify", "fix_pass", "lead_task_review", "re_review"]) else ""''',
+        "tests/test_module_built.py"),
+
     # ── kind-and-edges (CHG-20260907-09) ──────────────────────────────
     # `MODES` was closed from the day it was written; `kind` was not, and the difference was
     # worth 23 of 31 nodes accepting nonsense -- with `done` reaching the engine's terminal
