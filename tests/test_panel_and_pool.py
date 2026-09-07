@@ -17,7 +17,7 @@ mode in the first place.
 """
 import pytest
 
-from ai_sdlc_runner import engine, graph, policy
+from ai_sdlc_runner import engine, graph, policy, plan
 from test_flow import DECISIONS, SPEC
 
 
@@ -192,8 +192,22 @@ def test_the_mode_and_not_the_node_name_decides():
 
     Keyed off the declared mode, so renaming a node changes nothing — which is the property task 12
     was built for and this is the first task that could demonstrate it.
+
+    **This docstring said "configuration error" and the body asserted the run proceeded.** The
+    engine asked once and said nothing about the other two, on all four `SINGLE` nodes, while
+    `graph.py` said *"exactly one model, one session"* and `README.md`'s mode table said `1`. A
+    plan is refused now (CHG-20260907-18), and the tolerance below is what the engine does when a
+    config reaches it another way — the guard behind the guard, not the contract.
     """
     assert graph.BY_ID["qa_verify"].mode == graph.SINGLE
+
+    with pytest.raises(plan.PlanError, match="exactly one model, one session"):
+        plan.check({"node_models": {"qa_verify": ["opus", "codex", "gemini"]}}, where="a plan")
+
+    # Reached around `plan.check`, on purpose: `_run` builds a `RunConfig` directly, which is the
+    # only way left to put three models on a `SINGLE` node. What it proves is that the engine
+    # still reads the mode rather than the length — one ask, no adjudication — and that is the
+    # property the test is named for.
     report, asked = _run(node_models={"qa_verify": ["opus", "codex", "gemini"]})
     assert len([a for a in asked if a[0] == "qa_verify"]) == 1
     assert not [a for a in report.adjudications if a["node_id"] == "qa_verify"]

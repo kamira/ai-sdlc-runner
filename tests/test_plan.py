@@ -460,3 +460,30 @@ def test_every_member_of_a_sequence_is_checked_not_only_the_first():
     same "found after the work" shape the node-name rule exists to remove."""
     with pytest.raises(plan.PlanError, match="not one of its branches"):
         plan.check({"decisions": {"pm_confirm": ["yes", "sideways"]}}, where="a plan")
+
+
+@pytest.mark.parametrize("node_id", ["pm_plan", "qa_verify", "pr", "merge"])
+def test_a_single_node_is_refused_more_than_one_model(node_id):
+    """All four, parametrised, so a repair covering three cannot pass.
+
+    `graph.py` says a `SINGLE` node is *"exactly one model, one session"* and that three configured
+    is *"a configuration error, not a panel"*; `README.md`'s mode table says `1`. Measured before
+    this rule: `plan.check` accepted one, two or three, and every `SINGLE` node asked **once** and
+    said nothing about the rest (CHG-20260907-18).
+    """
+    from ai_sdlc_runner import graph
+
+    assert graph.BY_ID[node_id].mode == graph.SINGLE
+    with pytest.raises(plan.PlanError, match="exactly one model, one session"):
+        plan.check({"node_models": {node_id: ["opus", "codex"]}}, where="a plan")
+
+
+def test_a_panel_and_a_pool_still_take_a_list():
+    """The other failure mode of a length rule: refusing what it should accept.
+
+    A `MODEL_PANEL` with one model is a panel of one, and a `POOL` is a list on purpose — both said
+    in the same paragraph of `graph.py` that gives the `SINGLE` rule its words.
+    """
+    plan.check({"node_models": {"lead_review": ["a", "b", "c"]}}, where="a plan")
+    plan.check({"node_models": {"engineer_build": ["a", "b", "c"]}}, where="a plan")
+    plan.check({"node_models": {"pm_plan": ["only-one"]}}, where="a plan")
