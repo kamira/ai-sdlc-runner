@@ -197,24 +197,36 @@ MUTATIONS: List[Mutation] = [
     # IPv6 address is two different lookups. Entry 2 is the one that showed it - it was
     # NOT CAUGHT before the test started calling the functions.
     Mutation(
-        "loopback", "the server may bind an address no request may name again",
+        "loopback", "the bind list may permit an address no request may name again",
         SRC / "server.py",
         '''LOOPBACK = ("127.0.0.1", "::1", "localhost")''',
         '''LOOPBACK = ("127.0.0.1", "127.0.0.2", "::1", "localhost")''',
         "tests/test_server.py"),
 
     Mutation(
-        "loopback", "a bound IPv6 address may lose the bracketed form a browser sends again",
+        "loopback", "a permitted IPv6 address may lose the bracketed form a browser sends again",
         SRC / "server.py",
         '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})''',
         '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})''',
         "tests/test_server.py"),
 
     Mutation(
-        "loopback", "the header check may be tightened below what is bound again",
+        "loopback", "the header check may be tightened below what the bind list permits again",
         SRC / "server.py",
         '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})''',
         '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "[::1]", "::1"})''',
+        "tests/test_server.py"),
+
+    # The bind list losing an entry is the one edit this group did not make, and the reverse
+    # test catches it for free. Not registered: removing the bare "::1" from LOOPBACK_HOSTS,
+    # which one seat proposed and measurement refused - `"[::1]".strip("[]")` already supplies
+    # it to `_loopback_origin`, and `_loopback_host` reaches it only through `Host: ::1:8765`,
+    # an unbracketed IPv6 authority no compliant client sends. Nothing should catch that.
+    Mutation(
+        "loopback", "the bind list may lose an address the header check still accepts again",
+        SRC / "server.py",
+        '''LOOPBACK = ("127.0.0.1", "::1", "localhost")''',
+        '''LOOPBACK = ("127.0.0.1", "::1")''',
         "tests/test_server.py"),
 
     Mutation(

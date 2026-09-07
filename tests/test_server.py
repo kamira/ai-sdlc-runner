@@ -3094,14 +3094,18 @@ def _authority(addr):
     return f"[{addr}]" if ":" in addr else addr
 
 
-def test_every_address_the_server_binds_is_accepted_as_a_host():
+def test_every_address_the_bind_list_permits_is_accepted_as_a_host():
     """Two spellings of one boundary, and nothing required them to agree.
 
-    `server.LOOPBACK` is consulted when the server binds; `server.LOOPBACK_HOSTS` is consulted for
-    every `Host` and `Origin`. Neither constant was named by any test. A legitimate loopback alias
-    added to the bind list alone -- `127.0.0.2`, or an IPv4-mapped `::ffff:127.0.0.1` -- would
-    start a server that then refuses its own requests, with the refusal blaming the header
-    (CHG-20260907-19).
+    `server.LOOPBACK` is what `serve` **permits as a bind argument**; `server.LOOPBACK_HOSTS` is
+    consulted for every `Host` and `Origin`. Neither constant was named by any test. A legitimate
+    loopback alias added to the bind list alone -- `127.0.0.2` -- would start a server that then
+    refuses its own requests, with the refusal blaming the header (CHG-20260907-19).
+
+    *Permits*, not *binds*, and the distinction is measured: `ThreadingHTTPServer.address_family`
+    is `AF_INET`, so `::1` is in this list and cannot be bound at all. That is a defect in the
+    list and has its own record; what this test asserts about `::1` -- that
+    `_loopback_host("[::1]")` is true -- is true today either way.
 
     **This asks the two functions rather than their table.** The first version compared the
     constants as sets and was refuted by reading `_loopback_host`: it keeps the brackets, so for a
@@ -3129,21 +3133,34 @@ def test_every_address_the_server_binds_is_accepted_as_a_host():
         f"needs the bracketed form as well as the bare one for an IPv6 address.")
 
 
-def test_no_host_is_accepted_that_the_server_would_not_bind():
+def test_no_host_is_accepted_that_the_bind_list_does_not_permit():
     """The other direction, which is about a rebinding surface rather than reachability.
 
-    Not literal containment -- `"[::1]"` is a header form and not an address to bind, so
+    **"Does not permit" means `serve` refuses it, not that a socket would fail.** Those differ
+    today: `serve` permits `::1` and an `AF_INET` server cannot bind it. Measuring the socket
+    instead of the list would make this test fail on a defect it is not about, so it reads the
+    list and says so; the socket is a separate record.
+
+    Not literal containment -- `"[::1]"` is a header form and not a bind argument, so
     `LOOPBACK_HOSTS <= LOOPBACK` is false by design. Normalised, the two sets are equal today, and
-    an entry that survives normalisation and is not a bindable address is a name this server
-    accepts for a socket it will never listen on. `LOOPBACK_HOSTS`' own comment calls anything
-    else *"a rebinding attempt or a proxy"*, which is a reason to make the addition deliberate.
+    an entry that survives normalisation and is not permitted as a bind address is a name this
+    server accepts for a socket it will never be asked to open. `LOOPBACK_HOSTS`' own comment
+    calls anything else *"a rebinding attempt or a proxy"*, which is a reason to make the addition
+    deliberate.
+
+    Equality was the form one seat proposed and then withdrew on measuring it: normalised equality
+    holds with `"[::1]"` deleted, so it is blind to the bracket split this file exists to hold.
+    Behaviour forwards plus containment backwards is strictly stronger.
+
+    If the address-family defect is fixed by dropping `::1` from `LOOPBACK` rather than by
+    binding it, this test requires `"[::1]"` and `"::1"` to go with it, which is right.
 
     Raised by an independent seat, which pointed out that the first record refuted only the
     literal reverse and then declined the whole direction (CHG-20260907-19).
     """
-    bindable = {addr.lower() for addr in server.LOOPBACK}
-    extra = sorted({host.strip("[]").lower() for host in server.LOOPBACK_HOSTS} - bindable)
+    permitted = {addr.lower() for addr in server.LOOPBACK}
+    extra = sorted({host.strip("[]").lower() for host in server.LOOPBACK_HOSTS} - permitted)
     assert not extra, (
-        f"{extra} are accepted as a `Host` and are not addresses this server will bind. If one is "
-        f"deliberate, it belongs in `LOOPBACK` too or in a sentence here saying why a name this "
-        f"server never answers on is accepted anyway.")
+        f"{extra} are in the set `Host` and `Origin` are checked against, and are not addresses "
+        f"`serve` permits. If one is deliberate, it belongs in `LOOPBACK` too, or in a sentence "
+        f"here saying why a name this server never answers on is accepted anyway.")
