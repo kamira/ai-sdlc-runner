@@ -66,9 +66,16 @@ def test_a_stale_local_ref_does_not_answer_for_the_remote(repo):
     _git("push", "-q", "origin", "feature", cwd=repo)
     assert probes.branch_on_remote(repo, "feature") is True
 
-    _git("push", "-q", "origin", "--delete", "feature", cwd=repo)
-    # the stale remote-tracking ref is still there...
-    assert (Path(repo) / ".git" / "refs" / "remotes" / "origin" / "feature").exists() or True
+    # **`update-ref -d` in the bare remote, not `push --delete`.** Measured: pushing a delete
+    # also prunes the pushing repository's remote-tracking ref, so the fixture built no stale ref
+    # at all and the comment that said otherwise was false. Deleting the branch *in the remote*
+    # leaves this clone's `refs/remotes/origin/feature` behind, which is the state the test's name
+    # is about (CHG-20260907-17).
+    _git("update-ref", "-d", "refs/heads/feature", cwd=Path(repo).parent / "remote.git")
+    # `rev-parse --verify`, not a file path: after `pack-refs` the ref resolves and the path does
+    # not exist, so a filesystem check reports absence for a ref that is very much there.
+    stale = _git("rev-parse", "--verify", "-q", "refs/remotes/origin/feature", cwd=repo)
+    assert stale.strip(), "the fixture did not leave a stale remote-tracking ref to answer from"
     # ...and the probe still answers correctly, because it asked the remote
     assert probes.branch_on_remote(repo, "feature") is False
 

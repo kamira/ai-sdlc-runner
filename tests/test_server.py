@@ -2727,7 +2727,12 @@ def wire(tmp_path):
         for _ in range(count):
             opened.append(_socket.create_connection(("127.0.0.1", port), timeout=6))
 
-    yield send, idle, httpd
+    # The operator and the runner too: without the token no request can reach a
+    # guarded route, and `test_the_stream_outlives_the_connection_deadline` spent a
+    # release asserting things about a 401 because it had no way to send one
+    # (CHG-20260907-17). The runner is what publishes, which is how a stream proves
+    # it is still there: `_stream` blocks on the queue and sends nothing on its own.
+    yield send, idle, httpd, operator, runner
     for sock in opened:
         try:
             sock.close()
@@ -2740,7 +2745,7 @@ def test_a_body_over_the_limit_is_refused_before_it_is_read(wire):
     """The defect: `rfile.read(length)` ran first and `MAX_BYTES` was checked afterwards, inside
     `Store.add` — so 38 MB was resident before anything objected, on a route that had a limit. The
     routes that have none read it all and kept it."""
-    send, _idle, _httpd = wire
+    send, _idle, _httpd, _operator, _runner = wire
     started = time.time()
     reply = send(server.MAX_BODY_BYTES + 1)
     took = time.time() - started
@@ -2761,7 +2766,7 @@ def test_the_limit_leaves_room_for_a_legal_attachment(wire):
 def test_a_content_length_that_lies_does_not_hold_the_thread_forever(wire):
     """Under the size cap, so only the deadline can catch it. This is the half a bounded read cannot
     reach: the bytes are promised, allowed, and never sent."""
-    send, _idle, _httpd = wire
+    send, _idle, _httpd, _operator, _runner = wire
     started = time.time()
     reply = send(server.MAX_BODY_BYTES - 1)          # promised, under the cap, never sent
     took = time.time() - started
@@ -2776,7 +2781,7 @@ def test_a_connection_that_says_nothing_does_not_hold_a_thread_forever(wire):
     fix: 20 bare connections held 20 threads for as long as the client kept them open, and a request
     already refused with 401 kept its thread too. Bounding the body alone would have changed
     neither."""
-    _send, idle, _httpd = wire
+    _send, idle, _httpd, _operator, _runner = wire
     before = threading.active_count()
     idle(8)
     time.sleep(0.7)
@@ -2799,7 +2804,7 @@ def test_a_content_length_that_is_not_a_size_is_refused_in_words(wire, length, s
     """`int(...)` sat outside the try, so a header a client typed wrong left as a 500 — the code
     `docs/API.md` reserves for *unforeseen* failures. `-1` was worse: it parsed, `not -1` is False,
     and `read(-1)` reads to EOF, so it became the stalled-body case."""
-    send, _idle, _httpd = wire
+    send, _idle, _httpd, _operator, _runner = wire
     reply = send(length, wait=6.0)
 
     assert "409" in reply.splitlines()[0], reply.splitlines()[0] or "(no reply at all)"
@@ -2810,7 +2815,7 @@ def test_a_content_length_that_is_not_a_size_is_refused_in_words(wire, length, s
 def test_a_json_array_body_is_refused_rather_than_crashing(wire):
     """Every route reads named fields off the body on the next line, so an array parsed here and
     failed there as an AttributeError — a 500 for something the server understood."""
-    send, _idle, _httpd = wire
+    send, _idle, _httpd, _operator, _runner = wire
     payload = b"[1, 2, 3]"
     reply = send(len(payload), payload)
 
@@ -2844,7 +2849,7 @@ def test_a_body_shorter_than_it_promised_is_refused_rather_than_parsed(wire):
     truncation happened to land on invalid JSON."""
     import socket as _socket
 
-    _send, _idle, httpd = wire
+    _send, _idle, httpd, _operator, _runner = wire
     port = httpd.server_address[1]
     # Reuse the fixture's own sender for the header, but hand it a body that stops early.
     whole = b'{"version": 0, "instruction": "the rest of this never arrives"}'
@@ -2860,19 +2865,31 @@ def test_the_stream_outlives_the_connection_deadline(wire):
     goes silent after thirty idle seconds."""
     import socket as _socket
 
-    _send, _idle, httpd = wire
+    _send, _idle, httpd, operator, runner = wire
     port = httpd.server_address[1]
-    operator_token = httpd.RequestHandlerClass.__dict__  # unused; token comes from the request below
-    assert operator_token is not None
 
-    sock = _socket.create_connection(("127.0.0.1", port), timeout=8)
+    sock = _socket.create_connection(("127.0.0.1", port), timeout=4)
     try:
-        sock.sendall(("GET /run/events HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n\r\n" % port)
-                     .encode("ascii"))
-        opening = sock.recv(400)
-        assert opening, "the stream did not open"
+        sock.sendall(("GET /run/events HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n"
+                      "X-Operator-Token: %s\r\n\r\n" % (port, operator.token)).encode("ascii"))
+        # **Drained, not sampled.** `recv(400)` took the first four hundred bytes of a snapshot
+        # frame that is longer than that, so the rest sat in the buffer and the read after the
+        # deadline returned the *old* frame's tail — a pass that says nothing about the stream
+        # being alive. Read to the end of the first frame before claiming anything about the next.
+        opening = b""
+        while b"data:" not in opening or not opening.endswith(b"\n\n"):
+            opening += sock.recv(4096)
+        assert b"200" in opening.split(b"\r\n")[0], opening.split(b"\r\n")[0]
+
         time.sleep(3.0)                               # longer than the fixture's deadline
-        assert sock.recv(200) or True                 # still connected: recv did not raise
+        # **Publish, then read.** `_stream` blocks on the queue and sends nothing of its own, so a
+        # bare `recv` here would sit until the socket timeout whether the stream were alive or
+        # closed — which is how the old assertion came to be `or True`. A frame that arrives after
+        # the deadline is the claim in the docstring, and the only thing that establishes it.
+        runner._publish()
+        frame = sock.recv(400)
+        assert frame.startswith(b"data:"), (
+            "the stream did not survive the deadline: %r" % frame[:80])
     finally:
         sock.close()
 

@@ -1130,7 +1130,10 @@ def test_provenance_is_the_same_answer_whether_the_file_is_there(tmp_path):
         "rule is back to asking whether something put it there")
     assert absent not in ignored, (
         "this floor stopped measuring: `examples/*/greet.py` would have to match this too")
-    assert here.exists() or True, "stated: the verdict above did not consult this"
+    # Deliberately **not** asserted: the verdict above comes from git's ignore rule, not from
+    # whether the path is on disk. This was written as `assert here.exists() or True` with that
+    # sentence as its message -- an assertion whose truth value is discarded, which is commentary
+    # wearing verification's clothes, and whose message therefore never prints (CHG-20260907-17).
 
 
 def test_provenance_skips_rather_than_passes_when_git_cannot_answer(tmp_path):
@@ -1933,3 +1936,92 @@ def test_the_record_rule_can_see_a_citation_with_no_record():
     assert unresolvable_among(cited, {"CHG-1"}, {"CHG-2"}) == {"CHG-3": ["c.py"]}
     assert unresolvable_among(cited, set(), set()) == cited, (
         "an id with neither a record nor a link was treated as resolvable")
+
+
+# ── an assertion that cannot fail for the reason it names ────────────────────────────────────────
+
+
+def _hollow_disjunctions():
+    """Every `assert A or B` in `tests/` that cannot fail for the reason it names.
+
+    Two shapes, both decidable from the syntax tree and both measured on real sites:
+
+      `assert A or True`          cannot fail at all. The most it establishes is that the line
+                                  above it did not raise -- and `sock.recv` returning an empty
+                                  bytes is an orderly close that does not raise, which is how a
+                                  stream test came to certify a 401.
+
+      `assert "x" in s or "y" in s`, where "y" is a substring of "x" **over the same container**:
+                                  the second branch is true whenever the first is, so the first is
+                                  decoration and only the weaker claim is held. CHG-20260907-14
+                                  reworded a page and turned such a first branch false; the second
+                                  caught it and nothing reported the loss.
+
+    Everything else stays: two spellings of one JSON, upper and lower case, two acceptable
+    phrasings -- in none of those is one literal a substring of the other over the same container.
+    """
+    import ast as _ast
+
+    def containment(node):
+        if (isinstance(node, _ast.Compare) and len(node.ops) == 1
+                and isinstance(node.ops[0], _ast.In)
+                and isinstance(node.left, _ast.Constant)
+                and isinstance(node.left.value, str)):
+            return node.left.value, _ast.dump(node.comparators[0])
+        return None
+
+    root = Path(__file__).resolve().parents[1] / "tests"
+    hollow = []
+    for path in sorted(root.glob("*.py")):
+        tree = _ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        for node in _ast.walk(tree):
+            if not (isinstance(node, _ast.Assert)
+                    and isinstance(node.test, _ast.BoolOp)
+                    and isinstance(node.test.op, _ast.Or)):
+                continue
+            values = node.test.values
+            if any(isinstance(v, _ast.Constant) and v.value is True for v in values):
+                hollow.append("%s:%d -- `or True`" % (path.name, node.lineno))
+                continue
+            parts = [containment(v) for v in values]
+            for i, a in enumerate(parts):
+                for j, b in enumerate(parts):
+                    if i != j and a and b and a[1] == b[1] and b[0] != a[0] and b[0] in a[0]:
+                        hollow.append("%s:%d -- %r is true whenever %r is"
+                                      % (path.name, node.lineno, b[0], a[0]))
+                        break
+                else:
+                    continue
+                break
+    return hollow
+
+
+ADVICE = (
+    "If the branch accepts a second spelling, neither literal should contain the other -- "
+    "normalise once and assert the normalised property. If it is there because the property is "
+    "not observable yet, that is the thing to repair. And if the statement genuinely cannot fail, "
+    "it is a comment."
+)
+
+
+def test_no_assertion_is_written_so_that_it_cannot_fail():
+    """Six were, and two of them were hiding something.
+
+    `tests/test_server.py` sent no operator token, so `GET /run/events` answered **401**; the read
+    meant to prove the stream outlived the deadline returned the buffered error body, and `or True`
+    was never even consulted. The guard for a shipped change measured a refusal.
+
+    `tests/test_conversations.py` asserted the tag was escaped as `&lt;` or as a `\u003c` that
+    Python had already turned into a single `<`. The replay embeds turns as JSON in a script, so
+    the escaping is six characters and `&lt;` never appears; one branch had the wrong expectation,
+    the other was a missing backslash, and the product was right the whole time
+    (CHG-20260907-17).
+
+    **No exception list.** The one deliberate site -- a statement whose message said the verdict
+    above deliberately did not consult it -- is a comment now, which is what a statement that
+    cannot fail has always been.
+    """
+    hollow = _hollow_disjunctions()
+    assert hollow == [], (
+        "these assertions cannot fail for the reason they name:\n  "
+        + "\n  ".join(hollow) + "\n\n" + ADVICE)
