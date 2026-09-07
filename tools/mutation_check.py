@@ -189,11 +189,13 @@ MUTATIONS: List[Mutation] = [
         "tests/test_plan.py"),
 
     # ── loopback (CHG-20260907-19) ───────────────────────
-    # One boundary written twice: `LOOPBACK` is what the server may bind, `LOOPBACK_HOSTS`
-    # is what a `Host` or `Origin` may say. No test named either constant. The first entry
-    # is the direction nothing covered - a bind address no request may name. The second is
-    # the reverse, which `test_our_own_origins_are_still_accepted` already caught with a
-    # hand-written list of four origins; it is here because the property is one property.
+    # One boundary written twice: `LOOPBACK` is what `serve` may bind, `LOOPBACK_HOSTS` is
+    # what a `Host` or `Origin` may say. No test named either constant. The first pair of
+    # entries here was refuted by both seats: they mutated the values, and the first draft
+    # of the test compared the two constants as sets, which is not what the server does.
+    # `_loopback_host` keeps the brackets and `_loopback_origin` strips them, so one bound
+    # IPv6 address is two different lookups. Entry 2 is the one that showed it - it was
+    # NOT CAUGHT before the test started calling the functions.
     Mutation(
         "loopback", "the server may bind an address no request may name again",
         SRC / "server.py",
@@ -202,10 +204,24 @@ MUTATIONS: List[Mutation] = [
         "tests/test_server.py"),
 
     Mutation(
+        "loopback", "a bound IPv6 address may lose the bracketed form a browser sends again",
+        SRC / "server.py",
+        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})''',
+        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})''',
+        "tests/test_server.py"),
+
+    Mutation(
         "loopback", "the header check may be tightened below what is bound again",
         SRC / "server.py",
         '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})''',
         '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "[::1]", "::1"})''',
+        "tests/test_server.py"),
+
+    Mutation(
+        "loopback", "the rebinding guard may accept a name this server never answers on again",
+        SRC / "server.py",
+        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})''',
+        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1", "runner.local"})''',
         "tests/test_server.py"),
 
     # ── decisions (CHG-20260907-16) ────────────────────────────────

@@ -3084,22 +3084,66 @@ def test_the_route_refuses_a_type_the_store_will_not_hold(live):
     assert ".exe" in said["error"]
 
 
+def _authority(addr):
+    """The address as a client would put it in a `Host` or an `Origin`.
+
+    An IPv6 literal is bracketed in an authority; a name or an IPv4 address is not. This is the
+    same rule `_loopback_origin` applies to the hostname it rebuilds, and it is why the two
+    checks look up different strings for one bound address.
+    """
+    return f"[{addr}]" if ":" in addr else addr
+
+
 def test_every_address_the_server_binds_is_accepted_as_a_host():
     """Two spellings of one boundary, and nothing required them to agree.
 
     `server.LOOPBACK` is consulted when the server binds; `server.LOOPBACK_HOSTS` is consulted for
-    every `Host` and `Origin`. Neither constant was named by any test. They agree today, and a
-    legitimate loopback alias added to the bind list alone -- `127.0.0.2`, or an IPv4-mapped
-    `::ffff:127.0.0.1` -- would start a server that then refuses its own requests, with the
-    refusal blaming the header (CHG-20260907-19).
+    every `Host` and `Origin`. Neither constant was named by any test. A legitimate loopback alias
+    added to the bind list alone -- `127.0.0.2`, or an IPv4-mapped `::ffff:127.0.0.1` -- would
+    start a server that then refuses its own requests, with the refusal blaming the header
+    (CHG-20260907-19).
 
-    Checked in the direction that matters: a bind address that no header may carry is a server
-    nobody can reach. The reverse is not a defect — a header form like `[::1]` is meaningful in a
-    header and is not something to bind.
+    **This asks the two functions rather than their table.** The first version compared the
+    constants as sets and was refuted by reading `_loopback_host`: it keeps the brackets, so for a
+    server bound to `::1` the string it looks up is `"[::1]"`, while `_loopback_origin` gets
+    `"::1"` from `urlsplit`. The set version asked for `"::1"` and was satisfied -- with `"[::1]"`
+    deleted from `LOOPBACK_HOSTS`, a server on `::1` refuses the `Host` every browser would send
+    it, and the whole of this file passed. Two checks that normalise differently cannot be modelled
+    by one membership test; calling them costs nothing and models nothing.
+
+    Checked in the direction that matters: a bind address no header may carry is a server nobody
+    can reach.
     """
-    bare = {host.strip("[]") for host in server.LOOPBACK_HOSTS}
-    unreachable = [addr for addr in server.LOOPBACK
-                   if addr.lower() not in server.LOOPBACK_HOSTS or addr not in bare]
-    assert not unreachable, (
-        f"the server may bind {unreachable}, and a request naming one would be refused as a "
-        f"foreign host. `LOOPBACK_HOSTS` is what `Host` and `Origin` are checked against.")
+    refused = []
+    for addr in server.LOOPBACK:
+        authority = _authority(addr)
+        for host in (authority, f"{authority}:8765"):
+            if not server._loopback_host(host):
+                refused.append(f"Host: {host}")
+        for origin in (f"http://{authority}:8765", f"https://{authority}"):
+            if not server._loopback_origin(origin):
+                refused.append(f"Origin: {origin}")
+    assert not refused, (
+        f"the server may bind these addresses and would refuse its own requests naming them: "
+        f"{refused}. `LOOPBACK_HOSTS` is what `Host` and `Origin` are checked against, and it "
+        f"needs the bracketed form as well as the bare one for an IPv6 address.")
+
+
+def test_no_host_is_accepted_that_the_server_would_not_bind():
+    """The other direction, which is about a rebinding surface rather than reachability.
+
+    Not literal containment -- `"[::1]"` is a header form and not an address to bind, so
+    `LOOPBACK_HOSTS <= LOOPBACK` is false by design. Normalised, the two sets are equal today, and
+    an entry that survives normalisation and is not a bindable address is a name this server
+    accepts for a socket it will never listen on. `LOOPBACK_HOSTS`' own comment calls anything
+    else *"a rebinding attempt or a proxy"*, which is a reason to make the addition deliberate.
+
+    Raised by an independent seat, which pointed out that the first record refuted only the
+    literal reverse and then declined the whole direction (CHG-20260907-19).
+    """
+    bindable = {addr.lower() for addr in server.LOOPBACK}
+    extra = sorted({host.strip("[]").lower() for host in server.LOOPBACK_HOSTS} - bindable)
+    assert not extra, (
+        f"{extra} are accepted as a `Host` and are not addresses this server will bind. If one is "
+        f"deliberate, it belongs in `LOOPBACK` too or in a sentence here saying why a name this "
+        f"server never answers on is accepted anyway.")
