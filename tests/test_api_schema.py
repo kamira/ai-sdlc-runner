@@ -225,6 +225,30 @@ def test_every_post_requires_a_version_and_the_page_says_so():
     assert '"version"' in section and "Not optional and not defaulted" in section
 
 
+def test_the_models_sketch_enumerates_the_payload_it_claims_to():
+    """A fenced key list claims to **be** the payload, so it is checked by equality.
+
+    Prose gets subset: section 10 of `SCHEMAS.md` mentions eight backticked identifiers that are
+    not fields — `ANTHROPIC_API_KEY`, `_model_from`, `claude` and the reach words — so demanding
+    equality there would turn a correct page red. A sketch is different: it enumerates, and
+    `docs/API.md`'s listed ten keys while the route shipped eleven, missing `reach_guessed`
+    (CHG-20260907-14).
+    """
+    sketch = PAGE.split("### `GET /models`")[1].split("```")[1]
+    keys = set(re.findall(r'"(\w+)"', sketch)) - {"models", "leaving"}
+    real = set(models.Model(
+        id="i", vendor="v", name="n", transport="cli", command=("a",)).as_dict())
+    assert keys == real, (
+        f"the sketch omits {sorted(real - keys)} and invents {sorted(keys - real)}")
+
+
+def test_the_page_names_every_computed_field_it_says_are_not_persisted():
+    """Subset, not equality: the page names field-like identifiers for other reasons too."""
+    section = PAGE.split("### `GET /models`")[1].split("###")[0]
+    missing = sorted(n for n in models.COMPUTED if f"`{n}`" not in section)
+    assert not missing, f"the page must name every computed field; it omits {missing}"
+
+
 def test_models_is_the_one_post_that_does_not_return_a_snapshot():
     body = SOURCE.split("def do_POST(self)")[1].split("\n        def ")[0]
     models_branch = body.split('self.path == "/models"')[1].split("elif self.path")[0]
@@ -234,9 +258,22 @@ def test_models_is_the_one_post_that_does_not_return_a_snapshot():
 
 def test_the_registry_route_sends_computed_reach_that_is_never_persisted():
     model = models.Model(id="i", vendor="v", name="n", transport="cli", command=("a",))
-    assert "reach" in model.as_dict()
-    assert "reach" not in inspect.getsource(models.save).split("if k not in")[1].split(")")[0] \
-        or "reach" in inspect.getsource(models.save)          # stripped on save
+    # **This test owns the route half.** Persistence has two owners already —
+    # `test_models.test_no_computed_field_is_written_to_disk` and
+    # `test_models_schema.test_the_page_says_reach_is_computed_and_never_stored` both save a
+    # registry, read the file back and assert no `COMPUTED` member reached it. A third copy of one
+    # fact is what CHG-20260903-39 argues against by name.
+    #
+    # What stood here was `assert A or B` over `inspect.getsource(models.save)`, and it never
+    # proved stripping — **not since it was written** (CHG-20260823-22). At that commit `save`
+    # excluded a literal tuple, so A was false and B was true, and B's literal meaning is "the
+    # word `reach` appears somewhere in `save`". When the exclusion moved into `COMPUTED` the
+    # branches swapped and neither established anything. Its `.split(")")[0]` returned 150
+    # characters of unrelated source, and removing `if k not in COMPUTED` made it raise
+    # `IndexError` — so a mutation over it reported CAUGHT by **exception**, which is how
+    # reverting the fix to test the test gets fooled (CHG-20260907-14).
+    assert set(models.COMPUTED) <= set(model.as_dict()), (
+        "the route must ship every computed field, not merely one of them")
     # Flattened, because prose wraps and a check that fails on where the line broke is testing
     # the formatter rather than the page.
     section = " ".join(PAGE.split("### `GET /models`")[1].split("###")[0].split())

@@ -175,6 +175,10 @@ def test_the_sqlite_entry_says_which_pragmas_survive_a_reconnect():
     (5, workorder.VERDICT_FIELDS),
     (9, conversations.CSV_COLUMNS),
     (8, conversations.KINDS),
+    # `models.COMPUTED` was never on this list, and `reach_guessed` joined the tuple in
+    # CHG-20260903-39 without reaching any of the four documents that enumerate it. The guard
+    # for exactly this class existed and had six entries (CHG-20260907-14).
+    (10, models.COMPUTED),
     (1, graph.MODES),
     (4, tuple(policy.PERMANENT_HALT_KINDS)),
     (11, settings.FIELDS),

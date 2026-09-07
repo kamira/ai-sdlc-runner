@@ -168,6 +168,33 @@ MUTATIONS: List[Mutation] = [
         '''    return worktree.key_for(cycle) if node.id in frozenset(["engineer_build", "engineer_selfverify", "fix_pass", "lead_task_review", "re_review"]) else ""''',
         "tests/test_module_built.py"),
 
+    # ── propagation (CHG-20260907-14) ──────────────────────────────
+    # `reach_guessed` joined `models.COMPUTED` in CHG-20260903-39 and reached none of the
+    # four documents that enumerate the set. Each of these puts one of those documents
+    # back to two fields, or back to quoting a sentence the source stopped carrying.
+    Mutation(
+        "propagation", "a page may enumerate two computed fields again",
+        REPO / "docs" / "SCHEMAS.md",
+        '''`leaves_this_machine` follows from it, and `reach_guessed` says whether the derivation had''',
+        '''`leaves_this_machine` follows from it, and the derivation had''',
+        "tests/test_schemas.py"),
+
+    Mutation(
+        "propagation", "the payload sketch may omit a key the route ships again",
+        REPO / "docs" / "API.md",
+        '''                "reach", "leaves_this_machine", "reach_guessed" } ],''',
+        '''                "reach", "leaves_this_machine" } ],''',
+        "tests/test_api_schema.py"),
+
+    Mutation(
+        "propagation", "a document may quote a comment the source does not carry again",
+        REPO / "docs" / "MODELS.md",
+        '''`models.COMPUTED` is declared:
+*"Storing one would let a stale label outlive the truth."*''',
+        '''`models.COMPUTED` is declared:
+*"both are computed; storing them would let a stale label outlive the truth."*''',
+        "tests/test_documented_numbers.py"),
+
     # ── contradiction (CHG-20260907-13) ────────────────────────────
     # The guard these replace proved a **true** sentence was present:
     #     assert f"{built} of {built} tables" in catalogue

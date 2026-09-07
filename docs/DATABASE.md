@@ -211,7 +211,7 @@ Both seats named it. `models.py` says **"Computed, never declared"**, and `save(
 
 ```python
 {k: v for k, v in m.as_dict().items()
- if k not in ("reach", "leaves_this_machine")}     # both are computed; storing them would
+ if k not in COMPUTED}     # both are computed; storing them would
                                                     # let a stale label outlive the truth
 ```
 

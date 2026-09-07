@@ -359,9 +359,12 @@ def save_registry(db: sqlite3.Connection, registry: models_mod.Registry) -> None
     references is **refused by name**, because "you cannot delete this yet" and "your registry
     saved" must not look the same.
 
-    `reach` and `leaves_this_machine` are **not** written, and there is no column for them.
-    `models.py` computes both and strips them on save: *"storing them would let a stale label
-    outlive the truth."*
+    Three fields, listed in `models.COMPUTED`, are **not** written, and there is no column
+    for them. `models.py` computes them, strips them on save, and says why where
+    `models.COMPUTED` is declared: *"Storing one would let a stale label outlive the truth."*
+
+    This docstring said *both* and quoted a sentence `models.py` no longer carries; it is in
+    `src/`, where no documentation sweep looks (CHG-20260907-14).
     """
     keep = {m.id for m in registry}
     with _locked(db), db:

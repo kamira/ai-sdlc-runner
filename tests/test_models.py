@@ -536,7 +536,15 @@ def test_nothing_hand_writes_the_computed_field_set():
     root = pathlib.Path(models.__file__).resolve().parents[2]
     literal = re.compile(r"[({]\s*\"reach\"\s*,\s*\"leaves_this_machine\"\s*[)}]")
     copies = []
-    for path in list((root / "src").rglob("*.py")) + list((root / "tests").glob("*.py")):
+    # **And the documents.** The rule was scoped to `src/` and `tests/`, and
+    # `docs/DATABASE.md` quoted `save`'s exclusion as a pair of literal names — a sixth copy,
+    # in the one place the rule was not looking, and stale besides
+    # (CHG-20260907-14). The ledger is excluded because it keeps its sentences: a record of what
+    # the code used to say is not a copy of what it says.
+    pages = [p for p in (root / "docs").rglob("*.md")
+             if not {"changes", "acceptance", "design", "worklog"} & set(p.parts)]
+    for path in (list((root / "src").rglob("*.py")) + list((root / "tests").glob("*.py"))
+                 + pages + [root / "README.md"]):
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             if literal.search(line) and "COMPUTED" not in line:
                 copies.append(f"{path.relative_to(root).as_posix()}: {line.strip()[:64]}")
