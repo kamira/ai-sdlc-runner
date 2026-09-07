@@ -89,8 +89,10 @@ def test_finished_and_suspended_are_not_the_same_shape():
     # Terminal nodes still set halted_at -- the old signal is unchanged, which is why the new one
     # was needed rather than being a rename.
     assert graph.BY_ID["done"].kind == graph.TERMINAL
+    # `_walk` is the body; `walk` is the wrapper that closes the durable record when the
+    # body does not return (CHG-20260907-15). The property below is the body's.
 
-    # This used to read `assert "report.state = FINISHED" in inspect.getsource(engine.walk)`, and
+    # This used to read `assert "report.state = FINISHED" in inspect.getsource(engine._walk)`, and
     # CHG-20260827-22 broke it without changing anything it was for: the line became
     # `STOPPED if node.permanent else FINISHED`, and `done` still reports FINISHED. The assertion
     # was matching **source text** for a claim about **behaviour** — this repository's own named
@@ -206,13 +208,17 @@ def test_nothing_waits_inside_the_walk():
     same safer alternative. This test is what stops it coming back: no sleeping, no waiting, no
     input, no polling inside `walk`. A stop is a return, so "alive and stopped" never exists.
     """
-    source = inspect.getsource(engine.walk)
+    # `_walk` is the body; `walk` is the wrapper that closes the durable record when the
+    # body does not return (CHG-20260907-15). The property below is the body's.
+    source = inspect.getsource(engine._walk)
     for blocking in ("time.sleep", "input(", ".join()", ".wait(", ".acquire(", "Event("):
         assert blocking not in source, f"walk blocks on {blocking} — a stop must stay a return"
 
 
 def test_the_suspended_report_is_returned_not_yielded():
-    source = inspect.getsource(engine.walk)
+    # `_walk` is the body; `walk` is the wrapper that closes the durable record when the
+    # body does not return (CHG-20260907-15). The property below is the body's.
+    source = inspect.getsource(engine._walk)
     marker = source.index("report.state = SUSPENDED")
     # The claim is that this exit **returns** rather than yielding — not what `_finish`
     # takes. CHG-20260903-23 gave it two more arguments and both of these turned red on

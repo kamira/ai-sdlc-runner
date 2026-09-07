@@ -151,7 +151,9 @@ def test_an_undecided_panel_does_not_take_a_branch_by_itself():
     Task 13 turned the stop into a suspension a person can answer. What has not changed, and is what
     this test was always protecting, is that **the runner never picks the branch itself**.
     """
-    source = inspect.getsource(engine.walk)
+    # `_walk` is the body; `walk` is the wrapper that closes the durable record when the
+    # body does not return (CHG-20260907-15). The property below is the body's.
+    source = inspect.getsource(engine._walk)
     assert "policy.UNDECIDED" in source, "the walk must recognise the third outcome"
     assert "will not pick a" in source, (
         "an undecided stop should say nobody decided — reporting it as a failure would send the "
@@ -165,7 +167,9 @@ def test_the_undecided_stop_is_a_return_like_every_other_halt():
     early by inventing a second way to stop, and task 13 must not have reached it by blocking — so
     the marker still has to be followed by a plain return.
     """
-    source = inspect.getsource(engine.walk)
+    # `_walk` is the body; `walk` is the wrapper that closes the durable record when the
+    # body does not return (CHG-20260907-15). The property below is the body's.
+    source = inspect.getsource(engine._walk)
     marker = source.index("will not pick a")
     after = source[marker:marker + 500]
     # The claim is that this exit **returns** rather than yielding — not what `_finish`

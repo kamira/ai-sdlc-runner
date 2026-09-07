@@ -1089,3 +1089,97 @@ def test_html_survives_a_turn_whose_timestamp_is_not_a_string():
     rendered = conv._html(document)
 
     assert "1234" in rendered
+
+
+# ── the record closes however the walk ends ──────────────────────────────────────────────────────
+
+
+def _walk_with_record(tmp_path, dispatch, decisions=None, effects=None):
+    """One walk with a durable record, returning the conversation and what escaped."""
+    import os
+    import sys
+
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from test_change_bound import ROUND_TWICE
+    from test_flow import SPEC as FLOW_SPEC
+
+    from ai_sdlc_runner import engine, graph, policy
+
+    record = conv.Conversation(_store(tmp_path), "P").open()
+    cfg = engine.RunConfig(
+        node_specs={n.id: dict(FLOW_SPEC) for n in graph.NODES if n.role},
+        decisions={**ROUND_TWICE, **(decisions or {})}, risk="low", undeclared="allow",
+        conversation=record, effects=effects,
+        confirmed=tuple(gate for gate in policy.GATES for _ in range(6)))
+    escaped = None
+    try:
+        engine.walk(cfg, dispatch, enabled=True)
+    except BaseException as exc:            # noqa: BLE001 - the point is that anything is caught
+        escaped = exc
+    return record, escaped
+
+
+def _kinds(record):
+    return [turn["kind"] for turn in record.document()["turns"]]
+
+
+def _answers(node_id):
+    """A dispatcher that drives the shipped flow to its end."""
+    from test_change_bound import Rejecting
+
+    return Rejecting(reject=(), times=None)
+
+
+def test_a_walk_that_dies_still_closes_its_record(tmp_path):
+    """`conversation.close` lives in `_finish` alone, and every `_finish` is on a `return`.
+
+    So an exception escaping the walk left the durable record open — measured before this change,
+    turns written and whether a `CLOSED` turn exists:
+
+        a run that finishes                             50   closed
+        a decision naming a branch that is not offered  36   NOT closed
+        an effects provider raising                     21   NOT closed
+        a KeyboardInterrupt in the dispatcher           16   NOT closed
+
+    A record left open is the run that most needs reading and cannot be (CHG-20260907-15).
+    """
+    class Dies:
+        def __call__(self, order):
+            raise RuntimeError("the provider went away")
+
+    record, escaped = _walk_with_record(tmp_path, Dies())
+    assert isinstance(escaped, RuntimeError), "the exception must still reach the caller"
+    assert _kinds(record)[-1] == "closed", _kinds(record)
+    closing = record.document()["turns"][-1]
+    assert closing["state"] == "stopped", closing
+    assert "RuntimeError: the provider went away" in closing["why"], closing
+
+
+def test_an_interrupted_walk_closes_its_record_too(tmp_path):
+    """`BaseException`, not `Exception`. An interruption is the case a durable record exists for,
+    and `str(KeyboardInterrupt())` is empty — so the closing turn carries the type name, or `why`
+    is dropped by `close`'s own falsy-value rule and the record says a run stopped for no reason.
+    """
+    class Interrupted:
+        def __call__(self, order):
+            raise KeyboardInterrupt()
+
+    record, escaped = _walk_with_record(tmp_path, Interrupted())
+    assert isinstance(escaped, KeyboardInterrupt)
+    closing = record.document()["turns"][-1]
+    assert closing["kind"] == "closed" and closing["state"] == "stopped"
+    assert closing["why"].startswith("KeyboardInterrupt"), closing
+
+
+def test_a_walk_that_finishes_closes_exactly_once(tmp_path):
+    """The guard against the repair being a `finally`.
+
+    `conversations.close` is deliberately not deduplicated — *"a walk ending suspended and later
+    ending finished are two things that happened"* — so a `finally` around the loop would write a
+    second closing turn on **every** normal run. `except BaseException` writes one only where
+    `_finish` wrote none.
+    """
+    record, escaped = _walk_with_record(tmp_path, _answers(None))
+    assert escaped is None, escaped
+    assert _kinds(record).count("closed") == 1, _kinds(record)
+    assert record.document()["turns"][-1]["state"] == "finished"

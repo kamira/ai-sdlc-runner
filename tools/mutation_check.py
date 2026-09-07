@@ -168,6 +168,35 @@ MUTATIONS: List[Mutation] = [
         '''    return worktree.key_for(cycle) if node.id in frozenset(["engineer_build", "engineer_selfverify", "fix_pass", "lead_task_review", "re_review"]) else ""''',
         "tests/test_module_built.py"),
 
+    # ── record-lifecycle (CHG-20260907-15) ─────────────────────────
+    # `conversation.close` lives in `_finish` alone and every `_finish` is on a `return`,
+    # so the closing turn was written on seven of the eight return paths and on none of
+    # the exceptional ones. The third entry is the false green: `RunReport.state` defaults
+    # to FINISHED, so closing with it would record a crash as a clean run. The second is
+    # why `Exception` is not enough -- an interruption is the case a record exists for.
+    Mutation(
+        "record-lifecycle", "a walk that dies may leave its record open again",
+        SRC / "engine.py",
+        '''    except BaseException as exc:
+        if cfg.conversation is not None:''',
+        '''    except BaseException as exc:
+        if False:''',
+        "tests/test_conversations.py"),
+
+    Mutation(
+        "record-lifecycle", "an interruption may go unrecorded again",
+        SRC / "engine.py",
+        '''    except BaseException as exc:''',
+        '''    except Exception as exc:''',
+        "tests/test_conversations.py"),
+
+    Mutation(
+        "record-lifecycle", "a crashed walk may be recorded as one that finished again",
+        SRC / "engine.py",
+        '''                STOPPED, at_node=where.get("node"),''',
+        '''                FINISHED, at_node=where.get("node"),''',
+        "tests/test_conversations.py"),
+
     # ── propagation (CHG-20260907-14) ──────────────────────────────
     # `reach_guessed` joined `models.COMPUTED` in CHG-20260903-39 and reached none of the
     # four documents that enumerate the set. Each of these puts one of those documents
