@@ -1329,10 +1329,30 @@ def _module_built(report: "RunReport") -> str:
     return "no"
 
 
-#: The two nodes a rejected whole change passes through on its way back round. Visiting one of them
+#: The nodes a rejected whole change passes through on its way back round. Visiting one of them
 #: **is** the rejection — they are reached only from a `fail` branch — which is why the bound counts
 #: these and not the asks (CHG-20260828-22).
-_WHOLE_CHANGE_REJECTED = ("review_failed", "acceptance_failed")
+#:
+#: **Derived, not written.** This was the tuple `("review_failed", "acceptance_failed")`, which is
+#: exactly the set below today — and a hand-written copy of something the graph already says drifts
+#: the moment the graph moves. Measured: changing one word, `qa_accept.rejects_to` from
+#: `acceptance_failed` to `next_module`, left `test_change_bound.py` and
+#: `test_sendback_retry_reject.py` at 43 passed while an operator refusing twice at `acceptance`
+#: got `suspended` instead of the bound firing (CHG-20260907-08, defect seat L-1).
+#:
+#: `qa_verify.rejects_to` is `next_module`, whose `.next` is not `change_retry`, so a QA refusal
+#: stays outside the bound — which is CHG-20260828-22's own decision, preserved by deriving rather
+#: than by remembering to exclude it.
+def _whole_change_rejected() -> tuple:
+    """The nodes a rejected whole change passes through, asked of the graph each time.
+
+    Computed here rather than at import. `engine._MODULE_CYCLE` is an import-time snapshot of
+    `graph.module_cycle()` while `plan.py` asks for it per call, and round fourteen's defect seat
+    measured the two disagreeing about a node added in memory — one derived view, two readers, two
+    answers. A module-level derivation of this would have been the same shape, introduced by the
+    change that removed its hand-written twin.
+    """
+    return tuple(node.id for node in graph.NODES if node.next == "change_retry")
 
 
 def _change_retry(report: "RunReport") -> str:
@@ -1364,7 +1384,7 @@ def _change_retry(report: "RunReport") -> str:
     `change_retry` runs after the `_failed` node it follows, so the rejection in progress is already
     in the count: one is the first, two is the second.
     """
-    rejections = sum(1 for node_id in report.visited if node_id in _WHOLE_CHANGE_REJECTED)
+    rejections = sum(1 for node_id in report.visited if node_id in _whole_change_rejected())
     return "again" if rejections > 1 else "first"
 
 

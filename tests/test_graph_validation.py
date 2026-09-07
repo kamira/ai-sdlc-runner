@@ -164,6 +164,81 @@ def test_a_rejection_needs_a_gate_to_be_refused_at():
         _validate_with(_mutate(ungated.id, rejects_to="intake"))
 
 
+def test_a_rejection_may_not_land_where_the_run_can_never_come_back_from():
+    """The weak half of the rule, and the record says plainly that it is the weak half.
+
+    A refusal is not how a run ends, so a target the walk can never return from is refused. In
+    this graph that means a terminal.
+    """
+    with pytest.raises(graph.GraphError, match="cannot reach it again"):
+        _validate_with(_mutate("qa_accept", rejects_to="done"))
+
+
+def test_the_whole_change_bound_reads_the_graph_rather_than_a_written_list():
+    """`_WHOLE_CHANGE_REJECTED` was the tuple `("review_failed", "acceptance_failed")` — exactly
+    the nodes whose `.next` is `change_retry`, written out by hand beside the graph that says so.
+
+    A written copy cannot be told from a derivation while the two agree, which is why this test
+    adds a **third** such node and asks whether the bound sees it. Under the hand-written pair it
+    does not.
+
+    It is a function rather than a module constant for the reason `engine._MODULE_CYCLE` is a
+    finding of this same round: that one snapshots `graph.module_cycle()` at import while `plan.py`
+    asks per call, and the two disagree about a node added later. Deriving at import would have
+    reproduced the shape this change removes.
+    """
+    import dataclasses
+
+    from ai_sdlc_runner import engine
+
+    assert set(engine._whole_change_rejected()) == {"review_failed", "acceptance_failed"}, (
+        "the shipped graph's answer, unchanged by deriving it")
+
+    extra = dataclasses.replace(graph.BY_ID["fix_pass"], id="another_failure",
+                                next="change_retry", branches={})
+    original = graph.NODES
+    try:
+        graph.NODES = graph.NODES + (extra,)
+        assert "another_failure" in engine._whole_change_rejected(), (
+            "a node routing into `change_retry` is a whole-change rejection, and the bound is "
+            "reading a list that cannot know about it")
+    finally:
+        graph.NODES = original
+
+
+def test_where_each_refusal_goes_is_pinned():
+    """**This is what actually protects it**, and four structural rules were measured first.
+
+    `validate` cannot express which gates a refusal must pass, because that is policy rather than
+    connectivity. Measured against every candidate (CHG-20260907-08):
+
+        the target reaches this node again    every shipped edge passes -- and so does
+                                              `qa_accept -> pr`, because the flow is one cycle
+        this node is on every path to merge   refuses `lead_task_review -> fix_pass`, which ships
+        the target is not downstream          the same cycle, the same vacuity
+        answerable without passing merge      accepts `qa_accept -> qa_verify`, which reaches
+                                              `qa_accept` again while skipping `lead_review`
+
+    The last is decisive: the normal return from an acceptance refusal passes `lead_review` and
+    `qa_verify`; that bypass passes only `qa_verify`. So the eight edges are written down here.
+    Changing one is not forbidden — it is a decision, and this test is where it has to be made.
+    """
+    assert {n.id: n.rejects_to for n in graph.NODES if n.rejects_to} == {
+        "pm_confirm": "pm_plan",
+        "lead_assess": "pm_plan",
+        "pm_signoff": "pm_plan",
+        "engineer_selfverify": "engineer_build",
+        "lead_task_review": "fix_pass",
+        "lead_review": "review_failed",
+        # Deliberately outside the whole-change bound (CHG-20260828-22): a QA refusal goes round
+        # the module loop rather than to `change_retry`.
+        "qa_verify": "next_module",
+        # Inside it. `acceptance_failed.next` is `change_retry`, which is what makes the second
+        # refusal at this gate the last one.
+        "qa_accept": "acceptance_failed",
+    }
+
+
 def test_a_rejection_may_not_name_a_node_that_does_not_exist():
     rejecting = next(n for n in graph.NODES if n.rejects_to)
     with pytest.raises(graph.GraphError, match="reject|no node|unknown"):

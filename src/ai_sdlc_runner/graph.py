@@ -391,6 +391,26 @@ def asking_nodes() -> List[str]:
     return [n.id for n in NODES if n.role]
 
 
+def _reaches(start: str, target: str) -> bool:
+    """Can the walk get from `start` to `target` along ordinary edges?
+
+    Ordinary means branches and `next`. `rejects_to` is deliberately not one: a refusal is what a
+    person does instead of letting the run continue, so counting it here would let two refusals
+    justify each other.
+    """
+    seen: set = set()
+    frontier = [start]
+    while frontier:
+        current = BY_ID[frontier.pop()]
+        for edge in list(current.branches.values()) + ([current.next] if current.next else []):
+            if edge == target:
+                return True
+            if edge not in seen:
+                seen.add(edge)
+                frontier.append(edge)
+    return False
+
+
 def validate() -> None:
     """Internal consistency, and agreement with the policy.
 
@@ -535,6 +555,33 @@ def validate() -> None:
             if node.rejects_to == node.id:
                 raise GraphError(
                     f"node {node.id!r} rejects to itself, which is a refusal that changes nothing")
+            # **Necessary, and nowhere near sufficient — which is the point of the comment.**
+            #
+            # A refusal that lands where the walk can never come back from is a refusal that ends
+            # the run, and `rejects_to` is not how a run ends. In this graph that means a terminal:
+            # `qa_accept` rejecting to `done` or to `halt_change_rejected` is refused here.
+            #
+            # It refuses nothing else, and four candidate rules were measured before settling for
+            # that (CHG-20260907-08):
+            #
+            #   the target reaches this node again          every shipped edge passes, and so does
+            #                                               `qa_accept -> pr`: the flow is one
+            #                                               cycle, so reachability says nothing
+            #   this node is on every path to `merge`       refuses `lead_task_review -> fix_pass`,
+            #                                               which ships — a fix pass is answered by
+            #                                               `re_review`, a different review
+            #   the target is not downstream                same cycle, same vacuity
+            #   answerable without passing `merge`          accepts `qa_accept -> qa_verify`, which
+            #                                               skips the `lead_review` gate entirely
+            #
+            # The last is the one that settles it: the normal return from an acceptance refusal
+            # passes `lead_review` and `qa_verify`; the bypass passes only `qa_verify`. Which gates
+            # a refusal must pass is **policy**, and connectivity cannot express it. What protects
+            # it is `test_where_each_refusal_goes_is_pinned`, which names all eight edges.
+            if not _reaches(node.rejects_to, node.id):
+                raise GraphError(
+                    f"node {node.id!r} rejects to {node.rejects_to!r}, which cannot reach it "
+                    f"again — a refusal the run can never answer is not a refusal, it is a stop")
 
     reachable = {"intake"}
     frontier = ["intake"]
