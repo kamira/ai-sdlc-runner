@@ -1251,6 +1251,42 @@ def test_a_suspension_refuses_a_field_nobody_reads():
         engine._suspension(node_id="pm_confirm", raeson="typo")
 
 
+def test_a_failed_effect_reaches_every_surface_as_stopped():
+    """Where `finished` went, before CHG-20260907-06.
+
+    `cmd_run`'s only state-dependent branch is `SUSPENDED`, so the terminal said nothing; the
+    server copies `report.state` into `RunState.state`, so the console said `finished`; and
+    `conversation.close(state, …)` writes it as the durable record of the run. A run whose `pr`
+    effects half-landed — branch made, commit written, push done, the pull request not — said it
+    finished in all three places.
+
+    This asserts the one thing all three read. The exit code is deliberately unchanged: making
+    `cmd_run` return non-zero for a stopped run is a separate decision about anything scripting
+    it, and is not implied by naming the state correctly.
+    """
+    landed = []
+
+    def provider(node_id):
+        from ai_sdlc_runner import effects as effects_mod
+
+        if node_id != "record_module":
+            return ()
+        return [effects_mod.Effect(name="tick", probe=lambda: False,
+                                   apply=lambda: landed.append("tick"),
+                                   postcondition="the task is ticked")]
+
+    report = engine.walk(
+        _cfg(effects=provider,
+             operations={"record_module": [{"description": "tick", "kind": "ordinary"}]}),
+        Recorder(), enabled=True)
+
+    assert report.state == engine.STOPPED
+    assert report.halted_at == "record_module"
+    assert "effect failed" in (report.halt_reason or "")
+    assert landed == ["tick"], "the effect ran; it is the postcondition that did not hold"
+    assert report.suspended is None, "nothing is waiting for a decision — this one is over"
+
+
 def test_the_engine_records_a_halted_nodes_partial_outcome():
     """A halted node used to have no `report.effects` entry at all (CHG-20260905-01).
 
@@ -1278,6 +1314,11 @@ def test_the_engine_records_a_halted_nodes_partial_outcome():
     report = engine.walk(cfg, Recorder(), enabled=True)
 
     assert report.halted_at == "record_module"
+    # **And it says it stopped.** This asserted the halted node and the partial outcome and left
+    # the state alone, so the run reported `finished` — the value `STOPPED`'s own definition
+    # reserves for "a permanent halt, or an effect that failed" (CHG-20260907-06).
+    assert report.state == engine.STOPPED, (
+        "a run that halted because an effect failed is reporting a normal finish")
     assert landed == ["first"], "one effect really landed before the halt"
     assert "record_module" in report.effects, (
         "the halted node left no record of what had already been applied")

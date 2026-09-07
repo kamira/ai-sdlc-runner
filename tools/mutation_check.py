@@ -118,6 +118,20 @@ MUTATIONS: List[Mutation] = [
         '''                    out = runner.attach(version, str(body.get("filename") or ""), raw)''',
         '''                    out = runner.attach(version, "attachment", raw)''',
         "tests/test_server.py"),
+    # ── effect-state (CHG-20260907-06) ─────────────────────────────────────────────
+    # `STOPPED`'s own definition says it covers *a permanent halt, or an effect that
+    # failed*. The second clause was never implemented: the except block set `halted_at`
+    # and `halt_reason` and left `state` at its `FINISHED` default, so a run whose `pr`
+    # effects half-landed reported `finished` to the terminal, the console and the durable
+    # conversation record. CHG-20260827-22 made this same decision for the first clause.
+    Mutation(
+        "effect-state", "a failed effect reports itself as a normal finish again",
+        SRC / "engine.py",
+        '''        report.state = STOPPED
+        report.halted_at = node.id''',
+        '''        report.halted_at = node.id''',
+        "tests/test_flow.py"),
+
     # ── option-distinctness (CHG-20260907-05) ───────────────────────────────────────
     # `option_request` asks a model for *different* options; `read_options` counted the
     # length of the list, so three copies of one label passed the check that exists because
