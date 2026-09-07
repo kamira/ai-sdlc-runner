@@ -620,7 +620,10 @@ def test_a_timestamp_that_will_not_parse_gets_a_beat_not_an_invented_duration(tm
     assert conv._seconds("") is None
     document = _timed(tmp_path, [_at(0), "not a time", _at(1)])
     page = conv.export_conversation(document, "playback")
-    assert '"waited": null' in page or '"waited":null' in page or "waited" in page
+    # Was `… or '"waited":null' in page or "waited" in page`. The second spelling never
+    # occurs -- `json.dumps` uses the default separators -- and the third is true of any replay,
+    # so the assertion could not fail for the reason its name gives (CHG-20260907-17).
+    assert '"waited": null' in page, "the unparseable stamp was given a duration"
 
 
 def test_what_a_model_wrote_is_escaped_in_the_replay_too(tmp_path):
@@ -628,7 +631,13 @@ def test_what_a_model_wrote_is_escaped_in_the_replay_too(tmp_path):
     c.answer("00-x", {"why": "<img src=x onerror=alert(1)>"}, "m")
     page = conv.export_conversation(c.document(), "playback")
     assert "<img src=x" not in page
-    assert "&lt;img" in page or "\u003c" in page
+    # **Both branches were wrong, and together they asserted nothing.** This read
+    # `assert "&lt;img" in page or "\u003c" in page`. The turns are embedded as JSON
+    # inside a `<script>`, so the escaping is the six characters \\u003c and `&lt;`
+    # never appears; and `"\u003c"` in Python source is the single character `<`, true
+    # of any HTML. One branch had the wrong expectation, the other was a missing backslash.
+    # The product was right the whole time (CHG-20260907-17).
+    assert r"\u003cimg src=x" in page, "the tag reached the page unescaped"
 
 
 def test_playback_is_one_of_the_formats_the_cli_offers():

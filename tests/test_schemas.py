@@ -215,11 +215,35 @@ def test_the_report_emits_every_field_it_declares():
         f"declared on RunReport and emitted by nothing: {sorted(declared - emitted)}"
 
 
-def test_the_model_entry_lists_exactly_what_persists():
-    """Eight fields persist; `reach` and `leaves_this_machine` are computed and stripped on save.
+def _sentence_naming(flat, referent):
+    """The sentence in `flat` that names `referent`, or `""`.
 
-    The entry must not list them as stored — that was the worst finding of the SQLite round, one
-    document over.
+    Sentence-scoped rather than proximity-scoped: this repository has refused a character window
+    twice (CHG-20260907-12, -13), because a window is a guess about how far a claim reaches and a
+    sentence is the unit a claim is made in.
+    """
+    import re
+
+    for part in re.split(r"(?<=\.)\s+", flat):
+        if f"`{referent}`" in part:
+            return part
+    return ""
+
+
+def test_the_model_entry_lists_exactly_what_persists():
+    """The entry must not describe a computed field as stored.
+
+    **This test was passing on an escape clause for two changes.** It ended
+    `assert "computed, never stored" in body.lower() or "computed" in body.lower()`, and
+    CHG-20260907-14 reworded the page to *"are computed and never stored"* — which made the first
+    branch false while the second caught it, so nothing said the guard had stopped guarding
+    (CHG-20260907-17). Its own docstring also still said the computed set was two names, a month
+    after it became three.
+
+    So the claim is checked structurally instead of by phrase: the sentence that names
+    `models.Model` is the one about what persists, the sentence that names `models.COMPUTED` is
+    the one about what does not, and a computed field appearing in the first is the defect this
+    test exists for.
     """
     model = models.Model(id="i", vendor="v", name="n", transport="cli", command=("a",))
     # `models.COMPUTED`, not a second copy (CHG-20260903-39).
@@ -227,7 +251,19 @@ def test_the_model_entry_lists_exactly_what_persists():
     body = _section(10)
     for field in persisted:
         assert field in body, f"entry 10 omits the persisted field {field!r}"
-    assert "computed, never stored" in body.lower() or "computed" in body.lower()
+
+    flat = " ".join(body.split())
+    stored = _sentence_naming(flat, "models.Model")
+    computed = _sentence_naming(flat, "models.COMPUTED")
+    assert stored, "entry 10 must say what persists, and name `models.Model` as the authority"
+    assert computed, "entry 10 must say what is computed, and name `models.COMPUTED`"
+
+    leaked = sorted(n for n in models.COMPUTED if f"`{n}`" in stored)
+    assert not leaked, (
+        f"the sentence about what persists names {leaked}, which `models.COMPUTED` holds: {stored!r}")
+    missing = sorted(n for n in models.COMPUTED if f"`{n}`" not in computed)
+    assert not missing, (
+        f"the sentence about what is computed omits {missing}: {computed!r}")
 
 
 def test_the_node_entry_lists_every_field_of_a_node():

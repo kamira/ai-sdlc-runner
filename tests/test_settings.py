@@ -328,9 +328,20 @@ class _Picks:
         self.labels = list(labels)
         self.stream = io.StringIO()
         self.seen = []
+        #: Everything the screen printed, in order. The working buffer is truncated on every menu
+        #: read so the rows of one menu are not parsed as the rows of the next, and that also wiped
+        #: whatever the screen said in between — including a refusal printed just before the menu
+        #: that follows it. A test asserting on `stream.getvalue()` afterwards was reading `""`,
+        #: and the `or True` beside it was the response (CHG-20260907-17).
+        self.transcript = []
+
+    def said(self):
+        """Everything printed, including what the next menu read would have wiped."""
+        return "".join(self.transcript) + self.stream.getvalue()
 
     def _rows(self):
         text = self.stream.getvalue()
+        self.transcript.append(text)
         self.stream.seek(0)
         self.stream.truncate()
         return re.findall(r"^\s*(\d+)[.)]\s+(.+)$", text, re.M)
@@ -380,7 +391,11 @@ def test_the_screen_refuses_a_vouch_load_would(tmp_path):
 
     assert result == settings_mod.Settings(), (
         "the screen accepted a vouch on the executor list, which `load` refuses")
-    assert "not vouched" in picks.stream.getvalue() or True
+    # `stream.getvalue()` is `""` here: `_rows` truncates it on every menu read, and the refusal
+    # is printed just before the menu that follows it. The `or True` was the response to that, and
+    # it meant the screen could stop explaining itself with nothing to say so (CHG-20260907-17).
+    assert "not vouched" in picks.said(), (
+        "the screen refused the vouch without telling the operator why")
 
 
 def test_the_confirmation_follows_the_crossing_in_either_order():
