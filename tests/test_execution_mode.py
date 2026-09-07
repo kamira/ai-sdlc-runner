@@ -142,7 +142,11 @@ def test_a_follows_chain_is_refused():
 
 
 def test_a_node_cannot_follow_itself():
-    with pytest.raises(graph.GraphError, match="follows itself|follows something else"):
+    # The alternation this used to carry — `follows itself|follows something else` — let the test
+    # pass on the chain rule, which fired first and said the node followed "something else" while
+    # pointing at itself. The rule this test is named for could not run. Narrowed, so the name and
+    # the assertion agree (CHG-20260907-07).
+    with pytest.raises(graph.GraphError, match="follows itself"):
         _validate_with(_mutate("engineer_selfverify", follows="engineer_selfverify"))
 
 
