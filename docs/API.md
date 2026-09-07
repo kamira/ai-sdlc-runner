@@ -50,7 +50,7 @@ The whole graph, so the console can draw it without embedding a copy.
 { "nodes": [ { "id": …, "kind": …, "label": …, "role": …, "gate": …, "gate_when": …,
                "mode": …, "main": …, "follows": …, "rejects_to": …,
                "branches": { "<label>": "<node id>" }, "next": …,
-               "permanent": … } ],                                      // all 28
+               "permanent": … } ],                                      // all 31
   "gates": { "<gate>": { "<risk>": "<verdict>" } },                     // all 10
   "modes": [ "runner", "single", "seat_panel", … ] }                    // all 7
 ```
@@ -293,7 +293,7 @@ L-36).
                             // the same time as `incomplete`: a seat cannot weigh a
                             // requirement it says it has not been told
   "gate":       "<gate>" | null,
-  "gate_when":  "before" | "after",
+  "gate_when":  "before" | "after" | null,
   "verdict":    "halt" | "confirm" | "halt_independent" | …,
   "risk":       "low" | "medium" | "high",
   "branches":   [ "<branch>", … ],     // empty for a gate; the choices for a tie

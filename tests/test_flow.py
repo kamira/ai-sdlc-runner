@@ -196,6 +196,22 @@ def test_a_one_way_door_is_gated_before_it_swings():
     assert graph.BY_ID["merge"].gate_when == "before"
 
 
+def test_a_sign_off_gate_is_asked_for_before_the_run_stops_on_it():
+    """`before_dispatch` releases the work to engineers, and `pm_signoff` is gated after it.
+
+    This asserts the **ask**, not the halt, and that is the whole point. Measured with the phase
+    flipped to `before`: the run halts at `pm_signoff` either way, and the only difference is that
+    nobody is asked — seven asks become six. Every test in the suite that pinned this node checked
+    where the run stopped, so the entire suite was green on a sign-off nobody had been asked for
+    (CHG-20260907-11).
+    """
+    report = engine.walk(_cfg(risk="high", confirmed=("plan_confirmed", "feasibility_confirmed")),
+                         Recorder(), enabled=True)
+    assert report.halted_at == "pm_signoff"
+    assert any(a.node_id == "pm_signoff" for a in report.asks), (
+        "the run stopped at the sign-off without asking for it")
+
+
 def test_a_gate_that_confirms_someones_judgement_waits_for_the_judgement():
     """`feasibility_confirmed` asks a person to confirm the lead's assessment. Stopping in front of
     the lead hands them an empty page — a verifier called this out, and it was wrong."""

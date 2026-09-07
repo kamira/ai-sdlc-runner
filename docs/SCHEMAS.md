@@ -43,7 +43,7 @@ kind: str                   # what sort of node
 label: str
 role: Optional[str]         # who is asked; None ⟺ mode == RUNNER
 gate: Optional[str]         # which of the 10 gates fires here
-gate_when: str              # "before" | "after"
+gate_when: Optional[str]    # "before" | "after"; None ⟺ gate is None
 next: Optional[str]         # the single successor
 branches: Dict[str, str]    # branch label -> node id
 answer_decides: bool        # the answer picks the branch

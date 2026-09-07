@@ -115,11 +115,18 @@ class Node:
     label: str
     role: Optional[str] = None
     gate: Optional[str] = None
-    #: When the gate is consulted. ``before`` stops instead of doing the work; ``after`` does the
-    #: work and then stops with its result in hand. Getting this backwards makes a gate unreachable:
-    #: a review that halts *before* it runs is a review a high-risk change can never get, which is
-    #: exactly what an independent verifier found here.
-    gate_when: str = "before"
+    #: When the gate is consulted, and **only meaningful with a gate**: ``None`` on a node that
+    #: has none. ``before`` stops instead of doing the work; ``after`` does the work and then stops
+    #: with its result in hand. Getting this backwards makes a gate unreachable: a review that
+    #: halts *before* it runs is a review a high-risk change can never get, which is exactly what
+    #: an independent verifier found here.
+    #:
+    #: **It used to default to** ``"before"`` — the *minority* value, since seven of the ten gated
+    #: nodes are ``after``. So a gated node whose author forgot the phase silently got the shape
+    #: the paragraph above calls a defect, and `validate` had no way to tell the omission from a
+    #: decision. There is no default now: a gate without a phase is a `GraphError` before the walk
+    #: starts, and so is a phase without a gate (CHG-20260907-11).
+    gate_when: Optional[str] = None
     next: Optional[str] = None
     branches: Dict[str, str] = field(default_factory=dict)
     #: For a decision node with a role: the answer names the branch, and these are the branches the
@@ -263,7 +270,8 @@ NODES: Tuple[Node, ...] = (
          note="several models here is the pool the lead may dispatch to, and exactly one of them "
               "does the work. Calling that a vote would misdescribe what happened"),
     Node("engineer_selfverify", STEP, "the engineer verifies its own work", role="engineer",
-         gate="self_verify", next="lead_task_review", mode=FOLLOWS, follows="engineer_build",
+         gate="self_verify", gate_when="before", next="lead_task_review", mode=FOLLOWS,
+         follows="engineer_build",
          rejects_to="engineer_build",
          note="its own work — which is why it is never the last word"),
     Node("lead_task_review", DECISION, "the lead reviews that module", role="lead",
@@ -326,8 +334,10 @@ NODES: Tuple[Node, ...] = (
          permanent=True,
          note="the same argument `halt_second_fail` makes one loop in: two rejections of the "
               "finished change is not something another lap fixes"),
-    Node("pr", STEP, "open the pull request", role="lead", gate="pr", next="merge", mode=SINGLE),
-    Node("merge", STEP, "merge", role="lead", gate="merge", next="close_out", mode=SINGLE,
+    Node("pr", STEP, "open the pull request", role="lead", gate="pr", gate_when="before",
+         next="merge", mode=SINGLE),
+    Node("merge", STEP, "merge", role="lead", gate="merge", gate_when="before",
+         next="close_out", mode=SINGLE,
          note="a one-way door — its gate is consulted BEFORE, because the stop has to come before "
               "the door swings, not after"),
     Node("close_out", STEP, "close out: status, links, what was learned", next="feedback",
@@ -506,10 +516,24 @@ def validate() -> None:
         if node.role and node.role not in policy.BY_ROLE:
             raise GraphError(
                 f"node {node.id!r} names role {node.role!r}, which policy.py does not define")
-        if node.gate_when not in ("before", "after"):
+        if node.gate_when is not None and node.gate_when not in ("before", "after"):
             raise GraphError(f"node {node.id!r} has an unknown gate phase {node.gate_when!r}")
-        if node.gate_when == "after" and not node.gate:
-            raise GraphError(f"node {node.id!r} has a gate phase but no gate")
+        # **Both directions, which is what the old message claimed and the old condition did not.**
+        # It refused an ungated node declaring `after` and accepted one declaring `before` — and
+        # since `before` was the default, the sentence "has a gate phase but no gate" was true of
+        # the twenty-one ungated nodes it let through. Round fourteen's conformance seat held a
+        # veto on that, and the honest repair was the type rather than the wording: with no
+        # default, "no phase" is a state the graph can be in, so the whole contract is sayable.
+        #
+        # The gain is not tidiness. Seven of the ten gated nodes are `after`, so the default was
+        # the minority case: the next gated node whose author forgets the phase used to get the
+        # behaviour the field's own comment calls a defect an independent verifier found. It gets
+        # a build error instead.
+        if (node.gate is None) != (node.gate_when is None):
+            raise GraphError(
+                f"node {node.id!r} names gate {node.gate!r} and phase {node.gate_when!r} — a "
+                f"phase says when a gate is consulted, so neither means anything without the "
+                f"other")
         if node.answer_decides and not node.role:
             raise GraphError(
                 f"node {node.id!r} says its answer decides, but nobody is asked at it")
