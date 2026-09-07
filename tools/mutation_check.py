@@ -147,6 +147,41 @@ MUTATIONS: List[Mutation] = [
         '''    return ("review_failed", "acceptance_failed")''',
         "tests/test_graph_validation.py"),
 
+    # ── kind-and-edges (CHG-20260907-09) ──────────────────────────────
+    # `MODES` was closed from the day it was written; `kind` was not, and the difference was
+    # worth 23 of 31 nodes accepting nonsense -- with `done` reaching the engine's terminal
+    # test as an ordinary node, so a finished run reported no `halted_at`, in the returned
+    # report and in the durable conversation record both. The second rule is the same defect
+    # in the edges: `validate` walks the union of `branches` and `next`, a run takes one of
+    # them, and where they differ the guard is measuring a graph that does not run.
+    Mutation(
+        "kind-and-edges", "a node's kind may be nonsense again",
+        SRC / "graph.py",
+        '''        if node.kind not in KINDS:''',
+        '''        if False:''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "kind-and-edges", "a node may declare an edge no run can take again",
+        SRC / "graph.py",
+        '''        if node.branches and node.next:''',
+        '''        if False:''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "kind-and-edges", "the closed set may quietly gain a member again",
+        SRC / "graph.py",
+        '''KINDS = (STEP, DECISION, LOOP, TERMINAL)''',
+        '''KINDS = (STEP, DECISION, LOOP, TERMINAL, "seat_panel")''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "kind-and-edges", "which nodes are loops may change unnoticed again",
+        SRC / "graph.py",
+        '''    Node("plan_scope", LOOP, "one workstream or several", mode=RUNNER,''',
+        '''    Node("plan_scope", DECISION, "one workstream or several", mode=RUNNER,''',
+        "tests/test_graph_validation.py"),
+
     # ── graph-validation (CHG-20260907-07) ───────────────────────────────────────
     # `validate()` is the only guard over the flow, and nineteen of its thirty-two rules had
     # no reverse test: each could be deleted with every likely test file still green. The one
