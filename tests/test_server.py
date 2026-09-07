@@ -3082,3 +3082,24 @@ def test_the_route_refuses_a_type_the_store_will_not_hold(live):
 
     assert status == 409, said
     assert ".exe" in said["error"]
+
+
+def test_every_address_the_server_binds_is_accepted_as_a_host():
+    """Two spellings of one boundary, and nothing required them to agree.
+
+    `server.LOOPBACK` is consulted when the server binds; `server.LOOPBACK_HOSTS` is consulted for
+    every `Host` and `Origin`. Neither constant was named by any test. They agree today, and a
+    legitimate loopback alias added to the bind list alone -- `127.0.0.2`, or an IPv4-mapped
+    `::ffff:127.0.0.1` -- would start a server that then refuses its own requests, with the
+    refusal blaming the header (CHG-20260907-19).
+
+    Checked in the direction that matters: a bind address that no header may carry is a server
+    nobody can reach. The reverse is not a defect — a header form like `[::1]` is meaningful in a
+    header and is not something to bind.
+    """
+    bare = {host.strip("[]") for host in server.LOOPBACK_HOSTS}
+    unreachable = [addr for addr in server.LOOPBACK
+                   if addr.lower() not in server.LOOPBACK_HOSTS or addr not in bare]
+    assert not unreachable, (
+        f"the server may bind {unreachable}, and a request naming one would be refused as a "
+        f"foreign host. `LOOPBACK_HOSTS` is what `Host` and `Origin` are checked against.")

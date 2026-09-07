@@ -188,6 +188,26 @@ MUTATIONS: List[Mutation] = [
         '''            if (key == "node_models" and owner in graph.BY_ID or True''',
         "tests/test_plan.py"),
 
+    # ── loopback (CHG-20260907-19) ───────────────────────
+    # One boundary written twice: `LOOPBACK` is what the server may bind, `LOOPBACK_HOSTS`
+    # is what a `Host` or `Origin` may say. No test named either constant. The first entry
+    # is the direction nothing covered - a bind address no request may name. The second is
+    # the reverse, which `test_our_own_origins_are_still_accepted` already caught with a
+    # hand-written list of four origins; it is here because the property is one property.
+    Mutation(
+        "loopback", "the server may bind an address no request may name again",
+        SRC / "server.py",
+        '''LOOPBACK = ("127.0.0.1", "::1", "localhost")''',
+        '''LOOPBACK = ("127.0.0.1", "127.0.0.2", "::1", "localhost")''',
+        "tests/test_server.py"),
+
+    Mutation(
+        "loopback", "the header check may be tightened below what is bound again",
+        SRC / "server.py",
+        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})''',
+        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "[::1]", "::1"})''',
+        "tests/test_server.py"),
+
     # ── decisions (CHG-20260907-16) ────────────────────────────────
     # `plan.check` refused an unknown KEY with 'ignoring them would let a setting look
     # configured and do nothing', and accepted an unknown NODE. `feedback` sits after
