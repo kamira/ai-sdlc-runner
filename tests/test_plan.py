@@ -405,3 +405,58 @@ def test_a_real_seat_assignment_still_loads(tmp_path):
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     assert plan.load(path)
+
+
+# ── a decision that names nothing ────────────────────────────────────────────────────────────────
+
+
+def test_a_decision_naming_a_node_this_flow_does_not_have_is_refused():
+    """`plan.check` refused an unknown **key** and accepted an unknown **node**.
+
+    Its top-level rule says an unknown key is refused because *"ignoring them would let a setting
+    look configured and do nothing"*. That doctrine stopped at this mapping's contents: measured
+    before this change, `{"nonesuch": "x"}` was accepted (CHG-20260907-16).
+    """
+    with pytest.raises(plan.PlanError, match="not a node in this flow"):
+        plan.check({"decisions": {"nonesuch": "x"}}, where="a plan")
+
+
+def test_a_decision_naming_a_branch_the_node_does_not_offer_is_refused():
+    """And the message says what it does offer, because the next thing the reader wants is that.
+
+    `feedback` sits **after `merge`**. Before this change the typo was found past the one-way door,
+    having dispatched every ask, as an exception out of the walk rather than a refusal about a
+    plan.
+    """
+    with pytest.raises(plan.PlanError, match=r"not one of its branches \['done', 'more'\]"):
+        plan.check({"decisions": {"feedback": "elsewhere"}}, where="a plan")
+
+
+@pytest.mark.parametrize("node_id", ["plan_scope", "reconcile", "module_built", "change_retry"])
+def test_a_decision_for_a_node_the_run_reads_is_refused(node_id):
+    """All four, parametrised, so a repair covering three cannot pass.
+
+    Each is answered from the graph or the report before `_choose` looks at `decisions`, with its
+    own reason written where it is answered. Supplying one is not overridden — it is **ignored**,
+    which is the state a closed schema exists to refuse.
+    """
+    with pytest.raises(plan.PlanError, match="reads rather than being told"):
+        plan.check({"decisions": {node_id: "yes"}}, where="a plan")
+
+
+def test_a_decision_may_still_be_a_branch_a_sequence_or_the_frontier():
+    """The other failure mode of a closed schema: refusing what it should accept.
+
+    `plan.check`'s own comment records the first version of the shape rule doing exactly that —
+    it took a string only, and twenty-five tests caught it. This checks the three forms survive.
+    """
+    plan.check({"decisions": {"feedback": "done"}}, where="a plan")
+    plan.check({"decisions": {"pm_confirm": "frontier"}}, where="a plan")
+    plan.check({"decisions": {"pm_confirm": ["yes", "no"]}}, where="a plan")
+
+
+def test_every_member_of_a_sequence_is_checked_not_only_the_first():
+    """A list is consumed one per visit, so a bad name in it fails on a later lap — which is the
+    same "found after the work" shape the node-name rule exists to remove."""
+    with pytest.raises(plan.PlanError, match="not one of its branches"):
+        plan.check({"decisions": {"pm_confirm": ["yes", "sideways"]}}, where="a plan")

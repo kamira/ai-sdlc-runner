@@ -168,6 +168,39 @@ MUTATIONS: List[Mutation] = [
         '''    return worktree.key_for(cycle) if node.id in frozenset(["engineer_build", "engineer_selfverify", "fix_pass", "lead_task_review", "re_review"]) else ""''',
         "tests/test_module_built.py"),
 
+    # ── decisions (CHG-20260907-16) ────────────────────────────────
+    # `plan.check` refused an unknown KEY with 'ignoring them would let a setting look
+    # configured and do nothing', and accepted an unknown NODE. `feedback` sits after
+    # `merge`, so the typo was found past the one-way door. The last entry names
+    # `test_module_built.py` because that is where the front door's refusal is asserted.
+    Mutation(
+        "decisions", "a plan may decide a node this flow does not have again",
+        SRC / "engine.py",
+        '''        if node_id not in graph.BY_ID:''',
+        '''        if False:''',
+        "tests/test_plan.py"),
+
+    Mutation(
+        "decisions", "a plan may decide a branch the node does not offer again",
+        SRC / "engine.py",
+        '''            if branch == FRONTIER or branch in offered:''',
+        '''            if True:''',
+        "tests/test_plan.py"),
+
+    Mutation(
+        "decisions", "a plan may supply a decision the run reads for itself again",
+        SRC / "engine.py",
+        '''        if node_id in DERIVED_DECISIONS:''',
+        '''        if False:''',
+        "tests/test_plan.py"),
+
+    Mutation(
+        "decisions", "a run built without a plan may skip the check again",
+        SRC / "engine.py",
+        '''        check_decisions(self.decisions, where="this run")''',
+        '''        pass''',
+        "tests/test_module_built.py"),
+
     # ── record-lifecycle (CHG-20260907-15) ─────────────────────────
     # `conversation.close` lives in `_finish` alone and every `_finish` is on a `return`,
     # so the closing turn was written on seven of the eight return paths and on none of

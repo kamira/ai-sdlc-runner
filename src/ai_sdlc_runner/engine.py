@@ -689,6 +689,15 @@ class RunConfig:
             return None
         return str(self.journal.dir.resolve())
 
+    def __post_init__(self):
+        """Refuse a decision that names nothing, at the one door every caller comes through.
+
+        Not `plan.check` alone: a `RunConfig` built directly bypasses the plan — two tests do it,
+        and so does `dataclasses.replace` in `server._walk_once`. One spelling of the rule, in the
+        place it cannot be gone round (CHG-20260907-16).
+        """
+        check_decisions(self.decisions, where="this run")
+
 
 def _grade_in_force(cfg: "RunConfig", report: "RunReport",
                     node: Optional[graph.Node] = None) -> str:
@@ -1516,6 +1525,52 @@ def _frontier(node: graph.Node, report: "RunReport") -> str:
         # class the argument was written against.
         return "none"
     return "module" if remaining else "none"
+
+
+#: The nodes `_choose` answers from the graph or the report **before** it reads `cfg.decisions`.
+#: Each has its reason written where it is answered: a run that could declare its own scope could
+#: declare itself simple and skip the reconciliation that exists to catch it; a run that could
+#: answer `module_built` could record a module it never built; a run that could answer
+#: `change_retry` could keep itself going round after the second rejection. Supplying one is not
+#: overridden, it is **ignored** — so `check_decisions` refuses it rather than letting a plan carry
+#: a setting that does nothing (CHG-20260907-16).
+DERIVED_DECISIONS = ("plan_scope", "reconcile", "module_built", "change_retry")
+
+
+def check_decisions(decisions, where: str = "a run") -> None:
+    """Refuse a decision that names nothing, before anything acts on it.
+
+    `plan.check` refuses an unknown **key** at the top level, with the reason that *"ignoring them
+    would let a setting look configured and do nothing"*. That doctrine stopped at this mapping's
+    contents: measured, `{"nonesuch": "x"}`, `{"feedback": "elsewhere"}` and `{"module_built":
+    "yes"}` were all accepted, and the first two are one word away from a plan that runs.
+
+    `feedback` sits **after `merge`**, so a misspelled branch there was discovered past the
+    one-way door, having dispatched every ask, as an exception out of the walk.
+    CHG-20260907-15 gave that run a closed record; this refuses the plan that produces it.
+
+    Raises `EngineError`; `plan.check` catches it and re-raises as `PlanError`, so a plan is
+    refused in a plan's vocabulary and a `RunConfig` in the engine's.
+    """
+    for node_id, value in (decisions or {}).items():
+        if node_id in DERIVED_DECISIONS:
+            raise EngineError(
+                f"{where} decides {node_id!r}, which the run reads rather than being told: see "
+                f"`_choose`. A decision here is not overridden, it is ignored — and a setting that "
+                f"looks configured and does nothing is what a closed schema exists to refuse.")
+        if node_id not in graph.BY_ID:
+            raise EngineError(
+                f"{where} decides {node_id!r}, which is not a node in this flow. Node ids are in "
+                f"`graph.NODES`.")
+        offered = graph.BY_ID[node_id].branches
+        named = [value] if isinstance(value, str) else list(value or ())
+        for branch in named:
+            if branch == FRONTIER or branch in offered:
+                continue
+            raise EngineError(
+                f"{where} decides {node_id!r} with {branch!r}, which is not one of its branches "
+                f"{sorted(offered)}. A branch this node does not offer is refused here rather "
+                f"than at the node, which for {node_id!r} may be after the work is done.")
 
 
 def _choose(cfg: RunConfig, node: graph.Node, taken: Dict[str, int],

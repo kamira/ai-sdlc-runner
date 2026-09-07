@@ -66,7 +66,15 @@ def test_the_run_cannot_answer_the_scope_question_itself():
     unexamined — with `visited` showing a clean single-workstream run. The branch is derived, so
     saying otherwise changes nothing.
     """
-    cfg = _cfg(workstreams={"api": "high", "copy": "low"}, decisions={"plan_scope": "single"})
+    with pytest.raises(engine.EngineError, match="reads rather than being told"):
+        _cfg(workstreams={"api": "high", "copy": "low"}, decisions={"plan_scope": "single"})
+
+    # **Around the constructor on purpose.** `RunConfig` refuses this decision now
+    # (CHG-20260907-16), so the only way to reach the guard below is to set the value after the
+    # object exists — and a test that has to go round the front door is saying exactly what it
+    # proves: defence in depth against a state the public API does not admit.
+    cfg = _cfg(workstreams={"api": "high", "copy": "low"})
+    object.__setattr__(cfg, "decisions", {"plan_scope": "single"})
     assert engine._choose(cfg, graph.BY_ID["plan_scope"], {}, engine.RunReport()) == "split"
 
 
