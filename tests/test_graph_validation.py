@@ -250,3 +250,104 @@ def test_a_rejection_may_not_return_to_the_node_that_was_refused():
     rejecting = next(n for n in graph.NODES if n.rejects_to)
     with pytest.raises(graph.GraphError, match="itself|same"):
         _validate_with(_mutate(rejecting.id, rejects_to=rejecting.id))
+
+
+# ── a node's kind, and what it promises about its edges ──────────────────────────────────────────
+
+
+def test_an_unknown_kind_is_refused():
+    """`MODES` has always been closed; `kind` was not, and 23 of 31 nodes accepted nonsense in it.
+
+    The phrase is matched narrowly on purpose. Several other rules fire on a typo'd kind as
+    collateral, naming a different node, and a loose `match=` here would go green on one of those
+    — which is exactly how five reverse tests in this file were found hollow (CHG-20260907-07).
+    """
+    with pytest.raises(graph.GraphError, match="unknown kind"):
+        _validate_with(_mutate("engineer_build", kind="stpe"))
+
+
+@pytest.mark.parametrize("node_id,changes", [
+    # A step with no successor.
+    ("record_module", dict(next=None)),
+    # A terminal with an outgoing edge.
+    ("done", dict(next="intake")),
+    # A loop, and a decision, with one branch each.
+    ("plan_scope", None),
+    ("module_built", None),
+])
+def test_a_kinds_own_rule_does_not_cover_that_kind_misspelled(node_id, changes):
+    """The four nodes that make the closed set necessary rather than tidy.
+
+    My first measurement said a misspelled kind is always still caught, by some other rule naming
+    some other node — bad, but bounded. A review seat refuted it: I had picked the four nodes that
+    happen to have a neighbour to trip over. On these four the kind's own rule is violated, the
+    kind is misspelled, and before this rule existed `validate` **accepted it outright**.
+
+    Parametrised rather than written as one test with four cases, so that a repair covering three
+    of them cannot pass.
+    """
+    node = graph.BY_ID[node_id]
+    if changes is None:
+        changes = dict(branches={list(node.branches)[0]: list(node.branches.values())[0]})
+    with pytest.raises(graph.GraphError, match="unknown kind"):
+        _validate_with(_mutate(node_id, kind=node.kind + "_", **changes))
+
+
+def test_the_one_terminal_a_typo_used_to_survive_on():
+    """`done` is the only node where a nonsense kind both validated and reached the engine.
+
+    The other three terminals are `permanent`, and the permanent-only-on-terminal rule refuses
+    them. `done` is not, so it validated, and `engine.walk`'s `node.kind == TERMINAL` test read it
+    as an ordinary node: the run still reported `finished` and `halted_at` came back `None`.
+    """
+    assert graph.BY_ID["done"].kind == graph.TERMINAL
+    assert not graph.BY_ID["done"].permanent
+    with pytest.raises(graph.GraphError, match="unknown kind"):
+        _validate_with(_mutate("done", kind="termnial"))
+
+
+def test_a_node_may_not_declare_both_branches_and_a_successor():
+    """The two edge shapes are exclusive, because a run only ever takes one of them.
+
+    `validate`'s reachability walk unions `branches` and `next`; `engine.walk` takes `branches` if
+    there are any and `next` otherwise. A node carrying both makes the guard and the run disagree
+    about what the graph is.
+    """
+    step = _first(id="record_module")
+    assert step.next and not step.branches
+    with pytest.raises(graph.GraphError, match="no run can ever take"):
+        _validate_with(_mutate(step.id, branches={"again": "next_module", "stop": "done"}))
+
+
+def test_the_reachability_walk_measures_the_graph_that_actually_runs():
+    """The case the rule above exists for, stated as the harm rather than as the shape.
+
+    Moving `reconcile`'s `unresolved` branch onto its `next` leaves every node reachable according
+    to the union `validate` walks, while a run — which takes the branches and never looks at
+    `next` — can reach 30 of the 31. The unreachable one is `halt_unreconciled`, a halt.
+    """
+    reconcile = graph.BY_ID["reconcile"]
+    kept = {k: v for k, v in reconcile.branches.items() if v != "halt_unreconciled"}
+    assert len(kept) == len(reconcile.branches) - 1, "the shipped branch this test moves is gone"
+    with pytest.raises(graph.GraphError, match="no run can ever take"):
+        _validate_with(_mutate("reconcile", branches=kept, next="halt_unreconciled"))
+
+
+def test_which_nodes_are_loops_is_pinned():
+    """A closed set refuses nonsense. It does not refuse the wrong member of the set.
+
+    `LOOP` appears in exactly one condition in `graph.py`, shared with `DECISION`, and nothing else
+    in the repository reads it. Measured: both loops relabelled `DECISION` validates, and 5 of the
+    10 decisions accept being relabelled `LOOP` — the 5 that do not are caught by the model-panel
+    rule, which is not about loops. No structural rule separates them either: 25 of the 31 nodes
+    are on a cycle, the same fact that defeated two of CHG-20260907-08's four candidate rules.
+
+    So which kind a node is, is a declaration, and this is where changing one is a decision.
+    """
+    assert [n.id for n in graph.NODES if n.kind == graph.LOOP] == ["plan_scope", "next_module"]
+    assert sorted(n.id for n in graph.NODES if n.kind == graph.TERMINAL) == [
+        "done", "halt_change_rejected", "halt_second_fail", "halt_unreconciled"]
+    # The membership too, not only that the shipped kinds are drawn from it: a set that
+    # quietly gains a member is a set that is closed and does not refuse anything.
+    assert graph.KINDS == (graph.STEP, graph.DECISION, graph.LOOP, graph.TERMINAL)
+    assert set(n.kind for n in graph.NODES) == set(graph.KINDS)

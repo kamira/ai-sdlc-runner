@@ -46,6 +46,24 @@ DECISION = "decision"
 LOOP = "loop"
 TERMINAL = "terminal"
 
+#: The four kinds, closed. `MODES` has been closed since it was written; `kind` was not, and the
+#: difference cost something measurable: a nonsense `kind` was accepted on 23 of the 31 shipped
+#: nodes, and `done` — the one terminal that is not `permanent`, so the rule below does not see it
+#: — reached `engine.walk`'s `node.kind == TERMINAL` test as a non-terminal. The run still said
+#: `finished`; `halted_at` went from `'done'` to `None`. A run that forgets where it ended is the
+#: same loss CHG-20260907-06 repaired for the other branch of that line.
+#:
+#: **A closed set refuses nonsense; it does not refuse the wrong member.** `LOOP` and `DECISION`
+#: are indistinguishable to every rule in this file and to every reader of `.kind` in the
+#: repository — `LOOP` appears in exactly one condition, shared with `DECISION`. Measured: both
+#: `LOOP` nodes relabelled `DECISION` is accepted, and 5 of the 10 `DECISION` nodes accept being
+#: relabelled `LOOP` (the other 5 are caught by the model-panel rule, which is not about loops).
+#: No structural rule can tell them apart, for the same reason CHG-20260907-08 could not derive
+#: where a refusal may go: 25 of 31 nodes are on a cycle, so "loops" is not a connectivity
+#: property here. Which kind a node is, is a declaration — `test_which_nodes_are_loops_is_pinned`
+#: is what protects it.
+KINDS = (STEP, DECISION, LOOP, TERMINAL)
+
 #: **How to read the models configured on a node.** A node may have several models attached, and
 #: several models mean two entirely different things depending on the node: at a verdict they are
 #: voices to be adjudicated, at a build they are a pool one of which does the work. That difference
@@ -428,6 +446,36 @@ def validate() -> None:
         for target in targets:
             if target not in ids:
                 raise GraphError(f"node {node.id!r} points at unknown node {target!r}")
+        # First, so that the diagnostic a reader gets is about the mistake they made.
+        #
+        # I first wrote here that a typo'd kind is always still caught, by some other rule naming
+        # some other node — a `step` with no successor coming back as a rejection-routing failure
+        # at `engineer_selfverify`, a `decision` with one branch as a model-panel failure. A review
+        # seat refuted it: **I had measured the four nodes that happen to have a neighbour to trip
+        # over.** For all four kinds there is a shipped node where the kind's own rule is violated,
+        # the kind is misspelled, and `validate` accepts it outright — `record_module` (a step with
+        # no successor), `done` (a terminal with an edge), `plan_scope` and `module_built` (one
+        # branch each).
+        #
+        # So both halves are true and neither is a defence: where a neighbouring rule fires it
+        # sends the reader to the wrong node, and on four shipped nodes nothing fires at all.
+        if node.kind not in KINDS:
+            raise GraphError(
+                f"node {node.id!r} has unknown kind {node.kind!r}, which is not one of {KINDS}")
+        # `validate`'s reachability walk takes the union of `branches` and `next`; the engine takes
+        # one **or** the other, `branches` first. So a node carrying both is a node where the two
+        # disagree about what the graph is. Measured on the shipped flow: moving `reconcile`'s
+        # `unresolved` branch onto its `next` leaves `halt_unreconciled` reachable according to
+        # `validate` and reachable by no run at all — 30 of 31 nodes, and the guard said 31.
+        #
+        # The other direction is not silent but is still a build-time fact failing at run time: a
+        # `STEP` given branches dies with `branches on [...] but the run supplied no choice for it`
+        # partway through a run rather than being refused before one starts.
+        if node.branches and node.next:
+            raise GraphError(
+                f"node {node.id!r} declares branches {sorted(node.branches)} and a successor "
+                f"{node.next!r}. A run takes one or the other, so the other is an edge this "
+                f"validator counts and no run can ever take")
         if node.kind == TERMINAL and targets:
             raise GraphError(f"terminal node {node.id!r} has outgoing edges")
         if node.kind in (DECISION, LOOP) and len(node.branches) < 2:
