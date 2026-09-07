@@ -47,6 +47,13 @@ DOCS = (
     ROOT / "README.md",
     ROOT / "docs" / "ARCHITECTURE.md",
     ROOT / "docs" / "ai-guideline.md",
+    # Added by CHG-20260907-12. The page documenting the public payload was outside every
+    # numbers sweep, and shipped `// all 28` nodes against a graph of 31 while the guard
+    # for exactly that class sat one directory away. It could not be added before: the
+    # field-count rule fired on its **true** sentence about `Node`, which is what made the
+    # referent the finding rather than the file list.
+    ROOT / "docs" / "API.md",
+    ROOT / "docs" / "SCHEMAS.md",
     ROOT / "docs" / "structure" / "design.md",
     ROOT / "docs" / "structure" / "data.md",
     ROOT / "docs" / "structure" / "directory.md",
@@ -106,15 +113,193 @@ def test_the_seat_floor_matches():
             assert int(claimed) == actual, f"{name} says floor {claimed}; policy says {actual}"
 
 
-def test_the_work_order_field_count_matches():
-    from ai_sdlc_runner import workorder
+#: Spelled-out numbers a document may state a count with. A digit-only sweep misses exactly the
+#: claims that are written out, and those are most of them in this repository's prose.
+NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+    "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
+}
 
-    actual = len(workorder.WORK_ORDER_FIELDS)
-    words = {"sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19}
-    for name, body in _text().items():
-        for word, value in words.items():
-            if re.search(rf"\b{word}\s+fields\b", body, re.IGNORECASE):
-                assert value == actual, f"{name} says {word} fields; there are {actual}"
+#: Field counts in prose that name no referent. Each is a **mention** rather than a claim -- a
+#: rejected design alternative, a quotation of a sentence that was withdrawn, a past-tense note --
+#: or a claim some other guard already counts. Each was read and judged once, and says why.
+#:
+#: Keyed on the **sentence**, not on how many times a phrase appears in a file. A count is blind to
+#: meaning: deleting one bare "three fields" and adding another elsewhere in the same document
+#: keeps the count, and so does rewriting a quotation into an assertion while the phrase survives.
+#: Both reviewers reached that independently, and `test_settings.py`'s own lesson -- *a sentence is
+#: not a line* (CHG-20260904-19) -- is why the sentence is whitespace-normalised rather than taken
+#: as it wraps.
+#:
+#: **Naming the referent is the first repair, not this list.** A mention here is checked by nothing
+#: in this rule, which is what an entry costs.
+FIELD_MENTIONS = {
+    ('design.md',
+     "the operation's `description` **vs** three fields **vs** every field"):
+        'a design alternative that was refused; the number is an option, not a count of anything',
+    ('design.md',
+     'Reading only the description let "deploy to production, then wipe the users table" through; reading three fields let the same sentence through in `done_criteria`.'):
+        'the same refused alternative, stated as what it let through',
+    ('design.md',
+     "Curating was the same mistake twice: first only the operation's description while the giveaway sat in `instructions`, then three fields while it could sit in `done_criteria`."):
+        'the same refused alternative, in the row that records why curating lost',
+    ('data.md',
+     'This said *"Two fields, both about the seat floor"* over a table of two until CHG-20260902-20.'):
+        'a quotation of the sentence this document replaced, kept so the record says why',
+    ('engine.py',
+     "Six fields lived only in # `cmd_run`'s stdout footer — so they reached no `docs/SCHEMAS.md` entry # and no console."):
+        'past tense: what was true before CHG-20260901-16, not a count of anything now',
+    ('engine.py',
+     'Choosing was the mistake, and it was the same mistake twice: the check first read only `operation["description"]` while the giveaway sat in `instructions`, and then read three fields while the giveaway could sit in `done_criteria` or `acceptance_predicate`.'):
+        'the same refused alternative, recorded beside the code that replaced it',
+    ('settings.py',
+     '**Two of the three fields do change whether a stop happens**, and this paragraph used to deny it (CHG-20260903-47, defect seat L-13).'):
+        'a real claim, and counted by `test_settings.COUNTS_SETTINGS` -- widened in CHG-20260907-12 to see it, because the pattern said `settings` and this sentence says `fields`',
+    ('settings.py',
+     'ses an unrecognised target by telling the operator to *"Vouch for the command in settings (`ordinary_commands`)"*, and the screen this repository built for that requirement had no row for it — two of three fields, in the module whose premise is 「在 GUI 上設定」.'):
+        'the same claim, and now counted by the same widened guard',
+}
+
+#: The modules a claim may name. An unknown module is a failure rather than a skip — the whole
+#: point of this rule is that an unresolvable referent is worse than a wrong number, not better.
+_CLAIMABLE = ("workorder", "graph", "policy", "store", "models", "conversations", "server",
+               "settings", "plan")
+
+
+def _sentence(normalised, start, end, span=200):
+    """The sentence a match sits in, from already-normalised text.
+
+    Bounded rather than unbounded: a Markdown table row has no sentence end, and a key that grew to
+    the width of a table would fail on any edit to any cell in it.
+    """
+    begin, stop = max(0, start - span), min(len(normalised), end + span)
+    # `|` as well as `. `: a table cell has no sentence end, and a key that ran to the width of a
+    # row would fail on an edit to any other cell in it.
+    for mark, width in ((". ", 2), ("| ", 2), (" | ", 3)):
+        found = normalised.rfind(mark, begin, start)
+        if found != -1:
+            begin = max(begin, found + width)
+        found = normalised.find(mark, end, stop)
+        if found != -1:
+            stop = min(stop, found + (1 if mark == ". " else 0))
+    return normalised[begin:stop].strip()
+
+
+def _count(said):
+    """A stated count, whether it is spelled or written in digits.
+
+    Digits were skipped entirely at first, which left `docs/API.md`'s `{…8 fields…}` unread. One
+    occurrence, so the cost of reading them is one decision — and skipping a whole notation is how
+    a sweep comes to have a blind spot nobody remembers choosing.
+    """
+    return int(said) if said.isdigit() else NUMBER_WORDS.get(said.lower())
+
+
+def _resolved(module, attr):
+    """How many things `module.attr` holds — a sequence's length, or a dataclass's fields.
+
+    Both shapes appear in the prose: `workorder.WORK_ORDER_FIELDS` is a tuple and `models.Model`
+    is a class whose fields are what "eight fields persist" counts. Refusing the second would push
+    a true sentence into the mentions list, which is where a claim goes to stop being checked.
+    """
+    import dataclasses
+    import importlib
+
+    assert module in _CLAIMABLE, f"a document names module {module!r}, which claims may not resolve"
+    held = getattr(importlib.import_module(f"ai_sdlc_runner.{module}"), attr)
+    return len(dataclasses.fields(held)) if dataclasses.is_dataclass(held) else len(held)
+
+
+def test_a_field_count_in_prose_is_checked_against_the_thing_it_counts():
+    """A number in prose is checkable only where the sentence says **what it counts**.
+
+    The rule this replaces matched any `<word> fields` anywhere in any scanned document and
+    compared it to `workorder.WORK_ORDER_FIELDS`. It had survived because across all twelve
+    scanned files it had exactly **one** live subject — `docs/structure/data.md`'s *"Seventeen
+    fields, listed in `workorder.WORK_ORDER_FIELDS`"*, which is true. `docs/API.md`'s *"Thirteen of
+    `Node`'s eighteen fields"* is also true, and the old rule fails on it: **a check on the right
+    number against the wrong referent**, the mirror image of the defect
+    `test_the_readme_says_how_many_nodes_a_run_actually_visits` records one screen away.
+
+    So the referent sits **inside** the matched phrase rather than near it — no window, nothing
+    guessed. A proximity window was measured and refused: even a paragraph-scoped one returns *no
+    referent* on `data.md`'s true sentence, because its heading is a separate paragraph. A marker
+    comment was proposed by one reviewer and withdrawn by it, because a marker nobody is forced to
+    write leaves a claim checked by nothing — which is the state this replaces.
+
+    A count matching **none** of the grammars fails. That is what makes the recogniser closed
+    rather than quietly permissive, and it is the half the old rule could not have.
+    """
+    import dataclasses
+
+    from ai_sdlc_runner import graph as graph_mod
+
+    checked = 0
+    mentions = {}
+    for name, raw_body in _text().items():
+        # Normalised first, so a claim that wraps across lines is still one sentence and a
+        # mention's key does not change when the paragraph is rewrapped.
+        body = " ".join(raw_body.split())
+        spans = []
+
+        # "Seventeen fields, listed in `workorder.WORK_ORDER_FIELDS`"
+        for match in re.finditer(r"\b(\w+) fields, listed in `(\w+)\.(\w+)`", body):
+            word, module, attr = match.groups()
+            assert _count(word) is not None, f"{name}: {word!r} is not a number this can read"
+            real = _resolved(module, attr)
+            assert _count(word) == real, (
+                f"{name} says {word} fields in {module}.{attr}; there are {real}")
+            spans.append(match.span())
+            checked += 1
+
+        # "Thirteen of `Node`'s eighteen fields"
+        for match in re.finditer(r"\b(\w+) of `Node`'s (\w+) fields", body):
+            sent, total = (w.lower() for w in match.groups())
+            assert _count(total) is not None, f"{name}: {total!r} is not a number this can read"
+            real = len(dataclasses.fields(graph_mod.Node))
+            assert _count(total) == real, (
+                f"{name} says `Node` has {total} fields; it has {real}")
+            assert _count(sent) is not None and _count(sent) < real, (
+                f"{name} says {sent} of {total} are sent, which is not fewer")
+            spans.append(match.span())
+            checked += 1
+
+        # Everything else that reads as a field count. Refusing all of these outright was the
+        # design both reviewers agreed on, and building it refuted the design: it refuses nine
+        # sentences, and most of them are **mentions** rather than claims — a rejected design
+        # alternative in `design.md`, a quotation of a sentence that was wrong kept so the record
+        # says why, a past-tense note in `engine.py`. This repository quotes its own wrong figures
+        # on purpose; `test_the_defect_logs_table_sums_to_the_total_it_states` says so in as many
+        # words. A rule that refused every unreferenced count would refuse the convention.
+        #
+        # A syntactic test was measured and dropped: "sentence-initial or bold" classifies eight
+        # of the ten correctly and calls `engine.py`'s past-tense "Six fields lived only in…" a
+        # claim. Adding a tense heuristic would be a guess with a grammar attached.
+        #
+        # So they are **pinned instead**, the way the eight rejection edges and the ten gate phases
+        # are. A new unreferenced count fails here, and a person decides which of the two it is:
+        # name the referent, or write it down as a mention.
+        for match in re.finditer(r"\b(\w+)\s+fields\b", body):
+            if _count(match.group(1)) is None:
+                continue
+            if any(start <= match.start() and match.end() <= end for start, end in spans):
+                continue
+            mentions[(name, _sentence(body, match.start(), match.end()))] = None
+
+    assert checked >= 5, (
+        f"only {checked} field claims resolved; the ones this rule was written for are gone")
+    unknown = sorted(k for k in mentions if k not in FIELD_MENTIONS)
+    gone = sorted(k for k in FIELD_MENTIONS if k not in mentions)
+    assert not unknown and not gone, (
+        "a field count in prose says nothing about what it counts.\n"
+        "  **Name the referent** — `<count> fields, listed in `module.NAME`` resolves against the "
+        "real thing, and `module.NAME` may be a sequence or a dataclass. That is the repair.\n"
+        "  Only if the sentence is not a claim — a refused alternative, a quotation of a withdrawn "
+        "sentence, a past-tense note — add it to `FIELD_MENTIONS` **with the reason**. An entry "
+        "there is checked by nothing.\n"
+        f"  not written down: {unknown}\n"
+        f"  written down and gone: {gone}")
 
 
 # --------------------------------------------------------------------------------------

@@ -284,7 +284,7 @@ the way in — the same reason CSV cells are defused against formulas.
 
 ## 10 · Model registry — **closed**, entry *and* envelope
 
-Eight fields persist. `_model_from` refuses anything else by name — and so, now, does the envelope.
+Eight fields, listed in `models.Model`, persist. `_model_from` refuses anything else by name — and so, now, does the envelope.
 A seat found that `{"models": [], "modelz": [...]}` loaded as an **empty registry**: one typo and
 every model you configured was gone with no message, which is the same defect `_model_from` refuses
 one level down. Closed on every path in: file load, `Registry.add`, and the console's
@@ -470,7 +470,7 @@ found these independently.
 | **The `.conversation` marker** and **`_project.json`** | durable, and the marker is load-bearing at resume — stale data there controls re-attachment |
 | **`EffectOutcome`** — `frontier`, `already_met`, `applied`, `out_of_order` | durable report output with a fixed shape |
 | **The intake `Survey` aggregate** | crosses the agent→operator boundary and lands in the run report; adds a computed `complete` absent from the answer contract |
-| ~~The `ship` block's interior~~ | **closed** — nine fields, four of them required |
+| ~~The `ship` block's interior~~ | **closed** — nine fields, listed in `plan.SHIP_FIELDS`; four required, listed in `plan.SHIP_REQUIRED` |
 
 ### Versioning
 

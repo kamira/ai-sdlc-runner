@@ -173,7 +173,7 @@ If the version does not match the run's current one:
 | `POST /config/halts` | `{version, kind, recipient?}` | a `kind` that is not one of the six permanent halts. A `recipient` is **never** refused — an organisation names its own functions, and an unrecognised one still reaches somebody because the operator is on every halt. A blank or missing `recipient` clears the route |
 | `POST /run/instruct` | `{version, instruction}` | the instruction is empty — *"an empty instruction says nothing"* |
 | `POST /attachments` | `{version, filename, data}` — `data` is **base64** | the base64 is invalid, or `attachments.py` refuses the type or size |
-| `POST /models` | `{version, model: {…8 fields…}}` | `_model_from` refuses an unknown field, or `validate` refuses the model |
+| `POST /models` | `{version, model: {…8 fields, listed in `models.Model`…}}` | `_model_from` refuses an unknown field, or `validate` refuses the model |
 
 ### Gate and tie are not interchangeable
 
