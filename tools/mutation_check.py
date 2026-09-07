@@ -168,6 +168,33 @@ MUTATIONS: List[Mutation] = [
         '''    return worktree.key_for(cycle) if node.id in frozenset(["engineer_build", "engineer_selfverify", "fix_pass", "lead_task_review", "re_review"]) else ""''',
         "tests/test_module_built.py"),
 
+    # ── claim-referent (CHG-20260907-12) ───────────────────────────
+    # The subject is a guard that read the right number against the wrong thing, so these
+    # break what the guard guards -- a document's claim, a document's referent, and the
+    # payload a claim describes. An earlier draft mutated the assertions themselves and
+    # reported NOT CAUGHT and ANCHOR GONE, which was right: disabling a test and then
+    # running that same test proves nothing about it.
+    Mutation(
+        "claim-referent", "a documented field count may drift from what it names again",
+        REPO / "docs" / "structure" / "data.md",
+        '''Seventeen fields, listed in `workorder.WORK_ORDER_FIELDS`''',
+        '''Sixteen fields, listed in `workorder.WORK_ORDER_FIELDS`''',
+        "tests/test_documented_numbers.py"),
+
+    Mutation(
+        "claim-referent", "a field count may stop saying what it counts again",
+        REPO / "docs" / "structure" / "design.md",
+        '''**Three fields, listed in `settings.FIELDS`.**''',
+        '''**Three fields.**''',
+        "tests/test_documented_numbers.py"),
+
+    Mutation(
+        "claim-referent", "the flow route may send a different number of node fields than the page states again",
+        SRC / "server.py",
+        '''                     "branches": dict(n.branches), "next": n.next,''',
+        '''                     "next": n.next,''',
+        "tests/test_api_schema.py"),
+
     # ── gate-phase (CHG-20260907-11) ────────────────────────────────
     # A validator cannot choose between two valid values, so these two pin the
     # assignment rather than the rule. Measured before they existed: moving

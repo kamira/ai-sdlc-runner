@@ -930,9 +930,15 @@ def _module_prose():
 BANNED_CLAIM = re.compile(r"lower\s+the\s+seat\s+floor\s+and\s+(?:can\s+do\s+)?nothing\s+else",
                           re.I)
 
-#: A count of the settings, however the words fall across lines.
+#: A count of the settings, however the words fall across lines — and whether the sentence
+#: calls them settings or **fields**. It said only `settings`, and `settings.py`'s own
+#: paragraph says *"Two of the three fields do change whether a stop happens"*: bold,
+#: present tense, counting `FIELDS`, and matched by nothing. Grow `FIELDS` to four, correct
+#: the two documents that name it, and that sentence would have kept saying three
+#: (CHG-20260907-12).
 COUNTS_SETTINGS = re.compile(
-    r"(?:one|two|three|four)\s+of\s+the\s+(one|two|three|four)\s+settings", re.I)
+    r"(?:one|two|three|four)\s+of\s+(?:the\s+)?(one|two|three|four)\s+(?:settings|fields)",
+    re.I)
 
 _NUMBERS = {"one": 1, "two": 2, "three": 3, "four": 4}
 

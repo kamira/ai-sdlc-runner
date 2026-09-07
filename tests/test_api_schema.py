@@ -142,10 +142,40 @@ def test_the_flow_route_section_names_the_node_fields_it_actually_sends():
 
 
 def test_the_page_states_the_real_number_of_node_fields_the_flow_route_withholds():
+    """The sentence is checked as a **partition**, because two numbers can each be right apart.
+
+    What stood here asserted `f"{sent} of `Node`'s" in PAGE or "Thirteen of `Node`'s" in PAGE`.
+    The first clause is never true — `sent` is the integer 13 and the page spells the word — so the
+    guard was the literal, and beside it a typed `sent == 13`. Neither looks at the **eighteen**,
+    and `Node`'s field count moved six times in the month before this was written (8, 10, 13, 14,
+    16, 17, 18). A field added and not sent leaves `sent` at thirteen, the literal matching, and
+    the page's total wrong (CHG-20260907-12).
+
+    So: the words are read as numbers, both are derived, and the fields the page names as withheld
+    are checked to be exactly the ones the route does not send — set equality, not two counts that
+    happen to add up.
+    """
+    from test_documented_numbers import NUMBER_WORDS
+
     body = SOURCE.split('elif path == "/flow"')[1].split("elif path ==")[0]
-    sent = len(set(re.findall(r'"(\w+)":', body)) & set(graph.Node.__dataclass_fields__))
-    assert f"{sent} of `Node`'s" in PAGE or f"Thirteen of `Node`'s" in PAGE
-    assert sent == 13, f"the /flow route now sends {sent} node fields; the page says thirteen"
+    sent = set(re.findall(r'"(\w+)": n\.(?:\w+)', body)) | set(
+        re.findall(r'"(\w+)": dict\(n\.', body))
+    fields = set(graph.Node.__dataclass_fields__)
+    assert sent <= fields, f"the /flow route sends {sorted(sent - fields)}, which `Node` has not"
+
+    said = re.search(r"(\w+) of `Node`'s (\w+) fields", PAGE)
+    assert said, "the page no longer says how many of `Node`'s fields the route sends"
+    said_sent, said_total = (w.lower() for w in said.groups())
+    assert NUMBER_WORDS.get(said_sent) == len(sent), (
+        f"the page says {said_sent} fields are sent; the route sends {len(sent)}")
+    assert NUMBER_WORDS.get(said_total) == len(fields), (
+        f"the page says `Node` has {said_total} fields; it has {len(fields)}")
+
+    # The withheld half, by name. A count can be right while the names are wrong.
+    section = PAGE.split("### `GET /flow`")[1].split("###")[0]
+    named = {f for f in fields - sent if f"`{f}`" in section}
+    assert named == fields - sent, (
+        f"the page must name every withheld field; it omits {sorted(fields - sent - named)}")
 
 
 def test_every_status_code_the_server_can_send_is_documented():

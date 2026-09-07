@@ -116,7 +116,7 @@ because it is the only one that is a fact rather than a claim.
 
 ### config/settings.json
 
-What the user set, and the only file this runner writes on their behalf. **Three fields.** They
+What the user set, and the only file this runner writes on their behalf. **Three fields, listed in `settings.FIELDS`.** They
 cannot change what a gate verdict is, which kinds are permanent halts, or the adjudication rule —
 `policy` owns those and takes nothing from here. Two of them do change **whether a stop happens**:
 `review_seats=1` makes the `undecided` outcome unreachable, and `ordinary_commands` decides whether
