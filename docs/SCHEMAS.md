@@ -213,7 +213,7 @@ JSON Lines: a header line, then one line per turn. Append-only, never rewritten.
               "run": { "journal": "…", "plan": "…" } } }
 
 // every turn
-{ "seq": 0, "kind": "<one of 9>", "at": "<ISO 8601 UTC>", …body… }
+{ "seq": 0, "kind": "<one of `conversations.KINDS`>", "at": "<ISO 8601 UTC>", …body… }
 ```
 
 `seq` is an **integer**, never a zero-padded name — the journal sorts filenames and `'%03d' % 1000`
@@ -249,7 +249,7 @@ which routes by seat name and passes no model at all.
 A reader may add `incomplete_lines` (a torn write) and `duplicate_seqs` (what `file` can report but
 not refuse).
 
-## 9 · Export formats — four, and only one of them lossless
+## 9 · Export formats — `conversations.FORMATS`, and only one of them lossless
 
 ```
 seq · at · kind · node_id · ask_id · role · seat · model
@@ -365,7 +365,7 @@ The **dataclass** does not enforce membership — `RunReport(state="banana")` co
 `as_dict()` emits it. `_finish` refuses on every walk exit, so it is enforced at the boundary that
 matters and not by the type.
 
-## 14 · SQLite DDL — three of five tables built
+## 14 · SQLite DDL — six of six tables built
 
 The full schema, with every absent column and the finding that removed it, is
 **[`DATABASE.md`](DATABASE.md)** — pinned by `tests/test_database_schema.py`, which executes the
@@ -411,9 +411,14 @@ CREATE TABLE models (
   key_env TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '');
 ```
 
-`models`, `node_assignments` and `seat_assignments` are live in
-[`store.py`](../src/ai_sdlc_runner/store.py); `conversations` and `turns` are not created by any
-code yet and arrive with the conversation-store migration.
+All six are live in [`store.py`](../src/ai_sdlc_runner/store.py): `models`,
+`node_assignments` and `seat_assignments` at schema 1, `conversations` and `turns` at schema
+2 with the conversation-store migration, and `halt_routing` after it.
+
+> This paragraph said `conversations` and `turns` were *"not created by any code yet"* until
+> CHG-20260907-13. `DATABASE.md` was corrected for the same sentence by CHG-20260903-37 and
+> given a guard; this page carried the denial for four more days, because the guard reads
+> one file and the sentence lived in two.
 
 No `reach` column, no `updated_at`, and **no `opened_at`** — the third one is this round's finding.
 Both earlier seats called `opened_at` a guess and the correction deleted `updated_at` while keeping
@@ -437,7 +442,7 @@ duplicate-`seq` policy is written down for the importer and not for the live pat
 
 ## 15 · Server HTTP API
 
-Seventeen routes, eight `GET` and nine `POST`, every one crossing a process boundary to a browser.
+Nineteen routes, eight `GET` and eleven `POST`, every one crossing a process boundary to a browser.
 Written down in **[`API.md`](API.md)** and pinned by `tests/test_api_schema.py`.
 
 The three-check guard that runs before every route — loopback `Host`, then `Origin`, then
@@ -463,7 +468,7 @@ found these independently.
 
 | Missing | Why it matters |
 |---|---|
-| ~~The server HTTP API~~ | **written down** — [`API.md`](API.md), seventeen routes, pinned by `tests/test_api_schema.py` |
+| ~~The server HTTP API~~ | **written down** — [`API.md`](API.md), nineteen routes, pinned by `tests/test_api_schema.py` |
 | **`runner.yaml`** — `agent_command`, `agent_timeout` | durable config with a hand-rolled fallback parser that has already shipped one bug (the inline-list split) |
 | **`RunConfig`** | the engine's real input contract, substantially wider than the plan file the catalogue shows |
 | **`Approval` / `Rejection` / `Ruling`** | operator decisions crossing the server→engine boundary; the catalogue has their flattened conversation turns, not their input shapes |

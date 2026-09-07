@@ -189,7 +189,7 @@ CREATE TABLE seat_assignments (
 );
 ```
 
-Five tables, and **all five are built** (CHG-20260823-41). `models`, `node_assignments` and
+**The five tables in this section** are all built (CHG-20260823-41); `halt_routing` is in §0.2, and the page-wide count is the six of line 3. `models`, `node_assignments` and
 `seat_assignments` arrived at schema 1; `conversations` and `turns` at schema 2, with the
 conversation-store migration this document had been describing for four rounds.
 

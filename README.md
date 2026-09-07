@@ -646,8 +646,8 @@ SQLite DDL, and the server's HTTP API. **Five** are closed schemas — the plan 
 the work order, the model registry and the settings: a field outside them is refused rather than
 ignored.
 
-Three have pages of their own — [`docs/API.md`](docs/API.md) for the **seventeen** HTTP routes,
-[`docs/DATABASE.md`](docs/DATABASE.md) for the SQLite schema (**three of its five tables are
+Three have pages of their own — [`docs/API.md`](docs/API.md) for the **nineteen** HTTP routes,
+[`docs/DATABASE.md`](docs/DATABASE.md) for the SQLite schema (**six of its six tables are
 built**), and [`docs/MODELS.md`](docs/MODELS.md) for the rules that govern models: every refusal,
 how reach is computed, and how a model reaches an ask.
 
@@ -793,7 +793,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 2299 tests
+pytest -q          # 2300 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

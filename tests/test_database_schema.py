@@ -1,6 +1,6 @@
 """Pin `docs/DATABASE.md` (CHG-20260823-22).
 
-Three of the five tables are now built (store.py); conversations and turns are not. For the unbuilt
+All six tables are built (store.py); this docstring said three of five until CHG-20260907-13. For the unbuilt
 half the question that matters is **does the DDL run, and do its constraints actually refuse?** — so
 this file executes the page SQL verbatim and tries to violate it. For the built half it checks the
 page against the tables the code really creates.
