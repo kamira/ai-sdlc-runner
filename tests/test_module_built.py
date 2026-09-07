@@ -105,7 +105,15 @@ def test_the_run_cannot_answer_the_question_itself():
     report = engine.RunReport()
     report.asks.append(engine.Ask(node_id="engineer_build", role="engineer",
                                   result={"module": ""}))
-    cfg = engine.RunConfig(node_specs={}, decisions={"module_built": "yes"})
+    with pytest.raises(engine.EngineError, match="reads rather than being told"):
+        engine.RunConfig(node_specs={}, decisions={"module_built": "yes"})
+
+    # **Around the constructor on purpose.** `RunConfig` refuses this decision now
+    # (CHG-20260907-16), so the only way to reach the guard below is to set the value after the
+    # object exists — and a test that has to go round the front door is saying exactly what it
+    # proves: defence in depth against a state the public API does not admit.
+    cfg = engine.RunConfig(node_specs={}, decisions={})
+    object.__setattr__(cfg, "decisions", {"module_built": "yes"})
     assert engine._choose(cfg, graph.BY_ID["module_built"], {}, report) == "no"
 
 

@@ -279,6 +279,18 @@ def check(payload: Mapping[str, object], where: str = "the plan") -> Dict[str, o
             f"**name**, a list of names consumed one per visit, or \"frontier\". Anything else "
             f"reached the engine as a TypeError about lengths rather than a refusal about a plan.")
 
+    # **And what the names mean.** The loop above checks the shape of each value and stops there,
+    # so a plan naming a node this flow does not have, or a branch the node does not offer, was
+    # accepted -- and `feedback` sits after `merge`, so the typo was found past the one-way door
+    # (CHG-20260907-16). The rule itself lives in `engine.check_decisions`, because a `RunConfig`
+    # built without a plan has to obey the same one.
+    from . import engine
+
+    try:
+        engine.check_decisions(payload.get("decisions"), where=where)
+    except engine.EngineError as exc:
+        raise PlanError(str(exc)) from exc
+
     for node_id, listed in (payload.get("operations") or {}).items():
         if not isinstance(listed, (list, tuple)):
             raise PlanError(
