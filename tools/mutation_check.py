@@ -118,6 +118,35 @@ MUTATIONS: List[Mutation] = [
         '''                    out = runner.attach(version, str(body.get("filename") or ""), raw)''',
         '''                    out = runner.attach(version, "attachment", raw)''',
         "tests/test_server.py"),
+    # ── refusal-routing (CHG-20260907-08) ─────────────────────────────────────────
+    # `validate` accepted any `rejects_to` that existed and was not the node itself: all 24
+    # retargets of the eight rejection edges to `merge`, `pr` or `done` passed. Four
+    # structural rules were measured and none is sufficient -- two are vacuous because the
+    # flow is one cycle, one refuses a shipped edge, and the best of them accepts
+    # `qa_accept -> qa_verify`, which returns while skipping the `lead_review` gate. Which
+    # gates a refusal must pass is policy; the weak rule and the explicit pin are separate
+    # entries because reverting one must not look like reverting the other.
+    Mutation(
+        "refusal-routing", "a refusal may again land where the run can never return from",
+        SRC / "graph.py",
+        '''            if not _reaches(node.rejects_to, node.id):''',
+        '''            if False:''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "refusal-routing", "an acceptance refusal routes around the whole-change bound",
+        SRC / "graph.py",
+        '''         answer_decides=True, mode=MODEL_PANEL, rejects_to="acceptance_failed",''',
+        '''         answer_decides=True, mode=MODEL_PANEL, rejects_to="next_module",''',
+        "tests/test_graph_validation.py"),
+
+    Mutation(
+        "refusal-routing", "the bound goes back to a hand-written pair of node names",
+        SRC / "engine.py",
+        '''    return tuple(node.id for node in graph.NODES if node.next == "change_retry")''',
+        '''    return ("review_failed", "acceptance_failed")''',
+        "tests/test_graph_validation.py"),
+
     # ── graph-validation (CHG-20260907-07) ───────────────────────────────────────
     # `validate()` is the only guard over the flow, and nineteen of its thirty-two rules had
     # no reverse test: each could be deleted with every likely test file still green. The one
@@ -1956,8 +1985,8 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         'bounds', 'the panel and acceptance get a budget each, so neither is ever spent',
         SRC / 'engine.py',
-        '''_WHOLE_CHANGE_REJECTED = ("review_failed", "acceptance_failed")''',
-        '''_WHOLE_CHANGE_REJECTED = ("review_failed",)''',
+        '''    return tuple(node.id for node in graph.NODES if node.next == "change_retry")''',
+        '''    return ("review_failed",)''',
         'tests/test_change_bound.py'),
 
     Mutation(
@@ -1970,7 +1999,7 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         'bounds', 'a seat panel counts once per seat again, so three seats halt a first rejection',
         SRC / 'engine.py',
-        '''    rejections = sum(1 for node_id in report.visited if node_id in _WHOLE_CHANGE_REJECTED)''',
+        '''    rejections = sum(1 for node_id in report.visited if node_id in _whole_change_rejected())''',
         '''    rejections = sum(1 for ask in report.asks if ask.node_id in ("lead_review", "qa_accept")
                      and isinstance(ask.result, Mapping)
                      and str(ask.result.get("verdict") or "") == "fail")''',
