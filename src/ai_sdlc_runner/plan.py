@@ -137,6 +137,22 @@ def check(payload: Mapping[str, object], where: str = "the plan") -> Dict[str, o
                 raise PlanError(
                     f"{where} assigns {owner!r} a single {type(value).__name__}; `node_models` "
                     f"holds a **list** of model ids, and the order is load-bearing.")
+            # **How many, not only what shape.** `graph.py` says a `SINGLE` node is *"exactly one
+            # model, one session"* and that *"a `SINGLE` with three configured is a configuration
+            # error, not a panel"*; `README.md`'s mode table says `1`. Measured before this rule:
+            # `plan.check` accepted one, two or three on `pm_plan`, and all four `SINGLE` nodes
+            # asked **once** and said nothing about the rest — a setting that looks configured and
+            # does nothing, which is what the closed schema above exists to refuse
+            # (CHG-20260907-18).
+            #
+            # Only `SINGLE`, and only *too many*: a `MODEL_PANEL` with one model is a panel of one
+            # and `graph.py` says so in the same paragraph, and a `POOL` is a list on purpose.
+            if (key == "node_models" and owner in graph.BY_ID
+                    and graph.BY_ID[owner].mode == graph.SINGLE and len(value) > 1):
+                raise PlanError(
+                    f"{where} gives {owner!r} {len(value)} models, and it is mode "
+                    f"{graph.SINGLE!r} — exactly one model, one session. The engine asks once and "
+                    f"the rest are never used, so this is refused rather than half-applied.")
             # **The whole body above was guarded by `node_models`, so iterating `seat_models`
             # checked nothing** (CHG-20260903-35, defect seat L-55). The guard is right —
             # `store.seat_models(db)` is `Dict[str, str]` and `engine` reads it as a single

@@ -168,6 +168,26 @@ MUTATIONS: List[Mutation] = [
         '''    return worktree.key_for(cycle) if node.id in frozenset(["engineer_build", "engineer_selfverify", "fix_pass", "lead_task_review", "re_review"]) else ""''',
         "tests/test_module_built.py"),
 
+    # ── single-model (CHG-20260907-18) ─────────────────────────────
+    # `graph.py` says a SINGLE node is 'exactly one model, one session' and that three
+    # configured is 'a configuration error, not a panel'. Three surfaces accepted it and
+    # the engine asked once and said nothing. The second entry is the other direction:
+    # a length rule that starts refusing the panel and the pool, which take lists on
+    # purpose.
+    Mutation(
+        "single-model", "a single node may be given a panel's worth of models again",
+        SRC / "plan.py",
+        '''                    and graph.BY_ID[owner].mode == graph.SINGLE and len(value) > 1):''',
+        '''                    and graph.BY_ID[owner].mode == graph.SINGLE and False):''',
+        "tests/test_plan.py"),
+
+    Mutation(
+        "single-model", "the rule may start biting a panel or a pool again",
+        SRC / "plan.py",
+        '''            if (key == "node_models" and owner in graph.BY_ID''',
+        '''            if (key == "node_models" and owner in graph.BY_ID or True''',
+        "tests/test_plan.py"),
+
     # ── decisions (CHG-20260907-16) ────────────────────────────────
     # `plan.check` refused an unknown KEY with 'ignoring them would let a setting look
     # configured and do nothing', and accepted an unknown NODE. `feedback` sits after
