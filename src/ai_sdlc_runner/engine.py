@@ -1542,6 +1542,19 @@ def _run_effects(node: graph.Node, cfg: "RunConfig", report: "RunReport"):
     try:
         outcome = effects_mod.run(sequence)
     except effects_mod.EffectError as exc:
+        # **The state the vocabulary already names for this.** `STOPPED`'s own definition eleven
+        # hundred lines up reads *"stopped, and nothing continues it — a permanent halt, or an
+        # effect that failed"*, and this block set `halted_at` and `halt_reason` and left
+        # `RunReport.state` at its `FINISHED` default. So a run that stopped because `pr`'s
+        # effects half-landed — branch made, commit written, push done, the pull request not —
+        # reported `finished` to the terminal, to `RunState.state` and to the console through it,
+        # and to `conversation.close("finished", …)`, which is the durable record.
+        #
+        # CHG-20260827-22 made exactly this decision for the other half of that sentence: a
+        # permanent terminal used to report a normal finish, and it was changed *"because that is
+        # exactly the distinction the state vocabulary exists to draw"*. This is the same
+        # distinction, for the clause of the same definition that was never implemented.
+        report.state = STOPPED
         report.halted_at = node.id
         report.halt_reason = f"effect failed at {node.id!r}: {exc}"
         if exc.outcome is not None:
