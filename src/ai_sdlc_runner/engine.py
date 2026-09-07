@@ -280,10 +280,6 @@ class Ask:
 #: ``halted_at``, and so did every TERMINAL node including ``done`` — so "stopped for a decision"
 #: and "ran to the end" were the same shape, and an independent seat found that the one property
 #: task 1 rests on did not exist.
-#: The asking nodes of one module's build, derived once (CHG-20260827-21). They share a tree;
-#: everything else runs in the main one, because everything else reviews the whole change.
-_MODULE_CYCLE = frozenset(graph.module_cycle())
-
 FINISHED = "finished"    #: reached a terminal node; the flow ended where it was designed to
 SUSPENDED = "suspended"  #: stopped at a gate, and a decision can continue it
 STOPPED = "stopped"      #: stopped, and nothing continues it — a permanent halt, or an effect that failed
@@ -939,7 +935,13 @@ def _workspace(node: graph.Node, cycle: int) -> str:
     pass through the loop this is — and one pass builds one module, which is exactly the property
     the isolation needs.
     """
-    return worktree.key_for(cycle) if node.id in _MODULE_CYCLE else ""
+    # Asked of the graph here rather than read from a `frozenset` captured at import
+    # (CHG-20260907-10). The snapshot was measured going stale: a node inserted into the module
+    # loop in memory validated, ran, and came back `""` — the **shared** tree — while its two
+    # neighbours got `module-001`. That is the isolation CHG-20260827-21 exists to provide,
+    # bypassed for exactly the population `policy.py` says is supported. A traversal of thirty-odd
+    # nodes per ask, against a guarantee about which tree work happens in.
+    return worktree.key_for(cycle) if node.id in graph.module_cycle() else ""
 
 
 def _open(factory: SessionFactory, seat: Optional[str], model: Optional[str] = None,
@@ -1346,11 +1348,13 @@ def _module_built(report: "RunReport") -> str:
 def _whole_change_rejected() -> tuple:
     """The nodes a rejected whole change passes through, asked of the graph each time.
 
-    Computed here rather than at import. `engine._MODULE_CYCLE` is an import-time snapshot of
-    `graph.module_cycle()` while `plan.py` asks for it per call, and round fourteen's defect seat
-    measured the two disagreeing about a node added in memory — one derived view, two readers, two
-    answers. A module-level derivation of this would have been the same shape, introduced by the
-    change that removed its hand-written twin.
+    Computed here rather than at import. `engine._MODULE_CYCLE` used to be an import-time snapshot
+    of `graph.module_cycle()` while `plan.py` asked for it per call, and round fourteen's defect
+    seat measured the two disagreeing about a node added in memory — one derived view, two
+    readers, two answers. A module-level derivation of this would have been the same shape,
+    introduced by the change that removed its hand-written twin. The snapshot itself is gone
+    (CHG-20260907-10); this docstring keeps the reason, because the reason is why this function is
+    a function.
     """
     return tuple(node.id for node in graph.NODES if node.next == "change_retry")
 

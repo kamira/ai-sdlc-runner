@@ -182,10 +182,11 @@ def test_the_whole_change_bound_reads_the_graph_rather_than_a_written_list():
     adds a **third** such node and asks whether the bound sees it. Under the hand-written pair it
     does not.
 
-    It is a function rather than a module constant for the reason `engine._MODULE_CYCLE` is a
-    finding of this same round: that one snapshots `graph.module_cycle()` at import while `plan.py`
-    asks per call, and the two disagree about a node added later. Deriving at import would have
-    reproduced the shape this change removes.
+    It is a function rather than a module constant for the reason `engine._MODULE_CYCLE` was a
+    finding of this same round: that one snapshotted `graph.module_cycle()` at import while
+    `plan.py` asked per call, and the two disagreed about a node added later. Deriving at import
+    would have reproduced the shape this change removes. That snapshot is gone too
+    (CHG-20260907-10) — this note keeps the reason, not the example.
     """
     import dataclasses
 
@@ -351,3 +352,45 @@ def test_which_nodes_are_loops_is_pinned():
     # quietly gains a member is a set that is closed and does not refuse anything.
     assert graph.KINDS == (graph.STEP, graph.DECISION, graph.LOOP, graph.TERMINAL)
     assert set(n.kind for n in graph.NODES) == set(graph.KINDS)
+
+
+# ── one graph, two views ─────────────────────────────────────────────────────────────────────────
+
+
+def _validate_with_nodes_only(nodes):
+    """Rebind `NODES` and leave `BY_ID` alone — the half-swap, on purpose.
+
+    `_validate_with` above swaps both because that is how a test should ask the question. This one
+    exists to be wrong, so that the rule refusing it has something to refuse.
+    """
+    original = graph.NODES
+    graph.NODES = nodes
+    try:
+        graph.validate()
+    finally:
+        graph.NODES = original
+
+
+def test_the_two_views_of_the_graph_must_be_the_same_graph():
+    """`len(BY_ID) != len(NODES)` is a length check, and equal lengths is not the same graph.
+
+    Both names are module attributes a caller may rebind, and `policy.py` says the checks run
+    "including one whose graph a caller has altered in memory" — so this is a supported surface,
+    not a test artefact. Rebinding one of the two is enough: the per-node rules then read the new
+    `NODES` while reachability, `follows` and `_reaches` read the old `BY_ID`, and `engine.walk`
+    executes the node it fetches from `BY_ID`.
+    """
+    with pytest.raises(graph.GraphError, match="rebound separately"):
+        _validate_with_nodes_only(_mutate("merge", next="intake"))
+
+
+def test_the_half_swap_used_to_certify_a_graph_that_does_not_run():
+    """The measurement the rule above exists for, stated as the harm.
+
+    With `merge -> intake` in `NODES` alone, `validate` passed: the shipped `merge` in `BY_ID` says
+    the run finishes, the rebound one says it loops forever, and the walk follows `BY_ID`. Swapping
+    both views instead refuses it, for a reason about the graph rather than about the rebinding —
+    three nodes stop being reachable.
+    """
+    with pytest.raises(graph.GraphError, match="unreachable"):
+        _validate_with(_mutate("merge", next="intake"))
