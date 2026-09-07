@@ -3082,3 +3082,85 @@ def test_the_route_refuses_a_type_the_store_will_not_hold(live):
 
     assert status == 409, said
     assert ".exe" in said["error"]
+
+
+def _authority(addr):
+    """The address as a client would put it in a `Host` or an `Origin`.
+
+    An IPv6 literal is bracketed in an authority; a name or an IPv4 address is not. This is the
+    same rule `_loopback_origin` applies to the hostname it rebuilds, and it is why the two
+    checks look up different strings for one bound address.
+    """
+    return f"[{addr}]" if ":" in addr else addr
+
+
+def test_every_address_the_bind_list_permits_is_accepted_as_a_host():
+    """Two spellings of one boundary, and nothing required them to agree.
+
+    `server.LOOPBACK` is what `serve` **permits as a bind argument**; `server.LOOPBACK_HOSTS` is
+    consulted for every `Host` and `Origin`. Neither constant was named by any test. A legitimate
+    loopback alias added to the bind list alone -- `127.0.0.2` -- would start a server that then
+    refuses its own requests, with the refusal blaming the header (CHG-20260907-19).
+
+    *Permits*, not *binds*, and the distinction is measured: `ThreadingHTTPServer.address_family`
+    is `AF_INET`, so `::1` is in this list and cannot be bound at all. That is a defect in the
+    list and has its own record; what this test asserts about `::1` -- that
+    `_loopback_host("[::1]")` is true -- is true today either way.
+
+    **This asks the two functions rather than their table.** The first version compared the
+    constants as sets and was refuted by reading `_loopback_host`: it keeps the brackets, so for a
+    server bound to `::1` the string it looks up is `"[::1]"`, while `_loopback_origin` gets
+    `"::1"` from `urlsplit`. The set version asked for `"::1"` and was satisfied -- with `"[::1]"`
+    deleted from `LOOPBACK_HOSTS`, a server on `::1` refuses the `Host` every browser would send
+    it, and the whole of this file passed. Two checks that normalise differently cannot be modelled
+    by one membership test; calling them costs nothing and models nothing.
+
+    Checked in the direction that matters: a bind address no header may carry is a server nobody
+    can reach.
+    """
+    refused = []
+    for addr in server.LOOPBACK:
+        authority = _authority(addr)
+        for host in (authority, f"{authority}:8765"):
+            if not server._loopback_host(host):
+                refused.append(f"Host: {host}")
+        for origin in (f"http://{authority}:8765", f"https://{authority}"):
+            if not server._loopback_origin(origin):
+                refused.append(f"Origin: {origin}")
+    assert not refused, (
+        f"the server may bind these addresses and would refuse its own requests naming them: "
+        f"{refused}. `LOOPBACK_HOSTS` is what `Host` and `Origin` are checked against, and it "
+        f"needs the bracketed form as well as the bare one for an IPv6 address.")
+
+
+def test_no_host_is_accepted_that_the_bind_list_does_not_permit():
+    """The other direction, which is about a rebinding surface rather than reachability.
+
+    **"Does not permit" means `serve` refuses it, not that a socket would fail.** Those differ
+    today: `serve` permits `::1` and an `AF_INET` server cannot bind it. Measuring the socket
+    instead of the list would make this test fail on a defect it is not about, so it reads the
+    list and says so; the socket is a separate record.
+
+    Not literal containment -- `"[::1]"` is a header form and not a bind argument, so
+    `LOOPBACK_HOSTS <= LOOPBACK` is false by design. Normalised, the two sets are equal today, and
+    an entry that survives normalisation and is not permitted as a bind address is a name this
+    server accepts for a socket it will never be asked to open. `LOOPBACK_HOSTS`' own comment
+    calls anything else *"a rebinding attempt or a proxy"*, which is a reason to make the addition
+    deliberate.
+
+    Equality was the form one seat proposed and then withdrew on measuring it: normalised equality
+    holds with `"[::1]"` deleted, so it is blind to the bracket split this file exists to hold.
+    Behaviour forwards plus containment backwards is strictly stronger.
+
+    If the address-family defect is fixed by dropping `::1` from `LOOPBACK` rather than by
+    binding it, this test requires `"[::1]"` and `"::1"` to go with it, which is right.
+
+    Raised by an independent seat, which pointed out that the first record refuted only the
+    literal reverse and then declined the whole direction (CHG-20260907-19).
+    """
+    permitted = {addr.lower() for addr in server.LOOPBACK}
+    extra = sorted({host.strip("[]").lower() for host in server.LOOPBACK_HOSTS} - permitted)
+    assert not extra, (
+        f"{extra} are in the set `Host` and `Origin` are checked against, and are not addresses "
+        f"`serve` permits. If one is deliberate, it belongs in `LOOPBACK` too, or in a sentence "
+        f"here saying why a name this server never answers on is accepted anyway.")
