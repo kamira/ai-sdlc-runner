@@ -54,6 +54,10 @@ DOCS = (
     # referent the finding rather than the file list.
     ROOT / "docs" / "API.md",
     ROOT / "docs" / "SCHEMAS.md",
+    # Added by CHG-20260907-13. It carries the other half of the table count, and the
+    # sentence CHG-20260903-37 corrected here while leaving the same sentence standing
+    # in `SCHEMAS.md` -- one guard, one file, two places to be wrong.
+    ROOT / "docs" / "DATABASE.md",
     ROOT / "docs" / "structure" / "design.md",
     ROOT / "docs" / "structure" / "data.md",
     ROOT / "docs" / "structure" / "directory.md",
@@ -165,6 +169,114 @@ FIELD_MENTIONS = {
 #: point of this rule is that an unresolvable referent is worse than a wrong number, not better.
 _CLAIMABLE = ("workorder", "graph", "policy", "store", "models", "conversations", "server",
                "settings", "plan")
+
+
+def _prose(raw):
+    """Live prose: fenced code, blockquotes and the withdrawn-sentence form removed.
+
+    This repository keeps sentences that were wrong, quoted, so the record says why they were
+    changed — `docs/DATABASE.md` carries *"3 of 5 tables built"* in a blockquote on purpose. A
+    checker that scanned those would have to be lenient, and a lenient checker over prose is one
+    `or` away from proving nothing. Removing them **structurally** is what lets the rules below be
+    strict: no allowlist, no second phrasing accepted "just in case" (CHG-20260907-13).
+
+    Structural means the three forms the documents actually use, not any quoted substring: an
+    inline quotation can carry a live claim, and this must not silently drop one.
+    """
+    kept, fenced = [], False
+    for line in raw.splitlines():
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced or line.lstrip().startswith(">"):
+            continue
+        kept.append(line)
+    return re.sub(r'\*"[^"]*"\*', " ", " ".join(" ".join(kept).split()))
+
+
+#: Counts of tables or routes that are **not** claims about the whole repository. Keyed on the
+#: sentence, with the reason, exactly as `FIELD_MENTIONS` is.
+COUNT_MENTIONS = {
+    ('DATABASE.md',
+     '--- ## 2 · The tables **The five tables in this section** are all built (CHG-20260823-41); `halt_routing` is in §0.2, and the page-wide count is the six of line 3.'):
+        'explicitly scoped to one section, which is why it is not compared with `store._EXPECTED` -- a bare noun names the global authority only where the sentence does not narrow it',
+}
+
+
+def test_a_count_of_tables_or_routes_matches_the_thing_there_is_one_of():
+    """`tables` and `routes` are not polysemous, so the noun is the referent.
+
+    `fields` needed a named referent because three different things have fields. There
+    is one set of tables and one set of routes, and the two claims that were wrong live in a
+    Markdown **heading** and a **table cell** — neither of which can carry an identifier. So the
+    noun keys the check, and a count that narrows its own scope is pinned instead (CHG-20260907-13).
+
+    What this replaces: `assert f"{built} of {built} tables" in catalogue`, which proves a true
+    sentence is **present** and says nothing about a contradicting one. It was green while the
+    heading of the section its row describes said *"three of five tables built"*, and while
+    `DATABASE.md` said *"Five tables, and all five are built"*. CHG-20260903-37 repaired the row,
+    added that guard, and missed both.
+    """
+    from ai_sdlc_runner import store
+
+    from test_api_schema import _routes
+
+    tables = len(store._EXPECTED)
+    # `/` and `/index.html` are one branch serving one route, as `test_api_schema` also allows for.
+    gets, posts = len(_routes("do_GET")) - 1, len(_routes("do_POST"))
+    routes = gets + posts
+
+    seen, mentions = 0, {}
+    for name, raw_body in _text().items():
+        body = _prose(raw_body)
+        spans = []
+
+        # "six of six tables built", "6 of 6 tables"
+        for match in re.finditer(
+                r"\b(\w+) of (?:its |the )?(\w+) (?:HTTP )?(tables|routes)\b", body, re.I):
+            said_built, said_total, noun = match.groups()
+            real = tables if noun.lower() == "tables" else routes
+            assert _count(said_total) == real, (
+                f"{name} says {said_total} {noun}; there are {real}")
+            assert _count(said_built) == real, (
+                f"{name} says {said_built} of {said_total} {noun} are built, and all {real} are")
+            spans.append(match.span())
+            seen += 1
+
+        # "Nineteen routes — eight `GET`, eleven `POST`" and "…, eight `GET` and eleven `POST`",
+        # keyed on the sentence so the two punctuations are one rule rather than two regexes.
+        for match in re.finditer(r"\b(\w+) (?:HTTP )?routes\b", body, re.I):
+            if any(a <= match.start() and match.end() <= b for a, b in spans):
+                continue
+            if _count(match.group(1)) is None:
+                continue
+            sentence = _sentence(body, match.start(), match.end())
+            assert _count(match.group(1)) == routes, (
+                f"{name} says {match.group(1)} routes; the server answers {routes}")
+            for verb, real in (("GET", gets), ("POST", posts)):
+                said = re.search(rf"(\w+) `{verb}`", sentence)
+                if said:
+                    assert _count(said.group(1)) == real, (
+                        f"{name} says {said.group(1)} {verb} routes; there are {real}")
+            spans.append(match.span())
+            seen += 1
+
+        for match in re.finditer(r"\b(\w+) (?:HTTP )?(tables|routes)\b", body, re.I):
+            if any(a <= match.start() and match.end() <= b for a, b in spans):
+                continue
+            if _count(match.group(1)) is None:
+                continue
+            mentions[(name, _sentence(body, match.start(), match.end()))] = None
+
+    assert seen >= 6, f"only {seen} table or route claims resolved; the documents lost them"
+    unknown = sorted(k for k in mentions if k not in COUNT_MENTIONS)
+    gone = sorted(k for k in COUNT_MENTIONS if k not in mentions)
+    assert not unknown and not gone, (
+        "a count of tables or routes is not checked and not written down.\n"
+        "  **Say the real number** — the noun is the referent, so nothing else is needed.\n"
+        "  Only if the sentence narrows its own scope — one section, one page — add it to "
+        "`COUNT_MENTIONS` with the reason.\n"
+        f"  not written down: {unknown}\n  written down and gone: {gone}")
 
 
 def _sentence(normalised, start, end, span=200):
@@ -1184,36 +1296,63 @@ def test_the_api_page_does_not_promise_a_null_the_field_cannot_hold():
     assert '"error": null' not in page
 
 
-def test_the_schema_catalogue_counts_the_tables_that_exist():
-    """`SCHEMAS.md` said *"3 of 5 tables built"*; `DATABASE.md` said *"6 of 6"*; `store` has six.
+#: Ways a document has said a table is not there. Strict — no `or`, no "either phrasing accepted"
+#: — because `_prose` has already removed the places a withdrawn sentence is allowed to survive.
+#: The guard this replaces looked for one of these strings, in one file, in the part of it before a
+#: chosen phrase; the same denial then lived in `docs/SCHEMAS.md` for four more days.
+_NOT_BUILT = (
+    "not created by any code",
+    "created by no code",
+    "are not created",
+    "is not created",
+    "are not built",
+    "is not built",
+)
 
-    The sharp part is that `SCHEMAS.md`'s own opening paragraph says *"A catalogue of closedness
-    that miscounts its own subject is the thing it warns about, so the count is now checked by
-    `tests/test_schemas.py` rather than asserted here"* — and that guard covers the **closed-schema**
-    count, not the table count, which was checked by nothing (conformance seat L-51).
+
+def test_a_withdrawn_sentence_is_ignored_only_where_it_is_marked_as_one():
+    """Both directions, because a stripper that removes too much proves nothing either.
+
+    The strictness of the rule below is bought entirely by `_prose`: it can refuse a denial with no
+    allowlist because the three places a withdrawn sentence may survive are removed first. That
+    makes `_prose` load-bearing, so what it removes **and** what it keeps are pinned here.
     """
-    root = Path(__file__).resolve().parents[1]
-    catalogue = (root / "docs" / "SCHEMAS.md").read_text(encoding="utf-8")
+    denial = "The `turns` table is not created by any code yet."
+    assert "not created" in _prose(denial), "a live sentence must reach the rule"
+    assert "not created" not in _prose("> " + denial), "a `>` block is a withdrawn sentence"
+    assert "not created" not in _prose(
+        'It said *"the `turns` table is not created by any code yet"* until CHG-20260907-13.'), (
+        'the *"..."* form is a withdrawn sentence')
+    assert "not created" not in _prose("```\n" + denial + "\n```"), (
+        "a code fence is not prose")
+    # And the boundary that keeps the stripping honest: an ordinary inline quotation can carry a
+    # live claim, so only the marked forms go.
+    assert "not created" in _prose('The page says "not created" in an ordinary quotation.')
 
+
+def test_no_document_calls_a_built_table_uncreated():
+    """`DATABASE.md` said all six are live, then said two of them are *"created by no code"*, three
+    lines apart (conformance seat L-52). CHG-20260903-37 repaired that sentence and gave it a
+    guard — one that reads one file, and only the part of it before the words *"It follows the
+    ruling"*. The **same denial** was in `docs/SCHEMAS.md`, and stayed there.
+
+    So this reads every document the sweep reads, over live prose only. There is no allowlist and
+    no second phrasing accepted "just in case": a checker that has to be lenient over prose is one
+    `or` away from proving nothing, and `_prose` is what buys the strictness (CHG-20260907-13).
+    """
     from ai_sdlc_runner import store
 
-    built = len(store._EXPECTED)
-    assert f"{built} of {built} tables" in catalogue, (
-        f"store creates {built} tables and the catalogue does not say so")
-
-
-def test_the_database_page_does_not_call_the_same_table_live_and_dead():
-    """It said all six are live, then said two of them are *"created by no code"*, three lines apart.
-
-    Both are in `store._EXPECTED` and among the six `CREATE TABLE IF NOT EXISTS` statements
-    (conformance seat L-52).
-    """
-    root = Path(__file__).resolve().parents[1]
-    page = (root / "docs" / "DATABASE.md").read_text(encoding="utf-8")
-
-    live = page.split("It follows the ruling")[0]
-    assert "created by no code**:" not in live, (
-        "the status paragraph calls a built table uncreated")
+    for name, raw_body in _text().items():
+        body = _prose(raw_body)
+        for table in store._EXPECTED:
+            for phrase in _NOT_BUILT:
+                for match in re.finditer(re.escape(phrase), body, re.I):
+                    around = _sentence(body, match.start(), match.end(), span=260)
+                    assert f"`{table}`" not in around and f" {table} " not in around, (
+                        f"{name} says a built table is not there: {around!r}. "
+                        f"`store._EXPECTED` creates {table!r}. If the sentence is a record of what "
+                        f"a document used to say, put it in a `>` block or the *\"…\"* form, which "
+                        f"is where this repository keeps sentences it has withdrawn.")
 
 
 def test_the_node_docstring_does_not_state_a_phase_the_field_owns():

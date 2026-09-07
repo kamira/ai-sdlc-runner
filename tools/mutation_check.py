@@ -168,6 +168,34 @@ MUTATIONS: List[Mutation] = [
         '''    return worktree.key_for(cycle) if node.id in frozenset(["engineer_build", "engineer_selfverify", "fix_pass", "lead_task_review", "re_review"]) else ""''',
         "tests/test_module_built.py"),
 
+    # ── contradiction (CHG-20260907-13) ────────────────────────────
+    # The guard these replace proved a **true** sentence was present:
+    #     assert f"{built} of {built} tables" in catalogue
+    # which was green while the heading of the section its row describes said three of
+    # five. So the first two break a document rather than the code -- that is where the
+    # claim lives -- and the third takes a withdrawn sentence out of its `>` block and
+    # back into live prose, which is the whole boundary `_prose` draws.
+    Mutation(
+        "contradiction", "a section heading may contradict the row it heads again",
+        REPO / "docs" / "SCHEMAS.md",
+        '''## 14 · SQLite DDL — six of six tables built''',
+        '''## 14 · SQLite DDL — three of five tables built''',
+        "tests/test_documented_numbers.py"),
+
+    Mutation(
+        "contradiction", "a route count may disagree with the server again",
+        REPO / "docs" / "SCHEMAS.md",
+        '''Nineteen routes, eight `GET` and eleven `POST`, every one crossing''',
+        '''Nineteen routes, eight `GET` and nine `POST`, every one crossing''',
+        "tests/test_documented_numbers.py"),
+
+    Mutation(
+        "contradiction", "a document may call a built table uncreated again",
+        REPO / "docs" / "SCHEMAS.md",
+        '''> This paragraph said `conversations` and `turns` were *"not created by any code yet"* until''',
+        '''This paragraph is where `conversations` and `turns` are not created by any code yet, until''',
+        "tests/test_documented_numbers.py"),
+
     # ── claim-referent (CHG-20260907-12) ───────────────────────────
     # The subject is a guard that read the right number against the wrong thing, so these
     # break what the guard guards -- a document's claim, a document's referent, and the
