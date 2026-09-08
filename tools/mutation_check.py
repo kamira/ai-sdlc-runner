@@ -188,6 +188,26 @@ MUTATIONS: List[Mutation] = [
         '''            if (key == "node_models" and owner in graph.BY_ID or True''',
         "tests/test_plan.py"),
 
+    # ── backlog (CHG-20260907-22) ──────────────────
+    # `socketserver` defaults the listen backlog to 5 and `serve` never set it, so the sixth
+    # caller of a server whose acceptor is not draining is told `WinError 10061` -- the error
+    # for nothing listening at all. Restoring the default is the mutation; the second entry
+    # deletes the attribute outright, because a value that reads as deliberate and a value
+    # inherited by accident are the same defect and only one of them looks like one.
+    Mutation(
+        "backlog", "the listen backlog may go back to five again",
+        SRC / "server.py",
+        '''        request_queue_size = 128''',
+        '''        request_queue_size = 5''',
+        "tests/test_server.py::test_a_burst_of_connections_is_queued_rather_than_refused"),
+
+    Mutation(
+        "backlog", "the backlog may be inherited by accident again",
+        SRC / "server.py",
+        '''        request_queue_size = 128''',
+        '''        pass''',
+        "tests/test_server.py::test_a_burst_of_connections_is_queued_rather_than_refused"),
+
     # ── resolver-fixed (CHG-20260907-21) ────────────
     # The reverse test asserted a containment and `localhost` satisfied it by being a bind
     # spelling, which is not why it belongs. Equality states the relation instead, so every

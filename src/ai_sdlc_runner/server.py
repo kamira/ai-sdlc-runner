@@ -1357,6 +1357,21 @@ def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
 
         allow_reuse_address = False
 
+        #: How many connections the OS holds for us between `accept` calls.
+        #:
+        #: `socketserver` defaults this to **5**, and a full backlog is not a queue that grows --
+        #: Windows answers the sixth connection with an RST, which arrives at the client as
+        #: `WinError 10061`, *connection refused*, the same error a client gets when nothing is
+        #: listening at all. Measured on this class: 20 connections against an acceptor that is
+        #: not draining leaves 5 held and 15 refused; at 128 all 20 are held.
+        #:
+        #: The acceptor is one Python thread. It does not have to be absent to be starved -- it
+        #: competes for the GIL with every handler thread it has already spawned, and a browser
+        #: opens six connections to one host as a matter of course. So this is a production
+        #: surface and not only a test one: the failure it produces says *nothing is listening*
+        #: about a server that is (CHG-20260907-22).
+        request_queue_size = 128
+
     try:
         return _OneRunner((host, port),
                           make_handler(runner, operator, registry, registry_path, assignments,
