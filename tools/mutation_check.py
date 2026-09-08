@@ -3504,7 +3504,7 @@ CHG-20260907-28 and built by no record yet.''',
         "::test_the_page_documents_this_route_and_promises_no_reader_it_does_not_have"),
 
     Mutation(
-        "node-config-accounting", "a key acquires a console reader and keeps its inventory entry",
+        "node-config-accounting", "a key the page starts naming keeps its inventory entry",
         REPO / "src" / "ai_sdlc_runner" / "console" / "index.html",
         '''  var byModel = assign.by_model || {};''',
         '''  var byModel = assign.by_model || {};
@@ -3521,7 +3521,7 @@ CHG-20260907-28 and built by no record yet.''',
     # Separate entries, separate objectors, the way `refusal-routing`
     # splits its weak rule from its explicit pin.
     Mutation(
-        "node-config-accounting", "the carrier two inventory reasons name reaches no console",
+        "node-config-accounting", "the carrier two inventory reasons name is nowhere on the page",
         REPO / "src" / "ai_sdlc_runner" / "console" / "index.html",
         '''  var byModel = assign.by_model || {};''',
         '''  var byModel = assign["by" + "_model"] || {};''',
