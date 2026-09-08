@@ -168,6 +168,46 @@ MUTATIONS: List[Mutation] = [
         '''    return worktree.key_for(cycle) if node.id in frozenset(["engineer_build", "engineer_selfverify", "fix_pass", "lead_task_review", "re_review"]) else ""''',
         "tests/test_module_built.py"),
 
+    # ── graph-swap (CHG-20260907-25) ───────────────────────────────
+    # Three modules each carried their own "swap both views, validate, restore"; they are one
+    # `tests/_graph_swap.validate_with` now, shared by 39 test functions. A shared helper is a
+    # single point of failure for every guarantee that goes through it, which is what these two
+    # entries are about.
+    #
+    # **Both name a test node, and the first has to.** Dropping the `BY_ID` rebind fails 43 of
+    # the 74 tests in those three files, and 41 of the 43 fail collaterally: `validate` raises
+    # its identity refusal and their own `match=` string no longer matches the message. Measured
+    # over all 34 distinct `match=` patterns in the three files, exactly one — `"rebound
+    # separately"`, the deliberate half-swap's own — matches that message. So a file-level
+    # CAUGHT here would be reporting 41 regexes missing, not the swap. The node registered is the
+    # one whose stated guarantee IS that both views move.
+    #
+    # The second entry is registered **because its test was written for it**. Measured first:
+    # with the `finally` body removed and one mutating node run alone the result is `1 passed` —
+    # nothing named noticed. Run wider it fails 49, every one a later test inheriting a polluted
+    # graph, which is collection order rather than a guarantee (`pytest-randomly` is not
+    # installed, so that order is stable, which makes the collateral reliable and no more
+    # meaningful). Registering it against a file would have been a clean CAUGHT over a hole.
+    #
+    # **Absent on purpose:** nothing is registered for `_validate_one`'s arity. Its splice
+    # `tuple(node if n.id == node.id else n for n in graph.NODES)` and `_mutate` build the same
+    # tuple for the cases its two callers exercise, so no edit between the two shapes is
+    # observable by any test, and inventing one to round the group up to three would be the
+    # thing this file's own docstring warns against.
+    Mutation(
+        "graph-swap", "the shared swap may rebind one view of the graph and not the other",
+        REPO / "tests" / "_graph_swap.py",
+        '''    graph.BY_ID = {n.id: n for n in nodes}''',
+        '''    pass''',
+        "tests/test_graph_validation.py::test_the_half_swap_used_to_certify_a_graph_that_does_not_run"),
+
+    Mutation(
+        "graph-swap", "the shared swap may stop putting the shipped graph back",
+        REPO / "tests" / "_graph_swap.py",
+        '''        graph.NODES, graph.BY_ID = original_nodes, original_by_id''',
+        '''        pass''',
+        "tests/test_graph_validation.py::test_the_shared_swap_puts_both_views_back_when_validate_raises"),
+
     # ── single-model (CHG-20260907-18) ─────────────────────────────
     # `graph.py` says a SINGLE node is 'exactly one model, one session' and that three
     # configured is 'a configuration error, not a panel'. Three surfaces accepted it and

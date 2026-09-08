@@ -31,22 +31,13 @@ import dataclasses
 import pytest
 
 from ai_sdlc_runner import graph
+from _graph_swap import validate_with
 
 
 def _mutate(node_id, **changes):
     """The real graph with one node changed — the shape a wrong hand-edit would actually take."""
     nodes = tuple(dataclasses.replace(n, **changes) if n.id == node_id else n for n in graph.NODES)
     return nodes
-
-
-def _validate_with(nodes):
-    original_nodes, original_by_id = graph.NODES, graph.BY_ID
-    graph.NODES = nodes
-    graph.BY_ID = {n.id: n for n in nodes}
-    try:
-        graph.validate()
-    finally:
-        graph.NODES, graph.BY_ID = original_nodes, original_by_id
 
 
 def test_every_node_declares_a_mode_from_the_closed_set():
@@ -75,70 +66,70 @@ def test_the_seats_are_the_only_seat_panel():
 
 def test_a_role_bearing_node_declared_runner_is_refused():
     with pytest.raises(graph.GraphError, match="asks nobody"):
-        _validate_with(_mutate("pm_plan", mode=graph.RUNNER))
+        validate_with(_mutate("pm_plan", mode=graph.RUNNER))
 
 
 def test_a_runner_node_declared_single_is_refused():
     # The direction that would otherwise pass silently: SINGLE is the dataclass default, so a node
     # added without thinking about its mode lands here. That must be an error, not a default.
     with pytest.raises(graph.GraphError, match="asks nobody|must be"):
-        _validate_with(_mutate("intake", mode=graph.SINGLE))
+        validate_with(_mutate("intake", mode=graph.SINGLE))
 
 
 def test_a_non_seat_node_declared_seat_panel_is_refused():
     with pytest.raises(graph.GraphError, match="only the review seats"):
-        _validate_with(_mutate("lead_task_review", mode=graph.SEAT_PANEL))
+        validate_with(_mutate("lead_task_review", mode=graph.SEAT_PANEL))
 
 
 def test_the_seat_node_declared_model_panel_is_refused():
     with pytest.raises(graph.GraphError, match="only the review seats"):
-        _validate_with(_mutate("lead_review", mode=graph.MODEL_PANEL))
+        validate_with(_mutate("lead_review", mode=graph.MODEL_PANEL))
 
 
 def test_an_unknown_mode_is_refused():
     with pytest.raises(graph.GraphError, match="unknown mode"):
-        _validate_with(_mutate("pm_plan", mode="committee"))
+        validate_with(_mutate("pm_plan", mode="committee"))
 
 
 def test_a_work_producing_node_cannot_be_a_model_panel():
     # `qa_verify` produces work, not a verdict. Several models there would be several candidate
     # outputs and no rule for choosing — which the design lists as unsettled rather than inventing.
     with pytest.raises(graph.GraphError, match="nothing\nto adjudicate|nothing to adjudicate"):
-        _validate_with(_mutate("qa_verify", mode=graph.MODEL_PANEL))
+        validate_with(_mutate("qa_verify", mode=graph.MODEL_PANEL))
 
 
 def test_a_pool_must_name_a_main():
     with pytest.raises(graph.GraphError, match="names no main"):
-        _validate_with(_mutate("engineer_build", main=None))
+        validate_with(_mutate("engineer_build", main=None))
 
 
 def test_a_pools_main_is_a_role_not_a_node_id():
     # The mock-up used a role here and a node id for `follows`, and the design record deferred the
     # question. Deferring it was the finding: two builders would have produced incompatible graphs.
     with pytest.raises(graph.GraphError, match="not a role|is a role, not a node id"):
-        _validate_with(_mutate("engineer_build", main="lead_assess"))
+        validate_with(_mutate("engineer_build", main="lead_assess"))
 
 
 def test_only_a_pool_carries_a_main():
     with pytest.raises(graph.GraphError, match="no use for a main"):
-        _validate_with(_mutate("pm_plan", main="lead"))
+        validate_with(_mutate("pm_plan", main="lead"))
 
 
 def test_a_follows_must_name_a_node():
     with pytest.raises(graph.GraphError, match="names no node to follow"):
-        _validate_with(_mutate("engineer_selfverify", follows=None))
+        validate_with(_mutate("engineer_selfverify", follows=None))
 
 
 def test_a_follows_target_is_a_node_id_not_a_role():
     with pytest.raises(graph.GraphError, match="unknown node|is a node\nid|is a node id"):
-        _validate_with(_mutate("engineer_selfverify", follows="engineer"))
+        validate_with(_mutate("engineer_selfverify", follows="engineer"))
 
 
 def test_a_follows_chain_is_refused():
     # `fix_pass` follows `engineer_build`. Pointing it at `engineer_selfverify` — itself a follows —
     # would leave nothing at the end of the chain that actually chose a model.
     with pytest.raises(graph.GraphError, match="follows something else"):
-        _validate_with(_mutate("fix_pass", follows="engineer_selfverify"))
+        validate_with(_mutate("fix_pass", follows="engineer_selfverify"))
 
 
 def test_a_node_cannot_follow_itself():
@@ -147,12 +138,12 @@ def test_a_node_cannot_follow_itself():
     # pointing at itself. The rule this test is named for could not run. Narrowed, so the name and
     # the assertion agree (CHG-20260907-07).
     with pytest.raises(graph.GraphError, match="follows itself"):
-        _validate_with(_mutate("engineer_selfverify", follows="engineer_selfverify"))
+        validate_with(_mutate("engineer_selfverify", follows="engineer_selfverify"))
 
 
 def test_only_a_follows_carries_a_follows():
     with pytest.raises(graph.GraphError, match="no use for a follows"):
-        _validate_with(_mutate("pm_plan", follows="pm_confirm"))
+        validate_with(_mutate("pm_plan", follows="pm_confirm"))
 
 
 def test_the_engine_decides_a_panel_from_the_mode_not_the_role():

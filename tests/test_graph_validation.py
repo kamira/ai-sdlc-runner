@@ -27,28 +27,12 @@ import dataclasses
 import pytest
 
 from ai_sdlc_runner import graph, policy
+from _graph_swap import validate_with
 
 
 def _mutate(node_id, **changes):
     """The real graph with one node changed — the shape a wrong hand-edit would actually take."""
     return tuple(dataclasses.replace(n, **changes) if n.id == node_id else n for n in graph.NODES)
-
-
-def _validate_with(nodes):
-    """Swap in a graph, validate it, and put the real one back whatever happens.
-
-    Both `NODES` and `BY_ID` are replaced. `test_risk_adjudicated._validate_one` swaps only the
-    first, which is enough for the field-only changes it makes and wrong for anything about ids,
-    reachability or follows: `validate` compares the two lengths and then traverses `BY_ID`, so a
-    replacement can be half-validated against the new node and half against the shipped one.
-    """
-    original_nodes, original_by_id = graph.NODES, graph.BY_ID
-    graph.NODES = nodes
-    graph.BY_ID = {n.id: n for n in nodes}
-    try:
-        graph.validate()
-    finally:
-        graph.NODES, graph.BY_ID = original_nodes, original_by_id
 
 
 def _first(**predicate):
@@ -64,19 +48,19 @@ def _first(**predicate):
 def test_two_nodes_may_not_share_an_id():
     """`BY_ID` is a dict, so a duplicate id silently loses a node rather than colliding."""
     with pytest.raises(graph.GraphError, match="twice|duplicate|same id"):
-        _validate_with(_mutate("pm_plan", id="intake"))
+        validate_with(_mutate("pm_plan", id="intake"))
 
 
 def test_an_edge_may_not_name_a_node_that_does_not_exist():
     with pytest.raises(graph.GraphError, match="no node|unknown"):
-        _validate_with(_mutate("intake", next="nowhere_at_all"))
+        validate_with(_mutate("intake", next="nowhere_at_all"))
 
 
 def test_a_terminal_may_not_have_an_outgoing_edge():
     """A terminal with an edge is not a terminal; the walk would leave through it."""
     terminal = _first(kind=graph.TERMINAL)
     with pytest.raises(graph.GraphError, match="terminal"):
-        _validate_with(_mutate(terminal.id, next="intake"))
+        validate_with(_mutate(terminal.id, next="intake"))
 
 
 def test_a_decision_may_not_offer_fewer_than_two_branches():
@@ -87,7 +71,7 @@ def test_a_decision_may_not_offer_fewer_than_two_branches():
     # Not `match="branch"`: with this rule removed the panel-routability rule fires instead,
     # and its message — "whose 'fail' names no branch of its [...]" — contains the word too.
     with pytest.raises(graph.GraphError, match="needs at least two branches"):
-        _validate_with(_mutate(decision.id, branches=one))
+        validate_with(_mutate(decision.id, branches=one))
 
 
 def test_a_step_may_not_have_no_successor():
@@ -96,14 +80,14 @@ def test_a_step_may_not_have_no_successor():
     # nodes it could not reach — one of which is `next_module`, so the pattern matched a node id
     # inside another rule's message.
     with pytest.raises(graph.GraphError, match="has no successor"):
-        _validate_with(_mutate(step.id, next=None))
+        validate_with(_mutate(step.id, next=None))
 
 
 def test_every_node_is_reachable_from_intake():
     """An unreachable node is a mechanism nobody can get to, and the walk would never say so."""
     orphan = dataclasses.replace(_first(kind=graph.TERMINAL), id="orphan")
     with pytest.raises(graph.GraphError, match="unreachable|reach"):
-        _validate_with(graph.NODES + (orphan,))
+        validate_with(graph.NODES + (orphan,))
 
 
 # ── what a node may claim about gates ────────────────────────────────────────────────────────
@@ -111,19 +95,19 @@ def test_every_node_is_reachable_from_intake():
 def test_a_node_may_not_name_a_gate_policy_does_not_have():
     gated = _first(gate="merge")
     with pytest.raises(graph.GraphError, match="names gate .*policy.py does not define"):
-        _validate_with(_mutate(gated.id, gate="no_such_gate"))
+        validate_with(_mutate(gated.id, gate="no_such_gate"))
 
 
 def test_a_node_may_not_name_a_role_policy_does_not_have():
     roled = next(n for n in graph.NODES if n.role and n.role in policy.BY_ROLE)
     with pytest.raises(graph.GraphError, match="names role .*policy.py does not define"):
-        _validate_with(_mutate(roled.id, role="no_such_role"))
+        validate_with(_mutate(roled.id, role="no_such_role"))
 
 
 def test_a_gate_phase_outside_the_two_words_is_refused():
     gated = _first(gate="merge")
     with pytest.raises(graph.GraphError, match="before|after|phase"):
-        _validate_with(_mutate(gated.id, gate_when="whenever"))
+        validate_with(_mutate(gated.id, gate_when="whenever"))
 
 
 def test_a_phase_without_a_gate_is_refused():
@@ -138,7 +122,7 @@ def test_a_phase_without_a_gate_is_refused():
     ungated = next(n for n in graph.NODES if not n.gate)
     for phase in ("after", "before"):
         with pytest.raises(graph.GraphError, match="neither means anything without the other"):
-            _validate_with(_mutate(ungated.id, gate_when=phase))
+            validate_with(_mutate(ungated.id, gate_when=phase))
 
 
 def test_a_gate_without_a_phase_is_refused():
@@ -151,7 +135,7 @@ def test_a_gate_without_a_phase_is_refused():
     """
     gated = _first(gate="merge")
     with pytest.raises(graph.GraphError, match="neither means anything without the other"):
-        _validate_with(_mutate(gated.id, gate_when=None))
+        validate_with(_mutate(gated.id, gate_when=None))
 
 
 def test_which_gate_is_consulted_when_is_pinned():
@@ -185,7 +169,7 @@ def test_which_gate_is_consulted_when_is_pinned():
 def test_only_a_terminal_may_be_permanent():
     step = _first(kind=graph.STEP)
     with pytest.raises(graph.GraphError, match="permanent"):
-        _validate_with(_mutate(step.id, permanent=True))
+        validate_with(_mutate(step.id, permanent=True))
 
 
 # ── what a node may claim about answers ──────────────────────────────────────────────────────
@@ -194,7 +178,7 @@ def test_an_answer_may_not_decide_where_nobody_is_asked():
     """`answer_decides` on a node with no role is a field about an answer nobody gives."""
     roleless = next(n for n in graph.NODES if not n.role and not n.answer_decides)
     with pytest.raises(graph.GraphError, match="answer|role"):
-        _validate_with(_mutate(roleless.id, answer_decides=True))
+        validate_with(_mutate(roleless.id, answer_decides=True))
 
 
 # ── where a refusal goes ─────────────────────────────────────────────────────────────────────
@@ -204,7 +188,7 @@ def test_a_rejection_needs_a_gate_to_be_refused_at():
     ungated = next(n for n in graph.NODES if not n.gate and not n.rejects_to)
     # `match="gate|reject"` matched nearly every message this function can raise.
     with pytest.raises(graph.GraphError, match="has no gate to reject"):
-        _validate_with(_mutate(ungated.id, rejects_to="intake"))
+        validate_with(_mutate(ungated.id, rejects_to="intake"))
 
 
 def test_a_rejection_may_not_land_where_the_run_can_never_come_back_from():
@@ -214,7 +198,7 @@ def test_a_rejection_may_not_land_where_the_run_can_never_come_back_from():
     this graph that means a terminal.
     """
     with pytest.raises(graph.GraphError, match="cannot reach it again"):
-        _validate_with(_mutate("qa_accept", rejects_to="done"))
+        validate_with(_mutate("qa_accept", rejects_to="done"))
 
 
 def test_the_whole_change_bound_reads_the_graph_rather_than_a_written_list():
@@ -286,14 +270,14 @@ def test_where_each_refusal_goes_is_pinned():
 def test_a_rejection_may_not_name_a_node_that_does_not_exist():
     rejecting = next(n for n in graph.NODES if n.rejects_to)
     with pytest.raises(graph.GraphError, match="reject|no node|unknown"):
-        _validate_with(_mutate(rejecting.id, rejects_to="nowhere_at_all"))
+        validate_with(_mutate(rejecting.id, rejects_to="nowhere_at_all"))
 
 
 def test_a_rejection_may_not_return_to_the_node_that_was_refused():
     """A refusal that lands where it was made is a loop with a person in it."""
     rejecting = next(n for n in graph.NODES if n.rejects_to)
     with pytest.raises(graph.GraphError, match="itself|same"):
-        _validate_with(_mutate(rejecting.id, rejects_to=rejecting.id))
+        validate_with(_mutate(rejecting.id, rejects_to=rejecting.id))
 
 
 # ── a node's kind, and what it promises about its edges ──────────────────────────────────────────
@@ -307,7 +291,7 @@ def test_an_unknown_kind_is_refused():
     — which is exactly how five reverse tests in this file were found hollow (CHG-20260907-07).
     """
     with pytest.raises(graph.GraphError, match="unknown kind"):
-        _validate_with(_mutate("engineer_build", kind="stpe"))
+        validate_with(_mutate("engineer_build", kind="stpe"))
 
 
 @pytest.mark.parametrize("node_id,changes", [
@@ -334,7 +318,7 @@ def test_a_kinds_own_rule_does_not_cover_that_kind_misspelled(node_id, changes):
     if changes is None:
         changes = dict(branches={list(node.branches)[0]: list(node.branches.values())[0]})
     with pytest.raises(graph.GraphError, match="unknown kind"):
-        _validate_with(_mutate(node_id, kind=node.kind + "_", **changes))
+        validate_with(_mutate(node_id, kind=node.kind + "_", **changes))
 
 
 def test_the_one_terminal_a_typo_used_to_survive_on():
@@ -347,7 +331,7 @@ def test_the_one_terminal_a_typo_used_to_survive_on():
     assert graph.BY_ID["done"].kind == graph.TERMINAL
     assert not graph.BY_ID["done"].permanent
     with pytest.raises(graph.GraphError, match="unknown kind"):
-        _validate_with(_mutate("done", kind="termnial"))
+        validate_with(_mutate("done", kind="termnial"))
 
 
 def test_a_node_may_not_declare_both_branches_and_a_successor():
@@ -360,7 +344,7 @@ def test_a_node_may_not_declare_both_branches_and_a_successor():
     step = _first(id="record_module")
     assert step.next and not step.branches
     with pytest.raises(graph.GraphError, match="no run can ever take"):
-        _validate_with(_mutate(step.id, branches={"again": "next_module", "stop": "done"}))
+        validate_with(_mutate(step.id, branches={"again": "next_module", "stop": "done"}))
 
 
 def test_the_reachability_walk_measures_the_graph_that_actually_runs():
@@ -374,7 +358,7 @@ def test_the_reachability_walk_measures_the_graph_that_actually_runs():
     kept = {k: v for k, v in reconcile.branches.items() if v != "halt_unreconciled"}
     assert len(kept) == len(reconcile.branches) - 1, "the shipped branch this test moves is gone"
     with pytest.raises(graph.GraphError, match="no run can ever take"):
-        _validate_with(_mutate("reconcile", branches=kept, next="halt_unreconciled"))
+        validate_with(_mutate("reconcile", branches=kept, next="halt_unreconciled"))
 
 
 def test_which_nodes_are_loops_is_pinned():
@@ -436,4 +420,26 @@ def test_the_half_swap_used_to_certify_a_graph_that_does_not_run():
     three nodes stop being reachable.
     """
     with pytest.raises(graph.GraphError, match="unreachable"):
-        _validate_with(_mutate("merge", next="intake"))
+        validate_with(_mutate("merge", next="intake"))
+
+
+def test_the_shared_swap_puts_both_views_back_when_validate_raises():
+    """One `finally` now serves 39 test functions, so it gets a test of its own.
+
+    Until CHG-20260907-25 the swap was written three times and nothing asserted that any of them
+    restored anything: measured with the `finally` body removed and one mutating test run alone,
+    the result was `1 passed`. Run wider it fails 49 tests across the three files — every one of
+    them a *later* test inheriting a graph the previous one left behind, which is collection
+    order rather than a guarantee. `pytest-randomly` is not installed, so that order is stable,
+    which makes the collateral reliable and no more meaningful.
+
+    **By identity, not equality.** `graph.NODES == original` would also hold for a `finally` that
+    rebuilt an equal tuple, and an equal tuple is the defect CHG-20260907-10 refuses: `validate`
+    asks `BY_ID.get(node.id) is not node`, so a restored view holding equal-but-distinct nodes
+    would fail the identity rule the next test to swap the graph relies on.
+    """
+    shipped_nodes, shipped_by_id = graph.NODES, graph.BY_ID
+    with pytest.raises(graph.GraphError, match="unknown node"):
+        validate_with(_mutate("intake", next="nowhere_at_all"))
+    assert graph.NODES is shipped_nodes, "the shipped node tuple did not come back"
+    assert graph.BY_ID is shipped_by_id, "the shipped index did not come back"
