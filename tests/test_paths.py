@@ -19,21 +19,9 @@ import pytest
 
 from ai_sdlc_runner import paths
 
-#: Every test in this module gets `conftest.py`'s deep-chain teardown. Named there rather
-#: than autouse so a module that builds a chain has to say so — `test_conversations_sqlite`
-#: did not, and its chains were the ones left in the basetemp this record's own suite run
-#: produced (CHG-20260908-04, second round).
-pytestmark = pytest.mark.usefixtures("remove_deep_chains")
-
 
 def _deep(root, depth_chars=320):
-    """A path past MAX_PATH, built out of ordinary components.
-
-    The chain stops at the first component boundary **at or past** ``depth_chars``, so how long it
-    ends up is decided by where the base ends: a record quoting an exact depth for it is quoting one
-    basetemp. Whatever this creates is removed by `remove_deep_chains` in `conftest.py`, which every
-    module that builds one opts into by name (CHG-20260908-04, second round).
-    """
+    """A path past MAX_PATH, built out of ordinary components."""
     d = root
     while len(str(d)) < depth_chars:
         d = d / "segment-of-an-ordinary-directory-name"

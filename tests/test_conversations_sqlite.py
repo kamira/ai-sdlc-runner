@@ -17,12 +17,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from ai_sdlc_runner import conversations as conv  # noqa: E402
 from ai_sdlc_runner import store as store_mod  # noqa: E402
 
-#: This module builds a chain past `MAX_PATH` too and did not clean it up: the basetemp
-#: CHG-20260908-04's own suite run produced held six entries past 259 characters, every one
-#: from `test_a_store_past_max_path_still_reports_what_it_could_not_read`. Found by a sweep
-#: the first round of that record had listed as still open.
-pytestmark = pytest.mark.usefixtures("remove_deep_chains")
-
 
 def _sqlite(tmp_path):
     return conv.backend("sqlite", root=tmp_path / "store")
