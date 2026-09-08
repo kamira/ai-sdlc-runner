@@ -598,6 +598,46 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1"})''',
         '''         gate="self_verify", gate_when="after", next="lead_task_review", mode=FOLLOWS,''',
         "tests/test_graph_validation.py"),
 
+    # ── mode-declared (CHG-20260907-26) ───────────────
+    # `Node.mode` defaulted to `SINGLE`, which is 4 of the 31 nodes where `RUNNER` is 15 --
+    # the minority value, the same shape the `gate-phase` group above was written for. A
+    # role-bearing node whose author never thought about its mode was read as one model in
+    # one session and `validate` accepted it: measured, `lead_task_review` rebuilt from its
+    # own fields minus `mode` came back `single` against a real `model_panel`.
+    #
+    # The first entry is the default itself. It must be reached through the **constructor**,
+    # because that is the only place a default acts: the obvious test
+    # `_mutate("pm_plan", mode=None)` passes with the default restored, since what it trips
+    # is the `is None` rule and that rule survives this mutation. Measured before the test
+    # was written: with `mode: str = SINGLE` back, nothing in the suite objects -- no shipped
+    # node omits `mode`, and the one construction that did (`test_rerun_idempotence.py:118`)
+    # is never validated. The second entry pins the message rather than the refusal: with the
+    # `is None` rule gone the closed-set rule below it still raises, saying "unknown mode
+    # None", which sends a reader after a typo when what happened is an omission.
+    #
+    # **Absent on purpose:** the other half of CHG-20260907-26 removes a hand-written count
+    # from a comment in `graph.py` -- "three nodes are `role="lead"`", where there are five,
+    # false from the commit that wrote it. Nothing can catch that returning. It is prose, and
+    # the sweep that reads `graph.py` for stale numbers
+    # (`test_the_node_count_in_the_documents_matches_the_graph`) matches digits only, which is
+    # not an oversight: of the 12 spelled-out "<word> nodes" phrases across the swept files,
+    # 11 are true counts of a *subset*, so a word-aware rule comparing against `len(NODES)`
+    # would fail 11 true sentences. The repair was to delete the number, and a deleted number
+    # is guarded by nothing -- which is why it is a smaller claim than a rule.
+    Mutation(
+        "mode-declared", "a node may take a mode nobody chose for it again",
+        SRC / "graph.py",
+        '''    mode: Optional[str] = None''',
+        '''    mode: str = SINGLE''',
+        "tests/test_execution_mode.py::test_a_node_whose_author_never_declared_a_mode_is_refused"),
+
+    Mutation(
+        "mode-declared", "an omitted mode may be reported as a typo again",
+        SRC / "graph.py",
+        '''        if node.mode is None:''',
+        '''        if False:''',
+        "tests/test_execution_mode.py::test_a_node_whose_author_never_declared_a_mode_is_refused"),
+
     # ── kind-and-edges (CHG-20260907-09) ──────────────────────────────
     # `MODES` was closed from the day it was written; `kind` was not, and the difference was
     # worth 23 of 31 nodes accepting nonsense -- with `done` reaching the engine's terminal

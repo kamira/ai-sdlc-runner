@@ -49,7 +49,7 @@ def test_the_real_graph_validates():
     graph.validate()
 
 
-def test_the_modes_partition_all_twenty_three_nodes():
+def test_the_modes_partition_every_node():
     counted = sum(1 for n in graph.NODES if n.mode in graph.MODES)
     assert counted == len(graph.NODES), "every node has a mode from the closed set"
 
@@ -70,8 +70,10 @@ def test_a_role_bearing_node_declared_runner_is_refused():
 
 
 def test_a_runner_node_declared_single_is_refused():
-    # The direction that would otherwise pass silently: SINGLE is the dataclass default, so a node
-    # added without thinking about its mode lands here. That must be an error, not a default.
+    # This used to be justified by the dataclass default — `SINGLE` was where a node added
+    # without thinking about its mode landed. CHG-20260907-26 removed that default, so the
+    # omission is refused on its own now (the test below) and this one holds what is left: a
+    # node that asks nobody and has `SINGLE` written on it deliberately.
     with pytest.raises(graph.GraphError, match="asks nobody|must be"):
         validate_with(_mutate("intake", mode=graph.SINGLE))
 
@@ -164,3 +166,27 @@ def test_the_engine_decides_a_panel_from_the_mode_not_the_role():
         "the walk is keying its panel decision off the role again — the mode is then a field "
         "nothing reads, which is the decorative-data failure task 12 exists to prevent")
     assert "graph.SEAT_PANEL" in source, "the walk should decide a panel from the declared mode"
+
+def test_a_node_whose_author_never_declared_a_mode_is_refused():
+    """The state that had no name until CHG-20260907-26: `mode` defaulted, so an omission was
+    `SINGLE` — 4 of the 31 nodes, where `RUNNER` is 15. The default was the minority value, the
+    same shape CHG-20260907-11 removed from `gate_when`, whose `before` was 3 of 10.
+
+    **Through the constructor, not through `_mutate`.** `_mutate("pm_plan", mode=None)` would
+    pass with the default restored, because what it trips is the `is None` clause and that
+    clause survives the mutation. A default can only act where a value is not supplied, so the
+    node has to be built without one — which is also the shape of the real mistake: somebody
+    adds a node and does not think about its mode.
+
+    Measured before the default went: `lead_task_review` rebuilt from its own fields minus
+    `mode` came back `single` against a real `model_panel`, and `validate()` **accepted** it.
+    """
+    import dataclasses
+
+    shipped = graph.BY_ID["lead_task_review"]
+    fields = {f.name: getattr(shipped, f.name) for f in dataclasses.fields(shipped)}
+    del fields["mode"]
+    forgotten = graph.Node(**fields)
+    assert forgotten.mode is None, "a mode nobody wrote down must not come back as a mode"
+    with pytest.raises(graph.GraphError, match="declares no mode"):
+        validate_with(tuple(forgotten if n.id == shipped.id else n for n in graph.NODES))

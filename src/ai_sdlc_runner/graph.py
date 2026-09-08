@@ -153,7 +153,20 @@ class Node:
     #: theirs. `validate` refuses it here.
     panel_branches: Dict[str, str] = field(default_factory=dict)
     #: How to read the models configured here — see ``MODES``. Declared, never inferred.
-    mode: str = SINGLE
+    #:
+    #: **There is no default, and ``None`` is never a valid state.** The sentinel is there only
+    #: so that an omission is a `GraphError` naming the node, instead of a `TypeError` raised
+    #: from a constructor where nothing can say which node or what was missing.
+    #:
+    #: It used to default to ``SINGLE``, which is **4 of the 31 nodes**; ``RUNNER`` is 15. So
+    #: the default was the minority value, and a node whose author never thought about its mode
+    #: was read as one model in one session. Measured: `lead_task_review` rebuilt from its own
+    #: fields minus `mode` came back ``single`` against a real ``model_panel``, and `validate`
+    #: **accepted** the graph. The record that introduced this field named that hazard and
+    #: shipped the default anyway (CHG-20260823-11, *"every unconsidered node would land there
+    #: silently"*); CHG-20260907-11 had already taken the same decision one field up, where
+    #: `gate_when` defaulted to the 3-of-10 value (CHG-20260907-26).
+    mode: Optional[str] = None
     #: This terminal is a **give-up**, not an ending (CHG-20260827-22). `done` is where the flow was
     #: designed to arrive; `halt_second_fail` and `halt_unreconciled` are where it stopped because
     #: nothing it can do would help. Both used to report `state: finished`, which made "it worked"
@@ -182,8 +195,8 @@ class Node:
     #: represents "the lead handing out work" — the dispatching is part of the build node itself.
     main: Optional[str] = None
     #: ``FOLLOWS`` only: the **node id** whose model to reuse. A node id and not a role, because
-    #: roles are not unique — three nodes are ``role="lead"`` — and "verify what *this* build
-    #: produced" cannot be said by naming a role.
+    #: roles are not unique — several nodes are ``role="lead"`` — and "verify what *this*
+    #: build produced" cannot be said by naming a role.
     follows: Optional[str] = None
     #: Where a **rejected** gate sends the run. ``None`` means this gate cannot be rejected — it can
     #: be approved or left waiting, and nothing else.
@@ -572,6 +585,17 @@ def validate() -> None:
         # role would mean a node's role silently decides how its models are read, which is a name
         # standing in for a constraint. Checking means both are written down and a disagreement is
         # a build error rather than a surprise at run time.
+        #
+        # No default, so "nobody wrote one down" is a state the graph can be in, and this is
+        # where it stops. Its own rule, ahead of the closed-set one below, because "unknown
+        # mode None" sends a reader after a typo when what happened is an omission — the same
+        # repair CHG-20260907-11 made for `gate_when`, whose default was a minority value in
+        # exactly this way (CHG-20260907-26).
+        if node.mode is None:
+            raise GraphError(
+                f"node {node.id!r} declares no mode. How its models are read is declared and "
+                f"never inferred, so a node that says nothing is a build error rather than a "
+                f"{SINGLE!r}. It must name one of {MODES}")
         if node.mode not in MODES:
             raise GraphError(f"node {node.id!r} has unknown mode {node.mode!r}")
         if (node.role is None) != (node.mode == RUNNER):
