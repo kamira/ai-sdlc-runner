@@ -12,7 +12,6 @@ violations it must find, and a set of correct forms it must not flag.
 import ast
 import io
 import os
-import shutil
 import sqlite3
 from pathlib import Path
 
@@ -20,36 +19,20 @@ import pytest
 
 from ai_sdlc_runner import paths
 
-
-@pytest.fixture(autouse=True)
-def _remove_what_this_file_builds(tmp_path):
-    """**pytest cannot clean up after these tests, and nothing said so** (CHG-20260908-04).
-
-    Four tests here build a 320-character chain under `tmp_path`. pytest keeps the last three
-    basetemps and removes the older ones with `shutil.rmtree` on a **plain** path, which is the
-    exact call this module exists because of: `os.walk` stops at 227 characters and the removal
-    fails `WinError 3`. So every run of this file left a `pytest-N` directory that nobody — not
-    pytest, not Explorer, not `rmdir /s` — could delete. Two were found on the machine that
-    measured this, one per full-suite run, each holding four of these chains.
-
-    Teardown rather than a `finally` in each test, for the reason the tests themselves argue: a
-    test that has already failed should still clean up, and a fifth test that builds a chain
-    tomorrow should not have to remember. `ignore_errors` because a test that never built one
-    leaves an ordinary directory pytest will handle, and a teardown that raises would turn a green
-    test red for a reason that has nothing to do with it.
-
-    `paths.real` is what makes the removal possible and is what this module ships; using anything
-    else here would be a test suite declining to eat its own cooking.
-    """
-    yield
-    shutil.rmtree(paths.real(tmp_path), ignore_errors=True)
+#: Every test in this module gets `conftest.py`'s deep-chain teardown. Named there rather
+#: than autouse so a module that builds a chain has to say so — `test_conversations_sqlite`
+#: did not, and its chains were the ones left in the basetemp this record's own suite run
+#: produced (CHG-20260908-04, second round).
+pytestmark = pytest.mark.usefixtures("remove_deep_chains")
 
 
 def _deep(root, depth_chars=320):
     """A path past MAX_PATH, built out of ordinary components.
 
-    Whatever this is used to create is removed by `_remove_what_this_file_builds` above; nothing
-    here has to remember to.
+    The chain stops at the first component boundary **at or past** ``depth_chars``, so how long it
+    ends up is decided by where the base ends: a record quoting an exact depth for it is quoting one
+    basetemp. Whatever this creates is removed by `remove_deep_chains` in `conftest.py`, which every
+    module that builds one opts into by name (CHG-20260908-04, second round).
     """
     d = root
     while len(str(d)) < depth_chars:
