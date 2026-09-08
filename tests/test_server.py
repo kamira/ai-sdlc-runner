@@ -2448,8 +2448,8 @@ def test_the_inventory_is_fifteen_and_the_two_renamed_ones_are_not_in_it():
 #: **Four of six is the finding, not a lapse in the inventory.** It is this route's first
 #: accounting; two of the four are honest folds and say so.
 CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE = {
-    "node_models": "folded into `by_model` by the route itself; drawn as each card's `use.nodes`",
-    "seat_models": "folded into `by_model` by the route itself; drawn as each card's `use.seats`",
+    "node_models": "folded into `by_model` by the route itself; the page names it at `use.nodes`",
+    "seat_models": "folded into `by_model` by the route itself; the page names it at `use.seats`",
     "source": "read by nothing. `runner run` and `runner serve` each print an aggregate count of "
               "the same fact, but they compute it themselves from the store rather than from this "
               "response — a draft of this line said the field 'reaches the terminal only' and a "
@@ -2523,9 +2523,10 @@ def test_every_key_of_the_node_config_route_is_named_by_the_console_or_written_d
                       if not re.search(r"\b%s\b" % re.escape(k), page)
                       and k not in CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE)
     assert unlisted == [], (
-        f"GET /config/nodes sends these and the console names none of them: {unlisted}. Draw them, "
-        f"or add each to CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE with what it is for and where its "
-        f"content goes — an inventory a reader can argue with, not a silence")
+        f"GET /config/nodes sends these and the console names none of them: {unlisted}. Name them "
+        f"where the page can use them, or add each to CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE with "
+        f"what it is for and where its content goes — an inventory a reader can argue with, not a "
+        f"silence")
 
     stale = sorted(k for k in CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE if k not in keys)
     assert stale == [], f"the inventory names keys the route no longer sends: {stale}"
@@ -2533,8 +2534,9 @@ def test_every_key_of_the_node_config_route_is_named_by_the_console_or_written_d
     named_but_listed = sorted(k for k in CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE
                               if re.search(r"\b%s\b" % re.escape(k), page))
     assert named_but_listed == [], (
-        f"these are listed as unnamed and the console names them: {named_but_listed}. A key that "
-        f"acquired a reader loses its entry, or the entry starts lying the day the view lands")
+        f"these are listed as unnamed and the console names them: {named_but_listed}. A key the "
+        f"page has started naming loses its entry, or the entry starts lying the day the view "
+        f"lands")
 
 
 def test_no_fold_named_in_the_node_config_inventory_is_absent_from_the_route_or_the_page():
@@ -2571,11 +2573,12 @@ def test_no_fold_named_in_the_node_config_inventory_is_absent_from_the_route_or_
                     if carrier not in keys)
     assert absent == [], f"these carriers are not keys of the response they claim to be in: {absent}"
 
-    undrawn = sorted(f"{carrier} (the carrier claimed for {key})"
+    unnamed = sorted(f"{carrier} (the carrier claimed for {key})"
                      for key, carriers in folds.items() for carrier in carriers
                      if not re.search(r"\b%s\b" % re.escape(carrier), page))
-    assert undrawn == [], (
-        f"these carriers reach no console, so the folded key reaches none either: {undrawn}")
+    assert unnamed == [], (
+        f"the page names none of these carriers, so the key folded into them is named nowhere "
+        f"either: {unnamed}")
 
 
 #: Words that turn a mention of the console into a statement of what it does **not** do. A closed

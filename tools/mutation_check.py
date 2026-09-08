@@ -3512,9 +3512,13 @@ CHG-20260907-28 and built by no record yet.''',
         "tests/test_server.py::test_every_key_of_the_node_config_route_is_named_by_the_console_or_written_down"),
 
     # The same edit as "the console stops naming the one key it draws by name", against the other
-    # guard. One console line carries two guarantees — that a drawn key stays drawn, and that the
-    # carrier two folds name is one a reader can actually see — and reverting it must not look like
-    # reverting only the first. Separate entries, separate objectors, the way `refusal-routing`
+    # guard. One console line carries two guarantees — that a named key stays named, and that the
+    # carrier two folds name is one the page still mentions — and reverting it must not look like
+    # reverting only the first. **Named, not drawn**: what these guards prove is that the
+    # identifier occurs in executable page text, and a dead `var schemaNames = ["by_model"]` would
+    # satisfy them while nothing read it. A seat blocked the first draft for saying more than that
+    # and blocked the second for leaving the claim in the prose beside a renamed test.
+    # Separate entries, separate objectors, the way `refusal-routing`
     # splits its weak rule from its explicit pin.
     Mutation(
         "node-config-accounting", "the carrier two inventory reasons name reaches no console",
