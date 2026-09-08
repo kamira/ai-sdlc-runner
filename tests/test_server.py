@@ -368,7 +368,12 @@ def test_a_failing_walk_reports_stopped_rather_than_looking_idle():
     def boom(cfg):
         raise RuntimeError("the dispatcher fell over")
 
-    runner = server.Runner(walk=boom, make_config=lambda i, a, r, art=(), rej=(), hist=(): None)
+    # A real `RunConfig` and not `None`: `_walk_once` sets `intake_ask_in_flight` on whatever
+    # `make_config` returns, so a stub outside the contract fails here for its own reason and the
+    # error this test is named for never gets a chance to be raised (CHG-20260907-27).
+    runner = server.Runner(walk=boom,
+                           make_config=lambda i, a, r, art=(), rej=(), hist=(): engine.RunConfig(
+                               node_specs={}, decisions={}))
     out = runner.start("do it", 0)
     assert out["state"] == engine.STOPPED
     assert "fell over" in out["error"]
@@ -1168,11 +1173,11 @@ def test_a_run_started_on_nothing_counts_its_first_stop():
     over every sequence; the difference is that under the second, CHG-20260904-09's mutation
     stays green, so an existing guard becomes a test that cannot fail.
     """
-    assert server.RunState().instructions_when_last_asked == -1, (
+    assert server.RunState().instructions_when_last_read == -1, (
         "a run that begins on nothing has not been asked anything yet, and 0 says it has")
 
     told = 0                                    # `start("")` -> instructions == []
-    assert told > server.RunState().instructions_when_last_asked, (
+    assert told > server.RunState().instructions_when_last_read, (
         "the first stop of a run started on nothing is not counted")
 
 
@@ -1865,7 +1870,9 @@ def test_a_finished_run_does_not_still_carry_the_failure_before_it():
         report.halted_at = "done"
         return report
 
-    runner = server.Runner(walk=walk, make_config=lambda *a, **k: object())
+    # `RunConfig()` rather than `object()`, for the reason in
+    # `test_a_failing_walk_reports_stopped_rather_than_looking_idle` (CHG-20260907-27).
+    runner = server.Runner(walk=walk, make_config=lambda *a, **k: engine.RunConfig(node_specs={}, decisions={}))
 
     failed = runner.start("do it", 0)
     assert failed["state"] == engine.STOPPED
@@ -2684,16 +2691,27 @@ def test_a_decision_that_names_nothing_is_refused_before_it_reaches_the_ledger(l
 
 # ── one question, one answer, in one rendered box (CHG-20260904-03) ───────────────────────────
 
-def _intake_runner(sequence):
-    """A runner whose intake seat reports `sequence[i]` missing on the i-th walk."""
+def _intake_runner(sequence, tmp_path=None):
+    """A runner walked once per entry in `sequence`, which is `(aspect, how)` per walk.
+
+    `how` is `"instruct"` or `"attach"` — the two ways an operator reaches a second walk from an
+    incomplete stop, and the whole difference this helper exists to be able to express. The first
+    walk is always `start`. `attach` needs a store, so it needs `tmp_path`.
+    """
     from test_flow import DECISIONS, SPEC
 
-    aspect = {"now": sequence[0]}
+    aspect = {"now": sequence[0][0]}
 
     def factory(seat=None, model=None, **_):
         class Session(engine.Session):
             def ask(self, order):
                 if order["node_id"] == "intake_review":
+                    # The option ask is the one with no seat. Answering it is what lets the
+                    # escalation *land on the page* instead of raising out of `read_options` —
+                    # a crash and a box offering options are not the same finding, and this test
+                    # is about the box (CHG-20260907-27).
+                    if seat is None:
+                        return {"options": ["one way", "another way", "a third way"]}
                     return {"missing": [aspect["now"]], "problems": []}
                 return {"verdict": "pass"} if seat else {"ok": True}
 
@@ -2710,18 +2728,53 @@ def _intake_runner(sequence):
                                 intake_history=tuple(intake_history))
 
     runner = server.Runner(walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
-                           make_config=make_config)
-    for lap, missing in enumerate(sequence):
+                           make_config=make_config,
+                           store=attach_mod.Store(tmp_path) if tmp_path is not None else None)
+    for lap, (missing, how) in enumerate(sequence):
         aspect["now"] = missing
         version = runner.state.version
         if lap == 0:
             runner.start("do it", version)
+        elif how == "attach":
+            runner.attach(version, "f%d.md" % lap, b"an unrelated file")
         else:
             runner.instruct(version, "more")
-        yield missing, runner.state.snapshot()
+        yield missing, how, runner.state.snapshot()
 
 
-def test_the_console_shows_one_answer_to_how_many_times_it_has_been_asked():
+def _console_gap_row(snapshot, aspect):
+    """What `drawSuspension` puts under one aspect, built by the page's own rule.
+
+    `console/index.html` renders the count **only** where options are on the table, and reads it
+    from `intake_asks_by_aspect`; everywhere else the row says `not stated`. Mirrored here rather
+    than asserted against the two raw fields, because the defect this guards is two numbers in one
+    rendered box and a test comparing snapshot keys never enters the box.
+    """
+    suspended = snapshot.get("suspended") or {}
+    options = (suspended.get("options") or {}).get(aspect)
+    if not options:
+        return "not stated"
+    asked = (snapshot.get("intake_asks_by_aspect") or {}).get(aspect) or 0
+    word = {1: "asked once", 2: "asked twice"}.get(asked, f"asked {asked} times")
+    return f"{word}. Options, none of them chosen for you:"
+
+
+def test_the_row_this_file_renders_is_the_row_the_page_renders():
+    """The floor under `_console_gap_row`: a mirror nobody checks is a second implementation.
+
+    Only the parts that decide *what a reader sees* — that the row is built from
+    `intake_asks_by_aspect`, that it is guarded on the options being there, and the three spellings
+    of the count. Not the whole line, which would go red on a rewording.
+    """
+    page = _console()
+    for fragment in ('(state.intake_asks_by_aspect || {})[aspect]',
+                     'if (opts && opts.length)',
+                     '"asked " + (asked === 1 ? "once" : asked === 2 ? "twice"',
+                     '"not stated"'):
+        assert fragment in page, f"the console no longer renders the gap row this way: {fragment!r}"
+
+
+def test_the_console_shows_one_answer_to_how_many_times_it_has_been_asked(tmp_path):
     """**Two numbers in one box** (CHG-20260904-03, defect seat L-16).
 
     The panel's `<p>` renders `reason`, which `intake.stop_reason` writes **per aspect**. The row
@@ -2736,17 +2789,55 @@ def test_the_console_shows_one_answer_to_how_many_times_it_has_been_asked():
     CHG-20260903-42 gave the two engine-side readers one name; the console is the third reader and
     it was not swept. The claim asserted here is that the two agree, not that either is spelled a
     particular way.
+
+    **The version that shipped could not fail on the attach path** (CHG-20260907-27), for two
+    reasons that had to be repaired together. It compared two snapshot *fields*, never the row a
+    person reads — and it walked `start` and `instruct` only, where the stop is always appended and
+    the two columns can differ only by which stops were counted. The lap where they differ by the
+    **ask in flight** is `attach`, and it is here now:
+
+        walk       the row said     the <p> said
+        attach     asked twice      asked 3 times     <- what CHG-20260904-05 left behind
     """
-    words = {1: "asked once", 2: "asked twice"}
-    for missing, snap in _intake_runner(["flow", "architecture", "architecture", "architecture"]):
+    laps = [("flow", "start", False), ("architecture", "instruct", False),
+            ("architecture", "instruct", False), ("architecture", "attach", False),
+            ("architecture", "instruct", True)]
+    for lap, (missing, how, snap) in enumerate(
+            _intake_runner([(a, h) for a, h, _ in laps], tmp_path)):
         counted = (snap.get("intake_asks_by_aspect") or {}).get(missing)
         assert counted is not None, (
-            f"the console has no per-aspect count for {missing!r}: "
+            f"the console has no per-aspect count for {missing!r} after a {how}: "
             f"{snap.get('intake_asks_by_aspect')}")
+        words = {1: "asked once", 2: "asked twice"}
         said = words.get(counted, f"asked {counted} times")
         assert said in str(snap.get("reason")), (
-            f"the sentence and the counter disagree in one box: the counter says {counted} "
-            f"({said!r}) and the sentence reads {snap.get('reason')!r}")
+            f"the sentence and the counter disagree in one box after a {how}: the counter says "
+            f"{counted} ({said!r}) and the sentence reads {snap.get('reason')!r}")
+
+        # And the same claim about the rendered row, which is the only one of the two a person
+        # ever sees. `not stated` is the page's own text for an aspect with no options on it.
+        #
+        # **Each lap says which row it expects, rather than accepting either** (codex seat, twice).
+        # The first version was one `or` across all five laps, so the attach lap — the one the test
+        # had just been extended to reach — was satisfied by the left side and measured nothing.
+        # Splitting on `how == "attach"` fixed that lap and left the same hole on the others: a
+        # fifth lap where the escalation had failed **entirely** renders `not stated` too, and the
+        # `or` would have called that a pass. So the expectation is in the lap table above, the
+        # escalation is asserted to have happened where it is expected, and the count in the row is
+        # compared to the sentence's by equality rather than by `in`.
+        row = _console_gap_row(snap, missing)
+        offered = ((snap.get("suspended") or {}).get("options") or {}).get(missing)
+        if laps[lap][2]:
+            assert offered, (
+                f"lap {lap} is the third real ask for {missing!r} and nothing escalated; "
+                f"every row below this one would then read `not stated` and assert nothing: "
+                f"{snap.get('suspended')!r}")
+            assert row.split(".")[0] == said, (
+                f"the box renders {row!r} over a sentence reading {snap.get('reason')!r}")
+        else:
+            assert row == "not stated", (
+                f"a lap nobody was asked on offered options anyway: {row!r} over a sentence "
+                f"reading {snap.get('reason')!r} after a {how}")
 
 
 def test_the_count_is_the_tally_because_the_stop_is_already_recorded():
@@ -2781,14 +2872,24 @@ def test_the_count_is_the_tally_because_the_stop_is_already_recorded():
         "this is read")
 
 
-def _intake_only_runner(tmp_path=None):
-    """A runner whose intake seat always reports the same aspect missing."""
+def _intake_only_runner(tmp_path=None, journal=None):
+    """A runner whose intake seat always reports the same aspect missing.
+
+    ``journal`` builds the config the way `cmd_serve` does — a journal and ``resume=True``
+    (`cli.py`) — which no other test here does, and which CHG-20260907-27 made load-bearing.
+    """
     from test_flow import DECISIONS, SPEC
 
     def factory(seat=None, model=None, **_):
         class Session(engine.Session):
             def ask(self, order):
                 if order["node_id"] == "intake_review":
+                    # The option ask carries no seat. Answered, so that reaching the escalation
+                    # shows up as **options on the table** — which is the behaviour under test —
+                    # rather than as `read_options` raising and the run going to `stopped`
+                    # (CHG-20260907-27).
+                    if seat is None:
+                        return {"options": ["one way", "another way", "a third way"]}
                     return {"missing": ["architecture"], "problems": []}
                 return {"verdict": "pass"} if seat else {"ok": True}
 
@@ -2798,11 +2899,18 @@ def _intake_only_runner(tmp_path=None):
 
     def make_config(instructions, approvals, rulings, artifacts=(), rejections=(),
                     intake_history=()):
+        # **`artifacts` reaches the config** (CHG-20260907-27, second round, codex seat). It was
+        # accepted and dropped, so an attachment never reached a work order here — while
+        # `test_a_journalled_console_run_still_reaches_the_escalation`'s docstring rests on
+        # *"attach changes something every order carries"*. Its assertions only walk the `instruct`
+        # lap, so they stood; the sentence was not what the fixture could measure.
         return engine.RunConfig(node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
                                 decisions=dict(DECISIONS), risk="low", undeclared="allow",
                                 instructions=tuple(instructions), confirmed=tuple(approvals),
                                 rulings=tuple(rulings), rejections=tuple(rejections),
-                                intake_history=tuple(intake_history))
+                                artifacts=tuple(artifacts),
+                                intake_history=tuple(intake_history),
+                                journal=journal, resume=journal is not None)
 
     store = attach_mod.Store(tmp_path) if tmp_path is not None else None
     return server.Runner(walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
@@ -2836,17 +2944,390 @@ def test_a_walk_that_nobody_asked_for_is_not_counted_as_an_ask(tmp_path):
 
 
 def test_the_runner_does_not_give_up_on_somebody_it_never_asked_again(tmp_path):
-    """The consequence, at the limit: `ASK_LIMIT` attachments used to reach the options path."""
+    """The consequence, at the limit: an attachment used to reach the options path.
+
+    **Rewritten, because the shipped version measured the wrong moment and the wrong start**
+    (CHG-20260907-27, both seats). It began from **one** recorded ask and attached four files, so
+    the tally never came within one of `ASK_LIMIT` and no walk could have escalated whatever the
+    engine decided. Then it asked `needs_options` about the history **after** the walk, with the
+    default `in_flight` — re-deriving a decision the runner had already made, from a fixture, with
+    an input the walk did not use. The defect it is named for lived in neither: on the walk itself,
+    `asks_including_this_one` added one for an ask nobody made, and `2 + 1` is `ASK_LIMIT`.
+
+    So the ask that matters is the **third**, the walk that matters is an `attach`, and the thing
+    to look at is what the run put in front of the operator.
+    """
     from ai_sdlc_runner import intake as intake_mod
 
     runner = _intake_only_runner(tmp_path)
     runner.start("do it", runner.state.version)
-    for n in range(intake_mod.ASK_LIMIT + 1):
-        runner.attach(runner.state.version, "f%d.md" % n, b"unrelated")
+    runner.instruct(runner.state.version, "and the architecture is three services")
+    assert len(runner.state.intake_history) == intake_mod.ASK_LIMIT - 1, (
+        f"the floor: this has to stand one ask short of the limit, or nothing below can fire. "
+        f"{runner.state.intake_history}")
 
-    assert not intake_mod.needs_options(runner.state.intake_history, "architecture"), (
-        f"the runner stopped asking after {len(runner.state.intake_history)} recorded asks, "
-        f"having asked once and been answered by nobody")
+    runner.attach(runner.state.version, "notes.md", b"an unrelated file")
+
+    stop = runner.state.snapshot().get("suspended") or {}
+    assert not (stop.get("options") or {}), (
+        f"attaching a file made the runner give up and offer options for "
+        f"{sorted((stop.get('options') or {}))}, having asked twice and been answered by nobody")
+    assert "asked twice" in str(runner.state.snapshot().get("reason")), (
+        f"the operator is told how often they were asked, and an attachment is not an ask: "
+        f"{runner.state.snapshot().get('reason')!r}")
+    assert runner.state.state == engine.SUSPENDED, (
+        f"the run left the ask-again path: {runner.state.state} {runner.state.error!r}")
+
+    # And the ask that *is* one still lands on the limit, so this is not "the escalation stopped
+    # working" wearing the name of a fix.
+    runner.instruct(runner.state.version, "still nothing about the architecture")
+    after = runner.state.snapshot()
+    assert (after.get("suspended") or {}).get("options", {}).get("architecture"), (
+        f"the third real ask did not reach the options path: {after.get('suspended')!r}")
+
+
+def test_the_walk_is_told_whether_it_is_an_ask(tmp_path):
+    """**The server's two answers to one question are one sentence read twice** (CHG-20260907-27).
+
+    `_walk_once` decides *"did the requirement grow?"* twice: once before the walk, to tell the
+    engine whether there is an ask in flight, and once after it, as the first conjunct of the guard
+    that records the stop. It is the same expression on purpose — a walk the server counts and a
+    walk the engine counts must be the same walk, or the tally and the escalation drift the way
+    CHG-20260903-42's two readers did.
+
+    **It is the first conjunct and not the whole guard**, from the second round of this record.
+    Both the guard and the engine also ask *"did this node open a session?"*, which is what
+    `test_the_same_brief_started_twice_says_one_number` is for; this fixture builds no journal, so
+    that half is structurally true here and every walk below turns on the declaration alone.
+
+    **And *"attach does not grow the requirement"* is pinned here only where the mark is current**
+    (fourth round). `False` on the attach below is `told > mark` reading `1 > 1`, and that is a fact
+    about the mark, not about the method: leave the mark behind and the same attach declares itself
+    an ask. Every walk here follows one that moved the mark, which is the case this test covers;
+    `test_an_attachment_after_a_replayed_start_is_not_an_ask` covers the one where it did not.
+
+    Captured off the config the runner actually handed the walk, because a rule read out of the
+    source is a rule about the source.
+    """
+    seen = []
+    runner = _intake_only_runner(tmp_path)
+    walk = runner._walk
+    runner._walk = lambda cfg: (seen.append(cfg.intake_ask_in_flight), walk(cfg))[1]
+
+    runner.start("do it", runner.state.version)
+    runner.attach(runner.state.version, "notes.md", b"an unrelated file")
+    runner.instruct(runner.state.version, "and the architecture is three services")
+
+    assert seen == [True, False, True], (
+        f"the engine was told {seen}: start and instruct grow the requirement, and an attach whose "
+        f"mark is current does not")
+
+    # The floor: the two decisions have to agree, walk by walk, or one of them is measuring
+    # something else. Three walks, three recorded stops... minus the attachment.
+    assert len(runner.state.intake_history) == sum(1 for was_an_ask in seen if was_an_ask), (
+        f"the stops recorded ({len(runner.state.intake_history)}) and the walks the engine was "
+        f"told were asks ({seen}) are two different counts of one thing")
+
+
+def test_a_journalled_console_run_still_reaches_the_escalation(tmp_path):
+    """**The conjunct is inert on `serve`'s `instruct` and `attach`, and that had to be pinned
+    rather than reasoned** (CHG-20260907-27, second seat).
+
+    `engine.walk` ANDs the caller's declaration with *"did this node open a session?"*, so a walk
+    that answered every seat out of the journal is not an ask. `cmd_serve` walks with `resume=True`
+    and a journal, and the reason the conjunct does not fire on these two laps is that `instruct`
+    and `attach` both change something every work order carries — so the orders differ from the
+    journal's and every seat is re-asked.
+
+    **It is not inert on `start`**, and the first build of this record said it was. `start` builds
+    a fresh `RunState` and the journal outlives it, so the same brief started again replays every
+    seat and asks nobody; `test_the_same_brief_started_twice_says_one_number` is that lap. This
+    test covers the two laps where the escalation must still be reachable.
+
+    That is a property of `_order_for`, not of this change, and **every other server test builds a
+    config with no journal**, which makes `resumed` structurally `0` and the conjunct structurally
+    true. If artifacts or instructions ever stopped reaching every work order, `serve` would
+    silently stop escalating and nothing would go red. This is the test that would.
+    """
+    from ai_sdlc_runner import intake as intake_mod
+
+    journal = engine.AskJournal(tmp_path / "asks")
+    runner = _intake_only_runner(tmp_path / "att", journal=journal)
+
+    # The floor, twice over: this has to be the *resuming* configuration, and the journal has to
+    # have something in it to resume from. Without both, the conjunct is trivially true and this
+    # test passes over the thing it is named for.
+    walked = []
+    walk = runner._walk
+    runner._walk = lambda cfg: (walked.append((cfg.resume, cfg.journal is journal)), walk(cfg))[1]
+
+    runner.start("do it", runner.state.version)
+    assert walked == [(True, True)], (
+        f"this is not the configuration `cmd_serve` walks with — (resume, journal is ours): "
+        f"{walked}")
+    assert journal.answers(), "the journal recorded no answer, so there was nothing to resume from"
+
+    for _ in range(intake_mod.ASK_LIMIT - 1):
+        runner.instruct(runner.state.version, "and here is some more that still misses it")
+
+    assert len(runner.state.intake_history) == intake_mod.ASK_LIMIT, (
+        f"a journalled run counted {len(runner.state.intake_history)} asks over "
+        f"{intake_mod.ASK_LIMIT} instructions — a seat's answer was reused across a changed brief")
+    stop = runner.state.snapshot().get("suspended") or {}
+    assert (stop.get("options") or {}).get("architecture"), (
+        f"the console's own configuration cannot reach the escalation any more: {stop!r}")
+
+
+def test_the_same_brief_started_twice_says_one_number(tmp_path, monkeypatch):
+    """**`start` against a persisted journal, and the box with two answers in it**
+    (CHG-20260907-27, second round, codex seat, blocking).
+
+    The first build declared `serve` unaffected on the grounds that *"start, instruct and attach
+    each change instructions or artifacts, so the order and the journal differ and every seat asks
+    again."* It is false for `start`. `Runner.start` builds a fresh `RunState`, but `cmd_serve`'s
+    journal lives at `token_dir/asks`, persists across processes, has no run id and nothing clears
+    it — so the same brief started again, **when the journal's last intake walk was on that
+    brief**, replays every seat and opens no session.
+
+    That clause is the third round's, and it is load-bearing: the
+    journal keeps one order per ask id and the last walk overwrote it, so
+    `start a, instruct b, restart, start a` compares a brief of `a` against an order for `a + b`
+    and re-asks. This test drives the case where they match, which is what the guard was wrong on.
+
+    Measured on `28afbc2`, through the real `Runner`:
+
+        start, finish, start the same brief   declared  resumed  asks  tally  the <p>
+        first start                               True        0     3      1  asked once
+        second start                              True        3     3      1  asked 0 times
+
+    The append guard asked *"did the requirement grow?"* alone — true, because a fresh `RunState`
+    resets the mark to `-1` — while the engine asked that **and** *"did this node open a
+    session?"*, which was false. One box, two answers: the defect CHG-20260903-42 closed,
+    reintroduced by this record's own conjunct on the path it had declared unaffected.
+
+    The claim asserted is that the sentence and the counter are one number, and it is asserted off
+    the `in_flight` the engine actually used rather than off either source — so the stop the server
+    records has to be the walk the engine called an ask, walk by walk.
+    """
+    from ai_sdlc_runner import intake as intake_mod
+
+    used = []
+    real = intake_mod.stop_reason
+    monkeypatch.setattr(
+        intake_mod, "stop_reason",
+        lambda survey, history, in_flight=True: (used.append(in_flight),
+                                                 real(survey, history, in_flight))[1])
+
+    journal = engine.AskJournal(tmp_path / "asks")
+    runner = _intake_only_runner(tmp_path / "att", journal=journal)
+
+    for lap in ("first", "second"):
+        if lap == "second":
+            # The one precondition `start` checks is the state word, and this is `cmd_serve`
+            # restarting the same brief: a fresh `RunState`, the same journal underneath it.
+            runner.state.state = engine.FINISHED
+        runner.start("do it", runner.state.version)
+        report, snap = runner.state.report, runner.state.snapshot()
+
+        # The floors. Without them the second lap can pass by never resuming anything, which is
+        # the only reason it is different from the first.
+        if lap == "first":
+            assert not report.resumed and report.asks, (
+                f"the first start resumed {len(report.resumed)} of {len(report.asks)} asks; there "
+                f"was nothing in the journal yet, so this is not the run being measured")
+        else:
+            assert report.asks and len(report.resumed) == len(report.asks), (
+                f"the second start opened a session — {len(report.resumed)} resumed of "
+                f"{len(report.asks)} asked — so it is an ask after all and this test is measuring "
+                f"nothing")
+
+        counted = (snap.get("intake_asks_by_aspect") or {}).get("architecture") or 0
+        said = {0: "not asked yet", 1: "asked once",
+                2: "asked twice"}.get(counted, f"asked {counted} times")
+        assert said in str(snap.get("reason")), (
+            f"the sentence and the counter disagree in one box on the {lap} start: the counter "
+            f"says {counted} ({said!r}) and the sentence reads {snap.get('reason')!r}")
+        assert not ((snap.get("suspended") or {}).get("options") or {}), (
+            f"the {lap} start offered options after {counted} recorded asks: "
+            f"{snap.get('suspended')!r}")
+
+        # The mechanism under the agreement: one fact, two readers. The stop this walk recorded is
+        # the walk the engine called an ask — read off the value the engine passed, not off either
+        # of the two expressions that produce it.
+        assert len(runner.state.intake_history) == (1 if used[-1] else 0), (
+            f"the {lap} start recorded {len(runner.state.intake_history)} stop(s) while "
+            f"the engine walked with in_flight={used[-1]}; two answers to one question")
+
+    assert used == [True, False], (
+        f"the engine was told {used}: the first start asks, and the second answers every seat out "
+        f"of the journal and asks nobody")
+
+
+def test_an_attachment_after_a_replayed_start_is_not_an_ask(tmp_path, monkeypatch):
+    """**`POST /attachments` counted as an ask, on the walk after a same-brief restart**
+    (CHG-20260907-27, fourth round, blocking on behaviour).
+
+    The round above put `len(report.resumed) < len(report.asks)` into the same `if` as
+    `instructions_when_last_read = told`, so a replayed `start` correctly recorded nothing **and
+    stopped moving the mark**. `Runner.start` builds a fresh `RunState`, so the mark was back at
+    `-1` and stayed there. The next `attach` read `1 > -1`, was declared an ask by
+    `_walk_once`'s pre-walk expression, opened a session with every seat — its artifact changes
+    every work order, so nothing replays and the third conjunct is true too — and appended. The
+    console said *"asked once"* after `POST /attachments`, which `docs/API.md` says never happens.
+
+    Measured through the real `Runner` on `e3e838f`, and the same three walks after the repair.
+    *declared* is `_walk_once`'s pre-walk expression, on the config the runner handed the walk;
+    *engine* is what `engine.walk` resolved it to and passed to `stop_reason`; *mark* is read after
+    the walk:
+
+        e3e838f              declared  engine  told  mark  resumed  asks  stops  the <p>
+        start a                  True    True     1     1        0     3      1  asked once
+        restart, same brief      True   False     1    -1        3     3      0  not asked yet
+        attach                   True    True     1     1        0     3      1  asked once  <- the
+                                                                                             defect
+
+        with this repair     declared  engine  told  mark  resumed  asks  stops  the <p>
+        start a                  True    True     1     1        0     3      1  asked once
+        restart, same brief      True   False     1     1        3     3      0  not asked yet
+        attach                  False   False     1     1        0     3      0  not asked yet
+
+    The restarting walk still declares itself an ask — the mark it is read against is `-1` at that
+    moment, on a `RunState` a line old — and the engine still refuses it. What changes is the mark
+    the walk leaves behind, and therefore the walk after it.
+
+    It is CHG-20260904-05's defect — the tally moving on an attachment — on the path this record
+    opened, and a regression against `3a8caf2` and `28afbc2`, where the replayed `start` still set
+    the mark and the attach after it read `1 > 1`.
+
+    Swept over every sequence of `instruct` / `attach` / same-brief restart up to five operations
+    (2004 walks, 363 sequences), tabulated on `op` x *declared* x *recorded* rather than on the
+    round above's *did an option ask fire*: 100 walks were an `attach` that recorded a stop, all
+    100 immediately after a restart, none of them dispatching an option ask — which is why a table
+    counting option dispatches showed nothing.
+
+    The floors matter more than the assertions here. Without them this passes by never restarting,
+    never replaying, or never attaching.
+    """
+    from ai_sdlc_runner import intake as intake_mod
+
+    used = []
+    real = intake_mod.stop_reason
+    monkeypatch.setattr(
+        intake_mod, "stop_reason",
+        lambda survey, history, in_flight=True: (used.append(in_flight),
+                                                 real(survey, history, in_flight))[1])
+
+    journal = engine.AskJournal(tmp_path / "asks")
+    runner = _intake_only_runner(tmp_path / "att", journal=journal)
+
+    declared = []
+    walk = runner._walk
+    runner._walk = lambda cfg: (declared.append(cfg.intake_ask_in_flight), walk(cfg))[1]
+
+    runner.start("do it", runner.state.version)
+    assert len(runner.state.intake_history) == 1 and not runner.state.report.resumed, (
+        "the first start did not reach an incomplete stop with nothing to resume from, so there "
+        "is no journal entry for the restart below to replay")
+
+    # `cmd_serve` restarting the same brief: a fresh `RunState`, the same journal under it.
+    runner.state.state = engine.FINISHED
+    runner.start("do it", runner.state.version)
+    report = runner.state.report
+    assert report.asks and len(report.resumed) == len(report.asks), (
+        f"the restart opened a session — {len(report.resumed)} resumed of {len(report.asks)} "
+        f"asked — so it is an ask after all and the mark below moves for the ordinary reason")
+    assert len(runner.state.intake_history) == 0, (
+        f"the restart recorded {len(runner.state.intake_history)} stop(s); it asked nobody")
+
+    runner.attach(runner.state.version, "notes.md", b"an unrelated file")
+    assert not runner.state.report.resumed, (
+        f"the attach replayed {len(runner.state.report.resumed)} of "
+        f"{len(runner.state.report.asks)} seats, so the third conjunct would refuse the append on "
+        f"its own and this test measures nothing")
+
+    assert declared == [True, True, False], (
+        f"the server declared {declared} over start / restart / attach. The attachment did not "
+        f"grow the requirement, and the mark the restart leaves behind is the only thing that can "
+        f"make the server say it did — so the third entry is the one this test is about")
+    assert used == [True, False, False], (
+        f"the engine walked with in_flight={used}: it refuses the replayed restart on its own, "
+        f"and the attach after it has to be refused by the first conjunct or by nothing")
+    assert len(runner.state.intake_history) == 0, (
+        f"`POST /attachments` recorded {len(runner.state.intake_history)} intake stop(s) after a "
+        f"replayed start; `docs/API.md` says it never moves this counter")
+
+    snap = runner.state.snapshot()
+    assert not (snap.get("intake_asks_by_aspect") or {}), (
+        f"the tally moved on an attachment: {snap.get('intake_asks_by_aspect')!r}")
+    assert "not asked yet" in str(snap.get("reason")), (
+        f"the console says the aspect has been asked for after an attachment: "
+        f"{snap.get('reason')!r}")
+
+
+def test_nothing_asks_anybody_before_the_node_the_append_guard_counts_over():
+    """**The assumption that makes two differently scoped expressions one number**
+    (CHG-20260907-27, third round).
+
+    `Runner._walk_once`'s `len(report.resumed) < len(report.asks)` is **report-wide**: it counts
+    every ask the walk dispatched, at any node. `engine.walk`'s `asked_somebody` is **node-scoped**
+    — `asks_before`/`resumed_before` are marked immediately before the halted node's seats and read
+    immediately after them. The two expressions are the same pair of integers only because, at an
+    incomplete intake stop, `intake_review` is the only node that has asked anything yet.
+
+    That is stated twice — in `Runner._walk_once`'s own comment and in `cli.cmd_run`'s
+    `record_intake_stop` guard, which is written the same way for the same reason — and until this
+    test it was pinned by nothing. Put an asking node in front of `intake_review` and the server
+    counts asks the engine did not, and records a stop on a walk the engine called an ask nobody
+    was asked for: the blocker this record's second round was refused for, back.
+
+    Two halves, because the comments make two claims: nothing asks on the way in, and nothing
+    routes back afterwards. The second matters for the same reason as the first — a rejection
+    routed to `intake_review` from below would reach it with other nodes' asks already in the
+    report.
+
+    **The second half looks for edges into either node, not into `intake_review` alone**
+    (fourth round). It read `"intake_review" in …`, so an edge into `intake` would have walked
+    straight on to `intake_review` — `intake` is a `RUNNER` step whose only `next` is that node —
+    and arrived with other nodes' asks in the report, with this test green. True today and pinned
+    by nothing until now. The one edge excluded is `intake` -> `intake_review` itself, which is the
+    way in; an edge the other way, `intake_review` -> `intake`, is a loop and is caught.
+
+    A pin and not a repair. Scoping the server's expression to the halted node was the other way
+    to close this, and it was rejected: `report.resumed` holds ask **ids** and `Ask` carries no id
+    (`engine.Ask` has a `node_id` and no ask id), so the server would have to recover the node from
+    the spelling of `NNN-node-seat` — a string convention standing in for the thing it identifies,
+    trading an unpinned graph assumption for an unpinned id format inside a guard whose subject is
+    two readers of one fact. That reason stands on its own. **It is not the shape CHG-20260901-14
+    took out of this field** (fourth round, correcting the third's citation): that record replaced
+    journal *membership* with the *reuse* decision — a count that was wrong, not an id convention
+    — and the resemblance is to the field, not to the defect.
+    """
+    node, seen = graph.BY_ID["intake"], []
+    while not node.role and node.next and node.id not in seen:
+        seen.append(node.id)
+        node = graph.BY_ID[node.next]
+
+    assert node.id == "intake_review", (
+        f"the walk reaches {node.id!r} before `intake_review`, and it asks somebody "
+        f"({node.role!r}). `Runner._walk_once` counts asks over the whole report while the engine "
+        f"counts them over the halted node, and the two agree only while this is the first node "
+        f"that asks — so the append guard now records a stop on a walk that opened no session. "
+        f"Scope the server's expression to `report.suspended['node_id']`, or route this node "
+        f"after the intake stop")
+
+    # Either node, because everything that reaches `intake` reaches `intake_review` next.
+    targets = {"intake", "intake_review"}
+    way_in = {("intake", "intake_review")}
+    routes_back = sorted(
+        f"{n.id} -> {target}" for n in graph.NODES
+        for target in ({n.next, n.rejects_to} | set(n.branches.values()))
+        if target in targets and (n.id, target) not in way_in)
+    assert routes_back == [], (
+        f"{routes_back} route back into the intake stop, so `intake_review` can be reached with "
+        f"other nodes' asks already in `report.asks` — and the server's report-wide count and the "
+        f"engine's node-scoped one stop being the same number. The same two comments rest on this "
+        f"half. Scope the server's expression to `report.suspended['node_id']`, or route this edge "
+        f"somewhere that is not the way back into intake")
 
 
 def test_the_ask_counter_still_counts_on_the_second_run_of_a_process(tmp_path):
@@ -2869,7 +3350,7 @@ def test_the_ask_counter_still_counts_on_the_second_run_of_a_process(tmp_path):
     assert len(runner.state.intake_history) == 1, "run 1 did not reach an incomplete stop"
     runner.instruct(runner.state.version, "and the architecture is three services")
     assert len(runner.state.intake_history) == 2, "run 1's second ask was not counted"
-    mark = runner.state.instructions_when_last_asked
+    mark = runner.state.instructions_when_last_read
 
     # The one precondition `start` checks is the state word, and a finished run is what a person
     # starting a second one has in front of them.

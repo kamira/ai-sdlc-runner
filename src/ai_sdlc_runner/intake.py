@@ -221,7 +221,8 @@ def times_asked(history: Sequence[Mapping[str, object]], aspect: str) -> int:
     return sum(1 for stop in history if aspect in (stop.get("missing") or ()))
 
 
-def asks_including_this_one(history: Sequence[Mapping[str, object]], aspect: str) -> int:
+def asks_including_this_one(history: Sequence[Mapping[str, object]], aspect: str,
+                            in_flight: bool = True) -> int:
     """How many times this has been asked, **counting the ask being made right now**.
 
     `times_asked` is the raw tally over *recorded* stops, and the engine checks both of the
@@ -234,17 +235,36 @@ def asks_including_this_one(history: Sequence[Mapping[str, object]], aspect: str
     result was that on the third ask the operator read *"(asked 3 times)"* while the decision beside
     it counted two and asked again — against three declarations in this file that say the third
     (CHG-20260903-42). One name both of them read, so they cannot drift apart again.
+
+    **`in_flight` is whether this walk is an ask at all** (CHG-20260907-27). The `+ 1` was
+    unconditional, and CHG-20260904-05 had already measured that it must not be: three methods can
+    walk from an incomplete stop, and on `attach` the requirement did not grow, so nobody was
+    asked. That record repaired the *tally* — `server._walk_once` stops appending — and left the
+    `+ 1` alone, so after two recorded asks an `attach` walk read `2 + 1`, crossed `ASK_LIMIT` and
+    put options on the table. The same headline one lap over: the runner gives up on somebody
+    nobody asked again.
+
+    A parameter and not an inference. This module is handed a history of stops and an aspect; an
+    attachment leaves no trace in either, and nothing in `intake_history`, the instructions or the
+    artifacts tells the two walks apart. Only the caller that performed the walk knows, so only the
+    caller can say. Defaulted to `True` because that is what every caller meant before this record
+    existed — and because the two errors are not symmetric: counting an ask that did not happen
+    ends the asking early and is unrecoverable, while missing one asks a person once more.
     """
-    return times_asked(history, aspect) + 1
+    return times_asked(history, aspect) + (1 if in_flight else 0)
 
 
-def needs_options(history: Sequence[Mapping[str, object]], aspect: str) -> bool:
+def needs_options(history: Sequence[Mapping[str, object]], aspect: str,
+                  in_flight: bool = True) -> bool:
     """Has asking for this aspect failed often enough to stop asking?
 
     ``>=`` rather than ``>``: the third unanswered ask is the one that has failed, not the fourth.
     The lap was never lost here — it was lost in what the history held at the moment of the check.
+
+    ``in_flight`` is `asks_including_this_one`'s and is passed straight through: a walk that is not
+    an ask must not be the ask that runs out of patience.
     """
-    return asks_including_this_one(history, aspect) >= ASK_LIMIT
+    return asks_including_this_one(history, aspect, in_flight) >= ASK_LIMIT
 
 
 def option_request(aspect: str, instructions: Sequence[str]) -> Dict[str, object]:
@@ -341,12 +361,33 @@ def proceeded_note(survey: Survey) -> str:
             f"person, who chose to continue")
 
 
-def stop_reason(survey: Survey, history: Sequence[Mapping[str, object]]) -> str:
-    """One plain sentence for a person, naming what is missing and how often it has been asked."""
+def stop_reason(survey: Survey, history: Sequence[Mapping[str, object]],
+                in_flight: bool = True) -> str:
+    """One plain sentence for a person, naming what is missing and how often it has been asked.
+
+    ``in_flight`` is `asks_including_this_one`'s, and it is here for the reason that function
+    exists at all: `stop_reason` and `needs_options` answer the same question at the same moment,
+    and a keyword given to one and not the other is CHG-20260903-42's defect back in a new spelling
+    — the sentence saying *"asked 3 times"* beside a decision that counted two. One number, two
+    readers, one input.
+
+    **Zero has a spelling**, because `in_flight=False` made it reachable and a table that stopped
+    at one produced *"asked 0 times"* (CHG-20260907-27, second round). A `serve` `start` against a
+    persisted journal is the shape: the `RunState` is fresh so nothing is in `history`, every seat
+    answers out of the journal so no session is opened, and the stop is neither recorded nor an
+    ask. Measured rather than reasoned — the sentence was read off a real `Runner` started twice on
+    one journal — and `test_the_same_brief_started_twice_says_one_number` is where it is pinned.
+
+    The page is deliberately **not** given the same word. `console/index.html` renders its count
+    only where options are on the table, and options need `ASK_LIMIT` asks, so nothing the console
+    can draw counts zero. Prose nothing can produce is what this record already had to withdraw a
+    mutation entry for.
+    """
     parts = []
     for aspect in survey.missing:
-        seen = asks_including_this_one(history, aspect)
-        nth = {1: "asked once", 2: "asked twice"}.get(seen, f"asked {seen} times")
+        seen = asks_including_this_one(history, aspect, in_flight)
+        nth = {0: "not asked yet", 1: "asked once",
+               2: "asked twice"}.get(seen, f"asked {seen} times")
         parts.append(f"{BY_ASPECT[aspect]} ({nth})")
     joined = "; ".join(parts)
     return (f"The requirement does not say: {joined}. Nothing has been planned or built — this "

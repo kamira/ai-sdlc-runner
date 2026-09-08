@@ -244,7 +244,20 @@ caller never has to know which of the three it is holding.
                             "safety": {"<seat>": […]}, "complete": false },
   "intake_asks_by_aspect": {},      // per aspect, how many times it has been asked for
                                     // — counted after this stop was recorded, so it matches
-                                    // the sentence `reason` carries (CHG-20260904-03)
+                                    // the sentence `reason` carries (CHG-20260904-03).
+                                    // A walk that is not an ask records no stop, so both
+                                    // stay where they were: `POST /attachments` never moves
+                                    // this counter and never moves that sentence. It moved
+                                    // the sentence until CHG-20260907-27, and CHG-20260907-27
+                                    // then broke the first half of the line for one walk in
+                                    // twenty — an attach straight after a same-brief restart,
+                                    // measured at 100 of 2004 swept walks, where the counter
+                                    // and the sentence both read *"asked once"*. Repaired in
+                                    // that record's fourth round; both halves hold. An aspect with
+                                    // no entry here has been asked for zero times, which is
+                                    // what `POST /run` on a brief a persisted journal already
+                                    // answers produces, and `reason` spells that
+                                    // *"not asked yet"*
   "send_backs":    [ {…} ],
   "dispatches":    [ "…" ],         // which model a pool chose, and which a follows reused
   "adjudications": [ {…} ],         // every panel decision, with the seats' verdicts

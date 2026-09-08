@@ -1126,7 +1126,52 @@ def cmd_run(args: argparse.Namespace) -> int:
             #
             # `report.asks` at an incomplete intake stop is exactly the survey's asks and any
             # option ask: `intake_review` is the first asking node and nothing routes a rejection
-            # back to it, so the walk cannot have asked anywhere else yet.
+            # back to it, so the walk cannot have asked anywhere else yet. **That is an assumption
+            # about the graph, and this line and `server._walk_once` both rest their whole
+            # equivalence with the engine's node-scoped count on it** — insert an asking node ahead
+            # of `intake_review` and this expression counts asks the engine did not. Said in two
+            # comments and enforced by nothing until CHG-20260907-27's third round; it is now
+            # `test_nothing_asks_anybody_before_the_node_the_append_guard_counts_over`, which
+            # checks both halves of the sentence.
+            #
+            # **`RunConfig.intake_ask_in_flight` is left at its default here on purpose, and the
+            # engine covers what this line covers** (CHG-20260907-27). `serve` fills that field
+            # because it knows before the walk whether the requirement grew; `cmd_run` builds its
+            # config before the walk and this rule is a fact about a report that does not exist
+            # yet. Measured on a journal driven the way this function drives one — two fresh runs
+            # recording a stop each, then `--resume` on the same brief:
+            #
+            #     run                            resumed  asks  options?  stops after
+            #     1  fresh                             0     3  no                  1
+            #     2  fresh, one more instruction       0     3  no                  2
+            #     3  --resume, same brief              3     4  YES                 3   <- before
+            #     3  --resume, same brief              3     3  no                  2   <- after
+            #
+            # Run 3 asked nobody: its three intake asks all came back from the journal without a
+            # session being opened. Before the repair it escalated anyway, and the fourth ask this
+            # line counted was the **option ask the escalation itself dispatched** — so the guard
+            # read *"somebody was asked"* because the runner had given up. `engine.walk` now
+            # measures the same thing where it is knowable in time, over this node's asks only,
+            # and ANDs it with the caller's declaration. `not cfg.resume` was the alternative and
+            # is wrong: `--resume` with a **new** instruction re-dispatches every ask because the
+            # order changed (CHG-20260901-14), which is the normal way to answer an intake stop
+            # here, and it would have started needing four asks instead of three.
+            #
+            # **The state is still reachable, and this line stays honest only because the option
+            # ask replays too** (CHG-20260907-27, third round; the record said the engine had made
+            # it unreachable, and that was wrong). Driven the way this function drives a journal,
+            # three fresh runs recording a stop each and then `--resume` on the same brief:
+            #
+            #     run 4  --resume, same brief   resumed 4  asks 4  options YES  stops after 3
+            #
+            # The escalation fires — `times_asked` is 3 and `in_flight` is false, which is
+            # `needs_options`, not a contradiction of it — and the option ask comes back out of
+            # the journal, so `resumed` keeps pace with `asks` and no stop is recorded. Remove
+            # only that replay — the same run with the option ask's journal entry gone, which is
+            # what an `_acceptable` rejection or an order that differs between runs leaves behind
+            # — and the row reads `resumed 3  asks 4  options YES  stops after 4`: a fourth stop
+            # recorded under a sentence that says *"asked 3 times"*. Stating this over the
+            # survey's asks alone is its own record.
             and len(report.resumed) < len(report.asks)):
         journal.record_intake_stop(report.suspended.get("missing") or ())
     if journal and report.suspended and report.suspended.get("unsafe"):

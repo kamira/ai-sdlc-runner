@@ -323,7 +323,15 @@ class RunState:
     #: cannot answer findings nobody put in front of them; the brief retires it the way
     #: `_live_approvals` retires an approval the brief outgrew (CHG-20260906-03).
     proceeded: Optional[tuple] = None
-    #: How many instructions had been given when the last intake ask was counted (CHG-20260904-05).
+    #: How many instructions had been given when the seats last **read** the requirement
+    #: (CHG-20260904-05; renamed from `instructions_when_last_asked` in CHG-20260907-27's fourth
+    #: round). Read, not asked: a walk that answers every seat out of the journal asks nobody and
+    #: still leaves their answers standing against that brief, so the requirement has not grown
+    #: since — and `told > mark` is *"has it grown since the answers in hand were given?"*. While
+    #: the two were one sentence the name was true; the fourth round's guard moves this on a
+    #: replayed walk that records no stop, and the old name would have been a claim the code
+    #: refutes. Two earlier records name the old spellings, and they are history: CHG-20260904-05
+    #: put `_instructions_when_last_asked` on the `Runner`, CHG-20260904-09 moved it here.
     #: **On the run, not on the runner** (CHG-20260904-09): `start` builds a fresh `RunState` with
     #: `instructions=[instruction]`, so a mark that outlived it made `told > mark` false for every
     #: run after the first in a process, and `intake_history` above stayed empty — the field whose
@@ -334,7 +342,7 @@ class RunState:
     #: short for the life of the run. `or not self.intake_history` produces identical counts, and
     #: was rejected for a reason that is not about behaviour: under it CHG-20260904-09's mutation
     #: stays **green**, so the existing guard becomes a test that cannot fail.
-    instructions_when_last_asked: int = -1
+    instructions_when_last_read: int = -1
     log: List[Dict[str, object]] = field(default_factory=list)
     #: What the operator handed over, and anything the store has since lost. A brief that has
     #: quietly lost a document is worse than one that says so.
@@ -376,6 +384,31 @@ class RunState:
             # walk has recorded the current stop, so the ask in flight is already counted —
             # the same question has two correct answers at two moments, which is exactly why
             # one shared function would give the wrong one here.
+            #
+            # **The table above was measured before `attach` could walk without counting**
+            # (CHG-20260907-27). Its three rows are all `instruct` laps, where the stop is
+            # always appended, so the two columns could only differ by *which* stops were
+            # counted. The row it was missing is the one where they differ by the ask in
+            # flight, and it survived this repair's own predecessor:
+            #
+            #     walk       the <p> said      the counter said   options?
+            #     attach     asked 3 times     2                  YES     <- CHG-20260904-05
+            #     attach     asked twice       2                  no      <- and now
+            #
+            # Nothing here changed to fix it. The `<p>` moved, because the walk now tells the
+            # engine it was not an ask; this stayed the tally, which was right both times.
+            #
+            # **And a fourth kind of walk, from the second round.** A `start` on a brief a
+            # persisted journal already answers opens no session, so it is not an ask either, and
+            # the `RunState` it starts is fresh — so this map has no entry for the aspect at all.
+            # An absent key is zero here, and the sentence beside it says *"not asked yet"*:
+            #
+            #     walk       the <p> said      the counter said   options?
+            #     start      asked 0 times     1                  no      <- 28afbc2, two answers
+            #     start      not asked yet     (no entry)         no      <- and now
+            #
+            # Still nothing here changed. The append guard below stopped recording a stop nobody
+            # was asked for, which is what makes the two columns one number again.
             "intake_asks_by_aspect": {
                 aspect: intake_mod.times_asked(self.intake_history, aspect)
                 for stop in self.intake_history
@@ -405,7 +438,14 @@ class RunState:
 class Runner:
     """Owns the one run. Every state change bumps the version and wakes the listeners."""
 
-    def __init__(self, walk: Callable[..., engine.RunReport], make_config: Callable[..., object],
+    #: ``make_config`` returns a **`RunConfig`**, and the annotation says so from CHG-20260907-27.
+    #: It said `object`, and `_walk_once` has been calling `dataclasses.replace` on the result since
+    #: CHG-20260906-07 — behind `if proceeded`, so the two test stubs that returned `None` and
+    #: `object()` never reached it. Filling `intake_ask_in_flight` on every walk did, and both went
+    #: red at once. A signature that permits what the body cannot take is where those stubs came
+    #: from.
+    def __init__(self, walk: Callable[..., engine.RunReport],
+                 make_config: Callable[..., engine.RunConfig],
                  store: Optional["attach_mod.Store"] = None):
         self._walk = walk
         self._make_config = make_config
@@ -887,6 +927,40 @@ class Runner:
                         "the findings are shown again")
                 if note not in self.state.retired_approvals:
                     self.state.retired_approvals.append(note)
+            # **Whether this walk is an ask, said before the walk instead of only after it**
+            # (CHG-20260907-27). This is the half the caller can answer — *"did the requirement
+            # grow?"* — and it is the first conjunct of the append guard below, written out here
+            # rather than shared, because the two live at two moments and `cli.cmd_run` decides
+            # the same thing a third way, from the report. What matters is that the server's two
+            # answers agree, and they do because they are one sentence read twice.
+            #
+            # It is **not** the whole question, and a first build of this record shipped as if it
+            # were: the guard below took this half alone while `engine.walk` took this half AND
+            # *"did this node open a session?"*, so on a `start` against a persisted journal the
+            # counter said 1 and the sentence said 0. Both halves, in both places, from here on —
+            # see the guard.
+            #
+            # CHG-20260904-05 stopped `attach` *counting* as an ask and left the engine still
+            # adding one for the ask in flight, so two recorded asks and one attached file crossed
+            # `intake.ASK_LIMIT`. Set on the config for the reason the comment above gives —
+            # `_make_config` has twenty callers and several would silently drop an argument.
+            #
+            # **The two reads are separated by the walk and still cannot disagree**, and this is
+            # the state machine's guarantee rather than luck. A draft of this comment described a
+            # mid-walk `instruct` making them differ and called the divergence harmless; a review
+            # seat measured that it is not reachable at all, which is worse than harmless in a
+            # comment — a reader could take it as licence for a divergence that really would be.
+            #
+            # `start`, `instruct` and `attach` each set `state = "running"` under the lock before
+            # calling `_advance`, and `instruct` refuses anything but `suspended`, `idle`,
+            # `finished` or `stopped` — so no instruction can be added while a walk is in flight.
+            # `attach` is the one method that can arrive mid-walk and it does not touch
+            # `instructions`. `instructions_when_last_read` is written in one place, one
+            # walk at a time. Both operands are therefore fixed for the whole walk.
+            cfg = dataclasses.replace(
+                cfg,
+                intake_ask_in_flight=(len(self.state.instructions)
+                                      > self.state.instructions_when_last_read))
             report = self._walk(cfg)
         except Exception as exc:                   # the run failed; say so rather than look idle
             with self._lock:
@@ -921,11 +995,143 @@ class Runner:
             # An ask is counted when the **requirement itself grew**, because that is what
             # `intake_review` reads and what "asked for and not supplied" is about. An attachment
             # reaches work orders as an artifact; it is not somebody supplying the aspect.
+            #
+            # *"`attach` never counts"* is a property of the **mark**, not of the method, and the
+            # fourth round of this record is where that stopped being true: 100 of the sweep's
+            # 2004 walks were an `attach` that recorded a stop, every one of them straight after a
+            # same-brief restart that had left the mark behind. See the guard's own comment below.
+            #
+            # **And when a session was actually opened** (CHG-20260907-27, second round, codex
+            # seat, blocking). "Did the requirement grow?" is half the question, and this guard
+            # asked only that half while `engine.walk` asked both — so the two boxes on one page
+            # answered differently on the path this record had declared unaffected. Measured,
+            # `serve`'s journal lives at `token_dir/asks`, persists across processes, has no run
+            # id and nothing clears it, so the same brief started again replays every seat — when
+            # the journal's **last** intake walk was on exactly that brief, the clause the third
+            # round adds because the journal keeps one order per ask id and the last walk
+            # overwrote it. `start a, instruct b, restart, start a` compares a brief of `a`
+            # against an order for `a + b` and re-asks everything; the row below is the case where
+            # they match:
+            #
+            #     start, finish, start the same brief   resumed  asks  the tally  the <p>
+            #     first start                                 0     3          1  asked once
+            #     second start, before this line              3     3          1  asked 0 times
+            #     second start, after it                      3     3          0  not asked yet
+            #
+            # `told > instructions_when_last_read` is **true** on that second start — the mark is
+            # `-1` on a fresh `RunState` — so the stop was recorded and the counter said 1, while
+            # the engine's conjunct said no session was opened and the sentence counted the ask
+            # out. One box, two answers: the defect CHG-20260903-42 closed, reintroduced by this
+            # record's own conjunct.
+            #
+            # So the **append** takes both halves — the mark below moves on the first alone, for
+            # the reason written at the guard itself — and they are the same two numbers the engine
+            # takes. `cli.cmd_run` already writes this half exactly this way; the engine measures
+            # its own node's asks (`asks_before`/`resumed_before`), and at an incomplete intake
+            # stop those start at zero because `intake_review` is the first asking node and
+            # nothing routes a rejection back to it — the sentence `cmd_run`'s own comment carries.
+            # `test_the_same_brief_started_twice_says_one_number` measures the agreement lap by
+            # lap off the `in_flight` the engine actually walked with, rather than reading it out
+            # of either of the two expressions that produce it.
+            #
+            # The rejected alternative was to put the resolved `in_flight` on `RunReport` and read
+            # it here. It is the same behaviour — measured identical on the sequence above and on
+            # `test_server`/`test_intake`/`test_cli`/`test_flow`/`test_schemas` — and it costs a
+            # field on the report's **documented** shape: `docs/SCHEMAS.md` entry 13 and the
+            # console's `NOT_ON_THE_CONSOLE` inventory both go red until a purely internal
+            # engine-to-server handoff is entered in both. **Two catalogue lines, and no wire**
+            # (CHG-20260907-27, third round, correcting this comment's own overstatement):
+            # `RunReport.as_dict()` has no caller in `src/` — `cli.py` says so at its
+            # `risk_settled` line — so the field would reach no client, and `NOT_ON_THE_CONSOLE`
+            # already holds `resumed`, the field this guard reads. The reason to prefer the
+            # conjunct is the shape, not the paperwork: a field whose only reader is two lines
+            # downstream sits on a documented report for every later reader to account for.
+            #
+            # The escalation's own option ask cannot make this read true where it was false. The
+            # reason this comment gave until CHG-20260907-27's third round — *"an option ask is
+            # dispatched only where `in_flight` already held"* — is **not** that reason, because it
+            # is false. `intake.needs_options` is `times_asked + (1 if in_flight else 0) >=
+            # ASK_LIMIT`, and `recorded=3, in_flight=False` satisfies it. On the server it fires
+            # that way: swept over every sequence of `instruct` / `attach` / same-brief restart up
+            # to five operations, 2004 walks, 194 of them dispatching an option ask —
+            #
+            #     where the option ask fired  the engine's `in_flight`  this guard's `told > mark`
+            #     `instruct`, 151 walks       True                      True
+            #     `attach`, 43 walks          False                     False
+            #
+            # — so an option ask *is* dispatched with `in_flight` false, 43 times, and the guard
+            # is still right. `in_flight` is a conjunction, so a false one is false in one of two
+            # ways and each is closed on its own:
+            #
+            #   * the **caller's** half is false. Then `told > mark` above is the same falsehood,
+            #     and the first conjunct has already refused the append — whatever the third says.
+            #     This is the `attach` column.
+            #   * the **node's** half is false: the survey was answered entirely out of the
+            #     journal. Then the requirement cannot have grown, because a grown brief changes
+            #     every work order and the journal keeps one order per ask id, so the orders
+            #     mismatch and every seat is re-asked. The one walk where `told > mark` survives
+            #     that is a replayed `start` — the mark is `-1` on a fresh `RunState` — and a fresh
+            #     `RunState` has an empty `intake_history`, so `times_asked` is 0 and no option ask
+            #     can be dispatched there at all. Measured: of the swept walks, 363 have
+            #     `told > mark` with a fully resumed survey, every one of them a restart, every one
+            #     with an empty history and no option ask.
+            #
+            # The conclusion survives; the sentence it was argued from did not. A reachability
+            # claim the code does not support is the defect class this record exists to remove, and
+            # ACC finding 5 blocked the same class here already — in the mirror direction, where a
+            # comment described a race the state machine forbids. This direction is the worse of
+            # the two: what it is offered to prove is true, so nothing downstream looks wrong.
+            #
+            # **This counts asks over the whole report; the engine counts them over one node.**
+            # They are the same pair of integers only because `intake_review` is the first node
+            # that asks anybody and nothing routes back to it — the sentence *"the engine
+            # measures its own node's asks"* above rests on, carried again by `cmd_run`'s comment,
+            # and pinned since the third round by
+            # `test_nothing_asks_anybody_before_the_node_the_append_guard_counts_over`.
+            #
+            # **The mark moves on its own condition; only the append takes the third conjunct**
+            # (CHG-20260907-27, fourth round, blocking on behaviour). The two shared one `if`
+            # until here, and the conjunct the round above added therefore stopped the mark as
+            # well as the append. Every walk in this sweep, on the axis the round above did not
+            # tabulate — `op` x *declared an ask* x *recorded a stop*, rather than `op` x *an
+            # option ask fired*:
+            #
+            #     op         declared  recorded  walks     shipped     after this line
+            #     start      True      True        363     correct     unchanged
+            #     instruct   True      True        547     correct     unchanged
+            #     restart    True      False       363     correct     unchanged, mark now moves
+            #     restart    True      True        184     correct     unchanged
+            #     attach     False     False       447     correct     unchanged
+            #     attach     True      True        100     **wrong**   declared False, no append
+            #
+            # The last row is the defect. A replayed `start` — a fresh `RunState`, so the mark is
+            # `-1`, and a journal whose last intake walk was this brief, so every seat is answered
+            # out of it — correctly records nothing, and left the mark at `-1`. The next `attach`
+            # then read `1 > -1`, was declared an ask by the same expression at the top of this
+            # method, and appended: the console said *"asked once"* after `POST /attachments`, and
+            # `docs/API.md`'s *"`POST /attachments` never moves this counter and never moves that
+            # sentence"* was false on 100 of the 2004 walks. That attach walk really does open
+            # sessions — its artifact changes every order, so no seat is replayed and the third
+            # conjunct is true — which is why guarding the append alone never caught it. What was
+            # false is the **first** conjunct, read off a mark that had stopped moving.
+            #
+            # It is `CHG-20260904-05`'s defect, the tally moving on an attachment, on the path
+            # this record opened. At `3a8caf2` and `28afbc2` the replayed `start` still set the
+            # mark, so the attach after it read `1 > 1`: a regression the round above introduced
+            # and its own sweep hid.
+            #
+            # So the mark records **what the seats last read**, which is why it is no longer
+            # spelled `instructions_when_last_asked`: a replayed walk asks nobody and still leaves
+            # every seat's answer standing against that brief, so the requirement has not grown
+            # since. `told > mark` is *"did the requirement grow since the answers in hand were
+            # given?"*, and that question is unchanged by whether a session was opened.
             stop = report.suspended or {}
             told = len(self.state.instructions)
-            if stop.get("incomplete") and told > self.state.instructions_when_last_asked:
-                self.state.instructions_when_last_asked = told
-                self.state.intake_history.append({"missing": list(stop.get("missing") or ())})
+            if stop.get("incomplete") and told > self.state.instructions_when_last_read:
+                self.state.instructions_when_last_read = told
+                if len(report.resumed) < len(report.asks):
+                    self.state.intake_history.append(
+                        {"missing": list(stop.get("missing") or ())})
             self.state.report = report
             self.state.state = report.state
             self.state.version += 1

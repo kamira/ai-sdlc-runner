@@ -900,8 +900,8 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "intake-count", "a run that started on nothing goes back to not counting its first stop",
         SRC / "server.py",
-        '''    instructions_when_last_asked: int = -1''',
-        '''    instructions_when_last_asked: int = 0''',
+        '''    instructions_when_last_read: int = -1''',
+        '''    instructions_when_last_read: int = 0''',
         "tests/test_server.py"),
 
     Mutation(
@@ -3345,7 +3345,7 @@ MUTATIONS: List[Mutation] = [
         'decisions', 'the ask counter goes back to outliving the run it counts',
         SRC / 'server.py',
         '            self.state = RunState(state="running", version=self.state.version + 1,\n                                  instructions=[instruction] if instruction else [])',
-        '            self.state = RunState(state="running", version=self.state.version + 1,\n                                  instructions=[instruction] if instruction else [],\n                                  instructions_when_last_asked=(\n                                      self.state.instructions_when_last_asked))',
+        '            self.state = RunState(state="running", version=self.state.version + 1,\n                                  instructions=[instruction] if instruction else [],\n                                  instructions_when_last_read=(\n                                      self.state.instructions_when_last_read))',
         'tests/test_server.py'),
 
     Mutation(
@@ -3536,6 +3536,157 @@ CHG-20260907-28 and built by no record yet.''',
         '''''',
         "tests/test_server.py"
         "::test_the_page_documents_this_route_and_promises_no_reader_it_does_not_have"),
+
+    # ── ask-in-flight (CHG-20260907-27) ───────────────────────────────────────────────────
+    # CHG-20260904-05 measured that a walk is not always an ask and repaired the **tally**:
+    # `server._walk_once` stops appending on `attach`. `intake.asks_including_this_one` kept
+    # adding one unconditionally, so the walk that was not counted still counted itself, and two
+    # recorded asks plus one attached file crossed `ASK_LIMIT`. Six sites carry the repair — the
+    # arithmetic, the two engine call sites that must pass the same input, the one caller that
+    # knows the answer, the append guard that has to take the same fact the engine took, and the
+    # spelling that fact made reachable — and each is registered against the node that goes red
+    # when it is undone.
+    #
+    # The last two are the **second round's**. The first build gave the engine a conjunct the
+    # server's append guard did not have, so on a `serve` `start` against a persisted journal the
+    # counter said 1 and the sentence said 0 — one box, two answers, which is the defect
+    # CHG-20260903-42 closed. Both new entries name the same node, because both lines are what
+    # makes that one box hold one number.
+    #
+    # The last two after those are the **third round's**, and they are not in `src/ai_sdlc_runner`
+    # at all. The server's expression counts asks over the whole report and the engine's counts
+    # them over one node; they are the same pair of integers only because nothing asks before
+    # `intake_review`. Two comments say so and nothing enforced it, so the graph is what the
+    # mutations edit: an asking node put in front of it, and a rejection routed back to it. Both
+    # name the one test that pins the assumption rather than a behaviour, because that is what is
+    # being registered — an assumption, not a repair.
+    #
+    # **`console/index.html` is deliberately not mutated here.** A draft registered
+    # `if (opts && opts.length)` -> `if (true)` against
+    # `test_the_row_this_file_renders_is_the_row_the_page_renders`, and a review seat named what
+    # that measures: the guard is a text search over the page, so the entry is caught **by the
+    # exact token it edits** and by nothing else. It reports on the spelling of the line rather
+    # than on what a browser draws, which is the shape this repository has had to undo twice
+    # (CHG-20260903-39). The test stays — a mirror nobody checks is a second implementation, and a
+    # text search is the only console guard available here — and the table does not claim it as
+    # coverage of rendered behaviour.
+    #
+    # The **default** is registered too, and the first draft of this comment said it could not be:
+    # the server fills the field on every walk, so the reasoning went that no test could see the
+    # default move. Measured instead of reasoned — `= True` -> `= False`, whole files — and **two**
+    # tests objected, both walking with a plain `RunConfig` and reading the sentence a person is
+    # shown. (The first draft of this sentence said *three*, against the `2 failed, 395 passed`
+    # three lines below it and against its own *"both"*; a review seat absorbed the corrected
+    # figure without carrying it here.) The claim that an entry is uncatchable is a claim about a
+    # search
+    # (`tests/test_intake.py`, `test_flow.py`, `test_cli.py`, `test_server.py`: 2 failed, 395
+    # passed).
+    Mutation(
+        "ask-in-flight", "the ask in flight is counted on a walk nobody was asked for",
+        SRC / "intake.py",
+        '''    return times_asked(history, aspect) + (1 if in_flight else 0)''',
+        '''    return times_asked(history, aspect) + 1''',
+        "tests/test_server.py::test_the_runner_does_not_give_up_on_somebody_it_never_asked_again"),
+
+    Mutation(
+        "ask-in-flight", "the decision stops being told whether this walk is an ask",
+        SRC / "engine.py",
+        '''                        if not intake_mod.needs_options(cfg.intake_history, aspect,
+                                                        in_flight):''',
+        '''                        if not intake_mod.needs_options(cfg.intake_history, aspect):''',
+        "tests/test_server.py::test_the_runner_does_not_give_up_on_somebody_it_never_asked_again"),
+
+    Mutation(
+        "ask-in-flight", "the sentence and the decision take different inputs again",
+        SRC / "engine.py",
+        '''                    said = (intake_mod.stop_reason(survey, cfg.intake_history, in_flight)''',
+        '''                    said = (intake_mod.stop_reason(survey, cfg.intake_history)''',
+        "tests/test_server.py::test_the_console_shows_one_answer_to_how_many_times_it_has_been_asked"),
+
+    Mutation(
+        "ask-in-flight", "the server tells every walk it is an ask",
+        SRC / "server.py",
+        '''                intake_ask_in_flight=(len(self.state.instructions)
+                                      > self.state.instructions_when_last_read))''',
+        '''                intake_ask_in_flight=True)''',
+        "tests/test_server.py::test_the_walk_is_told_whether_it_is_an_ask"),
+
+    Mutation(
+        "ask-in-flight", "a resumed walk that opened no session still counts itself as an ask",
+        SRC / "engine.py",
+        '''                in_flight = cfg.intake_ask_in_flight and asked_somebody''',
+        '''                in_flight = cfg.intake_ask_in_flight''',
+        "tests/test_intake.py::test_a_resumed_walk_that_opened_no_session_asked_nobody"),
+
+    Mutation(
+        "ask-in-flight", "a caller that says nothing is assumed to have asked nobody",
+        SRC / "engine.py",
+        '''    intake_ask_in_flight: bool = True''',
+        '''    intake_ask_in_flight: bool = False''',
+        "tests/test_intake.py::test_before_three_asks_there_are_no_options_only_the_question"),
+
+    Mutation(
+        "ask-in-flight", "the append guard stops asking whether a session was opened",
+        SRC / "server.py",
+        '''                if len(report.resumed) < len(report.asks):''',
+        '''                if len(report.resumed) <= len(report.asks):''',
+        "tests/test_server.py::test_the_same_brief_started_twice_says_one_number"),
+
+    # The fourth round's blocking finding, and the reason the two lines above are two `if`s.
+    # Putting the assignment back under the third conjunct is the shipped code of `e3e838f`, so
+    # this entry is the regression itself rather than an invented edit.
+    Mutation(
+        "ask-in-flight", "the mark stops moving on a walk that recorded no stop",
+        SRC / "server.py",
+        '''            if stop.get("incomplete") and told > self.state.instructions_when_last_read:
+                self.state.instructions_when_last_read = told
+                if len(report.resumed) < len(report.asks):
+                    self.state.intake_history.append(
+                        {"missing": list(stop.get("missing") or ())})''',
+        '''            if (stop.get("incomplete") and told > self.state.instructions_when_last_read
+                    and len(report.resumed) < len(report.asks)):
+                self.state.instructions_when_last_read = told
+                self.state.intake_history.append(
+                    {"missing": list(stop.get("missing") or ())})''',
+        "tests/test_server.py::test_an_attachment_after_a_replayed_start_is_not_an_ask"),
+
+    Mutation(
+        "ask-in-flight", "zero loses the spelling the conjunct made reachable",
+        SRC / "intake.py",
+        '''        nth = {0: "not asked yet", 1: "asked once",
+               2: "asked twice"}.get(seen, f"asked {seen} times")''',
+        '''        nth = {1: "asked once", 2: "asked twice"}.get(seen, f"asked {seen} times")''',
+        "tests/test_server.py::test_the_same_brief_started_twice_says_one_number"),
+
+    Mutation(
+        "ask-in-flight", "a node asks somebody before the one the append guard counts over",
+        SRC / "graph.py",
+        '''    Node("intake", STEP, "the user's instruction arrives", next="intake_review", mode=RUNNER,
+         note="the runner reads it; nobody is asked anything yet"),''',
+        '''    Node("intake", STEP, "the user's instruction arrives", next="intake_review",
+         role="seat", mode=SINGLE, note="the runner reads it; nobody is asked anything yet"),''',
+        "tests/test_server.py::"
+        "test_nothing_asks_anybody_before_the_node_the_append_guard_counts_over"),
+
+    Mutation(
+        "ask-in-flight", "a rejection routes back to the node the append guard counts over",
+        SRC / "graph.py",
+        '''    Node("review_failed", STEP, "the panel did not pass it", next="change_retry", mode=RUNNER,''',
+        '''    Node("review_failed", STEP, "the panel did not pass it", next="intake_review", mode=RUNNER,''',
+        "tests/test_server.py::"
+        "test_nothing_asks_anybody_before_the_node_the_append_guard_counts_over"),
+
+    # The half above looked for edges into `intake_review` alone, so this graph was green until
+    # the fourth round widened the target set: `intake` is a `RUNNER` step whose only `next` is
+    # `intake_review`, so an edge into it arrives at the counted node just the same. Measured on
+    # the pre-widening expression: `routes_back` came back `[]`.
+    Mutation(
+        "ask-in-flight", "a rejection routes back to the step in front of the counted node",
+        SRC / "graph.py",
+        '''    Node("acceptance_failed", STEP, "back into the module loop", next="change_retry", mode=RUNNER),''',
+        '''    Node("acceptance_failed", STEP, "back into the module loop", next="intake", mode=RUNNER),''',
+        "tests/test_server.py::"
+        "test_nothing_asks_anybody_before_the_node_the_append_guard_counts_over"),
 ]
 
 

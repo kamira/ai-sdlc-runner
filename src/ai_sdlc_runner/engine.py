@@ -643,6 +643,19 @@ class RunConfig:
     #: missing each time. Carried across walks so "asked three times" is a fact rather than a
     #: feeling — the escalation to options depends on it being counted, not remembered.
     intake_history: Sequence[Mapping[str, object]] = ()
+    #: Whether **this walk is itself an ask** for whatever intake finds missing (CHG-20260907-27).
+    #: `intake_history` above holds the stops already recorded; this walk's own stop is not in it
+    #: yet, so `intake.asks_including_this_one` adds one for the ask in flight — and
+    #: CHG-20260904-05 measured that there is not always one to add. `attach` walks from an
+    #: incomplete stop without the requirement growing, so nobody was asked; that record stopped
+    #: *counting* such a walk and left the `+ 1`, which is how two recorded asks and one attached
+    #: file reached `intake.ASK_LIMIT` and put options in front of somebody nobody asked again.
+    #:
+    #: A field rather than something the engine works out. The engine is given a history, some
+    #: instructions and some artifacts, and an attachment changes none of them in a way that says
+    #: *"this was not an ask"* — only the caller that performed the walk knows why it walked.
+    #: `True` by default, so a caller that does not say keeps the behaviour it had.
+    intake_ask_in_flight: bool = True
     #: Digests of unsafe findings that have already been put in front of a person, from
     #: `intake.shown_digest`. Read from the journal *before* the walk and handed in here, because
     #: `cli.cmd_run`'s own comment at the `record_intake_stop` call says why: the engine takes its
@@ -2795,6 +2808,25 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                 # wrong, and counting them throws the information away.
                 said: Dict[str, Mapping[str, object]] = {}
                 before = len(opened)
+                # **Was anybody actually asked here?** (CHG-20260907-27, codex seat, blocking.)
+                # Marked before the seats, read after them, and scoped to this node's asks.
+                #
+                # `cfg.intake_ask_in_flight` is the caller's declaration — the only thing that can
+                # tell an `attach` walk from an `instruct` walk, because the two dispatch the same
+                # asks. This is the fact the caller cannot know in time: on a resumed walk every
+                # seat's answer can come back out of the journal without a session being opened,
+                # and a walk that opened no session asked nobody. `cmd_run` builds its config
+                # before the walk and can only decide this from a report that does not exist yet;
+                # by the time the escalation is decided, the survey has already run and the
+                # counters below are the answer.
+                #
+                # **Not the same rule as the server's or the command line's, and not a unification
+                # of them.** Those two ask *"did the requirement grow?"* — a fact about the brief,
+                # at two moments, in two callers. This asks *"did this node open a session?"* and
+                # is strictly weaker: it can only take an ask away, never add one. Both have to be
+                # true for there to be an ask in flight, which is why they are two inputs and not
+                # one function.
+                asks_before, resumed_before = len(report.asks), len(report.resumed)
                 for seat in policy.seat_names(seats):
                     ask_id = f"{len(report.asks):03d}-{node.id}-{seat}"
                     result = _ask(
@@ -2807,6 +2839,10 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                     answers.append(result)
                     said[seat] = result
                 _note_panel_diversity(node, report, opened[before:])
+                # The two inputs, resolved into the one number both readers below take.
+                asked_somebody = ((len(report.asks) - asks_before)
+                                  > (len(report.resumed) - resumed_before))
+                in_flight = cfg.intake_ask_in_flight and asked_somebody
 
                 survey = intake_mod.collect(said)
                 report.survey = survey.as_dict()
@@ -2837,7 +2873,8 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                     # recorded as an ask, because a runner that quietly writes requirements has
                     # stopped being a runner.
                     for aspect in survey.missing:
-                        if not intake_mod.needs_options(cfg.intake_history, aspect):
+                        if not intake_mod.needs_options(cfg.intake_history, aspect,
+                                                        in_flight):
                             continue
                         request = intake_mod.option_request(aspect, list(cfg.instructions))
                         ask_id = f"{len(report.asks):03d}-{node.id}-options-{aspect}"
@@ -2859,7 +2896,12 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                     # assigned to `halt_reason` eleven lines below, so the suspension could not
                     # carry it and `cli.cmd_run` printed a placeholder where the console printed
                     # the sentence. The shape says what it says it says.
-                    said = (intake_mod.stop_reason(survey, cfg.intake_history)
+                    # **The same `in_flight` the decision above was made with.** The sentence a
+                    # person reads and the decision beside it are one number (CHG-20260903-42), so
+                    # they take one input: handing the flag to `needs_options` alone would put
+                    # *"asked 3 times"* over a runner that had counted two, which is that defect
+                    # wearing this record's keyword.
+                    said = (intake_mod.stop_reason(survey, cfg.intake_history, in_flight)
                             if not survey.complete else intake_mod.unsafe_reason(survey))
                     report.suspended = _suspension(
                         node_id=node.id,
