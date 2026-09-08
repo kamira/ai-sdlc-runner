@@ -3078,6 +3078,96 @@ def test_a_journalled_console_run_still_reaches_the_escalation(tmp_path):
         f"the console's own configuration cannot reach the escalation any more: {stop!r}")
 
 
+def _seat_answers(script, tmp_path):
+    """A runner whose `intake_review` seat answers from ``script``, one entry per walk.
+
+    `_intake_only_runner` above always reports the same aspect missing, which is what every guard
+    on this path needed until now. The sixth round's claim is about a walk that reads the
+    requirement and finds **nothing** missing, so the seat has to be able to say so — and to say
+    something different on the next walk, because the case is a completing walk followed by an
+    attach (CHG-20260907-27, eighth round).
+    """
+    from test_flow import DECISIONS, SPEC, _answer
+
+    walks = {"n": 0}
+
+    def factory(seat=None, model=None, **_):
+        class Session(engine.Session):
+            def ask(self, order):
+                if order["node_id"] == "intake_review":
+                    if seat is None:
+                        return {"options": ["one way", "another way", "a third way"]}
+                    missing = script[min(walks["n"], len(script) - 1)]
+                    return {"missing": list(missing), "problems": [], "unsafe": []}
+                # Everything downstream is answered the way a model would answer it. Unlike
+                # `_intake_only_runner`, this fixture's intake can **complete**, so the walk goes
+                # on and a branch node that gets `{"verdict": "pass"}` stops the run — which is
+                # what the first draft of this helper did, and it made the assertion below measure
+                # a stopped run rather than a completing intake.
+                return _answer(dict(order, seat=seat))
+
+            def close(self):
+                pass
+        return Session()
+
+    def make_config(instructions, approvals, rulings, artifacts=(), rejections=(),
+                    intake_history=()):
+        return engine.RunConfig(node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+                                decisions=dict(DECISIONS), risk="low", undeclared="allow",
+                                instructions=tuple(instructions), confirmed=tuple(approvals),
+                                rulings=tuple(rulings), rejections=tuple(rejections),
+                                artifacts=tuple(artifacts), intake_history=tuple(intake_history),
+                                journal=None, resume=False)
+
+    runner = server.Runner(walk=lambda cfg: engine.walk(cfg, factory, enabled=True),
+                           make_config=make_config, store=attach_mod.Store(tmp_path))
+    return runner, walks
+
+
+def test_a_walk_that_finds_nothing_missing_does_not_move_the_mark(tmp_path):
+    """**The mark is written at an incomplete stop, not at every read** (CHG-20260907-27, sixth
+    round, and pinned in the eighth after a seat measured that nothing pinned it).
+
+    The walk:
+
+        op                  told  mark  history  incomplete
+        start   missing        1     1        1  True
+        instruct complete      2     1        1  False       <- reads the requirement, does not move
+        attach  missing        2     2        2  True        <- so this one is an ask, and counts
+
+    Drop the `incomplete` conjunct from the mark's own `if` and the middle walk moves the mark to
+    `2`; the attach then reads `2 > 2` and records nothing, and an operator who attached a file
+    after supplying the architecture is told the runner never asked again. Every other guard on
+    this path stays green through that — `test_server`, `test_intake`, `test_cli` and `test_flow` —
+    because none of them has a seat that can answer complete and then missing.
+
+    The two rows either side are the control: the first stop is an ask, and the mark and the
+    history agree with each other at every step. What the assertion is on is the **third** row,
+    because that is the one the conjunct decides.
+    """
+    runner, walks = _seat_answers([["architecture"], [], ["architecture"]], tmp_path / "att")
+
+    runner.start("do it", runner.state.version)
+    assert len(runner.state.intake_history) == 1, "the first stop is an ask"
+    mark_after_start = runner.state.instructions_at_last_incomplete_stop
+
+    walks["n"] = 1
+    runner.instruct(runner.state.version, "the architecture is three services")
+    assert not (runner.state.report.suspended or {}).get("incomplete"), (
+        "the fixture is meant to complete intake on this walk; it did not, so the row below "
+        "measures something else")
+    assert runner.state.instructions_at_last_incomplete_stop == mark_after_start, (
+        f"a walk that read the requirement and found nothing missing moved the mark: "
+        f"{mark_after_start} -> {runner.state.instructions_at_last_incomplete_stop}. The mark "
+        f"records the last **incomplete** stop, and this walk was not one")
+
+    walks["n"] = 2
+    runner.attach(runner.state.version, "spec.md", b"the spec")
+    assert len(runner.state.intake_history) == 2, (
+        f"the attach stopped incomplete at an instruction count no incomplete stop had been "
+        f"reached at, so it asked and should be counted: {runner.state.intake_history}")
+
+
 def test_the_same_brief_started_twice_says_one_number(tmp_path, monkeypatch):
     """**`start` against a persisted journal, and the box with two answers in it**
     (CHG-20260907-27, second round, codex seat, blocking).
@@ -3255,7 +3345,7 @@ def test_an_attachment_after_a_replayed_start_is_not_an_ask(tmp_path, monkeypatc
     assert len(runner.state.intake_history) == 0, (
         f"`POST /attachments` recorded {len(runner.state.intake_history)} intake stop(s) after a "
         f"replayed start; `docs/API.md` says it moves neither once an incomplete stop has "
-        f"been recorded at this instruction count")
+        f"been reached at this instruction count, recorded or replayed")
 
     snap = runner.state.snapshot()
     assert not (snap.get("intake_asks_by_aspect") or {}), (

@@ -1116,7 +1116,8 @@ class Runner:
             # then read `1 > -1`, was declared an ask by the same expression at the top of this
             # method, and appended: the console said *"asked once"* after `POST /attachments`, and
             # `docs/API.md`'s *"`POST /attachments` moves neither once an incomplete stop has been
-            # recorded at this instruction count"* was false on 100 of the 2004 walks. (That line
+            # reached at this instruction count — recorded, or replayed out of the journal by a
+            # same-brief restart"* was false on 100 of the 2004 walks. (That line
             # is qualified *per instruction count* because of the other narrowing, which is not
             # this record's. The mark is written only under `incomplete`, so a walk that completes
             # leaves it where it was, and the next attach at the same count appends — correctly,
@@ -1138,8 +1139,12 @@ class Runner:
             # So the mark records **what the seats last read**, which is why it is no longer
             # spelled `instructions_when_last_asked`: a replayed walk asks nobody and still leaves
             # every seat's answer standing against that brief, so the requirement has not grown
-            # since. `told > mark` is *"did the requirement grow since the answers in hand were
-            # given?"*, and that question is unchanged by whether a session was opened.
+            # since. `told > mark` is *"has it grown since the last incomplete stop?"* — and that
+            # question is unchanged by whether a session was opened. It was written *"since the
+            # answers in hand were given"* here until the eighth round: the sixth round replaced
+            # that gloss at the field and missed this copy, which straddles a line break and
+            # survived the grep that found the other one. A phrase split across two lines is not
+            # found by a search for the phrase.
             stop = report.suspended or {}
             told = len(self.state.instructions)
             if stop.get("incomplete") and told > self.state.instructions_at_last_incomplete_stop:

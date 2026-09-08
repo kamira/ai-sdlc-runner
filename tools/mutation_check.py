@@ -3680,6 +3680,18 @@ CHG-20260907-28 and built by no record yet.''',
     # the fourth round widened the target set: `intake` is a `RUNNER` step whose only `next` is
     # `intake_review`, so an edge into it arrives at the counted node just the same. Measured on
     # the pre-widening expression: `routes_back` came back `[]`.
+    # The eighth round's, and it is the shape this file exists for: the sixth round argued that the
+    # mark is written only at an incomplete stop, corrected four documents on the strength of it,
+    # and nothing executable held it. A seat measured the gap by dropping the conjunct and running
+    # every file that names the mark, the history or the `Runner` — all green. The claim had a
+    # measurement and no pin, which is the difference this registry is here to keep visible.
+    Mutation(
+        "ask-in-flight", "the mark moves on a walk that found nothing missing",
+        SRC / "server.py",
+        '''            if stop.get("incomplete") and told > self.state.instructions_at_last_incomplete_stop:''',
+        '''            if told > self.state.instructions_at_last_incomplete_stop:''',
+        "tests/test_server.py::test_a_walk_that_finds_nothing_missing_does_not_move_the_mark"),
+
     Mutation(
         "ask-in-flight", "a rejection routes back to the step in front of the counted node",
         SRC / "graph.py",
