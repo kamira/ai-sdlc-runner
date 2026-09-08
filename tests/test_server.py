@@ -3363,10 +3363,18 @@ def test_a_burst_of_connections_is_queued_rather_than_refused(tmp_path):
     opens six connections to one host as a matter of course, so this is the console's surface as
     well as the suite's.
 
-    Driven with the acceptor never started, because that is the condition rather than load: the
-    acceptor is one Python thread and it does not have to be absent to be starved -- it competes
-    for the GIL with every handler thread it has already spawned. An earlier attempt to test this
-    let the acceptor run and found nothing, because a draining queue never fills (CHG-20260907-22).
+    Driven with the acceptor never started, which makes this a test of the **mechanism**: a full
+    backlog refuses, deterministically, in 0.04s. The *trigger* -- a running acceptor starved of
+    the GIL by its own handler threads -- is reproducible too and is measured in the record rather
+    than here, because reproducing it costs seconds and a probability. An earlier probe let the
+    acceptor run without loading it and found nothing, because a draining queue never fills
+    (CHG-20260907-22).
+
+    The refusal is **not** immediate: the SYN is dropped, the client retransmits, and the RST
+    follows, which measures 2.03s here every time. So `settimeout` has to exceed that or the same
+    refusal arrives as `TimeoutError` with no errno to report -- the assertion still fails, but it
+    would fail describing the wrong thing. Three seconds is one second of headroom over a measured
+    two.
     """
     httpd = server.serve(_runner(), server.Operator.mint(tmp_path), port=0)
     port = httpd.server_address[1]

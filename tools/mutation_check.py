@@ -191,21 +191,18 @@ MUTATIONS: List[Mutation] = [
     # ── backlog (CHG-20260907-22) ──────────────────
     # `socketserver` defaults the listen backlog to 5 and `serve` never set it, so the sixth
     # caller of a server whose acceptor is not draining is told `WinError 10061` -- the error
-    # for nothing listening at all. Restoring the default is the mutation; the second entry
-    # deletes the attribute outright, because a value that reads as deliberate and a value
-    # inherited by accident are the same defect and only one of them looks like one.
+    # for nothing listening at all.
+    #
+    # One entry, not two. A second was registered that deleted the attribute so the default is
+    # inherited by accident -- and both seats said the same thing about it: `pass` and `= 5`
+    # produce the identical class attribute, so no test can tell them apart and anything catching
+    # one catches the other. It read as a distinct class only to a human reading the source.
+    # Deleted rather than relabelled.
     Mutation(
         "backlog", "the listen backlog may go back to five again",
         SRC / "server.py",
         '''        request_queue_size = 128''',
         '''        request_queue_size = 5''',
-        "tests/test_server.py::test_a_burst_of_connections_is_queued_rather_than_refused"),
-
-    Mutation(
-        "backlog", "the backlog may be inherited by accident again",
-        SRC / "server.py",
-        '''        request_queue_size = 128''',
-        '''        pass''',
         "tests/test_server.py::test_a_burst_of_connections_is_queued_rather_than_refused"),
 
     # ── resolver-fixed (CHG-20260907-21) ────────────
