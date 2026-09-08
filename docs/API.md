@@ -120,10 +120,17 @@ on eight nodes looks the same in a list as one on a single node.
 **`source` says which of two places put each assignment there.** An assignment can come from the
 plan file (this change's declaration) or from the store (the project's standing one), and **the plan
 wins**. A console showing the merged result with no provenance could not say that it had — and an
-override nobody can see is worse than no override.
+override nobody can see is worse than no override. **The console this repository ships is that
+console**: it draws the merged assignments through `by_model` and renders no provenance at all.
+`runner run` and `runner serve` each print a count to the terminal; per-assignment provenance is
+sent on this route and read by nothing, and the view that would read it is named in
+CHG-20260907-28 and built by no record yet.
 
-**`assignable` is the three modes that do anything with a list.** The other four ignore it, so the
-console can grey them out rather than let somebody configure a node that will not read it.
+**`assignable` is the three modes that do anything with a list.** It is for a client that wants to
+refuse a node before it posts — `POST /config/nodes` refuses the same node anyway, with a `409`
+naming what each of the other four does instead. **No shipped console reads it.** From `22f6ace`
+until CHG-20260907-28 this page said the console greys the other four out; the console has no
+per-node configure control at all, so there has never been anything to grey.
 
 `known: false` marks a model a plan names and the registry does not have. Every registry model
 appears in `by_model` even with empty `nodes` and `seats` — that is how "configured but unused"
