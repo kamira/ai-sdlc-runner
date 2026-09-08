@@ -259,74 +259,119 @@ MUTATIONS: List[Mutation] = [
 
     # ── resolver-fixed (CHG-20260907-21) ────────────
     # The reverse test asserted a containment and `localhost` satisfied it by being a bind
-    # spelling, which is not why it belongs. Equality states the relation instead, so every
-    # term is required rather than tolerated. The first two entries are the halves a
-    # subtraction could not have: a bracketed IPv4 literal, which the old containment accepted
-    # because it stripped the brackets before comparing and found `127.0.0.1` permitted, and the
-    # case that made the record -- the bind list and the header set losing `localhost` TOGETHER.
+    # spelling, which is not why it belongs. Equality stated the relation instead, so every term
+    # was required rather than tolerated; CHG-20260907-24 then made the same relation true by
+    # construction and moved `RESOLVER_FIXED` into `src/`, which is where these two now anchor.
     #
-    # That last one was first left out, with a sentence saying no single anchor could reach it
-    # because the harness takes one replacement and the constants are separate statements. That
-    # sentence was never measured and is false: `replace` has no length limit, 130 registered
-    # anchors already contain newlines and the longest is 393 lines, so the eleven-line span
-    # between the two constants is a legal, unique anchor. A seat measured it. It is the entry
-    # that matters, too: the first one below -- the header set losing the name alone -- was
-    # already CAUGHT before this record existed, by the Origin test and the forward table test,
-    # so its verdict says nothing about the equality this record added.
+    # **One of the three is deleted with its guarantee** -- the bind list and the header set
+    # losing `localhost` TOGETHER, an eleven-line span across both constants. That state cannot
+    # be reached any more and not because it stopped mattering: `localhost` is in exactly one
+    # constant now, and the header set follows it. Deleting the name is what entry 1 below does,
+    # in one line, and it is the same state.
     #
-    # The anchor spans the comment between the constants, so editing that comment breaks it. It
-    # breaks as ANCHOR GONE, which is loud.
+    # Its history is worth keeping even though the entry is gone, because the reasoning was the
+    # defect. It was first left out with a sentence saying no single anchor could reach it, the
+    # harness taking one replacement and the constants being separate statements. That sentence
+    # was never measured and was false -- `replace` has no length limit, 130 registered anchors
+    # already contained newlines and the longest was 393 lines. A seat measured it.
     #
-    # Every objector to each state, measured with `-x` off, because `-x` reports whichever test
-    # is collected first and that is not the same question:
+    # Every objector, measured with `-x` off, because `-x` reports whichever test is collected
+    # first and that is not the same question. At CHG-20260907-21:
     #
     #     HOSTS loses localhost         5   equality, live Host x2, Origin, forward table
     #     both constants lose it        4   equality, live Host x2, Origin
     #     [127.0.0.1] added to HOSTS    1   equality alone
     #
-    # So the first two states were already objected to before this record, by the Origin test.
-    # The entries below name the test whose guarantee each one is, so a CAUGHT here means what
-    # the `says` means rather than that something in the file went red.
-    Mutation(
-        "resolver-fixed", "a name a standard fixes may leave both constants together again",
-        SRC / "server.py",
-        '''LOOPBACK = ("127.0.0.1", "localhost")
-
-#: `Host` values a loopback request can legitimately carry. Anything else is a rebinding attempt or
-#: a proxy, and both are reasons to refuse rather than to guess.
-#:
-#: The two IPv6 spellings left with `"::1"` above. A browser sends `Host: [::1]` only from a URL
-#: that connects to `::1`, where this server is not; the bare `"::1"` was reachable only through an
-#: unbracketed authority RFC 7230 5.4 does not permit. Neither can arrive from the socket that
-#: exists, and a rebinding guard that accepts an authority no legitimate request can carry is
-#: surface without a use.
-LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})''',
-        '''LOOPBACK = ("127.0.0.1",)
-
-#: `Host` values a loopback request can legitimately carry. Anything else is a rebinding attempt or
-#: a proxy, and both are reasons to refuse rather than to guess.
-#:
-#: The two IPv6 spellings left with `"::1"` above. A browser sends `Host: [::1]` only from a URL
-#: that connects to `::1`, where this server is not; the bare `"::1"` was reachable only through an
-#: unbracketed authority RFC 7230 5.4 does not permit. Neither can arrive from the socket that
-#: exists, and a rebinding guard that accepts an authority no legitimate request can carry is
-#: surface without a use.
-LOOPBACK_HOSTS = frozenset({"127.0.0.1"})''',
-        "tests/test_server.py::test_the_header_set_is_the_bind_list_plus_the_one_name_a_standard_fixes"),
-
+    # and after CHG-20260907-24, re-measured on the anchors below:
+    #
+    #     RESOLVER_FIXED emptied        5   derivation, live Host x2, Origin, the literal pin
+    #     [127.0.0.1] added to it       2   derivation, the literal pin
+    #
+    # The entries name the test whose guarantee each one is, so a CAUGHT means what the `says`
+    # means rather than that something in the file went red.
     Mutation(
         "resolver-fixed", "the header set may lose a name a standard fixes again",
         SRC / "server.py",
-        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})''',
-        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1"})''',
+        '''RESOLVER_FIXED = frozenset({"localhost"})''',
+        '''RESOLVER_FIXED = frozenset()''',
         "tests/test_server.py::test_the_name_a_standard_fixes_is_accepted_as_a_live_host_header"),
 
     Mutation(
         "resolver-fixed", "an authority form nothing derives may be accepted again",
         SRC / "server.py",
-        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})''',
-        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "[127.0.0.1]", "localhost"})''',
-        "tests/test_server.py"),
+        '''RESOLVER_FIXED = frozenset({"localhost"})''',
+        '''RESOLVER_FIXED = frozenset({"localhost", "[127.0.0.1]"})''',
+        "tests/test_server.py::test_the_names_a_standard_fixes_are_the_one_member_that_was_measured"),
+
+    # ── derived-hosts (CHG-20260907-24) ──────────────────────────
+    # `LOOPBACK_HOSTS` is now `_accepted_hosts(LOOPBACK)` and `localhost` has left the bind list,
+    # which is one record because the second is what makes the first honest: with `localhost` in
+    # both `LOOPBACK` and `RESOLVER_FIXED`, dropping the `| RESOLVER_FIXED` term changed the
+    # resulting table by nothing at all -- measured -- so the standard's term would have crossed
+    # into `src/` already unfalsifiable. Entry 3 is that measurement as a mutation, and it is
+    # CAUGHT only because of the narrowing.
+    #
+    # **The obvious entry is deliberately absent: hardcoding `LOOPBACK_HOSTS` back to
+    # `frozenset({"127.0.0.1", "localhost"})`.** Measured, the whole file passes -- 142, no
+    # objector -- because the derivation and the literal are the same table today, which is the
+    # point of a refactor and not a hole in it. What this record makes checkable is the *rule*,
+    # on inputs the constant does not have, and those are entries 1, 2, 4 and 5. Registering an
+    # entry that cannot fail would be a claim this file exists to refuse.
+    #
+    # Entries 4 and 5 are the two normalisations CHG-20260907-20 left dead-by-data, with a note
+    # saying they are what an IPv6 build would need back. They were NOT CAUGHT by anything --
+    # re-measured here, 139 passed with the new test deselected, for each -- and they are caught
+    # now, because deriving the table for a hypothetical bind list is a question a test can ask
+    # and a constant cannot.
+    #
+    # Entry 1 has **two** production call sites, and the second was found by review: `server.py`
+    # was carrying a byte-identical copy of the rule inline in `_loopback_origin`
+    # (`literal = f"[{host}]" if ":" in host else host`), ninety lines from the function that now
+    # owns it, in the file whose whole subject is one boundary written twice. It reads
+    # `_authority(host)` now, and that call site is the one where the bracket is actually
+    # **reached** -- `test_an_ipv6_origin_is_refused_because_nothing_serves_one` sends
+    # `http://[::1]:8080` on every run.
+    #
+    # **A second absent entry, for the same reason as the first:** putting that inline copy back
+    # is behaviour-preserving too -- 142 passed, no objector, measured. De-duplicating an
+    # expression is not a behaviour a test can hold, and neither is deriving a table that already
+    # had the right members. Both are written here instead of registered.
+    Mutation(
+        "derived-hosts", "the derivation may store an IPv6 address in a form no client sends again",
+        SRC / "server.py",
+        '''    return f"[{addr}]" if ":" in addr else addr''',
+        '''    return addr''',
+        "tests/test_server.py::test_the_derivation_is_the_authority_form_plus_the_name_a_standard_fixes"),
+
+    Mutation(
+        "derived-hosts", "the derivation may store a bind address in a case the lookup never asks for",
+        SRC / "server.py",
+        '''    return frozenset({_authority(addr).lower() for addr in addresses}) | RESOLVER_FIXED''',
+        '''    return frozenset({_authority(addr) for addr in addresses}) | RESOLVER_FIXED''',
+        "tests/test_server.py::test_the_derivation_is_the_authority_form_plus_the_name_a_standard_fixes"),
+
+    Mutation(
+        "derived-hosts", "the derivation may admit only what the bind list supplies again",
+        SRC / "server.py",
+        '''    return frozenset({_authority(addr).lower() for addr in addresses}) | RESOLVER_FIXED''',
+        '''    return frozenset({_authority(addr).lower() for addr in addresses})''',
+        "tests/test_server.py::test_the_name_a_standard_fixes_is_accepted_as_a_live_host_header"),
+
+    Mutation(
+        "derived-hosts", "the Host check may stop keeping the brackets a browser sends again",
+        SRC / "server.py",
+        '''    if host.startswith("["):                       # [::1]:8765
+        host = host.split("]")[0] + "]"
+    elif ":" in host:''',
+        '''    if ":" in host:''',
+        "tests/test_server.py::test_the_derived_table_answers_both_lookups_for_any_address_it_is_given"),
+
+    Mutation(
+        "derived-hosts", "the Origin check may stop stripping the brackets off the table again",
+        SRC / "server.py",
+        '''    return host in {h.strip("[]") for h in LOOPBACK_HOSTS}''',
+        '''    return host in set(LOOPBACK_HOSTS)''',
+        "tests/test_server.py::test_the_derived_table_answers_both_lookups_for_any_address_it_is_given"),
 
     # ── bind (CHG-20260907-20) ───────────────────────────
     # `LOOPBACK` called itself "the only addresses this server will bind" and named one the
@@ -335,19 +380,27 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1"})''',
     # because the claim is about the operating system and both stopped at Python. The third
     # entry is the error branch that hid it: `gaierror` is an `OSError`, so a resolver answer
     # was reported as a port conflict.
+    #
+    # Re-anchored by CHG-20260907-24, which derived the header set and narrowed the bind list to
+    # one member. Entry 1 now names the test whose guarantee it is rather than the file: the
+    # socket is the only instrument that can see this, and `::1` back in the list also puts
+    # `[::1]` back in the header table -- five objectors in all, three of them origin tests, so a
+    # file-level CAUGHT would not have said the socket noticed.
+    #
+    # The second entry -- *"the header set may accept an authority no listener can answer on"* --
+    # is **deleted with its guarantee**, not re-anchored. It edited a hand-written
+    # `LOOPBACK_HOSTS`, and there is no longer one to edit. Both doors into that table are
+    # covered: an address arrives through `LOOPBACK` (entry 1 here) and anything else through
+    # `RESOLVER_FIXED` (`resolver-fixed` entry 2). **What refuses it there is the literal pin, not
+    # a shape check** -- an earlier draft of this comment said "by shape", and a review seat
+    # measured that the shape conditions cannot fail while the pin stands, which is why they are
+    # no longer written as assertions at all.
     Mutation(
         "bind", "the permit list may name an address the socket cannot open again",
         SRC / "server.py",
-        '''LOOPBACK = ("127.0.0.1", "localhost")''',
-        '''LOOPBACK = ("127.0.0.1", "::1", "localhost")''',
-        "tests/test_server.py"),
-
-    Mutation(
-        "bind", "the header set may accept an authority no listener can answer on again",
-        SRC / "server.py",
-        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})''',
-        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})''',
-        "tests/test_server.py"),
+        '''LOOPBACK = ("127.0.0.1",)''',
+        '''LOOPBACK = ("127.0.0.1", "::1")''',
+        "tests/test_server.py::test_every_permitted_address_can_actually_be_bound"),
 
     Mutation(
         "bind", "every way a bind can fail may be called a port conflict again",
@@ -356,12 +409,17 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1"})''',
         '''        if True:''',
         "tests/test_server.py"),
 
+    # Re-anchored by CHG-20260907-24, because the edit it shipped with became a no-op: it replaced
+    # `' or '.join(LOOPBACK)` with `LOOPBACK[0]`, and with one member in the list those are the
+    # same string. Measured NOT CAUGHT under the narrowing. The guarantee is unchanged and the
+    # assertion that holds it is unchanged -- a refusal must name every address `serve` takes --
+    # so what is registered is an edit that can still make it false: the refusal naming none.
     Mutation(
-        "bind", "the refusal may name one address for a list of several again",
+        "bind", "the refusal may stop naming the addresses it will take again",
         SRC / "server.py",
         '''f"on {' or '.join(LOOPBACK)} and nowhere else. If another machine needs to see it, put "''',
-        '''f"on {LOOPBACK[0]} and nowhere else. If another machine needs to see it, put "''',
-        "tests/test_server.py"),
+        '''f"on this machine and nowhere else. If another machine needs to see it, put "''',
+        "tests/test_server.py::test_it_refuses_to_bind_anything_but_loopback"),
 
     # Both added in review of the build. The fifth is the one that matters: two branches are
     # defensible only because the plain one carries the operating system's own sentence, and
@@ -378,9 +436,9 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1"})''',
     Mutation(
         "bind", "the permit list may take an address the whole network can reach again",
         SRC / "server.py",
-        '''LOOPBACK = ("127.0.0.1", "localhost")''',
-        '''LOOPBACK = ("127.0.0.1", "localhost", "0.0.0.0")''',
-        "tests/test_server.py"),
+        '''LOOPBACK = ("127.0.0.1",)''',
+        '''LOOPBACK = ("127.0.0.1", "0.0.0.0")''',
+        "tests/test_server.py::test_it_refuses_to_bind_anything_but_loopback"),
 
     # ── loopback (CHG-20260907-19) ───────────────────────
     # One boundary written twice: `LOOPBACK` is what `serve` permits as a bind argument,
@@ -392,46 +450,54 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1"})''',
     # refused - `"[::1]".strip("[]")` supplied it to `_loopback_origin`, and `_loopback_host`
     # reached it only through `Host: ::1:8765`, an unbracketed IPv6 authority no compliant
     # client sends.
-    Mutation(
-        "loopback", "the bind list may permit an address no request may name again",
-        SRC / "server.py",
-        '''LOOPBACK = ("127.0.0.1", "localhost")''',
-        '''LOOPBACK = ("127.0.0.1", "127.0.0.2", "localhost")''',
-        "tests/test_server.py"),
-
-    Mutation(
-        "loopback", "the header check may be tightened below what the bind list permits again",
-        SRC / "server.py",
-        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})''',
-        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1"})''',
-        "tests/test_server.py"),
-
-    # Re-anchored by CHG-20260907-21, and the word that was missing is `address`. Dropping
-    # `localhost` from the bind list stopped being something this file objects to when the
-    # reverse test stopped justifying that name by its membership there -- RFC 6761 fixes what
-    # `localhost` means, so it may stay in the header set without being a bind spelling. Whether
-    # it should stay in the bind list is re-opened by -21, not decided by it. Losing
-    # `127.0.0.1` is still a defect, and that is what this now says.
+    # Re-anchored again by CHG-20260907-24, and **two of the four are deleted with their
+    # guarantees** because deriving `LOOPBACK_HOSTS` made the states they name unreachable:
     #
-    # `tests` names one test rather than the file, and it is the only entry that does. Removing
-    # `127.0.0.1` from the bind list makes `serve`'s own default refuse itself, so under `-x`
-    # `test_binding_loopback_is_allowed` fails first and this entry would report CAUGHT with the
-    # rule it is about deleted. A seat measured that. The node id pins the guarantee instead of
-    # the collateral; if the test is renamed, pytest collects nothing and the baseline fails
-    # loudly rather than the entry passing quietly.
+    #   "the header check may be tightened below what the bind list permits"  -- there is no
+    #       hand-written header set left to tighten; it follows the bind list by construction.
+    #   "the bind list may lose an address the header check still accepts"    -- the header check
+    #       cannot still accept it. The name it went to, the set equality, is gone with it.
+    #
+    # That is this record's product rather than a hole in it, and the entry below replaces the
+    # second with what is still true and still falsifiable: `serve`'s own default has to be a
+    # member. Losing `127.0.0.1` draws ten objectors and 52 errors; `test_binding_loopback_is_
+    # allowed` is the one whose guarantee that is.
+    #
+    # The first entry keeps its anchor and loses half its `says`. Under a hand-written table,
+    # `127.0.0.2` in the bind list was *"an address no request may name"* -- the server refused
+    # its own requests and blamed the header. Derivation makes that impossible, so what is left
+    # is the other half: it is not the address this constant promises. One objector now, measured
+    # twice, and it is the socket.
+    #
+    # **Not "an address that is not this machine"**, which is what an earlier draft of this `says`
+    # read and which a review seat refused: `127.0.0.2` **is** this machine, it is in 127.0.0.0/8,
+    # and that is precisely why ACC-20260907-20 kept the socket test's `server_address[0] ==
+    # "127.0.0.1"` instead of the `is_loopback` weakening a seat proposed there. What the socket
+    # objects to is the address not being the one the constant promises.
     Mutation(
-        "loopback", "the bind list may lose an address the header check still accepts again",
+        "loopback", "the bind list may permit an address the constant does not promise again",
         SRC / "server.py",
-        '''LOOPBACK = ("127.0.0.1", "localhost")''',
-        '''LOOPBACK = ("localhost",)''',
-        "tests/test_server.py::test_the_header_set_is_the_bind_list_plus_the_one_name_a_standard_fixes"),
+        '''LOOPBACK = ("127.0.0.1",)''',
+        '''LOOPBACK = ("127.0.0.1", "127.0.0.2")''',
+        "tests/test_server.py::test_every_permitted_address_can_actually_be_bound"),
 
+    Mutation(
+        "loopback", "the bind list may lose the address serve itself defaults to again",
+        SRC / "server.py",
+        '''LOOPBACK = ("127.0.0.1",)''',
+        '''LOOPBACK = ("localhost",)''',
+        "tests/test_server.py::test_binding_loopback_is_allowed"),
+
+    # The rebinding guard, re-anchored to the door that is left. A name enters `LOOPBACK_HOSTS`
+    # without being an address `serve` binds only through `RESOLVER_FIXED` now, and that set is
+    # pinned against a literal on the test side -- a set union permits, and it takes a separate
+    # assertion to make it forbid.
     Mutation(
         "loopback", "the rebinding guard may accept a name this server never answers on again",
         SRC / "server.py",
-        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})''',
-        '''LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "runner.local"})''',
-        "tests/test_server.py"),
+        '''RESOLVER_FIXED = frozenset({"localhost"})''',
+        '''RESOLVER_FIXED = frozenset({"localhost", "runner.local"})''',
+        "tests/test_server.py::test_the_names_a_standard_fixes_are_the_one_member_that_was_measured"),
 
     # ── decisions (CHG-20260907-16) ────────────────────────────────
     # `plan.check` refused an unknown KEY with 'ignoring them would let a setting look

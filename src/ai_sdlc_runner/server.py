@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 from pathlib import Path
-from typing import Callable, Dict, List, Mapping, Optional
+from typing import Callable, Dict, FrozenSet, Iterable, List, Mapping, Optional
 
 from . import attachments as attach_mod
 from . import paths
@@ -65,17 +65,85 @@ from . import engine, graph, intake as intake_mod, models as models_mod, policy,
 #: refusal blamed something else (CHG-20260907-20). Serving IPv6 is a capability nobody has asked
 #: for and it costs the guarantee `_OneRunner` exists for: `127.0.0.1:p` held, `[::1]:p` binds
 #: anyway, measured. So the promise is narrowed to what the socket does, not widened to match it.
-LOOPBACK = ("127.0.0.1", "localhost")
+#:
+#: `"localhost"` left in CHG-20260907-24, and the reason is `LOOPBACK_HOSTS` below rather than the
+#: socket — it binds fine under `AF_INET`, resolving to `127.0.0.1`, which is what kept it here
+#: through CHG-20260907-20. Once the header set is **derived**, a name that is both a bind spelling
+#: and a name RFC 6761 fixes supplies itself twice, and measured, dropping `RESOLVER_FIXED` from the
+#: derivation changed the resulting table by nothing at all: the standard's term would arrive in
+#: `src/` already unfalsifiable. One address, one reason each. Binding `localhost` bought nothing
+#: over binding what it resolves to, and `serve(host="localhost")` is refused now — by a refusal
+#: that names what it does take.
+LOOPBACK = ("127.0.0.1",)
+
+#: Names whose loopback meaning is fixed by **RFC 6761 6.3** rather than by a bind argument or by
+#: DNS. A browser at `http://localhost:8765` reaches a server bound to `127.0.0.1` because the
+#: standard fixes what the name means, whether or not `localhost` is a spelling `serve` accepts.
+#:
+#: Fixed by the standard and not by "the platform", and the difference is measured: this machine's
+#: resolver also answers `127.0.0.1` for `localhost.localdomain`, which no standard requires and a
+#: rebinding guard must not accept — *"whatever resolves to loopback here"* is the attacker's
+#: precondition, not a rule. `foo.localhost` goes the other way: 6.3 covers it and this OS answers
+#: `gaierror`, so only a browser could send it and accepting it would be a widening with its own
+#: record. That intersection of standard, resolver and browser leaves exactly one member.
+#:
+#: **What a member may be, for whoever adds the second one.** A bare, lowercase name: an address's
+#: loopback meaning is IANA's and belongs in `LOOPBACK`, and lowercase because `_loopback_host`
+#: lowercases the header and looks the result up in `LOOPBACK_HOSTS` **as written**, so an
+#: uppercase member is unreachable at runtime. CHG-20260907-21 wrote those as three assertions
+#: beside the set; CHG-20260907-24 measured that once the set is pinned against a literal on the
+#: test side they cannot fail on their own -- every single-edit widening is refused by the pin or
+#: by the live `Host` test first -- and moved the rule here, where it is addressed to the person
+#: who edits this line rather than presented as a check.
+#:
+#: Written on the test side by CHG-20260907-21, which said the record deriving `LOOPBACK_HOSTS` is
+#: what would lift it across the line. This is that record (CHG-20260907-24).
+RESOLVER_FIXED = frozenset({"localhost"})
+
+
+def _authority(addr: str) -> str:
+    """The authority a client sends for a bind address: an IPv6 literal wears brackets.
+
+    `[::1]` is the string `_loopback_host` looks up for a server on `::1`, because it keeps the
+    brackets, while `_loopback_origin` gets the bare form out of `urlsplit` and strips them off the
+    table. The bracketed form is therefore the one to store: CHG-20260907-20 removed the bare
+    `"::1"` as unreachable by any compliant request, and CHG-20260907-19's sketch emitted **both**
+    spellings, which is the side this does not take.
+
+    **The bracket is dead by data and not by test.** `LOOPBACK` holds no IPv6 address and cannot
+    hold one while `address_family` is `AF_INET`, so no request reaches this branch. What keeps it
+    honest is that this is a function rather than a comprehension inside a constant: a test can ask
+    it about an input the constant does not have, and removing the bracket is CAUGHT. The same move
+    reaches the two normalisations CHG-20260907-20 left dead-by-data in `_loopback_host` and
+    `_loopback_origin` — derive this table for a bind list that is not the shipped one and both
+    become falsifiable, which they were not before (CHG-20260907-24).
+    """
+    return f"[{addr}]" if ":" in addr else addr
+
+
+def _accepted_hosts(addresses: Iterable[str]) -> FrozenSet[str]:
+    """The `Host` and `Origin` table a bind list implies, plus the names a standard fixes.
+
+    One boundary, written once. It used to be written twice four lines apart and nothing required
+    the two spellings to agree; CHG-20260907-19 found that, CHG-20260907-21 stated the relation as
+    an equality a test asserted, and this makes the equality true by construction instead.
+
+    Lowercased, because `_loopback_host` lowercases the header and looks the result up in this
+    table **as written** — a member spelled `LocalHost` would be dead at runtime, so a bind
+    address spelled that way has to arrive here folded.
+    """
+    return frozenset({_authority(addr).lower() for addr in addresses}) | RESOLVER_FIXED
+
 
 #: `Host` values a loopback request can legitimately carry. Anything else is a rebinding attempt or
 #: a proxy, and both are reasons to refuse rather than to guess.
 #:
-#: The two IPv6 spellings left with `"::1"` above. A browser sends `Host: [::1]` only from a URL
-#: that connects to `::1`, where this server is not; the bare `"::1"` was reachable only through an
-#: unbracketed authority RFC 7230 5.4 does not permit. Neither can arrive from the socket that
-#: exists, and a rebinding guard that accepts an authority no legitimate request can carry is
-#: surface without a use.
-LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})
+#: **Derived, not written down twice** (CHG-20260907-24). The two IPv6 spellings this held left with
+#: `"::1"` above (CHG-20260907-20) and cannot come back by hand: a browser sends `Host: [::1]` only
+#: from a URL that connects to `::1`, where this server is not, and the bare `"::1"` was reachable
+#: only through an unbracketed authority RFC 7230 5.4 does not permit. Now they can only come back
+#: with the address, which is the point — the surface follows the socket rather than tracking it.
+LOOPBACK_HOSTS = _accepted_hosts(LOOPBACK)
 
 IDLE = "idle"
 
@@ -113,10 +181,13 @@ def _loopback_host(header: Optional[str]) -> bool:
     if not header:
         return False
     host = header.strip()
-    # `[::1]` is not a host this server accepts any more (CHG-20260907-20) and this branch is
-    # unfalsifiable by data: removing it changes no test. It is kept because it is what an IPv6
-    # build would need back, and because `_loopback_origin` normalises the other way — the pair
-    # is the thing to read together, not either half alone.
+    # `[::1]` is not a host this server accepts any more (CHG-20260907-20), so no request reaches
+    # this branch. It was also unfalsifiable until CHG-20260907-24: removing it changed no test,
+    # measured then and re-measured since. It is now caught, because `LOOPBACK_HOSTS` is derived
+    # and a test can derive it for a bind list the constant does not have and ask this function the
+    # same question a browser would. Kept because it is what an IPv6 build would need back, and
+    # because `_loopback_origin` normalises the other way — the pair is the thing to read together,
+    # not either half alone.
     if host.startswith("["):                       # [::1]:8765
         host = host.split("]")[0] + "]"
     elif ":" in host:
@@ -156,10 +227,18 @@ def _loopback_origin(origin: str) -> bool:
     # origins" is exactly the kind of assumption that turns into the next finding.
     host = (host_attr or "").lower()
     port_part = f":{port}" if port else ""
-    literal = f"[{host}]" if ":" in host else host
+    # `_authority`, not a second copy of it. This line read `f"[{host}]" if ":" in host else host`
+    # -- the same expression, ninety lines from the function that now owns it, in the same file
+    # whose subject is one boundary written twice. Found by review of CHG-20260907-24, whose record
+    # had claimed there was no second copy. This is also the call site where the bracket is
+    # **reached**: `test_an_ipv6_origin_is_refused_because_nothing_serves_one` sends
+    # `http://[::1]:8080` on every run.
+    literal = _authority(host)
     if f"{scheme}://{literal}{port_part}" != origin.strip().lower():
         return False
-    # `hostname` strips the port and the brackets from an IPv6 literal, so `[::1]` arrives as `::1`.
+    # `hostname` strips the port and the brackets from an IPv6 literal, so `[::1]` arrives as `::1`
+    # while `_loopback_host` looks up `"[::1]"`. One address, two lookups — the half of the pair
+    # `_loopback_host` describes, and caught from CHG-20260907-24 for the reason given there.
     return host in {h.strip("[]") for h in LOOPBACK_HOSTS}
 
 
