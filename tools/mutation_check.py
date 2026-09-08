@@ -3455,7 +3455,7 @@ MUTATIONS: List[Mutation] = [
         '''                    "assignable": list(store_mod.MODES_THAT_USE_MODELS),
                     "seventh": [],
                 })''',
-        "tests/test_server.py::test_every_key_of_the_node_config_route_is_drawn_or_written_down"),
+        "tests/test_server.py::test_every_key_of_the_node_config_route_is_named_by_the_console_or_written_down"),
 
     Mutation(
         "node-config-accounting", "a key leaves the route and its inventory entry stands",
@@ -3463,14 +3463,14 @@ MUTATIONS: List[Mutation] = [
         '''                    "assignable": list(store_mod.MODES_THAT_USE_MODELS),
                 })''',
         '''                })''',
-        "tests/test_server.py::test_every_key_of_the_node_config_route_is_drawn_or_written_down"),
+        "tests/test_server.py::test_every_key_of_the_node_config_route_is_named_by_the_console_or_written_down"),
 
     Mutation(
         "node-config-accounting", "the console stops naming the one key it draws by name",
         REPO / "src" / "ai_sdlc_runner" / "console" / "index.html",
         '''  var byModel = assign.by_model || {};''',
         '''  var byModel = assign.byModel || {};''',
-        "tests/test_server.py::test_every_key_of_the_node_config_route_is_drawn_or_written_down"),
+        "tests/test_server.py::test_every_key_of_the_node_config_route_is_named_by_the_console_or_written_down"),
 
     Mutation(
         "node-config-accounting", "the carrier two inventory reasons name is not a key any more",
@@ -3509,7 +3509,7 @@ CHG-20260907-28 and built by no record yet.''',
         '''  var byModel = assign.by_model || {};''',
         '''  var byModel = assign.by_model || {};
   var modes = assign.assignable || [];''',
-        "tests/test_server.py::test_every_key_of_the_node_config_route_is_drawn_or_written_down"),
+        "tests/test_server.py::test_every_key_of_the_node_config_route_is_named_by_the_console_or_written_down"),
 
     # The same edit as "the console stops naming the one key it draws by name", against the other
     # guard. One console line carries two guarantees — that a drawn key stays drawn, and that the

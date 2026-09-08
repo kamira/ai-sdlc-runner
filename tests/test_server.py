@@ -2450,9 +2450,11 @@ def test_the_inventory_is_fifteen_and_the_two_renamed_ones_are_not_in_it():
 CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE = {
     "node_models": "folded into `by_model` by the route itself; drawn as each card's `use.nodes`",
     "seat_models": "folded into `by_model` by the route itself; drawn as each card's `use.seats`",
-    "source": "reaches the terminal only, as a count — `runner run` prints how many rows the store "
-              "filled and `runner serve` how many the plan overrode. No console renders provenance "
-              "per assignment; the view is named in CHG-20260907-28 and built by no record yet",
+    "source": "read by nothing. `runner run` and `runner serve` each print an aggregate count of "
+              "the same fact, but they compute it themselves from the store rather than from this "
+              "response — a draft of this line said the field 'reaches the terminal only' and a "
+              "seat refused it: a related fact computed twice is not this value being consumed. "
+              "The per-assignment view is named in CHG-20260907-28 and built by no record yet",
     "assignable": "for an API client, which can refuse a node before it posts. No shipped console "
                   "reads it and there is no per-node configure control for it to grey out; the "
                   "server refuses the same node anyway, in `store._check_node`",
@@ -2463,9 +2465,11 @@ def _config_nodes_keys():
     """The keys the **route** answers, from a live GET.
 
     Not a fixture list and not a source split. A hand-written set is the thing CHG-20260903-29
-    refused — *"naming the six keys would go green the moment a seventh arrived"* — and splitting
-    `do_GET`'s text on the path is the fragile idiom `tests/test_models_schema.py` already carries
-    once. The route is cheap to ask: no assignments, no registry, all six keys.
+    refused — *"Naming the six keys and the one typo would go green the moment a seventh key or a
+    second typo arrived"*, quoted as written rather than paraphrased inside quotation marks, which
+    a seat caught in the first draft of this line — and splitting `do_GET`'s text on the path is the
+    fragile idiom `tests/test_models_schema.py` already carries once. The route is cheap to ask: no
+    assignments, no registry, all six keys.
     """
     tmp = pathlib.Path(tempfile.mkdtemp())
     operator = server.Operator.mint(tmp)
@@ -2490,7 +2494,7 @@ def _config_nodes_keys():
         thread.join(timeout=10)
 
 
-def test_every_key_of_the_node_config_route_is_drawn_or_written_down():
+def test_every_key_of_the_node_config_route_is_named_by_the_console_or_written_down():
     """**The surface neither of the two rules above reaches.**
 
     `assignable` shipped in `22f6ace` with a `docs/API.md` sentence saying the console greys out the
@@ -2500,6 +2504,16 @@ def test_every_key_of_the_node_config_route_is_drawn_or_written_down():
     watched by no rule at all.
 
     A rule, not the four. The next key added to `/config/nodes` cannot join in silence.
+
+    **What this proves is that the identifier occurs in executable page text, and no more** — the
+    name says `named_by_the_console` for that reason, and a review seat made it say so after a
+    draft called it `drawn`. A dead `var schemaNames = ["by_model", "models"];` would satisfy it
+    while `drawModels` read neither. That is exactly the reach
+    `test_every_key_the_server_sends_reaches_the_console` has under a name that claims more; the
+    honest statement of both is *the page mentions it somewhere a comment cannot*, which is what
+    CHG-20260904-13 bought by moving the read onto `_console_code()`. A guard that proved rendering
+    would have to run the page, and this repository has no harness that does. The rest of the claim
+    lives in the inventory, and the inventory is prose.
     """
     page = _console_code()
     keys = _config_nodes_keys()
@@ -2531,12 +2545,18 @@ def test_no_fold_named_in_the_node_config_inventory_is_absent_from_the_route_or_
     held, the way `test_no_exclusion_is_justified_by_a_flag_the_runner_does_not_have` holds the
     `--json` that was never a flag: a carrier named in a reason must be a key of the **same
     response** and must be named on the page. Both halves matter — a typo'd carrier is not a key,
-    and a real key nobody draws carries nothing.
+    and a name the page never mentions carries nothing.
 
-    What no test here can check is the other two reasons, and the record says so rather than
-    implying otherwise: whether `source` really reaches only the terminal, and whether some client
-    somewhere reads `assignable`, are claims about the world outside this repository. They are
-    prose, and prose is what an inventory is for.
+    **Named on the page, not rendered by it**, for the reason in the guard above: this reads text,
+    not behaviour, so it refuses a carrier the page never mentions and cannot refuse one mentioned
+    inertly. The fold itself is real — `server.py`'s `/config/nodes` branch appends every
+    `node_models` entry to `by_model[*].nodes` and every `seat_models` entry to `by_model[*].seats`,
+    and `drawModels` draws both as `use.nodes` and `use.seats` — but that relationship is what the
+    reason asserts, not what this proves.
+
+    What no test here can check at all is the other two reasons: whether any client outside this
+    repository reads `assignable`, and where the fact `source` carries does and does not go. Those
+    are claims about the world, and an inventory is what a repository has instead of a test for one.
     """
     page = _console_code()
     keys = _config_nodes_keys()
