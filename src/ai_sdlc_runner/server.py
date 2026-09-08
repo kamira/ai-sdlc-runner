@@ -1109,8 +1109,13 @@ class Runner:
             # out of it — correctly records nothing, and left the mark at `-1`. The next `attach`
             # then read `1 > -1`, was declared an ask by the same expression at the top of this
             # method, and appended: the console said *"asked once"* after `POST /attachments`, and
-            # `docs/API.md`'s *"`POST /attachments` never moves this counter and never moves that
-            # sentence"* was false on 100 of the 2004 walks. That attach walk really does open
+            # `docs/API.md`'s *"`POST /attachments` moves neither once the requirement has been
+            # read at this instruction count"* was false on 100 of the 2004 walks. (That line reads
+            # *"once … read"* because of the other narrowing, which is not this record's: on a run
+            # whose **first** incomplete stop is an attach walk, the mark is still `-1` and the
+            # append is correct — nobody had been asked before, and that walk asked. The mark is
+            # written only under `incomplete`, at `3a8caf2` as here, so a completing walk leaves it
+            # alone. Measured in the fifth round, on a seat answering complete then missing.) That attach walk really does open
             # sessions — its artifact changes every order, so no seat is replayed and the third
             # conjunct is true — which is why guarding the append alone never caught it. What was
             # false is the **first** conjunct, read off a mark that had stopped moving.

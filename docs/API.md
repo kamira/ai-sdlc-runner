@@ -246,14 +246,18 @@ caller never has to know which of the three it is holding.
                                     // — counted after this stop was recorded, so it matches
                                     // the sentence `reason` carries (CHG-20260904-03).
                                     // A walk that is not an ask records no stop, so both
-                                    // stay where they were: `POST /attachments` never moves
-                                    // this counter and never moves that sentence. It moved
-                                    // the sentence until CHG-20260907-27, and CHG-20260907-27
-                                    // then broke the first half of the line for one walk in
-                                    // twenty — an attach straight after a same-brief restart,
-                                    // measured at 100 of 2004 swept walks, where the counter
-                                    // and the sentence both read *"asked once"*. Repaired in
-                                    // that record's fourth round; both halves hold. An aspect with
+                                    // stay where they were: `POST /attachments` moves neither
+                                    // **once the requirement has been read at this instruction
+                                    // count**. Two narrowings, both measured, both in
+                                    // CHG-20260907-27: an attach straight after a same-brief
+                                    // restart moved the sentence — 100 of 2004 swept walks —
+                                    // and is repaired in that record's fourth round; and an
+                                    // attach whose walk is the run's **first** incomplete stop
+                                    // does move both, because the mark starts below every count
+                                    // and that walk genuinely asked. The second predates
+                                    // CHG-20260904-05 and is unchanged by either record: the
+                                    // mark is written only at an incomplete stop, so a walk that
+                                    // completes leaves it where it was. An aspect with
                                     // no entry here has been asked for zero times, which is
                                     // what `POST /run` on a brief a persisted journal already
                                     // answers produces, and `reason` spells that
