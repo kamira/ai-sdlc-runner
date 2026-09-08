@@ -115,7 +115,11 @@ def _report(**asks):
 def _frontier_over(sequence):
     engine, Ask, Report = _report()
     from ai_sdlc_runner import graph
-    node = graph.Node("next_module", graph.LOOP, "x", branches={"module": "a", "none": "b"})
+    # `mode=RUNNER` because the real `next_module` is one. Nothing here reads it — `_frontier`
+    # never looks at `mode` — and until CHG-20260907-26 this line was the one place in the
+    # repository that took the field default, and took it wrongly: it got `SINGLE`.
+    node = graph.Node("next_module", graph.LOOP, "x", mode=graph.RUNNER,
+                      branches={"module": "a", "none": "b"})
     return engine._frontier(node, Report([Ask(nid, res) for nid, res in sequence]))
 
 
