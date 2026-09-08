@@ -247,17 +247,17 @@ caller never has to know which of the three it is holding.
                                     // the sentence `reason` carries (CHG-20260904-03).
                                     // A walk that is not an ask records no stop, so both
                                     // stay where they were: `POST /attachments` moves neither
-                                    // **once the requirement has been read at this instruction
-                                    // count**. Two narrowings, both measured, both in
+                                    // **once an incomplete stop has been recorded at this
+                                    // instruction count**. Two narrowings, both measured in
                                     // CHG-20260907-27: an attach straight after a same-brief
                                     // restart moved the sentence — 100 of 2004 swept walks —
                                     // and is repaired in that record's fourth round; and an
-                                    // attach whose walk is the run's **first** incomplete stop
-                                    // does move both, because the mark starts below every count
-                                    // and that walk genuinely asked. The second predates
-                                    // CHG-20260904-05 and is unchanged by either record: the
-                                    // mark is written only at an incomplete stop, so a walk that
-                                    // completes leaves it where it was. An aspect with
+                                    // attach that is the first incomplete stop **at this
+                                    // instruction count** does move both, whether or not the run
+                                    // stopped earlier at a lower count, because that walk
+                                    // genuinely asked. The second is CHG-20260904-05's own — it
+                                    // put the mark under a gate CHG-20260823-13 already had —
+                                    // and CHG-20260907-27 leaves it alone. An aspect with
                                     // no entry here has been asked for zero times, which is
                                     // what `POST /run` on a brief a persisted journal already
                                     // answers produces, and `reason` spells that

@@ -3254,8 +3254,8 @@ def test_an_attachment_after_a_replayed_start_is_not_an_ask(tmp_path, monkeypatc
         f"and the attach after it has to be refused by the first conjunct or by nothing")
     assert len(runner.state.intake_history) == 0, (
         f"`POST /attachments` recorded {len(runner.state.intake_history)} intake stop(s) after a "
-        f"replayed start; `docs/API.md` says it moves neither once the requirement has been "
-        f"read at this instruction count")
+        f"replayed start; `docs/API.md` says it moves neither once an incomplete stop has "
+        f"been recorded at this instruction count")
 
     snap = runner.state.snapshot()
     assert not (snap.get("intake_asks_by_aspect") or {}), (

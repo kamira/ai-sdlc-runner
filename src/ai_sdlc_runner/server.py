@@ -327,7 +327,10 @@ class RunState:
     #: (CHG-20260904-05; renamed from `instructions_when_last_asked` in CHG-20260907-27's fourth
     #: round). Read, not asked: a walk that answers every seat out of the journal asks nobody and
     #: still leaves their answers standing against that brief, so the requirement has not grown
-    #: since — and `told > mark` is *"has it grown since the answers in hand were given?"*. While
+    #: since — and `told > mark` is *"has it grown since the last **incomplete** stop?"*. It was
+    #: written *"since the answers in hand were given"* until CHG-20260907-27's sixth round, where a
+    #: walk that reads the requirement and finds nothing missing refuted it: that walk gives an
+    #: answer and does not move this, because the assignment is under `incomplete`. While
     #: the two were one sentence the name was true; the fourth round's guard moves this on a
     #: replayed walk that records no stop, and the old name would have been a claim the code
     #: refutes. Two earlier records name the old spellings, and they are history: CHG-20260904-05
@@ -1109,13 +1112,17 @@ class Runner:
             # out of it — correctly records nothing, and left the mark at `-1`. The next `attach`
             # then read `1 > -1`, was declared an ask by the same expression at the top of this
             # method, and appended: the console said *"asked once"* after `POST /attachments`, and
-            # `docs/API.md`'s *"`POST /attachments` moves neither once the requirement has been
-            # read at this instruction count"* was false on 100 of the 2004 walks. (That line reads
-            # *"once … read"* because of the other narrowing, which is not this record's: on a run
-            # whose **first** incomplete stop is an attach walk, the mark is still `-1` and the
-            # append is correct — nobody had been asked before, and that walk asked. The mark is
-            # written only under `incomplete`, at `3a8caf2` as here, so a completing walk leaves it
-            # alone. Measured in the fifth round, on a seat answering complete then missing.) That attach walk really does open
+            # `docs/API.md`'s *"`POST /attachments` moves neither once an incomplete stop has been
+            # recorded at this instruction count"* was false on 100 of the 2004 walks. (That line
+            # is qualified *per instruction count* because of the other narrowing, which is not
+            # this record's. The mark is written only under `incomplete`, so a walk that completes
+            # leaves it where it was, and the next attach at the same count appends — correctly,
+            # nobody had been asked at that count and that walk asked. Measured in the sixth round:
+            # `start` incomplete at 1, `instruct` completing at 2, `attach` at 2 appends; the
+            # control, an attach at a count that already has an incomplete stop, does not. It is
+            # CHG-20260904-05's residue — that record put the mark under a gate CHG-20260823-13
+            # already had — and `3a8caf2` reads the same only because this record did not touch
+            # it; `3a8caf2` is younger than CHG-20260904-05 and can attribute nothing.) That attach walk really does open
             # sessions — its artifact changes every order, so no seat is replayed and the third
             # conjunct is true — which is why guarding the append alone never caught it. What was
             # false is the **first** conjunct, read off a mark that had stopped moving.
