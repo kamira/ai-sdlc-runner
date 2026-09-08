@@ -1357,6 +1357,38 @@ def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
 
         allow_reuse_address = False
 
+        #: How many connections the OS holds for us between `accept` calls.
+        #:
+        #: `socketserver` defaults this to **5**, and a full backlog is not a queue that grows.
+        #: The next connection is not answered at all: the SYN is dropped, the client retransmits,
+        #: and the RST follows that -- so it surfaces as `WinError 10061` / `ECONNREFUSED`, the
+        #: same error as a port with nothing listening, **after about two seconds** rather than
+        #: at once. Measured on this class, acceptor not draining:
+        #:
+        #:     listen(5)                 5 held    the 6th refused after 2.03s
+        #:     listen(128)             128 held    the 129th, 2.03s
+        #:     listen(200)             200 held
+        #:     listen(201)             200 held    <- Windows clamps here
+        #:     listen(socket.SOMAXCONN) 200 held    the constant is 2147483647 and is truncated
+        #:
+        #: **128, bounded from both sides**, which is the argument the number needs: above the
+        #: largest burst anything here makes (eight pool workers, twenty in the test that pins
+        #: this), and below the 200 the platform will silently truncate to. `SOMAXCONN` was the
+        #: other seat's proposal and would write a value Windows quietly rewrites; on Linux the
+        #: cap is `net.core.somaxconn`, read and not measured here.
+        #:
+        #: An earlier draft said 128 **because `http.server.HTTPServer` uses it**. It does not --
+        #: neither `HTTPServer` nor `ThreadingHTTPServer` overrides this attribute on any
+        #: supported version, and both inherit the 5. The citation was invented; a seat checked
+        #: what I had not.
+        #:
+        #: The acceptor is one Python thread and does not have to be absent to be starved: it
+        #: competes for the GIL with every handler thread it has already spawned. Measured with
+        #: `serve_forever` running and eight spinner threads beside it, a burst of twenty draws
+        #: 51 refusals in 200 connects at 5 and none at 128. What the depth buys is that a refusal
+        #: becomes a wait, not that a loaded server answers quickly (CHG-20260907-22).
+        request_queue_size = 128
+
     try:
         return _OneRunner((host, port),
                           make_handler(runner, operator, registry, registry_path, assignments,

@@ -188,6 +188,23 @@ MUTATIONS: List[Mutation] = [
         '''            if (key == "node_models" and owner in graph.BY_ID or True''',
         "tests/test_plan.py"),
 
+    # ── backlog (CHG-20260907-22) ──────────────────
+    # `socketserver` defaults the listen backlog to 5 and `serve` never set it, so the sixth
+    # caller of a server whose acceptor is not draining is told `WinError 10061` -- the error
+    # for nothing listening at all.
+    #
+    # One entry, not two. A second was registered that deleted the attribute so the default is
+    # inherited by accident -- and both seats said the same thing about it: `pass` and `= 5`
+    # produce the identical class attribute, so no test can tell them apart and anything catching
+    # one catches the other. It read as a distinct class only to a human reading the source.
+    # Deleted rather than relabelled.
+    Mutation(
+        "backlog", "the listen backlog may go back to five again",
+        SRC / "server.py",
+        '''        request_queue_size = 128''',
+        '''        request_queue_size = 5''',
+        "tests/test_server.py::test_a_burst_of_connections_is_queued_rather_than_refused"),
+
     # ── resolver-fixed (CHG-20260907-21) ────────────
     # The reverse test asserted a containment and `localhost` satisfied it by being a bind
     # spelling, which is not why it belongs. Equality states the relation instead, so every
