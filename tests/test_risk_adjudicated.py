@@ -34,6 +34,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ai_sdlc_runner import engine, graph, policy  # noqa: E402
+from _graph_swap import validate_with  # noqa: E402
 from test_flow import DECISIONS, SPEC  # noqa: E402
 
 
@@ -149,7 +150,7 @@ def test_a_panel_must_adjudicate_something():
 
 def _validate_one(node):
     """`validate()` walks the shipped NODES; this checks one node against the same rules by
-    swapping it in. Kept explicit rather than reaching into a private helper that may not exist.
+    swapping it in. What is local here is the **arity**, not the swap.
 
     **Both** views are replaced. This used to rebind `g.NODES` alone, which left `validate`
     reading the new node for its per-node rules and the shipped one everywhere it goes through
@@ -157,19 +158,11 @@ def _validate_one(node):
     wrong reason (measured: the messages are identical either way), but the half-swap is the
     hazard `validate` now refuses outright, so it could not stay.
 
-    `tests/test_graph_validation.py` and `tests/test_execution_mode.py` each carry a byte-identical
-    copy of this. Three implementations of one stateful operation is its own finding, recorded in
-    CHG-20260907-10 with `tests/conftest.py` as the agreed repair, and left to its own change so
-    that a forty-signature refactor is not folded into a rule."""
-    import ai_sdlc_runner.graph as g
-
-    original_nodes, original_by_id = g.NODES, g.BY_ID
-    try:
-        g.NODES = tuple(node if n.id == node.id else n for n in original_nodes)
-        g.BY_ID = {n.id: n for n in g.NODES}
-        g.validate()
-    finally:
-        g.NODES, g.BY_ID = original_nodes, original_by_id
+    The swap itself is `_graph_swap.validate_with`, one implementation for the three modules that
+    had their own (CHG-20260907-25). This wrapper survives it because its two callers hold a
+    single `Node` rather than a tuple — an earlier docstring here called the other two
+    "byte-identical" copies of it, and they never were: they take the whole graph."""
+    validate_with(tuple(node if n.id == node.id else n for n in graph.NODES))
 
 
 def test_a_grading_node_that_is_not_a_panel_is_refused():
