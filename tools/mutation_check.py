@@ -3434,6 +3434,104 @@ MUTATIONS: List[Mutation] = [
             return stop''',
         '''            return _finish(stop, confirmations)''',
         "tests/test_settings.py"),
+    # ── node-config-accounting (CHG-20260907-28) ─────────────────────────────────────────────
+    # `GET /config/nodes` sent six keys and no rule watched any of them. The `-29` rule iterates
+    # `RunState.snapshot()` and the `-49` rule iterates `RunReport.as_dict()`; `assignable` is in
+    # neither, so a key documented as something *"the console can grey out"* sat beside a console
+    # with no per-node configure control for a fortnight and nothing could have said so.
+    #
+    # **One fix here is deliberately unregistered.** `server.py`'s comment above `"assignable"`
+    # carried the same false claim as the page and is corrected in the same change, and no
+    # mutation of it can be caught: `_console_code()` strips comments from the *console* so a
+    # comment cannot satisfy the console rule, and no guard reads `server.py`'s comments at all.
+    # Writing a second vocabulary check over source-file prose would pin the wording of a comment
+    # and nothing else, which is the class this repository's own records call its recurring defect.
+    # The page is the copy three surfaces are written against, and the page is the copy pinned.
+    Mutation(
+        "node-config-accounting", "a seventh key joins the route in silence",
+        SRC / "server.py",
+        '''                    "assignable": list(store_mod.MODES_THAT_USE_MODELS),
+                })''',
+        '''                    "assignable": list(store_mod.MODES_THAT_USE_MODELS),
+                    "seventh": [],
+                })''',
+        "tests/test_server.py::test_every_key_of_the_node_config_route_is_drawn_or_written_down"),
+
+    Mutation(
+        "node-config-accounting", "a key leaves the route and its inventory entry stands",
+        SRC / "server.py",
+        '''                    "assignable": list(store_mod.MODES_THAT_USE_MODELS),
+                })''',
+        '''                })''',
+        "tests/test_server.py::test_every_key_of_the_node_config_route_is_drawn_or_written_down"),
+
+    Mutation(
+        "node-config-accounting", "the console stops naming the one key it draws by name",
+        REPO / "src" / "ai_sdlc_runner" / "console" / "index.html",
+        '''  var byModel = assign.by_model || {};''',
+        '''  var byModel = assign.byModel || {};''',
+        "tests/test_server.py::test_every_key_of_the_node_config_route_is_drawn_or_written_down"),
+
+    Mutation(
+        "node-config-accounting", "the carrier two inventory reasons name is not a key any more",
+        SRC / "server.py",
+        '''                    "by_model": by_model,''',
+        '''                    "by_models": by_model,''',
+        "tests/test_server.py"
+        "::test_no_fold_named_in_the_node_config_inventory_is_absent_from_the_route_or_the_page"),
+
+    Mutation(
+        "node-config-accounting", "the page goes back to promising a console that greys four modes",
+        REPO / "docs" / "API.md",
+        '''**No shipped console reads it.** From `22f6ace`
+until CHG-20260907-28 this page said the console greys the other four out; the console has no
+per-node configure control at all, so there has never been anything to grey.''',
+        '''The other four ignore it, so the
+console can grey them out rather than let somebody configure a node that will not read it.''',
+        "tests/test_server.py"
+        "::test_the_page_documents_this_route_and_promises_no_reader_it_does_not_have"),
+
+    Mutation(
+        "node-config-accounting", "the page stops saying the console it argues against is the shipped one",
+        REPO / "docs" / "API.md",
+        ''' **The console this repository ships is that
+console**: it draws the merged assignments through `by_model` and renders no provenance at all.
+`runner run` and `runner serve` each print a count to the terminal; per-assignment provenance is
+sent on this route and read by nothing, and the view that would read it is named in
+CHG-20260907-28 and built by no record yet.''',
+        '''''',
+        "tests/test_server.py"
+        "::test_the_page_documents_this_route_and_promises_no_reader_it_does_not_have"),
+
+    Mutation(
+        "node-config-accounting", "a key acquires a console reader and keeps its inventory entry",
+        REPO / "src" / "ai_sdlc_runner" / "console" / "index.html",
+        '''  var byModel = assign.by_model || {};''',
+        '''  var byModel = assign.by_model || {};
+  var modes = assign.assignable || [];''',
+        "tests/test_server.py::test_every_key_of_the_node_config_route_is_drawn_or_written_down"),
+
+    # The same edit as "the console stops naming the one key it draws by name", against the other
+    # guard. One console line carries two guarantees — that a drawn key stays drawn, and that the
+    # carrier two folds name is one a reader can actually see — and reverting it must not look like
+    # reverting only the first. Separate entries, separate objectors, the way `refusal-routing`
+    # splits its weak rule from its explicit pin.
+    Mutation(
+        "node-config-accounting", "the carrier two inventory reasons name reaches no console",
+        REPO / "src" / "ai_sdlc_runner" / "console" / "index.html",
+        '''  var byModel = assign.by_model || {};''',
+        '''  var byModel = assign["by" + "_model"] || {};''',
+        "tests/test_server.py"
+        "::test_no_fold_named_in_the_node_config_inventory_is_absent_from_the_route_or_the_page"),
+
+    Mutation(
+        "node-config-accounting", "the page's sketch stops enumerating what the route sends",
+        REPO / "docs" / "API.md",
+        '''  "source": { "node_models.<node id>": "plan" | "store", "seat_models.<seat>": … },
+''',
+        '''''',
+        "tests/test_server.py"
+        "::test_the_page_documents_this_route_and_promises_no_reader_it_does_not_have"),
 ]
 
 

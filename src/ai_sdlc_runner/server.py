@@ -1263,10 +1263,16 @@ def make_handler(runner: Runner, operator: Operator,
                     "models": [m.as_dict() for m in reg],
                     # Which source put each assignment there. An override nobody can see is worse
                     # than no override: the plan wins over the store, and a console that showed the
-                    # merged result with no provenance could not say that it had.
+                    # merged result with no provenance could not say that it had. **The shipped
+                    # console is that console** — it draws `by_model` and no provenance at all
+                    # (CHG-20260907-28). Sent for a client that wants it, and for the view that
+                    # nobody has built yet.
                     "source": dict(held.get("source") or {}),
-                    # Which modes do anything with a list, so the console can grey out the rest
-                    # rather than let somebody configure a node that ignores them.
+                    # Which modes do anything with a list, for a client that wants to refuse a node
+                    # before it posts; `POST /config/nodes` refuses the same node anyway. **No
+                    # shipped console reads this.** This comment said the console greys out the rest
+                    # from the day the key shipped, and the console has never had a per-node
+                    # configure control to grey (CHG-20260907-28).
                     "assignable": list(store_mod.MODES_THAT_USE_MODELS),
                 })
             elif path == "/whoami":

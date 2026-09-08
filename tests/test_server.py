@@ -2426,6 +2426,197 @@ def test_the_inventory_is_fifteen_and_the_two_renamed_ones_are_not_in_it():
             f"deliberate it belongs in NOT_ON_THE_CONSOLE")
 
 
+# ── the third surface, which had no accounting at all (CHG-20260907-28) ───────────────────────
+
+#: A key `GET /config/nodes` sends that the shipped console does not **name**, and why. Not an
+#: exemption list — an inventory, in the shape CHG-20260903-49 built for `RunReport`.
+#:
+#: **Why this route needed its own rule.** `test_every_key_the_server_sends_reaches_the_console`
+#: iterates `RunState.snapshot()` and `test_every_report_field_is_rendered_or_written_down`
+#: iterates `RunReport.as_dict()`. `/config/nodes` answers neither: `assignable` is in no snapshot
+#: and no report, so both rules were silent about a key `docs/API.md` explained in terms of a
+#: console control that has never existed. That is the same shape `-49` recorded against `-29` —
+#: *a field that never enters the snapshot cannot fail a rule that iterates the snapshot* — one
+#: surface further out.
+#:
+#: **Why the reading is by name, when `-49` learned to read content.** `_reaches_console`'s content
+#: half walks `snapshot()`'s own dict for `report.<attr>` reads, which works because that dict is
+#: the whole transform. This route's dict is a literal inside `do_GET`, and `by_model` is built by
+#: two loops above it. A fold no single hop can see is written down as a claim instead — and the
+#: part of that claim a test can check is checked by the test below it.
+#:
+#: **Four of six is the finding, not a lapse in the inventory.** It is this route's first
+#: accounting; two of the four are honest folds and say so.
+CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE = {
+    "node_models": "folded into `by_model` by the route itself; drawn as each card's `use.nodes`",
+    "seat_models": "folded into `by_model` by the route itself; drawn as each card's `use.seats`",
+    "source": "reaches the terminal only, as a count — `runner run` prints how many rows the store "
+              "filled and `runner serve` how many the plan overrode. No console renders provenance "
+              "per assignment; the view is named in CHG-20260907-28 and built by no record yet",
+    "assignable": "for an API client, which can refuse a node before it posts. No shipped console "
+                  "reads it and there is no per-node configure control for it to grey out; the "
+                  "server refuses the same node anyway, in `store._check_node`",
+}
+
+
+def _config_nodes_keys():
+    """The keys the **route** answers, from a live GET.
+
+    Not a fixture list and not a source split. A hand-written set is the thing CHG-20260903-29
+    refused — *"naming the six keys would go green the moment a seventh arrived"* — and splitting
+    `do_GET`'s text on the path is the fragile idiom `tests/test_models_schema.py` already carries
+    once. The route is cheap to ask: no assignments, no registry, all six keys.
+    """
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    operator = server.Operator.mint(tmp)
+    httpd = server.serve(_runner(), operator, port=0)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = httpd.server_address[1]
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/config/nodes", method="GET")
+        req.add_header("X-Operator-Token", operator.token)
+        req.add_header("Host", f"127.0.0.1:{port}")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return set(json.loads(resp.read().decode("utf-8")))
+    finally:
+        # `shutdown()` stops the loop; `server_close()` is what releases the listening socket, and
+        # the join is what makes the thread gone rather than going. Three guards call this helper,
+        # in a file that also asserts on `threading.active_count()`
+        # (`test_a_connection_that_says_nothing_does_not_hold_a_thread_forever`) — a helper that
+        # leaves a thread finishing is a flake for somebody else to diagnose.
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=10)
+
+
+def test_every_key_of_the_node_config_route_is_drawn_or_written_down():
+    """**The surface neither of the two rules above reaches.**
+
+    `assignable` shipped in `22f6ace` with a `docs/API.md` sentence saying the console greys out the
+    four modes that ignore a model list. The console mentions it zero times, and has no per-node
+    configure control to grey anything with — the key and the claim about it arrived together and
+    no record since named a reader. Nothing could have caught that: this route's response keys were
+    watched by no rule at all.
+
+    A rule, not the four. The next key added to `/config/nodes` cannot join in silence.
+    """
+    page = _console_code()
+    keys = _config_nodes_keys()
+    assert "by_model" in keys, "the route answered nothing recognisable; the rule would pass empty"
+
+    unlisted = sorted(k for k in keys
+                      if not re.search(r"\b%s\b" % re.escape(k), page)
+                      and k not in CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE)
+    assert unlisted == [], (
+        f"GET /config/nodes sends these and the console names none of them: {unlisted}. Draw them, "
+        f"or add each to CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE with what it is for and where its "
+        f"content goes — an inventory a reader can argue with, not a silence")
+
+    stale = sorted(k for k in CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE if k not in keys)
+    assert stale == [], f"the inventory names keys the route no longer sends: {stale}"
+
+    named_but_listed = sorted(k for k in CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE
+                              if re.search(r"\b%s\b" % re.escape(k), page))
+    assert named_but_listed == [], (
+        f"these are listed as unnamed and the console names them: {named_but_listed}. A key that "
+        f"acquired a reader loses its entry, or the entry starts lying the day the view lands")
+
+
+def test_no_fold_named_in_the_node_config_inventory_is_absent_from_the_route_or_the_page():
+    """**A reason a reader cannot check is not a reason.**
+
+    Two of the four entries above do not say *"nothing sees this"* — they say the content reaches
+    the page under another key. That is the one claim in the inventory a test can hold, so it is
+    held, the way `test_no_exclusion_is_justified_by_a_flag_the_runner_does_not_have` holds the
+    `--json` that was never a flag: a carrier named in a reason must be a key of the **same
+    response** and must be named on the page. Both halves matter — a typo'd carrier is not a key,
+    and a real key nobody draws carries nothing.
+
+    What no test here can check is the other two reasons, and the record says so rather than
+    implying otherwise: whether `source` really reaches only the terminal, and whether some client
+    somewhere reads `assignable`, are claims about the world outside this repository. They are
+    prose, and prose is what an inventory is for.
+    """
+    page = _console_code()
+    keys = _config_nodes_keys()
+
+    folds = {key: re.findall(r"folded into `([^`]+)`", why)
+             for key, why in CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE.items()}
+    folds = {key: carriers for key, carriers in folds.items() if carriers}
+    assert folds, "no reason claims a fold, so this guard is checking nothing"
+
+    absent = sorted(f"{carrier} (the carrier claimed for {key})"
+                    for key, carriers in folds.items() for carrier in carriers
+                    if carrier not in keys)
+    assert absent == [], f"these carriers are not keys of the response they claim to be in: {absent}"
+
+    undrawn = sorted(f"{carrier} (the carrier claimed for {key})"
+                     for key, carriers in folds.items() for carrier in carriers
+                     if not re.search(r"\b%s\b" % re.escape(carrier), page))
+    assert undrawn == [], (
+        f"these carriers reach no console, so the folded key reaches none either: {undrawn}")
+
+
+#: Words that turn a mention of the console into a statement of what it does **not** do. A closed
+#: set, and the guard below says plainly that a set of words is all a test over prose can be.
+_A_DENIAL = ("no shipped console", "no console", "renders no", "read by nothing",
+             "has never", "reads none")
+
+
+def _config_nodes_section():
+    root = pathlib.Path(__file__).resolve().parents[1]
+    page = (root / "docs" / "API.md").read_text(encoding="utf-8")
+    return page.split("### `GET /config/nodes`")[1].split("### `GET /whoami`")[0]
+
+
+def test_the_page_documents_this_route_and_promises_no_reader_it_does_not_have():
+    """**Both halves of the route's accounting**: what it sends, and what is true about who reads it.
+
+    The first half is `test_the_models_sketch_enumerates_the_payload_it_claims_to`'s move applied to
+    the second sketch on the page - a fenced key list claims to *be* the payload, so it is checked by
+    equality. `docs/API.md` listed ten keys for `GET /models` while the route shipped eleven
+    (CHG-20260907-14), and this route's sketch had nothing holding it at all. Top-level keys only:
+    the fence nests `nodes`, `seats`, `known` and the rest inside their values, and outer
+    indentation is what tells them apart.
+
+    The second half is the defect this record was opened for. `assignable` was documented as
+    something *"the console can grey out"* and the console has no per-node configure control; the
+    key and the claim shipped together in `22f6ace`. So: a paragraph introducing a key the console
+    does not name may not talk about the console without denying it.
+
+    **This holds words, not meaning, and that is the whole of what a test over prose can do.** The
+    denials are listed above so a writer changes them deliberately rather than discovering the guard
+    by turning it red. What cannot be checked here at all is the other direction - whether some
+    client outside this repository reads `assignable`, and whether `source` really reaches only the
+    terminal. Those are the reasons in `CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE`, and an inventory is
+    what a repository has instead of a test for a claim about the world.
+    """
+    section = _config_nodes_section()
+    sketch = section.split("```jsonc")[1].split("```")[0]
+
+    documented = set(re.findall(r'(?m)^(?:\{ |  )"(\w+)":', sketch))
+    assert documented == _config_nodes_keys(), (
+        f"the sketch omits {sorted(_config_nodes_keys() - documented)} and invents "
+        f"{sorted(documented - _config_nodes_keys())}")
+
+    examined = []
+    for key in CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE:
+        for paragraph in section.split("\n\n"):
+            flat = " ".join(paragraph.split())
+            if not flat.startswith("**`%s`" % key) or "console" not in flat.lower():
+                continue
+            examined.append(key)
+            assert any(word in flat.lower() for word in _A_DENIAL), (
+                f"the paragraph introducing `{key}` talks about the console, and no shipped "
+                f"console names that key. Say what it does not do, or delete the entry in "
+                f"CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE because a reader arrived: {flat[:160]}")
+    assert examined, (
+        "no paragraph on this route both introduces an unnamed key and mentions the console, so "
+        "this guard examined nothing. If the page stopped explaining these keys, that is the "
+        "finding")
+
+
 def test_a_decision_that_names_nothing_is_refused_before_it_reaches_the_ledger(live):
     """**The empty-string road into an append-only ledger** (CHG-20260904-01, defect seat L-15).
 
