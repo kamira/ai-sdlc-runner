@@ -323,17 +323,20 @@ class RunState:
     #: cannot answer findings nobody put in front of them; the brief retires it the way
     #: `_live_approvals` retires an approval the brief outgrew (CHG-20260906-03).
     proceeded: Optional[tuple] = None
-    #: How many instructions had been given when the seats last **read** the requirement
-    #: (CHG-20260904-05; renamed from `instructions_when_last_asked` in CHG-20260907-27's fourth
-    #: round). Read, not asked: a walk that answers every seat out of the journal asks nobody and
-    #: still leaves their answers standing against that brief, so the requirement has not grown
-    #: since — and `told > mark` is *"has it grown since the last **incomplete** stop?"*. It was
-    #: written *"since the answers in hand were given"* until CHG-20260907-27's sixth round, where a
-    #: walk that reads the requirement and finds nothing missing refuted it: that walk gives an
-    #: answer and does not move this, because the assignment is under `incomplete`. While
-    #: the two were one sentence the name was true; the fourth round's guard moves this on a
-    #: replayed walk that records no stop, and the old name would have been a claim the code
-    #: refutes. Two earlier records name the old spellings, and they are history: CHG-20260904-05
+    #: How many instructions had been given at the last stop that found the requirement
+    #: **incomplete** (CHG-20260904-05). The assignment below is under `stop["incomplete"]` and
+    #: nothing else writes this, so that is the whole of what it records — and `told > mark` is
+    #: *"has it grown since that stop?"*.
+    #:
+    #: **Two renames, and the second is why the first was not enough** (CHG-20260907-27). It was
+    #: `instructions_when_last_asked` until the fourth round, which was false once the guard split:
+    #: a replayed walk records no stop, asks nobody, and still moves this. The fourth round called
+    #: it `instructions_when_last_read` and glossed the comparison *"has it grown since the answers
+    #: in hand were given?"*, and the sixth round refuted the gloss with a walk that reads the
+    #: requirement, finds nothing missing, gives an answer and does not move this. The name had the
+    #: same reach as the gloss, so the seventh round took the name too: what is written here is not
+    #: every read, it is every read that stopped short. Three earlier records name the old
+    #: spellings, and they are history: CHG-20260904-05
     #: put `_instructions_when_last_asked` on the `Runner`, CHG-20260904-09 moved it here.
     #: **On the run, not on the runner** (CHG-20260904-09): `start` builds a fresh `RunState` with
     #: `instructions=[instruction]`, so a mark that outlived it made `told > mark` false for every
@@ -345,7 +348,7 @@ class RunState:
     #: short for the life of the run. `or not self.intake_history` produces identical counts, and
     #: was rejected for a reason that is not about behaviour: under it CHG-20260904-09's mutation
     #: stays **green**, so the existing guard becomes a test that cannot fail.
-    instructions_when_last_read: int = -1
+    instructions_at_last_incomplete_stop: int = -1
     log: List[Dict[str, object]] = field(default_factory=list)
     #: What the operator handed over, and anything the store has since lost. A brief that has
     #: quietly lost a document is worse than one that says so.
@@ -958,12 +961,12 @@ class Runner:
             # calling `_advance`, and `instruct` refuses anything but `suspended`, `idle`,
             # `finished` or `stopped` — so no instruction can be added while a walk is in flight.
             # `attach` is the one method that can arrive mid-walk and it does not touch
-            # `instructions`. `instructions_when_last_read` is written in one place, one
+            # `instructions`. `instructions_at_last_incomplete_stop` is written in one place, one
             # walk at a time. Both operands are therefore fixed for the whole walk.
             cfg = dataclasses.replace(
                 cfg,
                 intake_ask_in_flight=(len(self.state.instructions)
-                                      > self.state.instructions_when_last_read))
+                                      > self.state.instructions_at_last_incomplete_stop))
             report = self._walk(cfg)
         except Exception as exc:                   # the run failed; say so rather than look idle
             with self._lock:
@@ -1021,7 +1024,7 @@ class Runner:
             #     second start, before this line              3     3          1  asked 0 times
             #     second start, after it                      3     3          0  not asked yet
             #
-            # `told > instructions_when_last_read` is **true** on that second start — the mark is
+            # `told > instructions_at_last_incomplete_stop` is **true** on that second start — the mark is
             # `-1` on a fresh `RunState` — so the stop was recorded and the counter said 1, while
             # the engine's conjunct said no session was opened and the sentence counted the ask
             # out. One box, two answers: the defect CHG-20260903-42 closed, reintroduced by this
@@ -1139,8 +1142,8 @@ class Runner:
             # given?"*, and that question is unchanged by whether a session was opened.
             stop = report.suspended or {}
             told = len(self.state.instructions)
-            if stop.get("incomplete") and told > self.state.instructions_when_last_read:
-                self.state.instructions_when_last_read = told
+            if stop.get("incomplete") and told > self.state.instructions_at_last_incomplete_stop:
+                self.state.instructions_at_last_incomplete_stop = told
                 if len(report.resumed) < len(report.asks):
                     self.state.intake_history.append(
                         {"missing": list(stop.get("missing") or ())})

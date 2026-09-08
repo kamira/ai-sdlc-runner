@@ -900,8 +900,8 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "intake-count", "a run that started on nothing goes back to not counting its first stop",
         SRC / "server.py",
-        '''    instructions_when_last_read: int = -1''',
-        '''    instructions_when_last_read: int = 0''',
+        '''    instructions_at_last_incomplete_stop: int = -1''',
+        '''    instructions_at_last_incomplete_stop: int = 0''',
         "tests/test_server.py"),
 
     Mutation(
@@ -3345,7 +3345,7 @@ MUTATIONS: List[Mutation] = [
         'decisions', 'the ask counter goes back to outliving the run it counts',
         SRC / 'server.py',
         '            self.state = RunState(state="running", version=self.state.version + 1,\n                                  instructions=[instruction] if instruction else [])',
-        '            self.state = RunState(state="running", version=self.state.version + 1,\n                                  instructions=[instruction] if instruction else [],\n                                  instructions_when_last_read=(\n                                      self.state.instructions_when_last_read))',
+        '            self.state = RunState(state="running", version=self.state.version + 1,\n                                  instructions=[instruction] if instruction else [],\n                                  instructions_at_last_incomplete_stop=(\n                                      self.state.instructions_at_last_incomplete_stop))',
         'tests/test_server.py'),
 
     Mutation(
@@ -3607,7 +3607,7 @@ CHG-20260907-28 and built by no record yet.''',
         "ask-in-flight", "the server tells every walk it is an ask",
         SRC / "server.py",
         '''                intake_ask_in_flight=(len(self.state.instructions)
-                                      > self.state.instructions_when_last_read))''',
+                                      > self.state.instructions_at_last_incomplete_stop))''',
         '''                intake_ask_in_flight=True)''',
         "tests/test_server.py::test_the_walk_is_told_whether_it_is_an_ask"),
 
@@ -3638,14 +3638,14 @@ CHG-20260907-28 and built by no record yet.''',
     Mutation(
         "ask-in-flight", "the mark stops moving on a walk that recorded no stop",
         SRC / "server.py",
-        '''            if stop.get("incomplete") and told > self.state.instructions_when_last_read:
-                self.state.instructions_when_last_read = told
+        '''            if stop.get("incomplete") and told > self.state.instructions_at_last_incomplete_stop:
+                self.state.instructions_at_last_incomplete_stop = told
                 if len(report.resumed) < len(report.asks):
                     self.state.intake_history.append(
                         {"missing": list(stop.get("missing") or ())})''',
-        '''            if (stop.get("incomplete") and told > self.state.instructions_when_last_read
+        '''            if (stop.get("incomplete") and told > self.state.instructions_at_last_incomplete_stop
                     and len(report.resumed) < len(report.asks)):
-                self.state.instructions_when_last_read = told
+                self.state.instructions_at_last_incomplete_stop = told
                 self.state.intake_history.append(
                     {"missing": list(stop.get("missing") or ())})''',
         "tests/test_server.py::test_an_attachment_after_a_replayed_start_is_not_an_ask"),

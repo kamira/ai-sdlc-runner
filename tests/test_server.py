@@ -1173,11 +1173,11 @@ def test_a_run_started_on_nothing_counts_its_first_stop():
     over every sequence; the difference is that under the second, CHG-20260904-09's mutation
     stays green, so an existing guard becomes a test that cannot fail.
     """
-    assert server.RunState().instructions_when_last_read == -1, (
+    assert server.RunState().instructions_at_last_incomplete_stop == -1, (
         "a run that begins on nothing has not been asked anything yet, and 0 says it has")
 
     told = 0                                    # `start("")` -> instructions == []
-    assert told > server.RunState().instructions_when_last_read, (
+    assert told > server.RunState().instructions_at_last_incomplete_stop, (
         "the first stop of a run started on nothing is not counted")
 
 
@@ -3168,7 +3168,7 @@ def test_an_attachment_after_a_replayed_start_is_not_an_ask(tmp_path, monkeypatc
     (CHG-20260907-27, fourth round, blocking on behaviour).
 
     The round above put `len(report.resumed) < len(report.asks)` into the same `if` as
-    `instructions_when_last_read = told`, so a replayed `start` correctly recorded nothing **and
+    `instructions_at_last_incomplete_stop = told`, so a replayed `start` correctly recorded nothing **and
     stopped moving the mark**. `Runner.start` builds a fresh `RunState`, so the mark was back at
     `-1` and stayed there. The next `attach` read `1 > -1`, was declared an ask by
     `_walk_once`'s pre-walk expression, opened a session with every seat — its artifact changes
@@ -3351,7 +3351,7 @@ def test_the_ask_counter_still_counts_on_the_second_run_of_a_process(tmp_path):
     assert len(runner.state.intake_history) == 1, "run 1 did not reach an incomplete stop"
     runner.instruct(runner.state.version, "and the architecture is three services")
     assert len(runner.state.intake_history) == 2, "run 1's second ask was not counted"
-    mark = runner.state.instructions_when_last_read
+    mark = runner.state.instructions_at_last_incomplete_stop
 
     # The one precondition `start` checks is the state word, and a finished run is what a person
     # starting a second one has in front of them.
