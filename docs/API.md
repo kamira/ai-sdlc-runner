@@ -244,7 +244,29 @@ caller never has to know which of the three it is holding.
                             "safety": {"<seat>": […]}, "complete": false },
   "intake_asks_by_aspect": {},      // per aspect, how many times it has been asked for
                                     // — counted after this stop was recorded, so it matches
-                                    // the sentence `reason` carries (CHG-20260904-03)
+                                    // the sentence `reason` carries (CHG-20260904-03).
+                                    // A walk that is not an ask records no stop, so both
+                                    // stay where they were: `POST /attachments` moves neither
+                                    // **once an incomplete stop has been reached at this
+                                    // instruction count — recorded, or replayed out of the
+                                    // journal by a same-brief restart**. Two narrowings, both
+                                    // measured in CHG-20260907-27: an attach after a same-brief
+                                    // restart moved the sentence — 100 of 2004 swept walks —
+                                    // and is repaired in that record's fourth round; and an
+                                    // attach that is the first incomplete stop reached **at this
+                                    // instruction count** does move both, whether or not the run
+                                    // stopped earlier at a lower count, because that walk
+                                    // genuinely asked. *Reached*, not *recorded*: a replayed walk
+                                    // records nothing and moves the mark, which is the fourth
+                                    // round's own repair, so a later attach at that count is not
+                                    // an ask however empty the history looks. The second is
+                                    // CHG-20260904-05's own — it put the mark under a gate
+                                    // CHG-20260823-13 already had — and CHG-20260907-27 leaves it
+                                    // alone. An aspect with
+                                    // no entry here has been asked for zero times, which is
+                                    // what `POST /run` on a brief a persisted journal already
+                                    // answers produces, and `reason` spells that
+                                    // *"not asked yet"*
   "send_backs":    [ {…} ],
   "dispatches":    [ "…" ],         // which model a pool chose, and which a follows reused
   "adjudications": [ {…} ],         // every panel decision, with the seats' verdicts

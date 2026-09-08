@@ -659,11 +659,24 @@ def test_nothing_reads_the_raw_tally_where_the_ask_in_flight_counts():
                for c in ast.walk(named)), "the one name no longer reads the tally it exists to adjust"
 
 
-def test_the_sentence_and_the_decision_agree_on_the_same_run():
+@pytest.mark.parametrize("in_flight", [True, False])
+def test_the_sentence_and_the_decision_agree_on_the_same_run(in_flight):
     """What the defect looked like from the operator's chair, pinned as a property.
 
     Neither half is checked here for its own sake: the claim is that the number a person is shown
     and the number the runner acts on are **one number** (CHG-20260903-42).
+
+    **Swept over `in_flight` both ways** (CHG-20260907-27). The keyword that says whether this walk
+    is an ask reaches `needs_options` and `stop_reason` separately, and a caller — or a later edit —
+    that hands it to one of them is the same defect in a new spelling: *"asked 3 times"* over a
+    decision that counted two. Under `False` the walk is not an ask, so the count is the recorded
+    tally and both readers say so.
+
+    **Its first lap under `False` is zero**, and on the first build this test asserted the sentence
+    *"asked 0 times"* — the spelling table stopped at one, and the mirror here stopped with it, so
+    the ugly string was pinned rather than noticed. `serve`'s `start` against a persisted journal is
+    the walk that reaches it (CHG-20260907-27, second round); the table and this mirror both say
+    *"not asked yet"* now.
     """
     aspect = sorted(intake.BY_ASPECT)[0]
 
@@ -672,13 +685,114 @@ def test_the_sentence_and_the_decision_agree_on_the_same_run():
         complete = False
 
     history = []
-    for expected in range(1, intake.ASK_LIMIT + 3):
-        shown = intake.stop_reason(_Survey(), history)
-        offering = intake.needs_options(history, aspect)
+    for recorded in range(0, intake.ASK_LIMIT + 2):
+        expected = recorded + (1 if in_flight else 0)
+        shown = intake.stop_reason(_Survey(), history, in_flight)
+        offering = intake.needs_options(history, aspect, in_flight)
 
-        word = {1: "asked once", 2: "asked twice"}.get(expected, f"asked {expected} times")
+        word = {0: "not asked yet", 1: "asked once",
+                2: "asked twice"}.get(expected, f"asked {expected} times")
         assert word in shown, f"ask {expected} is described as something else: {shown}"
         assert offering == (expected >= intake.ASK_LIMIT), (
             f"the person is told {word!r} and the decision beside it "
             f"{'offers options' if offering else 'asks again'}")
         history.append({"missing": [aspect]})
+
+
+def test_a_walk_nobody_was_asked_for_is_not_the_ask_that_runs_out_of_patience():
+    """**The escalation fires on a walk that is not an ask** (CHG-20260907-27).
+
+    CHG-20260904-05 measured that three methods walk from an incomplete stop and that on `attach`
+    nobody was asked, then repaired only the *tally*: `server._walk_once` stopped appending. The
+    `+ 1` here stayed unconditional, so the walk that was not counted still counted itself, and two
+    recorded asks plus one attached file is `ASK_LIMIT`.
+
+    Stated at the boundary, because one short of the limit is the only place the two answers differ
+    in what the runner *does*.
+    """
+    aspect = sorted(intake.BY_ASPECT)[0]
+    one_short = [{"missing": [aspect]}] * (intake.ASK_LIMIT - 1)
+
+    assert intake.asks_including_this_one(one_short, aspect) == intake.ASK_LIMIT
+    assert intake.asks_including_this_one(one_short, aspect, in_flight=False) == (
+        intake.ASK_LIMIT - 1), "a walk that is not an ask must not add one"
+
+    assert intake.needs_options(one_short, aspect), (
+        "the ask that reaches the limit is still the ask that reaches the limit")
+    assert not intake.needs_options(one_short, aspect, in_flight=False), (
+        f"the runner stopped asking on a walk nobody was asked for, after "
+        f"{len(one_short)} recorded asks")
+
+    # And `stop_reason` reads the same walk the same way, or the box has two answers again.
+    class _Survey:
+        missing = (aspect,)
+        complete = False
+
+    def word(n):
+        return {1: "asked once", 2: "asked twice"}.get(n, f"asked {n} times")
+
+    assert word(intake.ASK_LIMIT - 1) in intake.stop_reason(_Survey(), one_short, False)
+    assert word(intake.ASK_LIMIT) in intake.stop_reason(_Survey(), one_short, True)
+
+
+def test_a_resumed_walk_that_opened_no_session_asked_nobody(tmp_path):
+    """**The other door to the same defect** (CHG-20260907-27, codex seat, blocking finding).
+
+    `RunConfig.intake_ask_in_flight` is the caller's declaration, and it is the only thing that can
+    tell an `attach` walk from an `instruct` one. It is not the only way to walk without asking:
+    on a resumed walk every seat's answer can come back out of the journal without a session being
+    opened, and `cmd_run` builds its config **before** the walk, so it cannot say so in time.
+
+    Measured on the first draft of this change, driven the way `cmd_run` drives a journal — two
+    runs recording a stop each, then `--resume` on the same brief:
+
+        run                            resumed  asks  options?  stops after
+        3  --resume, same brief              3     4  YES              3    <- the defect
+        3  --resume, same brief              3     3  no               2    <- now
+
+    The fourth ask in the first row is the **option ask the escalation itself dispatched**, so
+    `cmd_run`'s own guard read *"somebody was asked"* because the runner had given up.
+
+    `engine.walk` measures it where it is knowable — over this node's asks, after the survey and
+    before the escalation — and ANDs it with what the caller said. Two inputs, because neither can
+    answer for the other: this one cannot see an attachment, and the caller cannot see a journal
+    hit.
+    """
+    journal = engine.AskJournal(tmp_path / "asks")
+    seen = []
+
+    def one_run(resume):
+        report = _walk({"conformance": {"missing": ["flow"]}},
+                       intake_history=list(journal.intake_stops()),
+                       journal=journal, resume=resume)
+        stop = report.suspended or {}
+        # `cmd_run`'s own rule, at `cli.py`'s `record_intake_stop` guard.
+        if stop.get("missing") and len(report.resumed) < len(report.asks):
+            journal.record_intake_stop(stop.get("missing") or ())
+        seen.append((len(report.resumed), len(report.asks),
+                     bool((stop.get("options") or {}).get("flow")),
+                     len(journal.intake_stops()), str(report.halt_reason)))
+        return report
+
+    one_run(False)
+    one_run(False)
+    assert len(journal.intake_stops()) == intake.ASK_LIMIT - 1, (
+        f"the floor: the third walk has to stand one ask short of the limit, or nothing below can "
+        f"fire. {seen}")
+
+    report = one_run(True)
+    resumed, asks, offered, stops, reason = seen[-1]
+
+    assert not offered, (
+        f"a walk that opened no session made the runner give up and offer options: {seen[-1]}")
+    # The floor, **after** the claim, because the extra ask this counts under the defect is the
+    # option ask the escalation dispatched — the floor would fire first and name the symptom
+    # instead of the finding. In the green case it still runs, and it is what stops this passing
+    # by never being a resumed walk at all.
+    assert resumed == asks, (
+        f"the floor: this walk has to answer every ask from the journal, or it really was an ask. "
+        f"{resumed} resumed of {asks}")
+    assert "asked twice" in reason, (
+        f"the sentence and the decision have to take the same number: {reason!r}")
+    assert stops == intake.ASK_LIMIT - 1, (
+        f"the count moved on a walk nobody was asked for: {stops} stops recorded")
