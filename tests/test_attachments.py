@@ -24,6 +24,7 @@ import json
 import pathlib
 import shutil
 import tempfile
+import time
 
 import pytest
 
@@ -470,25 +471,54 @@ def test_a_frontier_with_no_plan_is_refused_rather_than_assumed_empty():
 # could see it.
 
 
-def _deep(target_len):
-    """A directory whose path is `target_len` characters, nested the way a real checkout gets deep."""
-    base = pathlib.Path(tempfile.gettempdir()) / "aslr_deep"
+def _deep(target_len, base):
+    """A directory whose path is `target_len` characters, nested the way a real checkout gets deep.
+
+    `base` is passed in rather than invented here. It used to be a fixed `%TEMP%/aslr_deep`,
+    shared by every process on the machine, and the test that called this `rmtree`d it before
+    building -- so two suites running this file at once deleted each other's tree, across
+    checkouts, because the path is derived from the machine and not from the worktree
+    (CHG-20260907-23).
+    """
     d = base / ("x" * 30)
     while len(str(d)) < target_len - 31:
         d = d / ("y" * 30)
     pad = target_len - len(str(d)) - 1
     if pad > 0:
         d = d / ("z" * pad)
-    return base, d
+    return d
 
 
 @pytest.mark.parametrize("length", [235, 252])
 def test_a_store_on_a_long_path_holds_what_it_says_it_holds(length):
     """Both lengths, because the failure inverted between them and one alone would miss half."""
-    base, directory = _deep(length)
+    # `mkdtemp`, not a fixed name: unique per process, so a second suite cannot delete this one's
+    # tree while it is using it.
+    #
+    # **Not because `tmp_path` is too long** -- an earlier version of this comment said so and the
+    # arithmetic did not support it: `tmp_path` measures 89 characters here against the guard's
+    # 120. The reason is that it contains the username *twice*
+    # (`C:\Users\<u>\...\pytest-of-<u>\...`), so every character of a longer username costs
+    # two, and around nineteen it crosses 120 and this test starts skipping itself in silence.
+    # `mkdtemp` costs the username once and leaves about seventy characters of headroom
+    # (CHG-20260907-23).
+    base = pathlib.Path(tempfile.mkdtemp(prefix="aslr_"))
+
+    # Unique names cannot collide and cannot be cleaned by the next run either, so a killed
+    # process strands its tree forever -- `%LOCALAPPDATA%\Temp` is swept by nothing on Windows,
+    # which `tools/mutation_check.py` already records. This is the old pre-emptive cleanup with
+    # the collision taken out of it: siblings only, by age, so a live run's directory (minutes
+    # old) is never touched. `base.parent` rather than `gettempdir()`, because the rule this file
+    # now holds refuses building a name from the shared directory and this does not build a name.
+    cutoff = time.time() - 3600
+    for stale in base.parent.glob("aslr_*"):
+        if stale != base and stale.is_dir() and stale.stat().st_mtime < cutoff:
+            shutil.rmtree("\\\\?\\" + str(stale), ignore_errors=True)
+
+    directory = _deep(length, base)
     if len(str(base)) > 120:                       # a temp dir this deep cannot reach the case
+        shutil.rmtree("\\\\?\\" + str(base), ignore_errors=True)
         pytest.skip("temp directory is already too deep to construct the case")
-    shutil.rmtree("\\\\?\\" + str(base), ignore_errors=True)
     try:
         store = attachments.Store(directory)
         store.add("spec.md", b"the spec")
@@ -678,3 +708,32 @@ def test_the_signature_table_only_holds_types_the_store_accepts(tmp_path):
     and would read as coverage."""
     assert set(attachments.SIGNATURES) <= set(attachments.ALLOWED)
     assert attachments.SIGNATURES, "the signature check has no types left to check"
+
+
+def test_no_test_module_builds_a_path_from_the_machine_s_temp_directory():
+    """The rule behind CHG-20260907-23, so a second spelling of it cannot arrive quietly.
+
+    `_deep` used to build under `tempfile.gettempdir() / "aslr_deep"` -- a name fixed for the whole
+    machine -- and `rmtree` it before building, so two pytest processes in two worktrees deleted
+    each other's tree. `mkdtemp` fixed that instance. This holds the class.
+
+    Asked of the syntax tree, not of the text, so a mention in a docstring or a comment does not
+    count and a call cannot hide behind a rename. `mkdtemp()` and `TemporaryDirectory()` are not
+    matched and are not the hazard: they are unique per call. What is refused is deriving a
+    **name** from a directory every process on the machine shares.
+
+    A seat asked for this after the fix, having pointed out that the record's claim -- that the
+    property needed two pytest processes to test -- was wrong. It needed a sweep.
+    """
+    offenders = []
+    for module in sorted(pathlib.Path(__file__).parent.glob("*.py")):
+        tree = ast.parse(module.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "gettempdir"):
+                offenders.append(f"{module.name}:{node.lineno}")
+    assert not offenders, (
+        f"{offenders} build a path under the directory every process on this machine shares. Two "
+        f"suites in two worktrees then meet there, and whichever starts second wins. Use "
+        f"`tmp_path`, or `tempfile.mkdtemp()` when the case needs a base shorter than `tmp_path` "
+        f"gives.")

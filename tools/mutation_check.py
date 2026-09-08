@@ -188,6 +188,18 @@ MUTATIONS: List[Mutation] = [
         '''            if (key == "node_models" and owner in graph.BY_ID or True''',
         "tests/test_plan.py"),
 
+    # ── shared-temp (CHG-20260907-23) ─────────────
+    # `_deep` built under a name fixed for the whole machine and deleted it before building, so
+    # two pytest processes in two worktrees deleted each other's tree. The entry restores that
+    # name. Note the anchor is in `tests/`, not `src/`: the defect was in a test helper, and a
+    # mutation that could only be spelled in `src/` could not reach it.
+    Mutation(
+        "shared-temp", "a test may build under a name the whole machine shares again",
+        REPO / "tests" / "test_attachments.py",
+        '''    base = pathlib.Path(tempfile.mkdtemp(prefix="aslr_"))''',
+        '''    base = pathlib.Path(tempfile.gettempdir()) / "aslr_deep"''',
+        "tests/test_attachments.py::test_no_test_module_builds_a_path_from_the_machine_s_temp_directory"),
+
     # ── backlog (CHG-20260907-22) ──────────────────
     # `socketserver` defaults the listen backlog to 5 and `serve` never set it, so the sixth
     # caller of a server whose acceptor is not draining is told `WinError 10061` -- the error
