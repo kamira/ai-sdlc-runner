@@ -99,10 +99,14 @@ def test_the_populations_the_panel_comments_count_are_the_ones_they_say():
     """
     named = {n.id for n in graph.NODES
              if {policy.PASS, policy.FAIL} <= set(n.branches or {})}
-    model = {n.id for n in graph.NODES if n.mode == graph.MODEL_PANEL and n.branches}
+    panels = {n.id for n in graph.NODES if n.mode == graph.MODEL_PANEL}
+    model = {nid for nid in panels if graph.BY_ID[nid].branches}
     seat = {n.id for n in graph.NODES if n.mode == graph.SEAT_PANEL}
 
-    assert len(model) == 5, f"the comments say five model-panel nodes carry branches; found {model}"
+    assert len(panels) == 6, (
+        f"the comments say six model panels, five of them carrying branches; found {panels}")
+    assert len(model) == 5, (
+        f"the comments say five of the six model panels carry branches; found {model}")
     assert len(named & model) == 3, (
         f"the comments say three of those five name the panel's own words; found {named & model}")
     assert seat == {"lead_review"}, f"the comments say one seat panel; found {seat}"
@@ -138,11 +142,17 @@ def test_a_seat_panel_whose_branches_the_panel_cannot_name_is_refused():
 
 
 def test_a_seat_panel_declaring_panel_branches_is_refused():
-    """Because nothing reads it there. `engine` maps a model panel's outcome through
-    `panel_branches`; a seat panel's comes back from `_adjudicate` as the branch name itself. A
-    declaration that reads as routing and routes nothing is the shape this file exists against.
+    """Because nothing **routes** on it there — and it is read, which is worse.
+
+    `engine` maps a model panel's outcome through `panel_branches`; every other mode's branch comes
+    from somewhere else. But `engine` reads the table once more after the branch is taken, to name
+    the word meaning ratified, so a node that declares a mapping it does not route through computes
+    a `ratified` its own answer can never equal: a `settles_risk` node would silently never settle.
+
+    The rule covers every mode that is not `MODEL_PANEL`. A seat measured a `runner` node declaring
+    it and `validate` accepting, when this rule named the seat mode alone.
     """
-    with pytest.raises(graph.GraphError, match="never read it"):
+    with pytest.raises(graph.GraphError, match="only a model panel routes through"):
         validate_with(_mutate("lead_review", panel_branches={policy.PASS: "qa_verify"}))
 
 

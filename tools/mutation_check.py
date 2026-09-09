@@ -197,26 +197,20 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "graph-swap", "the shared swap may rebind one view of the graph and not the other",
         REPO / "tests" / "_graph_swap.py",
-        '''    graph.BY_ID = {n.id: n for n in nodes}''',
+        '''    graph.BY_ID = {n.id: n for n in graph.NODES}''',
         '''    pass''',
         "tests/test_graph_validation.py::test_the_half_swap_used_to_certify_a_graph_that_does_not_run"),
 
     Mutation(
         "graph-swap", "the shared swap may stop putting the shipped graph back",
         REPO / "tests" / "_graph_swap.py",
-        # Anchored with the line above the restore. CHG-20260908-03 added a second helper to this
-        # module whose `finally` restores identically, and `test_every_shipped_mutation_has_a_
-        # unique_anchor` refused the bare restore line for naming two occurrences.
-        '''        graph.validate()
-    finally:
-        graph.NODES, graph.BY_ID = original_nodes, original_by_id''',
-        '''        graph.validate()
-    finally:
-        pass''',
-        "tests/test_graph_validation.py::test_the_shared_swap_puts_both_views_back_when_validate_raises"),
-    Mutation(
-        "graph-swap", "the context manager may stop putting the shipped graph back",
-        REPO / "tests" / "_graph_swap.py",
+        # One restore in the module, so one entry. CHG-20260908-03 briefly had two — it added a
+        # context manager with an identical `finally`, `test_every_shipped_mutation_has_a_unique_
+        # anchor` refused the bare restore line for naming both, and the fold that followed removed
+        # the duplicate rather than the ambiguity. **Two** named tests cover this one line now:
+        # `test_the_shared_swap_puts_both_views_back_when_validate_raises` reaches it through
+        # `validate_with`, and `test_the_context_manager_puts_both_views_back_when_the_body_raises`
+        # reaches it directly; this entry names the second, which fails alone.
         '''        yield graph.NODES
     finally:
         graph.NODES, graph.BY_ID = original_nodes, original_by_id''',
@@ -3719,9 +3713,17 @@ CHG-20260907-28 and built by no record yet.''',
     # The seat rule is **stricter**, and that asymmetry is the reason it is a separate rule rather
     # than a widened guard: a model panel's outcome is mapped through `panel_branches`
     # (`engine`'s `node.panel_branches.get(outcome, outcome)`), so declaring that mapping is a real
-    # escape. A seat panel's comes back from `_adjudicate` as the branch name itself and the
-    # mapping is never read, so there is no escape and a declared mapping there is a no-op that
-    # reads as routing — refused by its own rule.
+    # escape. A seat panel's comes back from `_adjudicate`, which does not consult it, so there is
+    # no escape and the message must not offer one.
+    #
+    # The third entry's rule refuses a declared mapping on **every** mode but `MODEL_PANEL`, not
+    # only the seat panel. Two corrections got it there, both from a seat: the first draft said the
+    # mapping is *never read* on the seat path, and `engine` reads it once more after the branch is
+    # taken to name the word meaning ratified — so a node declaring a mapping it does not route
+    # through computes a `ratified` its own answer can never equal, and a `settles_risk` node would
+    # silently never settle. That argument never distinguished the modes, and a seat then measured
+    # a `runner` node declaring the mapping and passing `validate`. Only two nodes ship a
+    # declaration and both are model panels, so widening refuses nothing that exists.
     #
     # The **first** entry pins a rule that had shipped for three rounds with no reverse test: this
     # file's own docstring lists CHG-20260901-11's rule among nineteen such, and the repair that
@@ -3739,9 +3741,9 @@ CHG-20260907-28 and built by no record yet.''',
         '''        if False and node.branches:''',
         "tests/test_graph_validation.py::test_a_seat_panel_whose_branches_the_panel_cannot_name_is_refused"),
     Mutation(
-        "panel-routability", "a seat panel may declare a mapping nothing reads again",
+        "panel-routability", "a node that does not route on the mapping may declare it again",
         SRC / "graph.py",
-        '''        if node.mode == SEAT_PANEL and node.panel_branches:''',
+        '''        if node.mode != MODEL_PANEL and node.panel_branches:''',
         '''        if False and node.panel_branches:''',
         "tests/test_graph_validation.py::test_a_seat_panel_declaring_panel_branches_is_refused"),
 

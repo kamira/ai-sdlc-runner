@@ -54,10 +54,9 @@ def swapped_graph(nodes):
     the rebind and the `try`/`finally` out by hand in order to call `graph.module_cycle()` and
     `engine._whole_change_rejected()` against a hypothetical graph. This is that shape, once.
 
-    `validate_with` is not rewritten in terms of this: its whole point is that the swap is closed
-    before the caller sees anything, and 39 test functions depend on that. The deliberate
-    half-swap in `test_graph_validation` is not folded in here either, for the reason its own
-    docstring gives — it exists to be wrong.
+    `validate_with` **is** written in terms of this. The deliberate half-swap in
+    `test_graph_validation` is not folded in here, for the reason its own docstring gives — it
+    exists to be wrong.
     """
     original_nodes, original_by_id = graph.NODES, graph.BY_ID
     graph.NODES = tuple(nodes)
@@ -76,11 +75,12 @@ def validate_with(nodes):
     `test_graph_validation.py::test_the_shared_swap_puts_both_views_back_when_validate_raises`
     asserts that by identity — 39 test functions share this one `finally`, and until that test was
     written nothing named could notice it going.
+
+    **Written in terms of `swapped_graph` (CHG-20260908-03).** The `with` exits before this returns,
+    so the closed-before-return property those 39 functions rest on is unchanged. An earlier draft
+    kept a second copy of the rebind here and gave that property as the reason; a seat measured the
+    fold and it passes every caller, so the reason was not one. There is one restore in this module
+    again, which is what its first line claims.
     """
-    original_nodes, original_by_id = graph.NODES, graph.BY_ID
-    graph.NODES = nodes
-    graph.BY_ID = {n.id: n for n in nodes}
-    try:
+    with swapped_graph(nodes):
         graph.validate()
-    finally:
-        graph.NODES, graph.BY_ID = original_nodes, original_by_id

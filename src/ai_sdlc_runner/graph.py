@@ -139,8 +139,10 @@ class Node:
     #: only thing `engine` has to route on, because reading one of several voices would make a panel
     #: into whichever model was asked first. A node answers in its own words.
     #:
-    #: **This table serves `MODEL_PANEL` nodes only**, and the count below is of those. Three of the
-    #: five happen to name their branches `pass` and `fail` and so need nothing here. Two —
+    #: **Only a `MODEL_PANEL` routes through this table**, and `validate` refuses a declaration on
+    #: any other mode. Six nodes are model panels and five of those carry branches — `lead_assess`
+    #: is the sixth and carries none. Three of the five happen to name their branches `pass` and
+    #: `fail` and so need nothing here. Two —
     #: `pm_confirm` and `pm_signoff` — ask a person-shaped question and offer `yes` and `no`, and
     #: **had no route at all**: the outcome named no branch of theirs, so any run with more than one
     #: model configured on either died there with `has no branch 'pass'`. Untested, because the
@@ -581,7 +583,8 @@ def validate() -> None:
         #
         # Stricter because **`panel_branches` is not an option here.** A model panel's outcome is
         # mapped through it (`engine`'s `node.panel_branches.get(outcome, outcome)`); a seat panel's
-        # comes back from `_adjudicate` as the branch name itself and that mapping is never read. So
+        # comes back from `_adjudicate`, which does not consult that mapping — though `engine`
+        # reads it once more after the branch is taken, to name the word meaning ratified. So
         # the escape the message above offers — *declare `panel_branches` on it* — is not one, and
         # this message must not offer it.
         if node.mode == SEAT_PANEL and node.branches:
@@ -591,13 +594,26 @@ def validate() -> None:
                         f"node {node.id!r} is routed by the review seats, whose {outcome!r} names "
                         f"no branch of its {sorted(node.branches)}. A seat panel must name its "
                         f"branches in the panel's own words: `panel_branches` routes a model "
-                        f"panel's outcome and is never read on this path")
-        if node.mode == SEAT_PANEL and node.panel_branches:
+                        f"panel's outcome and is never what routes this one")
+        if node.mode != MODEL_PANEL and node.panel_branches:
             # A declaration that reads as routing and routes nothing. Refused rather than ignored,
-            # because the thing this file is written against is a name standing in for a constraint.
+            # because the thing this file is written against is a name standing in for a
+            # constraint.
+            #
+            # `MODEL_PANEL` is the **only** mode that routes through this table, so every other
+            # mode is refused, not just `SEAT_PANEL`. The first version of this rule named the seat
+            # mode alone, because that was the one being repaired; a seat then declared it on a
+            # `runner` node and `validate` accepted it. The argument above does not distinguish the
+            # modes, so neither does the rule.
+            #
+            # It is not inert on those nodes, which is the sharper reason: `engine` reads
+            # `panel_branches` once more **after** the branch is taken, to name the word that means
+            # ratified. A node that declares a mapping and does not route through it computes a
+            # `ratified` its own answer can never equal, so a `settles_risk` node would silently
+            # never settle the grade — the shape of CHG-20260901-18.
             raise GraphError(
-                f"node {node.id!r} declares `panel_branches` and is routed by the review seats, "
-                f"which never read it. Name its branches in the panel's own words instead")
+                f"node {node.id!r} declares `panel_branches`, which only a model panel routes "
+                f"through. Name its branches in the panel's own words instead")
         for outcome, landed in node.panel_branches.items():
             if landed not in node.branches:
                 raise GraphError(
