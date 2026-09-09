@@ -136,6 +136,24 @@ per-node configure control at all, so there has never been anything to grey.
 appears in `by_model` even with empty `nodes` and `seats` — that is how "configured but unused"
 becomes visible.
 
+**`known` is built here and read by nothing**, like `assignable` above it and like the
+per-assignment provenance. Inside the branch that builds this answer the key is written on three
+lines — `server.py:1489`, `:1498`, `:1503` — and a **local dict of the same name**, the registry
+index, is built at `:1483` and read at `:1489`, `:1494`, `:1498` and `:1502`. Two of those lines do
+both: `"known": model_id in known` at `:1489` and `"known": label in known` at `:1498` each write
+the key and read the local in one expression. Six lines, eight occurrences, and no split of the
+lines into two sets is right — which is why this record's first count (six writes) and its second
+(three and three) were both refused. No client in this repository reads the key back: the console
+decides "not in the registry" from the model list, not from this.
+
+It is **nested** inside `by_model`, and that is why no guard says so: CHG-20260907-28 built a rule
+over this route's keys — the one that holds `source` and `assignable` — and it reads the **top
+level** only. `assignable`'s unread status is held by that guard; this one's is held by this
+paragraph, which is weaker and is the reason it is written here rather than left implied. Whether
+an unread key should ship at all is the question
+CHG-20260907-28 left open for `assignable`; this entry only stops the page implying somebody reads
+this one.
+
 ### `GET /whoami`
 ```jsonc
 { "operator": "<name>" }
@@ -166,7 +184,26 @@ If the version does not match the run's current one:
                 before answering again." }
 ```
 
-**Every POST except `/models` returns the run snapshot** ([§3](#3--the-run-snapshot)) with `200`.
+**Every POST under `/run` and `/attachments` returns the run snapshot**
+([§3](#3--the-run-snapshot)) with `200`. `POST /models` does not, and neither do the three
+`/config/*` writes: they go through one function (`server.py`'s `_config_edit`) and answer the
+merged assignment with its provenance and the new version —
+
+```jsonc
+{ "node_models": { "<node id>": ["<model id>", …] },
+  "seat_models": { "<seat>": "<model id>" },
+  "source": { "node_models.<node id>": "plan" | "store", … },
+  "version": 7 }
+```
+
+Three of `GET /config/nodes`'s keys — `node_models`, `seat_models` and `source` — and the version
+the edit advanced to. `seat_models` values are **not** joined here the way that route joins them;
+this one answers the stored id. [Below](#the-three-assignment-routes-return-the-resolved-assignment)
+now says the same thing about the same routes. Until CHG-20260908-02 it did not: it said **two**
+routes and **three** keys, while the sentence above this table said all of them return the run
+snapshot. Why neither was noticed is not measured here. What is measurable: no guard in this
+repository compares two prose descriptions of one route, and the section below had said *"Not a run
+snapshot"* the whole time the sentence above said it was one.
 
 | Route | Body | Refuses when |
 |---|---|---|
@@ -192,15 +229,18 @@ A gate asks *whether the run may proceed*; a tie asks *which way*. Accepting one
 record an answer to a question nobody was asked — so `/run/gate` and `/run/decide` each check
 `suspended.undecided` and refuse the other's case.
 
-### The two assignment routes return the resolved assignment
+### The three assignment routes return the resolved assignment
 
 ```jsonc
-{ "node_models": { … }, "seat_models": { … }, "source": { … } }
+{ "node_models": { … }, "seat_models": { … }, "source": { … }, "version": 7 }
 ```
 
-Not a run snapshot — they change configuration, not the run. **An empty `models` list clears a
-node**; there is no `DELETE` verb and adding one for a single case would be a second way to say a
-thing that already has one.
+Not a run snapshot — they change configuration, not the run. `/config/halts` answers the same
+shape as `/config/nodes` and `/config/seats`: all three go through one function, so there are
+**three** of them and not two, and the version the edit advanced to is a fourth key.
+
+**An empty `models` list clears a node**; there is no `DELETE` verb and adding one for a single
+case would be a second way to say a thing that already has one.
 
 **Clearing a node the plan speaks for changes nothing visible.** The store row goes and the plan's
 assignment still stands, with `source` still saying `"plan"`. That is the precedence working, and it
@@ -218,8 +258,10 @@ It also **writes `models.json`** when the server was given a registry path.
 
 ## 3 · The run snapshot
 
-Returned by `GET /run`, by every SSE frame, and by every POST except `/models`. One shape, so a
-caller never has to know which of the three it is holding.
+Returned by `GET /run`, by every SSE frame, and by every POST under `/run` and `/attachments`.
+Not by `POST /models`, and not by the [three assignment
+routes](#the-three-assignment-routes-return-the-resolved-assignment), which answer their own shape.
+One shape across the rest, so a caller never has to know which of them it is holding.
 
 ```jsonc
 {

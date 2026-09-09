@@ -1363,7 +1363,17 @@ def test_every_key_the_server_sends_reaches_the_console():
     unreached = [key for key in snapshot
                  if not re.search(r"\b%s\b" % re.escape(key), page)]
 
-    assert unreached == [], f"the server sends these and the console renders nothing for them: {unreached}"
+    # What this asserts is that the key's **token occurs** in the page with its comments
+    # stripped — not that anything draws it. A key named in a `const` and rendered nowhere
+    # passes. The message used to say the console *rendered* nothing for them, which is stronger
+    # than the search; the first correction said it did not mention them *at all*, which is
+    # stronger in the other direction, because `_console_code()` removes every comment and a key
+    # named only in one is mentioned (CHG-20260908-02, both refused by a seat). Going from
+    # *appears* to *renders* needs a harness that runs the page, and CHG-20260907-28 records that
+    # this repository has none.
+    assert unreached == [], (
+        f"the server sends these and the console's code does not name them outside a comment: "
+        f"{unreached}")
 
 
 # ── what a panel already said about the node being decided (CHG-20260904-11) ──────────────────
@@ -2374,8 +2384,14 @@ def test_the_rule_looks_at_the_three_methods_that_exist():
 
 #: A report field the console does not render, and **why**. Not an exemption list — an inventory.
 #:
-#: `test_every_key_the_server_sends_reaches_the_console` (CHG-20260903-29) watches the 19 keys
-#: `RunState.snapshot()` builds. `RunReport().as_dict()` has 30 fields, and CHG-20260903-24 retired
+#: `test_every_key_the_server_sends_reaches_the_console` (CHG-20260903-29) watches every key
+#: `RunState.snapshot()` builds; `test_the_snapshot_is_twenty_one_keys` holds how many that is,
+#: because this line said **19** and it measured **21** (CHG-20260908-02).
+#:
+#: `RunReport().as_dict()` has 30 fields — a count **no test holds**, here or anywhere; a seat
+#: swept for it. It is right today, and it is right the way the nineteen was right on the day it
+#: was typed. `test_schemas.py` holds the *set* of those fields against `docs/SCHEMAS.md`, which
+#: would not keep this number true. CHG-20260903-24 retired
 #: `CHG-20260901-15` task 24 on the ground that the `-29` rule would catch the next one to go
 #: unrendered. It cannot: a field that never enters the snapshot cannot fail a rule that iterates
 #: the snapshot. The rule is honestly named — *the server sends* — and the citation was not.
@@ -2506,6 +2522,25 @@ def test_no_exclusion_is_justified_by_a_flag_the_runner_does_not_have():
         "check is not a reason" % phantom)
 
 
+def test_the_snapshot_is_twenty_one_keys():
+    """The count the preamble above used to state, asserted instead (CHG-20260908-02).
+
+    It said **19** and the snapshot has **21**. Of the three counts in that paragraph only the
+    inventory's fifteen was held by a test; the thirty `as_dict` fields are held by nothing either,
+    and were right by luck rather than by mechanism — a seat measured that and refused this
+    record's first account of it.
+
+    This is a **typed number in an assertion**, not a derived one. What it buys is that the drift
+    fails in the commit that causes it instead of years later in a comment. The number is meant to
+    be retyped here, deliberately, by whoever adds the key.
+    """
+    keys = server.RunState().snapshot()
+    assert len(keys) == 21, (
+        f"the snapshot is {len(keys)} keys, not 21. Update this number in the same commit that "
+        f"adds or removes one: the console guard iterates the snapshot, so a new key changes what "
+        f"that guard covers, and nothing else says how many there are")
+
+
 def test_the_inventory_is_fifteen_and_the_two_renamed_ones_are_not_in_it():
     """**The floor**, and the correction that produced this record's number.
 
@@ -2513,6 +2548,7 @@ def test_the_inventory_is_fifteen_and_the_two_renamed_ones_are_not_in_it():
     and `halt_reason` as `reason`, so two of the seventeen are rendered — a name-based count of a
     thing that is renamed, which is the class of error this whole review round has been finding,
     inside one of the round's own findings.
+
     """
     page = _console()
     assert len(NOT_ON_THE_CONSOLE) == 15, (
