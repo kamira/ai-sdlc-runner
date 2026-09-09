@@ -170,17 +170,25 @@ MUTATIONS: List[Mutation] = [
 
     # ── graph-swap (CHG-20260907-25) ───────────────────────────────
     # Three modules each carried their own "swap both views, validate, restore"; they are one
-    # `tests/_graph_swap.validate_with` now, shared by 39 test functions. A shared helper is a
+    # `tests/_graph_swap.validate_with` now, shared by 44 functions — 43 test functions and one
+    # helper, and this line said 39 until
+    # CHG-20260908-03 counted them. A shared helper is a
     # single point of failure for every guarantee that goes through it, which is what these two
     # entries are about.
     #
-    # **Both name a test node, and the first has to.** Dropping the `BY_ID` rebind fails 43 of
-    # the 74 tests in those three files, and 41 of the 43 fail collaterally: `validate` raises
-    # its identity refusal and their own `match=` string no longer matches the message. Measured
-    # over all 34 distinct `match=` patterns in the three files, exactly one — `"rebound
-    # separately"`, the deliberate half-swap's own — matches that message. So a file-level
-    # CAUGHT here would be reporting 41 regexes missing, not the swap. The node registered is the
-    # one whose stated guarantee IS that both views move.
+    # **Both name a test node, and the first has to.** Dropping the `BY_ID` rebind makes most of
+    # the tests in those three files fail collaterally: `validate` raises its identity refusal and
+    # their own `match=` string no longer matches the message. Exactly one pattern in those files
+    # does match it — `"rebound separately"`, the deliberate half-swap's own. So a file-level
+    # CAUGHT here would be reporting missing regexes, not the swap. The node registered is the one
+    # whose stated guarantee IS that both views move.
+    #
+    # **The figures behind that are CHG-20260907-25's**: 43 of 74 tests failing, 41 of them
+    # collaterally, over 34 distinct `match=` patterns. They stood here in the present tense until
+    # CHG-20260908-03, when a seat measured them at 82 tests and 39 patterns. The conclusion is
+    # re-measured and unchanged — one of the 39 matches the identity refusal — so the numbers are
+    # left where they were taken rather than restated here, and the argument above no longer needs
+    # them.
     #
     # The second entry is registered **because its test was written for it**. Measured first:
     # with the `finally` body removed and one mutating node run alone the result is `1 passed` —
@@ -197,16 +205,27 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "graph-swap", "the shared swap may rebind one view of the graph and not the other",
         REPO / "tests" / "_graph_swap.py",
-        '''    graph.BY_ID = {n.id: n for n in nodes}''',
+        '''    graph.BY_ID = {n.id: n for n in graph.NODES}''',
         '''    pass''',
         "tests/test_graph_validation.py::test_the_half_swap_used_to_certify_a_graph_that_does_not_run"),
 
     Mutation(
         "graph-swap", "the shared swap may stop putting the shipped graph back",
         REPO / "tests" / "_graph_swap.py",
-        '''        graph.NODES, graph.BY_ID = original_nodes, original_by_id''',
-        '''        pass''',
-        "tests/test_graph_validation.py::test_the_shared_swap_puts_both_views_back_when_validate_raises"),
+        # One restore in the module, so one entry. CHG-20260908-03 briefly had two — it added a
+        # context manager with an identical `finally`, `test_every_shipped_mutation_has_a_unique_
+        # anchor` refused the bare restore line for naming both, and the fold that followed removed
+        # the duplicate rather than the ambiguity. **Two** named tests cover this one line now:
+        # `test_the_shared_swap_puts_both_views_back_when_validate_raises` reaches it through
+        # `validate_with`, and `test_the_context_manager_puts_both_views_back_when_the_body_raises`
+        # reaches it directly; this entry names the second, which fails alone.
+        '''        yield graph.NODES
+    finally:
+        graph.NODES, graph.BY_ID = original_nodes, original_by_id''',
+        '''        yield graph.NODES
+    finally:
+        pass''',
+        "tests/test_graph_validation.py::test_the_context_manager_puts_both_views_back_when_the_body_raises"),
 
     # ── single-model (CHG-20260907-18) ─────────────────────────────
     # `graph.py` says a SINGLE node is 'exactly one model, one session' and that three
@@ -3691,6 +3710,76 @@ CHG-20260907-28 and built by no record yet.''',
         '''            if stop.get("incomplete") and told > self.state.instructions_at_last_incomplete_stop:''',
         '''            if told > self.state.instructions_at_last_incomplete_stop:''',
         "tests/test_server.py::test_a_walk_that_finds_nothing_missing_does_not_move_the_mark"),
+
+    # ── panel-routability (CHG-20260908-03) ─────────────────────────────────────────────────
+    # `validate`'s panel-routability rule was written for `MODEL_PANEL` and guarded on it, and the
+    # other panel mode had no rule at all. Measured before writing one: renaming `lead_review`'s
+    # branches to `approve`/`reject` passed `validate`, and would then have died at `engine`'s
+    # branch lookup with `has no branch 'pass'` — which is the death CHG-20260901-11 was opened for
+    # and closed on one side.
+    #
+    # The seat rule is **stricter**, and that asymmetry is the reason it is a separate rule rather
+    # than a widened guard: a model panel's outcome is mapped through `panel_branches`
+    # (`engine`'s `node.panel_branches.get(outcome, outcome)`), so declaring that mapping is a real
+    # escape. A seat panel's comes back from `_adjudicate`, which does not consult it, so there is
+    # no escape and the message must not offer one. The mapping is refused there because it cannot
+    # help — the branch rule already puts `pass` among its branches, so the second read that names
+    # *ratified* lands correctly with no declaration at all — and because one shape of it,
+    # a `pass` key pointing elsewhere, makes that word the one the grade settles on — and the
+    # grade settles at all only if that word is one `_adjudicate` returns: `fail` puts the settling
+    # on a rejection, `undecided` on a panel that decided nothing, anything else on nothing.
+    # **No declaration helps**; the harm has an exact condition and is not a count, after four
+    # counts of this set were each refused for stopping short of it and four descriptions of the
+    # harm each named a subset of its three outcomes.
+    #
+    # The third entry's rule refuses a declared mapping on a **`SEAT_PANEL` only**, and the fourth
+    # pins that it stays there. Three corrections got it to that, each from a seat:
+    #
+    #   - the first draft said the mapping is *never read* on the seat path. `engine` reads it once
+    #     more after the branch is taken, to name the word meaning ratified.
+    #   - so the rule was widened to every mode but `MODEL_PANEL`, on the ground that a
+    #     declared-but-unrouted mapping gives a `ratified` the node's own answer can never equal.
+    #     **Backwards**: `pm_signoff` offers `yes`/`no` and settles *because* it declares
+    #     `{pass: "yes"}` — without it `ratified` is `pass`, which it does not offer. Elsewhere the
+    #     declaration is the only way to name that word, so the widening made a `settles_risk` node
+    #     with its own vocabulary inexpressible. Withdrawn.
+    #   - and the reason left behind — a declaration on a seat panel *can only misname* ratified —
+    #     is refuted by every declaration that does not point a `pass` key elsewhere — most of
+    #     them. What holds is that none helps, because rule 1 already puts `pass` among a seat
+    #     panel's branches.
+    #
+    # The **first** entry pins a rule that had shipped for three rounds with no reverse test: this
+    # file's own docstring lists CHG-20260901-11's rule among nineteen such, and the repair that
+    # installed it is where the next defect was.
+    Mutation(
+        "panel-routability", "the model-panel branch check may stop looking again",
+        SRC / "graph.py",
+        '''        if node.mode == MODEL_PANEL and node.branches:''',
+        '''        if False and node.branches:''',
+        "tests/test_graph_validation.py::test_a_model_panel_whose_branches_the_panel_cannot_name_is_refused"),
+    Mutation(
+        "panel-routability", "the seat-panel branch check may stop looking",
+        SRC / "graph.py",
+        '''        if node.mode == SEAT_PANEL and node.branches:''',
+        '''        if False and node.branches:''',
+        "tests/test_graph_validation.py::test_a_seat_panel_whose_branches_the_panel_cannot_name_is_refused"),
+    Mutation(
+        "panel-routability", "a seat panel may declare a mapping that misnames ratified again",
+        SRC / "graph.py",
+        '''        if node.mode == SEAT_PANEL and node.panel_branches:''',
+        '''        if False and node.panel_branches:''',
+        "tests/test_graph_validation.py::test_a_seat_panel_declaring_panel_branches_is_refused"),
+    Mutation(
+        # Deleting a rule and **widening** it are different failures, and the entry above only pins
+        # the first. This change widened this rule to every mode but `MODEL_PANEL` for one
+        # revision; a seat measured that wrong, because elsewhere the declaration is the only way
+        # to name the word meaning ratified — `pm_signoff` settles because it declares one. So what
+        # needs pinning is that the rule does not reach past the seat panel.
+        "panel-routability", "the mapping rule may widen past the seat panel again",
+        SRC / "graph.py",
+        '''        if node.mode == SEAT_PANEL and node.panel_branches:''',
+        '''        if node.mode != MODEL_PANEL and node.panel_branches:''',
+        "tests/test_graph_validation.py::test_a_node_that_is_not_a_panel_may_declare_panel_branches"),
 
     # ── config-accounting (CHG-20260908-02) ─────────────────────────────────────────────────
     # One count in `tests/test_server.py`'s `NOT_ON_THE_CONSOLE` preamble was typed and never

@@ -137,12 +137,27 @@ class Node:
     #:
     #: A panel answers in `pass` / `fail` / `undecided` — `policy.adjudicate`'s vocabulary, and the
     #: only thing `engine` has to route on, because reading one of several voices would make a panel
-    #: into whichever model was asked first. A node answers in its own words. Three decision nodes
-    #: happen to name their branches `pass` and `fail` and so need nothing here. Two — `pm_confirm`
-    #: and `pm_signoff` — ask a person-shaped question and offer `yes` and `no`, and **had no route
-    #: at all**: the outcome named no branch of theirs, so any run with more than one model
-    #: configured on either died there with `has no branch 'pass'`. Untested, because the panel
-    #: tests only ever configured the `pass`/`fail` nodes (CHG-20260901-11).
+    #: into whichever model was asked first. A node answers in its own words.
+    #:
+    #: **Only a `MODEL_PANEL` routes through this table**, and `validate` refuses a declaration on
+    #: a `SEAT_PANEL` — there and nowhere else. Every other mode may declare one, because `engine`
+    #: reads this table a second time after the branch is taken, to name the word meaning
+    #: *ratified*, and for a node whose branches are its own words that read is the only way to
+    #: name it. `test_a_node_that_is_not_a_panel_may_declare_panel_branches` holds that. Six nodes are model
+    #: panels and five of those carry branches — `lead_assess`
+    #: is the sixth and carries none. Three of the five happen to name their branches `pass` and
+    #: `fail` and so need nothing here. Two —
+    #: `pm_confirm` and `pm_signoff` — ask a person-shaped question and offer `yes` and `no`, and
+    #: **had no route at all**: the outcome named no branch of theirs, so any run with more than one
+    #: model configured on either died there with `has no branch 'pass'`. Untested, because the
+    #: panel tests only ever configured the `pass`/`fail` nodes (CHG-20260901-11).
+    #:
+    #: A fourth node names `pass`/`fail` too — `lead_review`, the one `SEAT_PANEL` — and is **not**
+    #: counted above, because this table is not what routes it: `engine._adjudicate` returns the
+    #: outcome as the branch name and never reads this. It therefore has no escape here and must
+    #: name its branches in the panel's words, which `validate` refuses it for since
+    #: CHG-20260908-03. Until then it was asked nothing at all, and the sentence above said
+    #: *"three decision nodes"* without saying three of what.
     #:
     #: Declared, never inferred. Reading `yes` as the affirmative *because the string says yes* is a
     #: name standing in for a constraint, which is the defect this whole file is written against —
@@ -564,6 +579,92 @@ def validate() -> None:
                         f"node {node.id!r} is routed by a panel, whose {outcome!r} names no branch "
                         f"of its {sorted(node.branches)}. Declare `panel_branches` on it, or name "
                         f"its branches in the panel's own words")
+        # The same question for the **other** panel mode, where the answer is stricter. The rule
+        # above was written for `MODEL_PANEL` and guarded on it, and a seat panel was left with no
+        # rule at all: measured by renaming `lead_review`'s branches to `approve`/`reject`, which
+        # `validate` accepted and which would have died at `engine`'s branch lookup with the same
+        # `has no branch 'pass'` CHG-20260901-11 was opened for.
+        #
+        # Stricter because **`panel_branches` is not an option here.** A model panel's outcome is
+        # mapped through it (`engine`'s `node.panel_branches.get(outcome, outcome)`); a seat panel's
+        # comes back from `_adjudicate`, which does not consult that mapping — though `engine`
+        # reads it once more after the branch is taken, to name the word meaning ratified. So
+        # the escape the message above offers — *declare `panel_branches` on it* — is not one, and
+        # this message must not offer it.
+        if node.mode == SEAT_PANEL and node.branches:
+            for outcome in (policy.PASS, policy.FAIL):
+                if outcome not in node.branches:
+                    raise GraphError(
+                        f"node {node.id!r} is routed by the review seats, whose {outcome!r} names "
+                        f"no branch of its {sorted(node.branches)}. A seat panel must name its "
+                        f"branches in the panel's own words: `panel_branches` routes a model "
+                        f"panel's outcome and is never what routes this one")
+        if node.mode == SEAT_PANEL and node.panel_branches:
+            # On a **seat panel** the mapping can never help and can harm, which is why the
+            # refusal is here and not on every mode that fails to route through it.
+            #
+            # `engine` reads this table twice. It routes a model panel's outcome through it, and
+            # then — after the branch is taken, for every branching node — reads it again to name
+            # the word that means *ratified*. The rule above requires a seat panel's branches to
+            # **contain** `pass`, so that second read already resolves to a branch it offers.
+            #
+            # So a declaration here can never improve anything, and some of them break the
+            # settling. The condition is exact and is not a count: **`ratified` moves iff the
+            # mapping carries a `pass` key pointing somewhere other than `pass`.** Only that key is
+            # read; every other declaration leaves `ratified` at `pass` and says nothing the
+            # default did not.
+            #
+            # `ratified` **is** the settling condition — `engine` tests `choice == ratified`
+            # against `_adjudicate`'s own word — so whichever word `pass` is pointed at is the one
+            # that settles, and anything settles at all only if that word is one `_adjudicate`
+            # returns. Those are `policy.OUTCOMES` — `pass`, `fail`, `undecided` — and naming
+            # them here is safe because `test_undecided` asserts that tuple by identity, so a
+            # fourth outcome reddens there before this comment can go stale. So:
+            #
+            #   `{pass: fail}`        a **rejection** settles the grade and a pass no longer does,
+            #                         recording the run as graded at what a panel that refused it
+            #                         agreed.
+            #   `{pass: undecided}`   a panel that decided **nothing** settles it, on a run that
+            #                         suspends for the person the split was meant to reach, at a
+            #                         grade nobody agreed. This is the same harm the `undecided`
+            #                         rule below refuses that word as a *key* for — *"a split panel
+            #                         looking like a decision it never reached"* — and a seat panel
+            #                         may carry an `undecided` branch, so it is writable.
+            #   anything else         no outcome equals it, so **nothing settles**.
+            #
+            # Four versions of this sentence named a subset of those three as though it were all of
+            # them: *never settles* alone, *swaps sides* alone, then the two together with
+            # `undecided` folded into "any other branch" — which is the one case that is neither.
+            #
+            # **No declaration helps**, and one that cannot help is a name standing in for a
+            # constraint. Four earlier versions of this comment were counts and each was refused:
+            # *can only misname*; *two of four*, counting `{}`, which a rule guarded on a non-empty
+            # mapping never sees; *three of four*, enumerating only single-key mappings when both
+            # shipped declarations are two-key; and *five of eight*, which counted the mappings
+            # whose keys **and** values are drawn from `{pass, fail}` and called that the space
+            # this rule sees. It is not. On a seat panel this `raise` fires before the loop below
+            # ever runs, and that loop constrains the mapped *values* and refuses only an
+            # `undecided` key — so `{"weird": "pass"}` is accepted, and so is `{"pass": "escalate"}`
+            # on a seat panel carrying a third branch, since the rule above requires `pass` and
+            # `fail` to be **among** the branches and not to be all of them.
+            # A count of this set invites a fifth wrong number; the condition does not.
+            #
+            # **This rule was briefly widened to every mode but `MODEL_PANEL` and that was wrong.**
+            # Elsewhere the branches are arbitrary and the second read is the *only* way to name
+            # the ratified word: `pm_signoff` offers `yes`/`no` and settles precisely because it
+            # declares `{pass: "yes"}` — without it, `ratified` is `pass`, which it does not offer,
+            # and it could never settle. Refusing the declaration there would make a `settles_risk`
+            # node with its own vocabulary inexpressible, and `engine` says that settling is "keyed
+            # on the answer, never on the mode". A seat measured a `runner` node declaring the
+            # mapping and passing, which is correct, not a gap.
+            raise GraphError(
+                f"node {node.id!r} is routed by the review seats and declares `panel_branches`, "
+                f"which nothing routes through there and which cannot name the word meaning "
+                f"ratified any better than the default already does — and which, if it maps `pass` "
+                f"elsewhere, makes that word the one a node settles the grade on: a rejection if "
+                f"it maps to `fail`, a panel that decided nothing if it maps to `undecided`, and "
+                f"nothing at all otherwise. Remove the declaration: a seat panel's branch comes "
+                f"back from `_adjudicate` already in the panel's words, and needs no mapping")
         for outcome, landed in node.panel_branches.items():
             if landed not in node.branches:
                 raise GraphError(

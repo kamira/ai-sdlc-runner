@@ -23,16 +23,13 @@ test here — `test_execution_mode` has one of those, and finding it was worth m
 would have been.
 """
 import dataclasses
+import pathlib
+import re
 
 import pytest
 
 from ai_sdlc_runner import graph, policy
-from _graph_swap import validate_with
-
-
-def _mutate(node_id, **changes):
-    """The real graph with one node changed — the shape a wrong hand-edit would actually take."""
-    return tuple(dataclasses.replace(n, **changes) if n.id == node_id else n for n in graph.NODES)
+from _graph_swap import mutated as _mutate, swapped_graph, validate_with
 
 
 def _first(**predicate):
@@ -72,6 +69,229 @@ def test_a_decision_may_not_offer_fewer_than_two_branches():
     # and its message — "whose 'fail' names no branch of its [...]" — contains the word too.
     with pytest.raises(graph.GraphError, match="needs at least two branches"):
         validate_with(_mutate(decision.id, branches=one))
+
+
+def test_the_context_manager_puts_both_views_back_when_the_body_raises():
+    """The twin of the swap test below, for the helper CHG-20260908-03 added.
+
+    `swapped_graph` holds the hypothetical graph open for the body instead of closing it before
+    returning, which is what two tests needed and `validate_with` cannot give them. That makes it a
+    **second** shared `finally`, and this module's docstring says what an unguarded one costs: the
+    first went unnoticed until a test named it. Asserted by identity, so that restoring an equal
+    object rather than the original one would still fail.
+    """
+    original_nodes, original_by_id = graph.NODES, graph.BY_ID
+    with pytest.raises(RuntimeError, match="from inside the swap"):
+        with swapped_graph(_mutate("intake", label="a label nobody shipped")):
+            assert graph.BY_ID["intake"].label == "a label nobody shipped", (
+                "the body must see the hypothetical graph, or this test measures nothing")
+            raise RuntimeError("from inside the swap")
+    assert graph.NODES is original_nodes
+    assert graph.BY_ID is original_by_id
+
+
+def test_a_node_that_is_not_a_panel_may_declare_panel_branches():
+    """The **scope**, from the other side: the rule stops at `SEAT_PANEL` deliberately.
+
+    A revision of this change widened it to every mode but `MODEL_PANEL`, and a seat measured that
+    wrong. `engine` reads the table a second time, after the branch, to name the word meaning
+    *ratified* — and for a node whose branches are its own words that read is the only way to name
+    it. `pm_signoff` offers `yes`/`no` and settles because it declares `{pass: "yes"}`; without the
+    declaration `ratified` is `pass`, which it does not offer.
+
+    So a `runner` node declaring the mapping is accepted, and this test says so, because the
+    widened rule passed every test in this file — nothing said what the scope was for.
+    """
+    runner_node = graph.BY_ID["plan_scope"]
+    assert runner_node.mode not in (graph.MODEL_PANEL, graph.SEAT_PANEL), (
+        f"this test needs a node that is neither panel; `plan_scope` is {runner_node.mode!r}")
+    landing = sorted(runner_node.branches)[0]
+    validate_with(_mutate("plan_scope", panel_branches={policy.PASS: landing}))
+
+
+#: Every place the caller count is written down, as the sentence it is written in. The test below
+#: puts the measured number into each and requires the result to be in the file, so the figure has
+#: one source and five echoes rather than six copies.
+#:
+#: **Fragments, not a pattern.** The first version matched `<n> test-function|caller` by regex and
+#: missed *"those 44 functions"* — a pattern narrow enough to miss a rewording is the failure this
+#: whole guard replaces. Reword one of these and the test fails, which is the point: a reworded
+#: sentence is one nobody has re-checked.
+#:
+#: **What is deliberately not in the list**, so that the next reader does not take it for another
+#: miss: this test's own docstrings say 44 three times while narrating how the figure got here —
+#: *"a seat measured 44"*, *"change every stated 44 to 77"*, *"missed those 44 functions"*. Those
+#: are past-tense accounts and stay true when the figure moves. The list holds the sentences that
+#: assert the count **now**. A sixth such sentence could be added without this list noticing; the
+#: list is maintained by hand and one was found missing from it by a seat.
+CALLER_COUNT_IS_STATED_IN = (
+    ("tests/_graph_swap.py", "against {n} call-site signatures"),
+    ("tests/_graph_swap.py", "**{n} functions** call `validate_with`"),
+    ("tests/_graph_swap.py", "those {n} functions rest on"),
+    ("tests/test_graph_validation.py", "**{n} of them**, counted by AST"),
+    ("tools/mutation_check.py", "shared by {n} functions"),
+)
+
+
+def test_the_number_of_callers_the_swap_states_is_the_real_one():
+    """`_graph_swap` says how many functions its one `finally` serves, and so do two other files.
+
+    That figure was 39, correct when CHG-20260907-25 wrote it and stale by the time this change
+    read it — this change then re-asserted it without measuring, and a seat measured 44.
+
+    **The first version of this test did not read the statements.** It counted the tree and compared
+    against a literal of its own, so a seat could change every stated 44 to 77 and it stayed green:
+    a test named for what the prose says, holding only what the tree does, and adding a sixth copy
+    of the number while it was at it. It now reads each statement back.
+
+    Counted the way the docstring says it counts: functions in the importing modules whose body
+    calls `validate_with`, **under whatever name that module imported it as**, and through the
+    module object as well as bare. A seat refused the first version of this counter for exactly the
+    defect it exists to prevent — it matched only a bare `validate_with(...)`, so
+    `_graph_swap.validate_with(...)`, `from _graph_swap import validate_with as check`, and an
+    `async def` all added a caller without moving the number, while the message below told the
+    reader the number moves with the callers.
+    """
+    import ast
+
+    def _names_for(tree):
+        """What this module calls the helper: its aliases, and the modules it reaches it through."""
+        bare, through = set(), set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module in ("_graph_swap", "tests._graph_swap"):
+                for alias in node.names:
+                    if alias.name == "validate_with":
+                        bare.add(alias.asname or alias.name)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in ("_graph_swap", "tests._graph_swap"):
+                        through.add(alias.asname or alias.name.split(".")[-1])
+        return bare, through
+
+    def _calls(fn, bare, through):
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Name) and func.id in bare:
+                return True
+            if (isinstance(func, ast.Attribute) and func.attr == "validate_with"
+                    and isinstance(func.value, ast.Name) and func.value.id in through):
+                return True
+        return False
+
+    root = pathlib.Path(__file__).resolve().parent
+    per_module = {}
+    for path in sorted(root.glob("test_*.py")):
+        source = path.read_text(encoding="utf-8")
+        if "validate_with" not in source:
+            continue
+        tree = ast.parse(source)
+        bare, through = _names_for(tree)
+        assert bare or through, (
+            f"{path.name} mentions `validate_with` and this counter cannot see how it reaches it; "
+            f"the count below would be wrong and silent")
+        defs = (ast.FunctionDef, ast.AsyncFunctionDef)
+        calls = sum(1 for fn in ast.walk(tree)
+                    if isinstance(fn, defs) and _calls(fn, bare, through))
+        if calls:
+            per_module[path.name] = calls
+
+    assert per_module == {"test_execution_mode.py": 15,
+                          "test_graph_validation.py": 28,
+                          "test_risk_adjudicated.py": 1}, per_module
+    measured = sum(per_module.values())
+
+    # And now the half the name is about: what the files *say*, read back.
+    repo = pathlib.Path(__file__).resolve().parents[1]
+    unstated = []
+    for rel, fragment in CALLER_COUNT_IS_STATED_IN:
+        text = (repo / rel).read_text(encoding="utf-8")
+        if fragment.format(n=measured) not in text:
+            unstated.append((rel, fragment.format(n=measured)))
+
+    assert not unstated, (
+        f"the tree has {measured} callers ({per_module}), and these sentences do not say so — "
+        f"either the figure moved and they did not, or one was reworded and needs re-checking "
+        f"here: {unstated}. This figure said 39 for two records after it stopped being true, "
+        f"which is why every copy is read back rather than trusted")
+
+
+def test_the_populations_the_panel_comments_count_are_the_ones_they_say():
+    """`graph.py`'s `panel_branches` comment and `engine.py`'s branch-taking comment each state a
+    count, and until CHG-20260908-03 neither said what it was counting — "three decision nodes"
+    over a graph where **four** nodes name their branches `pass`/`fail`, three of them model panels
+    and one a seat panel that the table those comments describe does not serve.
+
+    Both now name the population. This holds the figures, so that the next node moves them here
+    rather than in prose nobody re-reads.
+    """
+    named = {n.id for n in graph.NODES
+             if {policy.PASS, policy.FAIL} <= set(n.branches or {})}
+    panels = {n.id for n in graph.NODES if n.mode == graph.MODEL_PANEL}
+    model = {nid for nid in panels if graph.BY_ID[nid].branches}
+    seat = {n.id for n in graph.NODES if n.mode == graph.SEAT_PANEL}
+
+    assert len(panels) == 6, (
+        f"the comments say six model panels, five of them carrying branches; found {panels}")
+    assert len(model) == 5, (
+        f"the comments say five of the six model panels carry branches; found {model}")
+    assert len(named & model) == 3, (
+        f"the comments say three of those five name the panel's own words; found {named & model}")
+    assert seat == {"lead_review"}, f"the comments say one seat panel; found {seat}"
+    assert seat <= named, (
+        "the comments say the seat panel names `pass`/`fail` — which is why the rule refusing "
+        "anything else has never fired on the shipped graph")
+    assert len(named) == 4, f"the comments say four nodes name them in all; found {named}"
+
+
+def test_a_model_panel_whose_branches_the_panel_cannot_name_is_refused():
+    """CHG-20260901-11's rule, which had **no reverse test** — this file's own docstring lists it
+    among nineteen such, and it is the rule a repair installed.
+
+    `pm_confirm` offers `yes`/`no` and declares the mapping. Take the mapping away and the panel's
+    `pass` names nothing it offers, which is the state that killed every multi-model run at it.
+    """
+    with pytest.raises(graph.GraphError, match="is routed by a panel"):
+        validate_with(_mutate("pm_confirm", panel_branches={}))
+
+
+def test_a_seat_panel_whose_branches_the_panel_cannot_name_is_refused():
+    """The same question for the other panel mode, where `validate` asked nothing at all until
+    CHG-20260908-03.
+
+    Measured before the rule existed: renaming `lead_review`'s branches to `approve`/`reject`
+    passed `validate` and would have died at `engine`'s branch lookup with `has no branch 'pass'`,
+    which is what CHG-20260901-11 was opened for.
+    """
+    seat = graph.BY_ID["lead_review"]
+    renamed = {"approve": seat.branches[policy.PASS], "reject": seat.branches[policy.FAIL]}
+    with pytest.raises(graph.GraphError, match="routed by the review seats"):
+        validate_with(_mutate("lead_review", branches=renamed))
+
+
+def test_a_seat_panel_declaring_panel_branches_is_refused():
+    """Because on a seat panel it can never help and can harm — not merely because nothing routes
+    on it.
+
+    `engine` reads the table twice: it routes a model panel's outcome through it, and then reads it
+    again after the branch is taken to name the word meaning *ratified*. The rule above forces a
+    seat panel's branches to contain `pass`, so that second read already lands on a branch it
+    offers — and **no declaration can improve that**. What harms is exact: `ratified` moves iff
+    the mapping carries a `pass` key pointing elsewhere, and the word it points at becomes the one
+    that settles — so the grade settles at all only when that word is one `_adjudicate` returns.
+    `{pass: fail}` settles it on a **rejection**; `{pass: undecided}` settles it on a panel that
+    decided **nothing**, while the run suspends for a person; anything else settles it never. The
+    case below is the first. Five earlier versions of this sentence named a subset of those three
+    as though it were all of them.
+
+    Not widened past `SEAT_PANEL`. It was, for one revision, and a seat measured that wrong:
+    `pm_signoff` offers `yes`/`no` and settles **because** it declares `{pass: "yes"}`. Elsewhere
+    the declaration is the only way to name the ratified word, so refusing it would make a
+    `settles_risk` node with its own vocabulary inexpressible.
+    """
+    with pytest.raises(graph.GraphError, match="cannot name the word meaning"):
+        validate_with(_mutate("lead_review", panel_branches={policy.PASS: policy.FAIL}))
 
 
 def test_a_step_may_not_have_no_successor():
@@ -224,14 +444,10 @@ def test_the_whole_change_bound_reads_the_graph_rather_than_a_written_list():
 
     extra = dataclasses.replace(graph.BY_ID["fix_pass"], id="another_failure",
                                 next="change_retry", branches={})
-    original = graph.NODES
-    try:
-        graph.NODES = graph.NODES + (extra,)
+    with swapped_graph(graph.NODES + (extra,)):
         assert "another_failure" in engine._whole_change_rejected(), (
             "a node routing into `change_retry` is a whole-change rejection, and the bound is "
             "reading a list that cannot know about it")
-    finally:
-        graph.NODES = original
 
 
 def test_where_each_refusal_goes_is_pinned():
@@ -424,7 +640,14 @@ def test_the_half_swap_used_to_certify_a_graph_that_does_not_run():
 
 
 def test_the_shared_swap_puts_both_views_back_when_validate_raises():
-    """One `finally` now serves 39 test functions, so it gets a test of its own.
+    """One `finally` now serves every caller of `validate_with`, so it gets a test of its own.
+
+    **44 of them**, counted by AST across the three modules that import it (CHG-20260908-03) — 43
+    collected test functions and `test_risk_adjudicated._validate_one`, a module-level helper
+    pytest does not collect, which is why these sentences say *functions* and not *test
+    functions*. (*Test functions*, not *tests*: one of the 43 is parametrised four ways, so the
+    three modules collect more items than they define functions.) This line said 39 and nothing
+    had measured it.
 
     Until CHG-20260907-25 the swap was written three times and nothing asserted that any of them
     restored anything: measured with the `finally` body removed and one mutating test run alone,

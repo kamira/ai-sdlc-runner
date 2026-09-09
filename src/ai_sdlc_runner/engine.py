@@ -3027,8 +3027,13 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                 # more than one model on either died with `has no branch 'pass'`, and no test
                 # configured a panel there to notice (CHG-20260901-11).
                 #
-                # `.get(outcome, outcome)` and not a lookup that can raise: three nodes name their
-                # branches in the panel's own vocabulary and declare nothing, which is right. What
+                # `.get(outcome, outcome)` and not a lookup that can raise: three of the five
+                # **model-panel nodes that carry branches** — there are six model panels — name
+                # their branches in the panel's own vocabulary and
+                # declare nothing, which is right. (The fourth node that names them is
+                # `lead_review`, which is a seat panel and never reaches this line — its branch
+                # comes from `_adjudicate` below. This sentence said "three nodes" without saying
+                # three of what, until CHG-20260908-03.) What
                 # stops a node declaring *nothing* while offering *neither* is `graph.validate`.
                 #
                 # `validate` runs at the top of `walk`, before the loop — so a graph edited to be
