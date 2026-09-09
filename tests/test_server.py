@@ -923,12 +923,24 @@ def test_a_walk_reading_the_manifest_does_not_break_an_attachment(tmp_path, monk
     release = threading.Event()
     at_replace = threading.Event()
     replace_returned = threading.Event()
-    #: How long the writer is given to reach `os.replace` and come back from it. Derived, not
-    #: guessed: a seat measured the writer reaching the replace in 18-25 ms idle and **1.05-2.43 s**
-    #: under sixteen CPU burners on two cores, so this is about twice the worst load it has been
-    #: put under. It is spent only on the green side, where the signal never comes because the
-    #: writer is blocked — see the wait below.
+    #: Every deadline in this test, and the arithmetic between them.
+    #:
+    #: `REACHED` is what the writer is given to get into `os.replace` and come back out. Derived,
+    #: not guessed: a seat measured it reaching the replace in 18-25 ms idle and **1.05-2.43 s**
+    #: under sixteen CPU burners on two cores, so this is about twice the worst load anyone has put
+    #: it under. It is spent only on the green side, where the signal never comes because the writer
+    #: is blocked in `attach`.
+    #:
+    #: `HELD` is how long the reader keeps the manifest open, and it is **three times** `REACHED`
+    #: for a reason a seat had to point out: the parent can spend `2 * REACHED` — once waiting to
+    #: see the writer arrive, once waiting for it to return — before it releases anything, and the
+    #: previous version gave the hold a flat ten seconds. Those two budgets could expire together,
+    #: the hold would let go **by itself**, the replace would then succeed, and the test would be
+    #: green with the lock reverted. A hold that can time out before the parent has finished
+    #: deciding is not a barrier, and the record's claim that "the parent releases nothing first"
+    #: was false while this number was independent of that one.
     REACHED = 5.0
+    HELD = 3 * REACHED
     real_order_paths = attach_mod.Store.order_paths
     real_replace = attach_mod.paths.replace
 
@@ -981,7 +993,7 @@ def test_a_walk_reading_the_manifest_does_not_break_an_attachment(tmp_path, monk
 
             with paths.open_(self.manifest_path, encoding="utf-8"):
                 reading.set()
-                release.wait(10)
+                release.wait(HELD)
         return out
 
     def walk(cfg):
@@ -1025,13 +1037,15 @@ def test_a_walk_reading_the_manifest_does_not_break_an_attachment(tmp_path, monk
     monkeypatch.setattr(attach_mod.paths, "replace", signalling_replace)
     walker = threading.Thread(target=lambda: runner.instruct(runner.state.version, "again"))
     walker.start()
-    assert reading.wait(10), "the walk never reached the manifest read; the fixture is wrong"
+    assert reading.wait(HELD), "the walk never reached the manifest read; the fixture is wrong"
     writer = threading.Thread(target=post)
     writer.start()
     # The five seconds are only spent when the lock is doing its job: the signal never comes,
-    # because the writer is blocked. Measured, three runs each way — reverted 1.20s / 1.62s /
-    # 0.61s and red; as it ships 6.32s / 6.29s / 5.72s and green. The difference *is* the timeout,
-    # and paying it is what makes the green side mean something.
+    # because the writer is blocked. Three runs each way on this version: reverted 10.80 / 0.92 /
+    # 0.98s and red, shipped 6.49 / 6.70 / 5.78s and green. The difference *is* the timeout, and
+    # paying it is what makes the green side mean something. The 10.80s red is the slow path a seat
+    # described — the writer arriving late — and it is red rather than green now only because
+    # `HELD` outlasts the parent's whole budget.
     if at_replace.wait(REACHED):
         # It got into the replace with the read still holding the manifest open — the interleaving
         # this test exists for. **Wait for the call to come back**, and fail if it does not: the
@@ -1044,8 +1058,14 @@ def test_a_walk_reading_the_manifest_does_not_break_an_attachment(tmp_path, monk
     # about: the writer is blocked in `attach` waiting for the walk to give the lock back, so it
     # cannot be at the replace. That wait is the only cost this test adds to a green run.
     release.set()
-    writer.join(timeout=10)
-    walker.join(timeout=10)
+    writer.join(timeout=HELD)
+    walker.join(timeout=HELD)
+    # Both are joined on the same budget as the hold, and neither may outlive this test: a
+    # thread still running here would carry on driving a runner the assertions below have
+    # already read, which is the defect the hammer test above was repaired for.
+    assert not writer.is_alive() and not walker.is_alive(), (
+        f"a thread outlived the test: writer alive={writer.is_alive()}, "
+        f"walker alive={walker.is_alive()}")
 
     assert posted == ["ok"], (
         f"an attachment posted while a walk held the manifest open failed: {posted}. The walk's "
