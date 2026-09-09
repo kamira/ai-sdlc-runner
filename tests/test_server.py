@@ -922,6 +922,13 @@ def test_a_walk_reading_the_manifest_does_not_break_an_attachment(tmp_path, monk
     reading = threading.Event()
     release = threading.Event()
     at_replace = threading.Event()
+    replace_returned = threading.Event()
+    #: How long the writer is given to reach `os.replace` and come back from it. Derived, not
+    #: guessed: a seat measured the writer reaching the replace in 18-25 ms idle and **1.05-2.43 s**
+    #: under sixteen CPU burners on two cores, so this is about twice the worst load it has been
+    #: put under. It is spent only on the green side, where the signal never comes because the
+    #: writer is blocked — see the wait below.
+    REACHED = 5.0
     real_order_paths = attach_mod.Store.order_paths
     real_replace = attach_mod.paths.replace
 
@@ -939,9 +946,19 @@ def test_a_walk_reading_the_manifest_does_not_break_an_attachment(tmp_path, monk
         however slow the machine, which is the *broken* one. Both directions are decided by what
         happened, not by how long it took.
         """
-        if str(dst).endswith("manifest.json"):
-            at_replace.set()
-        return real_replace(src, dst)
+        if not str(dst).endswith("manifest.json"):
+            return real_replace(src, dst)
+        at_replace.set()
+        try:
+            return real_replace(src, dst)
+        finally:
+            # **Entering the wrapper is not attempting the replace.** A seat refused the version
+            # that set one event before the call and nothing after: the writer could be descheduled
+            # between the two, the parent's join could expire without anyone asking whether the
+            # thread was still alive, the handle would be released, and the writer would then
+            # replace successfully — the reverted lock passing again. This fires when the call has
+            # returned or raised, and the parent asserts on it before releasing anything.
+            replace_returned.set()
 
     def holding_order_paths(self):
         """Hold the walk *inside* its manifest read, which is what a slow read is.
@@ -1015,11 +1032,17 @@ def test_a_walk_reading_the_manifest_does_not_break_an_attachment(tmp_path, monk
     # because the writer is blocked. Measured, three runs each way — reverted 1.20s / 1.62s /
     # 0.61s and red; as it ships 6.32s / 6.29s / 5.72s and green. The difference *is* the timeout,
     # and paying it is what makes the green side mean something.
-    if at_replace.wait(5):
-        # It reached the replace with the read still holding the manifest open — the interleaving
-        # this test exists for. Let it finish before releasing, so the outcome is its own and not a
-        # matter of which thread the scheduler picked next.
-        writer.join(timeout=5)
+    if at_replace.wait(REACHED):
+        # It got into the replace with the read still holding the manifest open — the interleaving
+        # this test exists for. **Wait for the call to come back**, and fail if it does not: the
+        # outcome must be the replace's own, not a matter of which thread the scheduler picked
+        # while the handle was being released.
+        assert replace_returned.wait(REACHED), (
+            "the writer entered `os.replace` and never returned from it; the manifest handle is "
+            "still held and nothing here can say what the replace did")
+    # Reaching here without `at_replace` is the *shipped* observation, not a timeout to be sorry
+    # about: the writer is blocked in `attach` waiting for the walk to give the lock back, so it
+    # cannot be at the replace. That wait is the only cost this test adds to a green run.
     release.set()
     writer.join(timeout=10)
     walker.join(timeout=10)
