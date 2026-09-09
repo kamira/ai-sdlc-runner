@@ -140,8 +140,8 @@ becomes visible.
 per-assignment provenance. Inside the branch that builds this answer the key is written on three
 lines — `server.py:1489`, `:1498`, `:1503` — and a **local dict of the same name**, the registry
 index, is built at `:1483` and read at `:1489`, `:1494`, `:1498` and `:1502`. Two of those lines do
-both: `{"known": model_id in known}` writes the key and reads the local in one expression. Six
-lines, eight occurrences, and no split of the lines into two sets is right — which is why this
+both: `"known": model_id in known` at `:1489` and `"known": label in known` at `:1498` each write
+the key and read the local in one expression. Six lines, eight occurrences, and no split of the lines into two sets is right — which is why this
 record's first count (six writes) and its second (three and three) were both refused. No client in
 this repository reads the key back: the console decides "not in the registry" from the model list,
 not from this.
@@ -237,13 +237,10 @@ record an answer to a question nobody was asked — so `/run/gate` and `/run/dec
 
 Not a run snapshot — they change configuration, not the run. `/config/halts` answers the same
 shape as `/config/nodes` and `/config/seats`: all three go through one function, so there are
-**three** of them and not two, and the version the edit advanced to is a fourth key. Both readings
-were true when this section was written and were overtaken without it: a third route joined, and
-the edit's new version became a fourth key. No date is given for that here — this record wrote
-three sentences about this page's past and a seat measured each of them wrong.
+**three** of them and not two, and the version the edit advanced to is a fourth key.
 
-**An empty `models` list clears a node**; there is no `DELETE` verb and adding one for a single case would be a second way to say a
-thing that already has one.
+**An empty `models` list clears a node**; there is no `DELETE` verb and adding one for a single
+case would be a second way to say a thing that already has one.
 
 **Clearing a node the plan speaks for changes nothing visible.** The store row goes and the plan's
 assignment still stands, with `source` still saying `"plan"`. That is the precedence working, and it
