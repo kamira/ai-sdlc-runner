@@ -141,10 +141,10 @@ per-assignment provenance. Inside the branch that builds this answer the key is 
 lines — `server.py:1489`, `:1498`, `:1503` — and a **local dict of the same name**, the registry
 index, is built at `:1483` and read at `:1489`, `:1494`, `:1498` and `:1502`. Two of those lines do
 both: `"known": model_id in known` at `:1489` and `"known": label in known` at `:1498` each write
-the key and read the local in one expression. Six lines, eight occurrences, and no split of the lines into two sets is right — which is why this
-record's first count (six writes) and its second (three and three) were both refused. No client in
-this repository reads the key back: the console decides "not in the registry" from the model list,
-not from this.
+the key and read the local in one expression. Six lines, eight occurrences, and no split of the
+lines into two sets is right — which is why this record's first count (six writes) and its second
+(three and three) were both refused. No client in this repository reads the key back: the console
+decides "not in the registry" from the model list, not from this.
 
 It is **nested** inside `by_model`, and that is why no guard says so: CHG-20260907-28 built a rule
 over this route's keys — the one that holds `source` and `assignable` — and it reads the **top
