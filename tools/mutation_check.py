@@ -3710,7 +3710,7 @@ CHG-20260907-28 and built by no record yet.''',
     # `PytestUnhandledThreadExceptionWarning`, and this repository sets no `filterwarnings`, so the
     # run reported `1 passed, 1 warning` — which is how the race above went unreported for as long
     # as it did. It was measured with a worker made to die; the numbers are in the next paragraph,
-    # where they are the reason this half is not registered.
+    # where they stand in for the registration this half cannot have.
     #
     # **Removing the accounting is what cannot be registered; the writer being unlocked can.** A
     # mutation that deletes the accounting runs against a tree where the race is fixed, so no worker
@@ -3728,12 +3728,17 @@ CHG-20260907-28 and built by no record yet.''',
     # reports it, while the invariant test stays green. How many die varies between runs and
     # machines, and so does the error — an earlier draft of this comment said six workers of
     # `PermissionError` in `paths.replace`, and nobody had measured either the count or that it
-    # was the only error. **What does not vary is that some die**: no run the acceptance record lists came
-    # back with none, so a `NOT CAUGHT` here is a regression and not the low end of the spread.
+    # was the only error. **What did not vary across the runs of this mutation is that some die**:
+    # none the record lists came back with none. The eight ordinary runs cited three paragraphs up
+    # are a different thing — seven of those had none, which is why the undriven defect was no
+    # regression signal. And this is a floor under those measurements, not under the scheduler:
+    # serialise the writers and there is no collision to kill anyone. So a `NOT CAUGHT` here is a
+    # reason to re-run and then to look, not by itself proof of a regression.
+    #
     # The counts and the mix live in `ACC-20260908-05` and are not repeated here — not as a rule,
-    # because this comment repeats other figures a few paragraphs up, but because the death count
-    # is the one figure that has moved between measurements and was once written down as a number
-    # nobody had taken.
+    # because this comment repeats other figures a few paragraphs up, but because these two are
+    # what has moved between measurements: the count varied by run and by machine and was once
+    # written down as a number nobody had taken, and which error dominates moved with it.
     #
     # What this entry establishes is that **the write belongs under the lock**. It does not isolate
     # what the unlocked write collides with. `Store.add` reads `manifest.json` before it writes
