@@ -3694,10 +3694,12 @@ CHG-20260907-28 and built by no record yet.''',
 
     # ── config-accounting (CHG-20260908-02) ─────────────────────────────────────────────────
     # One count in `tests/test_server.py`'s `NOT_ON_THE_CONSOLE` preamble was typed and never
-    # asserted: it said the snapshot has **19** keys and the snapshot has 21. The two counts
-    # beside it in the same paragraph — `RunReport().as_dict()`'s 30 fields and the inventory's
-    # fifteen entries — were both right, and both are held by a test. That is the whole finding:
-    # in this file a number is asserted or it is a claim, and this was the one nobody held.
+    # asserted: it said the snapshot has **19** keys and the snapshot has 21. The first account of
+    # this said the two counts beside it were right *because tests hold them*; a seat measured
+    # that and refused it. Only the inventory's fifteen is held. The thirty `as_dict` fields are
+    # held by nothing either — no test asserts it, and the rule that would have is over a file
+    # list this file is not in. So: one held, two not, and one of the two unheld happens to still
+    # be right.
     #
     # The repair is the assertion, not a corrected number, so the mutation adds a key to
     # `RunState.snapshot()` and expects the size guard to go red. It also proves the guard is not
@@ -3713,7 +3715,7 @@ CHG-20260907-28 and built by no record yet.''',
         '''            "retired_approvals": list(self.retired_approvals),''',
         '''            "retired_approvals": list(self.retired_approvals),
             "an_unheld_key": None,''',
-        "tests/test_server.py::test_the_inventory_is_fifteen_and_the_two_renamed_ones_are_not_in_it"),
+        "tests/test_server.py::test_the_snapshot_is_twenty_one_keys"),
 
     # ── manifest-race (CHG-20260908-05) ──────────────────────────────────────────────────────
     # Two defects, one landing unit, and each half is registered against the node that goes red

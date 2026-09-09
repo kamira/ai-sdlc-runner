@@ -137,10 +137,16 @@ appears in `by_model` even with empty `nodes` and `seats` — that is how "confi
 becomes visible.
 
 **`known` is built here and read by nothing**, like `assignable` above it and like the
-per-assignment provenance: `server.py` writes it in the six places that build this answer and reads
-it back nowhere, and no shipped console asks for it. It is **nested** inside `by_model`, which is
-why no guard has ever said so — the rule that catches an unrendered key iterates the run snapshot,
-and none of this route's keys are on it. Whether an unread key should ship at all is the question
+per-assignment provenance: `server.py` writes the key in three places, all inside the branch that
+builds this answer, and no client in this repository reads it back — the console decides "not in
+the registry" from the model list, not from this. (Three further mentions of the word in that
+branch are a local dict of the same name, the registry index, which the branch does read.)
+
+It is **nested** inside `by_model`, and that is why no guard says so: CHG-20260907-28 built a rule
+over this route's keys — the one that holds `source` and `assignable` — and it reads the **top
+level** only. `assignable`'s unread status is held by that guard; this one's is held by this
+paragraph, which is weaker and is the reason it is written here rather than left implied. Whether
+an unread key should ship at all is the question
 CHG-20260907-28 left open for `assignable`; this entry only stops the page implying somebody reads
 this one.
 
@@ -181,13 +187,16 @@ merged assignment with its provenance and the new version —
 
 ```jsonc
 { "node_models": { "<node id>": ["<model id>", …] },
-  "seat_models": { "<seat>": "<model id or joined command line>" },
+  "seat_models": { "<seat>": "<model id>" },
   "source": { "node_models.<node id>": "plan" | "store", … },
   "version": 7 }
 ```
 
-which is `GET /config/nodes`'s first three keys and the version the edit advanced to, and not a run
-snapshot. This page said otherwise from the round that wrote the sentence until CHG-20260908-02.
+Three of `GET /config/nodes`'s keys — `node_models`, `seat_models` and `source` — and the version
+the edit advanced to. `seat_models` values are **not** joined here the way that route joins them;
+this one answers the stored id. [Below](#the-three-assignment-routes-return-the-resolved-assignment)
+says the same thing about the same routes, and said it while the sentence above this table said the
+opposite, from the round that wrote them until CHG-20260908-02.
 
 | Route | Body | Refuses when |
 |---|---|---|
@@ -213,13 +222,17 @@ A gate asks *whether the run may proceed*; a tie asks *which way*. Accepting one
 record an answer to a question nobody was asked — so `/run/gate` and `/run/decide` each check
 `suspended.undecided` and refuse the other's case.
 
-### The two assignment routes return the resolved assignment
+### The three assignment routes return the resolved assignment
 
 ```jsonc
-{ "node_models": { … }, "seat_models": { … }, "source": { … } }
+{ "node_models": { … }, "seat_models": { … }, "source": { … }, "version": 7 }
 ```
 
-Not a run snapshot — they change configuration, not the run. **An empty `models` list clears a
+Not a run snapshot — they change configuration, not the run. `/config/halts` answers the same
+shape as `/config/nodes` and `/config/seats`: all three go through one function, so there are
+**three** of them and not two, and the version the edit advanced to is a fourth key. Both errors
+stood from the round that wrote this section until CHG-20260908-02, whose first draft called the
+report of them the wrong framing and had not found this block. **An empty `models` list clears a
 node**; there is no `DELETE` verb and adding one for a single case would be a second way to say a
 thing that already has one.
 
