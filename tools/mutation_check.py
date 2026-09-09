@@ -3700,8 +3700,10 @@ CHG-20260907-28 and built by no record yet.''',
     # `self._lock`; `_walk_once` did not, because a walk deliberately holds no lock across itself.
     # `Store.all()` opens `manifest.json`; `Store.add`, under the lock, finishes with `os.replace`
     # onto it; on Windows that fails `PermissionError` [WinError 5] against an open handle. The
-    # test drives the interleaving on a barrier rather than waiting for it — undriven it appeared
-    # in about one ordinary run in eight, which is no use as a regression signal.
+    # defect appeared in about one ordinary run in eight, which is no use as a regression signal.
+    # Four tests tried to drive that interleaving and each was green with the repair reverted; the
+    # entry here asserts the **invariant** instead — the walk reads the store with the lock held —
+    # and a lock knows whether it is held.
     #
     # The **accounting**: the hammer test joined six workers with a timeout, asserted on two flags,
     # and never on the workers. A thread dying of anything but `ServerError` was a
@@ -3710,14 +3712,19 @@ CHG-20260907-28 and built by no record yet.''',
     # as it did. Measured with a worker made to die: with the accounting `1 failed`, without it
     # `1 passed`, the same `1 warning` either way.
     #
-    # **The accounting half is deliberately unregistered, and this is the reason.** A mutation that
-    # removes it runs against a tree where the race is already fixed, so no worker dies, `failures`
-    # is empty either way and the test passes — `NOT CAUGHT`, correctly. The accounting only bites
-    # when something else is broken, which is exactly what it is for and exactly what a mutation of
-    # a green tree cannot stage. Making it catchable would mean a second test that deliberately
-    # kills a worker, whose only subject would be this test's own bookkeeping. What was measured
-    # instead, and is in `ACC-20260908-05`: with a worker injected to die, the accounting gives
-    # `1 failed` and its removal gives `1 passed`, with the same `1 warning` in both.
+    # **Removing the accounting is what cannot be registered; the writer being unlocked can.** A
+    # mutation that deletes the accounting runs against a tree where the race is fixed, so no worker
+    # dies, `failures` is empty either way and the test passes — `NOT CAUGHT`, correctly, because
+    # the accounting only bites when something else is broken. What was measured instead, and is in
+    # `ACC-20260908-05`: with a worker injected to die, the accounting gives `1 failed` and its
+    # removal gives `1 passed`, with the same `1 warning` in both.
+    #
+    # The **second entry below** is the something-else. Moving `attach`'s `store.add` out of
+    # `with self._lock` makes six workers die of `PermissionError` in `paths.replace`, and the
+    # accounting reports it: a seat measured 5 of 5 runs red that way while the invariant test
+    # stayed green. So the pair covers both sides — the invariant holds the reader under the lock,
+    # this holds the writer under it — and the record's claim that the consequence was pinned by
+    # nothing was too pessimistic by one mutation.
     Mutation(
         "manifest-race", "the walk reads the store outside the lock again",
         SRC / "server.py",
@@ -3728,6 +3735,20 @@ CHG-20260907-28 and built by no record yet.''',
                 order_paths = ()''',
         '''            order_paths = tuple(self._store.order_paths()) if self._store else ()''',
         "tests/test_server.py::test_the_walk_reads_the_attachment_store_holding_the_lock"),
+
+    Mutation(
+        "manifest-race", "the writer replaces the manifest outside the lock",
+        SRC / "server.py",
+        '''        with self._lock:
+            self._require_version(version)
+            try:
+                self._store.add(filename, data, instruction=len(self.state.instructions))''',
+        '''        self._store.add(filename, data, instruction=len(self.state.instructions))
+        with self._lock:
+            self._require_version(version)
+            try:
+                pass''',
+        "tests/test_server.py::test_the_gate_never_rests_with_something_still_flagged"),
 
     Mutation(
         "ask-in-flight", "a rejection routes back to the step in front of the counted node",
