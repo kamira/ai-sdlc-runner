@@ -3700,7 +3700,7 @@ CHG-20260907-28 and built by no record yet.''',
     # `self._lock`; `_walk_once` did not, because a walk deliberately holds no lock across itself.
     # `Store.all()` opens `manifest.json`; `Store.add`, under the lock, finishes with `os.replace`
     # onto it; on Windows that fails `PermissionError` [WinError 5] against an open handle. The
-    # defect appeared in about one ordinary run in eight, which is no use as a regression signal.
+    # defect appeared in one of eight ordinary runs, which is no use as a regression signal.
     # Four tests tried to drive that interleaving and each was green with the repair reverted; the
     # entry here asserts the **invariant** instead — the walk reads the store with the lock held —
     # and a lock knows whether it is held.
@@ -3732,7 +3732,8 @@ CHG-20260907-28 and built by no record yet.''',
     # none the record lists came back with none. The eight ordinary runs cited three paragraphs up
     # are a different thing — seven of those had none, which is why the undriven defect was no
     # regression signal. And this is a floor under those measurements, not under the scheduler:
-    # serialise the writers and there is no collision to kill anyone. So a `NOT CAUGHT` here is a
+    # land every write on a manifest no other thread has open — writers and readers both, per the
+    # paragraph below — and there is no collision to kill anyone. So a `NOT CAUGHT` here is a
     # reason to re-run and then to look, not by itself proof of a regression.
     #
     # The counts and the mix live in `ACC-20260908-05` and are not repeated here — not as a rule,
