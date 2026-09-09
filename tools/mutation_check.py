@@ -3719,8 +3719,12 @@ CHG-20260907-28 and built by no record yet.''',
     # `ACC-20260908-05`: with a worker injected to die, the accounting gives `1 failed` and its
     # removal gives `1 passed`, with the same `1 warning` in both.
     #
-    # The **second entry below** is the something-else. Moving `attach`'s `store.add` out of
-    # `with self._lock` makes six workers die of `PermissionError` in `paths.replace`, and the
+    # The **second entry below** is the something-else: it moves `attach`'s `store.add` out of
+    # `with self._lock` and changes nothing else — the version check still runs first, under
+    # the lock, and the write keeps its own `try`/`except AttachmentError`. A first version of
+    # it moved the call above the version check and out of its `try` as well, and a seat
+    # refused it: a compound mutation's `CAUGHT` cannot be attributed to any one of the things
+    # it changed. Unlocked, six workers die of `PermissionError` in `paths.replace`, and the
     # accounting reports it: a seat measured 5 of 5 runs red that way while the invariant test
     # stayed green. So the pair covers both sides — the invariant holds the reader under the lock,
     # this holds the writer under it — and the record's claim that the consequence was pinned by
@@ -3742,12 +3746,19 @@ CHG-20260907-28 and built by no record yet.''',
         '''        with self._lock:
             self._require_version(version)
             try:
-                self._store.add(filename, data, instruction=len(self.state.instructions))''',
-        '''        self._store.add(filename, data, instruction=len(self.state.instructions))
-        with self._lock:
+                self._store.add(filename, data, instruction=len(self.state.instructions))
+            except attach_mod.AttachmentError as exc:
+                raise ServerError(str(exc))
+            self._refresh_attachments()''',
+        '''        with self._lock:
             self._require_version(version)
+        if True:
             try:
-                pass''',
+                self._store.add(filename, data, instruction=len(self.state.instructions))
+            except attach_mod.AttachmentError as exc:
+                raise ServerError(str(exc))
+        with self._lock:
+            self._refresh_attachments()''',
         "tests/test_server.py::test_the_gate_never_rests_with_something_still_flagged"),
 
     Mutation(
