@@ -615,17 +615,26 @@ def validate() -> None:
             # default did not.
             #
             # `ratified` **is** the settling condition — `engine` tests `choice == ratified`
-            # against `_adjudicate`'s own word — so whichever word `pass` is pointed at becomes the
-            # one that settles. Two outcomes follow, and this sentence has been written wrongly as
-            # each of them alone:
+            # against `_adjudicate`'s own word — so whichever word `pass` is pointed at is the one
+            # that settles, and anything settles at all only if that word is one `_adjudicate`
+            # returns. Those are `policy.OUTCOMES` — `pass`, `fail`, `undecided` — and naming
+            # them here is safe because `test_undecided` asserts that tuple by identity, so a
+            # fourth outcome reddens there before this comment can go stale. So:
             #
-            #   `{pass: fail}`      `ratified` is `fail`, which the panel does return, so the
-            #                       settling **swaps sides**: a rejection settles the grade and a
-            #                       pass no longer does, recording the run as graded at what a
-            #                       panel that refused it agreed.
-            #   `{pass: <other>}`   `ratified` is a branch word no adjudication returns, so
-            #                       **nothing settles** — the milder failure, and the one three
-            #                       earlier versions named as though it were the only one.
+            #   `{pass: fail}`        a **rejection** settles the grade and a pass no longer does,
+            #                         recording the run as graded at what a panel that refused it
+            #                         agreed.
+            #   `{pass: undecided}`   a panel that decided **nothing** settles it, on a run that
+            #                         suspends for the person the split was meant to reach, at a
+            #                         grade nobody agreed. This is the same harm the `undecided`
+            #                         rule below refuses that word as a *key* for — *"a split panel
+            #                         looking like a decision it never reached"* — and a seat panel
+            #                         may carry an `undecided` branch, so it is writable.
+            #   anything else         no outcome equals it, so **nothing settles**.
+            #
+            # Four versions of this sentence named a subset of those three as though it were all of
+            # them: *never settles* alone, *swaps sides* alone, then the two together with
+            # `undecided` folded into "any other branch" — which is the one case that is neither.
             #
             # **No declaration helps**, and one that cannot help is a name standing in for a
             # constraint. Four earlier versions of this comment were counts and each was refused:
@@ -653,9 +662,9 @@ def validate() -> None:
                 f"which nothing routes through there and which cannot name the word meaning "
                 f"ratified any better than the default already does — and which, if it maps `pass` "
                 f"elsewhere, makes that word the one a node settles the grade on: a rejection if "
-                f"it maps to `fail`, and nothing at all if it maps to a branch no panel returns. "
-                f"Remove the declaration: a seat panel's branch comes back from `_adjudicate` "
-                f"already in the panel's words, and needs no mapping")
+                f"it maps to `fail`, a panel that decided nothing if it maps to `undecided`, and "
+                f"nothing at all otherwise. Remove the declaration: a seat panel's branch comes "
+                f"back from `_adjudicate` already in the panel's words, and needs no mapping")
         for outcome, landed in node.panel_branches.items():
             if landed not in node.branches:
                 raise GraphError(

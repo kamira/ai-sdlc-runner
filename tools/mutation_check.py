@@ -3725,10 +3725,12 @@ CHG-20260907-28 and built by no record yet.''',
     # no escape and the message must not offer one. The mapping is refused there because it cannot
     # help — the branch rule already puts `pass` among its branches, so the second read that names
     # *ratified* lands correctly with no declaration at all — and because one shape of it,
-    # a `pass` key pointing elsewhere, makes that word the one the grade settles on: `fail` puts
-    # the settling on a rejection, any other branch puts it on nothing. **No declaration helps**;
-    # the harm has an exact condition and is not a count, after four counts of this set were each
-    # refused for stopping short of it, and two descriptions of it named one outcome each.
+    # a `pass` key pointing elsewhere, makes that word the one the grade settles on — and the
+    # grade settles at all only if that word is one `_adjudicate` returns: `fail` puts the settling
+    # on a rejection, `undecided` on a panel that decided nothing, anything else on nothing.
+    # **No declaration helps**; the harm has an exact condition and is not a count, after four
+    # counts of this set were each refused for stopping short of it and four descriptions of the
+    # harm each named a subset of its three outcomes.
     #
     # The third entry's rule refuses a declared mapping on a **`SEAT_PANEL` only**, and the fourth
     # pins that it stays there. Three corrections got it to that, each from a seat:
