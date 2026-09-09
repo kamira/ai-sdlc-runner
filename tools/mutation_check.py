@@ -3692,6 +3692,43 @@ CHG-20260907-28 and built by no record yet.''',
         '''            if told > self.state.instructions_at_last_incomplete_stop:''',
         "tests/test_server.py::test_a_walk_that_finds_nothing_missing_does_not_move_the_mark"),
 
+    # ── manifest-race (CHG-20260908-05) ──────────────────────────────────────────────────────
+    # Two defects, one landing unit, and each half is registered against the node that goes red
+    # when it alone is undone.
+    #
+    # The **race**: `start`, `instruct` and `attach` all read the attachment store under
+    # `self._lock`; `_walk_once` did not, because a walk deliberately holds no lock across itself.
+    # `Store.all()` opens `manifest.json`; `Store.add`, under the lock, finishes with `os.replace`
+    # onto it; on Windows that fails `PermissionError` [WinError 5] against an open handle. The
+    # test drives the interleaving on a barrier rather than waiting for it — undriven it appeared
+    # in about one ordinary run in eight, which is no use as a regression signal.
+    #
+    # The **accounting**: the hammer test joined six workers with a timeout, asserted on two flags,
+    # and never on the workers. A thread dying of anything but `ServerError` was a
+    # `PytestUnhandledThreadExceptionWarning`, and this repository sets no `filterwarnings`, so the
+    # run reported `1 passed, 1 warning` — which is how the race above went unreported for as long
+    # as it did. Measured with a worker made to die: with the accounting `1 failed`, without it
+    # `1 passed`, the same `1 warning` either way.
+    #
+    # **The accounting half is deliberately unregistered, and this is the reason.** A mutation that
+    # removes it runs against a tree where the race is already fixed, so no worker dies, `failures`
+    # is empty either way and the test passes — `NOT CAUGHT`, correctly. The accounting only bites
+    # when something else is broken, which is exactly what it is for and exactly what a mutation of
+    # a green tree cannot stage. Making it catchable would mean a second test that deliberately
+    # kills a worker, whose only subject would be this test's own bookkeeping. What was measured
+    # instead, and is in `ACC-20260908-05`: with a worker injected to die, the accounting gives
+    # `1 failed` and its removal gives `1 passed`, with the same `1 warning` in both.
+    Mutation(
+        "manifest-race", "the walk reads the store outside the lock again",
+        SRC / "server.py",
+        '''            if self._store is not None:
+                with self._lock:
+                    order_paths = tuple(self._store.order_paths())
+            else:
+                order_paths = ()''',
+        '''            order_paths = tuple(self._store.order_paths()) if self._store else ()''',
+        "tests/test_server.py::test_a_walk_reading_the_manifest_does_not_break_an_attachment"),
+
     Mutation(
         "ask-in-flight", "a rejection routes back to the step in front of the counted node",
         SRC / "graph.py",
