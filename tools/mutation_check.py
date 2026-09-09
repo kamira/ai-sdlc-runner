@@ -3709,8 +3709,8 @@ CHG-20260907-28 and built by no record yet.''',
     # and never on the workers. A thread dying of anything but `ServerError` was a
     # `PytestUnhandledThreadExceptionWarning`, and this repository sets no `filterwarnings`, so the
     # run reported `1 passed, 1 warning` — which is how the race above went unreported for as long
-    # as it did. Measured with a worker made to die: with the accounting `1 failed`, without it
-    # `1 passed`, the same `1 warning` either way.
+    # as it did. It was measured with a worker made to die; the numbers are in the next paragraph,
+    # where they are the reason this half is not registered.
     #
     # **Removing the accounting is what cannot be registered; the writer being unlocked can.** A
     # mutation that deletes the accounting runs against a tree where the race is fixed, so no worker
@@ -3728,8 +3728,12 @@ CHG-20260907-28 and built by no record yet.''',
     # reports it, while the invariant test stays green. How many die varies between runs and
     # machines, and so does the error — an earlier draft of this comment said six workers of
     # `PermissionError` in `paths.replace`, and nobody had measured either the count or that it
-    # was the only error. The counts and the error mix live in `ACC-20260908-05` and are not
-    # restated here: a number written in two places goes stale in one of them.
+    # was the only error. **What does not vary is that some die**: no run the acceptance record lists came
+    # back with none, so a `NOT CAUGHT` here is a regression and not the low end of the spread.
+    # The counts and the mix live in `ACC-20260908-05` and are not repeated here — not as a rule,
+    # because this comment repeats other figures a few paragraphs up, but because the death count
+    # is the one figure that has moved between measurements and was once written down as a number
+    # nobody had taken.
     #
     # What this entry establishes is that **the write belongs under the lock**. It does not isolate
     # what the unlocked write collides with. `Store.add` reads `manifest.json` before it writes
