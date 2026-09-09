@@ -137,10 +137,14 @@ appears in `by_model` even with empty `nodes` and `seats` — that is how "confi
 becomes visible.
 
 **`known` is built here and read by nothing**, like `assignable` above it and like the
-per-assignment provenance: `server.py` writes the key in three places, all inside the branch that
-builds this answer, and no client in this repository reads it back — the console decides "not in
-the registry" from the model list, not from this. (Three further mentions of the word in that
-branch are a local dict of the same name, the registry index, which the branch does read.)
+per-assignment provenance. Inside the branch that builds this answer the key is written on three
+lines — `server.py:1489`, `:1498`, `:1503` — and a **local dict of the same name**, the registry
+index, is built at `:1483` and read at `:1489`, `:1494`, `:1498` and `:1502`. Two of those lines do
+both: `{"known": model_id in known}` writes the key and reads the local in one expression. Six
+lines, eight occurrences, and no split of the lines into two sets is right — which is why this
+record's first count (six writes) and its second (three and three) were both refused. No client in
+this repository reads the key back: the console decides "not in the registry" from the model list,
+not from this.
 
 It is **nested** inside `by_model`, and that is why no guard says so: CHG-20260907-28 built a rule
 over this route's keys — the one that holds `source` and `assignable` — and it reads the **top
@@ -197,8 +201,9 @@ the edit advanced to. `seat_models` values are **not** joined here the way that 
 this one answers the stored id. [Below](#the-three-assignment-routes-return-the-resolved-assignment)
 now says the same thing about the same routes. Until CHG-20260908-02 it did not: it said **two**
 routes and **three** keys, while the sentence above this table said all of them return the run
-snapshot. Two descriptions of one thing, wrong in different directions, which is why neither caught
-the other.
+snapshot. Why neither was noticed is not measured here. What is measurable: no guard in this
+repository compares two prose descriptions of one route, and the section below had said *"Not a run
+snapshot"* the whole time the sentence above said it was one.
 
 | Route | Body | Refuses when |
 |---|---|---|
@@ -232,10 +237,12 @@ record an answer to a question nobody was asked — so `/run/gate` and `/run/dec
 
 Not a run snapshot — they change configuration, not the run. `/config/halts` answers the same
 shape as `/config/nodes` and `/config/seats`: all three go through one function, so there are
-**three** of them and not two, and the version the edit advanced to is a fourth key. Both errors
-stood from the round that wrote this section until CHG-20260908-02, whose first draft called the
-report of them the wrong framing and had not found this block. **An empty `models` list clears a
-node**; there is no `DELETE` verb and adding one for a single case would be a second way to say a
+**three** of them and not two, and the version the edit advanced to is a fourth key. Both readings
+were true when this section was written and were overtaken without it: a third route joined, and
+the edit's new version became a fourth key. No date is given for that here — this record wrote
+three sentences about this page's past and a seat measured each of them wrong.
+
+**An empty `models` list clears a node**; there is no `DELETE` verb and adding one for a single case would be a second way to say a
 thing that already has one.
 
 **Clearing a node the plan speaks for changes nothing visible.** The store row goes and the plan's
