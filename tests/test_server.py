@@ -899,6 +899,75 @@ def test_an_action_arriving_as_the_walk_decides_to_stop_is_not_stranded(tmp_path
     assert runner._walking is False
 
 
+def test_the_walk_reads_the_attachment_store_holding_the_lock(tmp_path):
+    """**The property the repair establishes, asserted directly** (CHG-20260908-05).
+
+    `start`, `instruct` and `attach` read the attachment store inside `with self._lock`.
+    `_walk_once` did not — deliberately, because a walk holds no lock across itself — and
+    `Store.all()`, which `order_paths()` reads through, opens `manifest.json` while `Store.add`,
+    under the lock from `attach`, ends in `os.replace` onto it. On Windows a replace onto a file
+    another thread holds open raises `PermissionError` [WinError 5], measured deterministically.
+    So the lock serialised writers against writers and left the walk's reader racing the writer:
+    eight ordinary runs of the hammer test below, one with a worker dead of exactly that, reported
+    `1 passed, 1 warning`.
+
+    **Why this asserts the invariant instead of staging the collision.** Four versions of a threaded
+    test tried to drive the interleaving, and a seat refused every one of them:
+
+    1. it parked *after* the read had finished, so no handle was open across the barrier — green
+       with the repair reverted;
+    2. it held a real handle and released it after `time.sleep(0.3)` — a load-bearing window, and
+       under sixteen CPU burners one run in five went green with the repair reverted;
+    3. it signalled immediately *before* `os.replace`, which proves the wrapper was entered and not
+       that the replace was attempted while the handle was held;
+    4. the hold had its own timeout equal to the parent's worst case, so it could let go by itself.
+
+    The fifth refusal is the one that ended the approach: **no finite timeout fixes it.** Waiting a
+    bounded time for the writer to appear and treating its absence as "the lock held it" is an
+    inference from a timeout, and a writer slower than that bound makes the parent release the
+    handle and the reverted code succeed. Every version was green, and each was green for a
+    different reason.
+
+    What the repair actually establishes is one sentence — *the walk reads the store with the lock
+    held* — and a lock knows whether it is held. This asserts that, in the walk, with no threads, no
+    barrier and no deadline, and it fails in milliseconds when the `with self._lock` is taken out.
+
+    What it does **not** show is the consequence: that an attachment posted during a walk used to
+    come back 500. That is measured in `ACC-20260908-05` and is not something a test can hold
+    without staging the race this one gave up on.
+    """
+    seen = []
+    real_order_paths = attach_mod.Store.order_paths
+
+    def recording_order_paths(self):
+        seen.append(runner._lock._is_owned())
+        return real_order_paths(self)
+
+    def walk(cfg):
+        report = engine.RunReport()
+        report.state = engine.FINISHED
+        return report
+
+    runner = server.Runner(
+        walk=walk,
+        make_config=lambda i, a, r, art=(), rej=(), hist=(): _make_config(i, a, r, art, rej, hist),
+        store=attach_mod.Store(tmp_path / "att"))
+
+    attach_mod.Store.order_paths = recording_order_paths
+    try:
+        runner.start("go", 0)
+        runner.attach(runner.state.version, "one.md", b"one")
+        runner.instruct(runner.state.version, "and again")
+    finally:
+        attach_mod.Store.order_paths = real_order_paths
+
+    assert seen, "the walk never read the store; this test measured nothing"
+    assert all(seen), (
+        f"the walk read the attachment store without holding the lock on "
+        f"{seen.count(False)} of {len(seen)} walks. `attach` replaces `manifest.json` under that "
+        f"lock, and on Windows a replace onto a file this read still has open fails WinError 5")
+
+
 def test_the_gate_never_rests_with_something_still_flagged(tmp_path):
     """The invariant, hammered.
 
@@ -925,17 +994,44 @@ def test_the_gate_never_rests_with_something_still_flagged(tmp_path):
         store=attach_mod.Store(tmp_path / "att"))
     runner.start("go", 0)
 
+    # **What the workers hit that is not a stale version** (CHG-20260908-05). `poke` used to
+    # swallow `ServerError` and nothing else, so a thread that died of anything different became a
+    # `PytestUnhandledThreadExceptionWarning` — a warning, and this repository sets no
+    # `filterwarnings`. Measured on `77b5c14`: eight ordinary runs of this test, **one** had a
+    # thread die of `PermissionError [WinError 5]` in `paths.replace` of `manifest.json`, and the
+    # run reported `1 passed, 1 warning`. The test could not say so, because it asserted on
+    # `_walking` and `_walk_again` and never on its own threads.
+    failures = []
+
     def poke(n):
         for i in range(12):
             try:
                 runner.attach(runner.state.version, f"a{n}-{i}.md", f"{n}{i}".encode())
             except server.ServerError:
                 pass                      # a stale version, which is the API doing its job
+            except BaseException as exc:  # noqa: BLE001 - the point is that nothing is swallowed
+                failures.append(f"{threading.current_thread().name}: "
+                                f"{type(exc).__name__}: {exc}")
+                raise
     threads = [threading.Thread(target=poke, args=(n,)) for n in range(6)]
     for t in threads:
         t.start()
     for t in threads:
         t.join(timeout=20)
+
+    # **Before the flags, because a flag is readable while a thread is not finished.** A
+    # `join(timeout=...)` that expires returns `None`; nothing about it reaches the assertions
+    # below. A worker stalled between `attach`'s lock release and `_advance` — the one window
+    # where a stall does not set `_walking` — lets both flag assertions pass and then drives the
+    # runner on afterwards: measured at eleven further walks and twenty-one version bumps on a
+    # runner this test had already judged.
+    alive = [t.name for t in threads if t.is_alive()]
+    assert alive == [], (
+        f"these workers had not finished when the joins timed out: {alive}. Whatever they do next "
+        f"happens to a runner this test has already read")
+    assert failures == [], (
+        f"a worker died of something other than a stale version, and before CHG-20260908-05 that "
+        f"was a warning rather than a failure: {failures}")
 
     assert runner._walking is False, "a walk is still marked in flight after everything joined"
     assert runner._walk_again is False, (

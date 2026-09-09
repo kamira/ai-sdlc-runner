@@ -910,11 +910,31 @@ class Runner:
                         f"and this gate asks again")
                 if note not in self.state.retired_approvals:
                     self.state.retired_approvals.append(note)
+            # **The store is read under the lock, and this was the one reader that was not**
+            # (CHG-20260908-05). `start`, `instruct` and `attach` all read it inside
+            # `with self._lock`; this call did not, because a walk deliberately holds no lock
+            # across itself. But `Store.all()` opens `manifest.json` to read it, and `Store.add`
+            # — under the lock, from `attach` — finishes with `os.replace` onto that same file.
+            # On Windows a replace onto a file another thread holds open fails `PermissionError`
+            # [WinError 5], deterministically. So the lock serialised writers against writers and
+            # left the walk's reader racing the writer, and the operator's attachment came back
+            # 500 while the walk carried on.
+            #
+            # Measured before this change: eight ordinary runs of
+            # `test_the_gate_never_rests_with_something_still_flagged`, one thread dead of exactly
+            # that. The test reported `1 passed`, which is the other half of this record.
+            #
+            # Only the read is inside the lock. The walk itself stays outside it, which is the
+            # property `_advance` is built on and which CHG-20260823-44 pinned.
+            if self._store is not None:
+                with self._lock:
+                    order_paths = tuple(self._store.order_paths())
+            else:
+                order_paths = ()
             cfg = self._make_config(tuple(self.state.instructions),
                                     tuple(live),
                                     tuple(self.state.rulings),
-                                    tuple(self._store.order_paths())
-                                    if self._store else (),
+                                    order_paths,
                                     tuple(self.state.rejections),
                                     tuple(self.state.intake_history))
             # Set on the config rather than passed through `_make_config`. Twenty callers build

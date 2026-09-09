@@ -3692,6 +3692,99 @@ CHG-20260907-28 and built by no record yet.''',
         '''            if told > self.state.instructions_at_last_incomplete_stop:''',
         "tests/test_server.py::test_a_walk_that_finds_nothing_missing_does_not_move_the_mark"),
 
+    # ── manifest-race (CHG-20260908-05) ──────────────────────────────────────────────────────
+    # Two defects, one landing unit, and each half is registered against the node that goes red
+    # when it alone is undone.
+    #
+    # The **race**: `start`, `instruct` and `attach` all read the attachment store under
+    # `self._lock`; `_walk_once` did not, because a walk deliberately holds no lock across itself.
+    # `Store.all()` opens `manifest.json`; `Store.add`, under the lock, finishes with `os.replace`
+    # onto it; on Windows that fails `PermissionError` [WinError 5] against an open handle. The
+    # defect appeared in one of eight ordinary runs, which is no use as a regression signal.
+    # Four tests tried to drive that interleaving and each was green with the repair reverted; the
+    # entry here asserts the **invariant** instead — the walk reads the store with the lock held —
+    # and a lock knows whether it is held.
+    #
+    # The **accounting**: the hammer test joined six workers with a timeout, asserted on two flags,
+    # and never on the workers. A thread dying of anything but `ServerError` was a
+    # `PytestUnhandledThreadExceptionWarning`, and this repository sets no `filterwarnings`, so the
+    # run reported `1 passed, 1 warning` — which is how the race above went unreported for as long
+    # as it did. It was measured with a worker made to die; the numbers are in the next paragraph,
+    # where they stand in for the registration this half cannot have.
+    #
+    # **Removing the accounting is what cannot be registered; the writer being unlocked can.** A
+    # mutation that deletes the accounting runs against a tree where the race is fixed, so no worker
+    # dies, `failures` is empty either way and the test passes — `NOT CAUGHT`, correctly, because
+    # the accounting only bites when something else is broken. What was measured instead, and is in
+    # `ACC-20260908-05`: with a worker injected to die, the accounting gives `1 failed` and its
+    # removal gives `1 passed`, with the same `1 warning` in both.
+    #
+    # The **second entry below** is the something-else: it moves `attach`'s `store.add` out of
+    # `with self._lock` and changes nothing else — the version check still runs first, under
+    # the lock, and the write keeps its own `try`/`except AttachmentError`. A first version of
+    # it moved the call above the version check and out of its `try` as well, and a seat
+    # refused it: a compound mutation's `CAUGHT` cannot be attributed to any one of the things
+    # it changed. Unlocked, workers die in the store's manifest write path and the accounting
+    # reports it, while the invariant test stays green. How many die varies between runs and
+    # machines, and so does the error — an earlier draft of this comment said six workers of
+    # `PermissionError` in `paths.replace`, and nobody had measured either the count or that it
+    # was the only error. **What did not vary across the runs of this mutation is that some die**:
+    # none the record lists came back with none. The eight ordinary runs cited three paragraphs up
+    # are a different thing — seven of those had none, which is why the undriven defect was no
+    # regression signal. And this is a floor under those measurements, not under the scheduler:
+    # serialise every manifest write in this process against every other reader and writer — neither
+    # `manifest.json` nor the fixed `manifest.json.writing` open by another thread when the write
+    # lands; the readers are enumerated two paragraphs below, and the writer counterparty is the
+    # staging file itself, which that paragraph does not cover — and there is no collision to kill
+    # anyone. (`Store.add` writes the content blob too, at `attachments.py:205`; that write has no
+    # fixed name and is not part of this.) So a `NOT CAUGHT` here is a reason to re-run and then
+    # to look, not by itself proof of a regression.
+    #
+    # The counts and the mix live in `ACC-20260908-05` and are not repeated here — not as a rule,
+    # because this comment repeats other figures a few paragraphs up, but because these two are
+    # what has moved between measurements: the count varied by run and by machine and was once
+    # written down as a number nobody had taken, and which error dominates moved with it.
+    #
+    # What this entry establishes is that **the write belongs under the lock**. It does not isolate
+    # what the unlocked write collides with. `Store.add` reads `manifest.json` before it writes
+    # (`attachments.py:177`), `_refresh_attachments` reads it under the lock, and the walk reads it
+    # too, so a replace onto an open handle can be against any of them. The walk's side is held by
+    # the first entry, which asserts the lock is held rather than catching a collision. Between
+    # them the pair pins the reader unlocked and the writer unlocked — not the accounting, which is
+    # this group's third paragraph, and not the consequence: a walk-time 500 is still pinned by
+    # nothing.
+    Mutation(
+        "manifest-race", "the walk reads the store outside the lock again",
+        SRC / "server.py",
+        '''            if self._store is not None:
+                with self._lock:
+                    order_paths = tuple(self._store.order_paths())
+            else:
+                order_paths = ()''',
+        '''            order_paths = tuple(self._store.order_paths()) if self._store else ()''',
+        "tests/test_server.py::test_the_walk_reads_the_attachment_store_holding_the_lock"),
+
+    Mutation(
+        "manifest-race", "the writer replaces the manifest outside the lock",
+        SRC / "server.py",
+        '''        with self._lock:
+            self._require_version(version)
+            try:
+                self._store.add(filename, data, instruction=len(self.state.instructions))
+            except attach_mod.AttachmentError as exc:
+                raise ServerError(str(exc))
+            self._refresh_attachments()''',
+        '''        with self._lock:
+            self._require_version(version)
+        if True:
+            try:
+                self._store.add(filename, data, instruction=len(self.state.instructions))
+            except attach_mod.AttachmentError as exc:
+                raise ServerError(str(exc))
+        with self._lock:
+            self._refresh_attachments()''',
+        "tests/test_server.py::test_the_gate_never_rests_with_something_still_flagged"),
+
     Mutation(
         "ask-in-flight", "a rejection routes back to the step in front of the counted node",
         SRC / "graph.py",
