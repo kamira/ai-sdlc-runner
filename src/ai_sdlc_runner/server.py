@@ -921,7 +921,7 @@ class Runner:
             # 500 while the walk carried on.
             #
             # Measured before this change: eight ordinary runs of
-            # `test_a_hammer_of_attachments_leaves_no_walk_in_flight`, one thread dead of exactly
+            # `test_the_gate_never_rests_with_something_still_flagged`, one thread dead of exactly
             # that. The test reported `1 passed`, which is the other half of this record.
             #
             # Only the read is inside the lock. The walk itself stays outside it, which is the

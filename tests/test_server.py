@@ -921,7 +921,27 @@ def test_a_walk_reading_the_manifest_does_not_break_an_attachment(tmp_path, monk
     """
     reading = threading.Event()
     release = threading.Event()
+    at_replace = threading.Event()
     real_order_paths = attach_mod.Store.order_paths
+    real_replace = attach_mod.paths.replace
+
+    def signalling_replace(src, dst):
+        """Say when the writer has actually reached the replace, instead of sleeping and hoping.
+
+        **A seat refused the first version of this test for the sleep it replaces.** That version
+        waited 0.3s and released the handle; if the writer had not reached `os.replace` by then the
+        handle closed first, the reverted code succeeded, and the test passed while guarding
+        nothing. The window was load-bearing and unsynchronised, on a machine nobody controls.
+
+        With the lock as it ships the writer never gets here at all — it is blocked in `attach`
+        waiting for the walk to finish its read — so this event does not fire and the wait below
+        times out, which is the *fixed* observation. With the lock reverted it always gets here,
+        however slow the machine, which is the *broken* one. Both directions are decided by what
+        happened, not by how long it took.
+        """
+        if str(dst).endswith("manifest.json"):
+            at_replace.set()
+        return real_replace(src, dst)
 
     def holding_order_paths(self):
         """Hold the walk *inside* its manifest read, which is what a slow read is.
@@ -985,12 +1005,21 @@ def test_a_walk_reading_the_manifest_does_not_break_an_attachment(tmp_path, monk
         posted.append("gave up on stale versions after 20 attempts")
 
     monkeypatch.setattr(attach_mod.Store, "order_paths", holding_order_paths)
+    monkeypatch.setattr(attach_mod.paths, "replace", signalling_replace)
     walker = threading.Thread(target=lambda: runner.instruct(runner.state.version, "again"))
     walker.start()
     assert reading.wait(10), "the walk never reached the manifest read; the fixture is wrong"
     writer = threading.Thread(target=post)
     writer.start()
-    time.sleep(0.3)              # let the writer reach `os.replace` while the read is held open
+    # The five seconds are only spent when the lock is doing its job: the signal never comes,
+    # because the writer is blocked. Measured, three runs each way — reverted 1.20s / 1.62s /
+    # 0.61s and red; as it ships 6.32s / 6.29s / 5.72s and green. The difference *is* the timeout,
+    # and paying it is what makes the green side mean something.
+    if at_replace.wait(5):
+        # It reached the replace with the read still holding the manifest open — the interleaving
+        # this test exists for. Let it finish before releasing, so the outcome is its own and not a
+        # matter of which thread the scheduler picked next.
+        writer.join(timeout=5)
     release.set()
     writer.join(timeout=10)
     walker.join(timeout=10)
