@@ -899,102 +899,49 @@ def test_an_action_arriving_as_the_walk_decides_to_stop_is_not_stranded(tmp_path
     assert runner._walking is False
 
 
-def test_a_walk_reading_the_manifest_does_not_break_an_attachment(tmp_path, monkeypatch):
-    """**The walk read the store outside the lock, and the writer under it paid** (CHG-20260908-05).
+def test_the_walk_reads_the_attachment_store_holding_the_lock(tmp_path):
+    """**The property the repair establishes, asserted directly** (CHG-20260908-05).
 
-    `start`, `instruct` and `attach` all read the attachment store inside `with self._lock`.
+    `start`, `instruct` and `attach` read the attachment store inside `with self._lock`.
     `_walk_once` did not — deliberately, because a walk holds no lock across itself — and
-    `Store.all()` opens `manifest.json` while `Store.add`, under the lock, ends in `os.replace`
-    onto it. On Windows a replace onto a file another thread holds open raises `PermissionError`
-    [WinError 5]. The lock serialised writers against writers and left the walk's reader racing
-    the writer.
+    `Store.all()`, which `order_paths()` reads through, opens `manifest.json` while `Store.add`,
+    under the lock from `attach`, ends in `os.replace` onto it. On Windows a replace onto a file
+    another thread holds open raises `PermissionError` [WinError 5], measured deterministically.
+    So the lock serialised writers against writers and left the walk's reader racing the writer:
+    eight ordinary runs of the hammer test below, one with a worker dead of exactly that, reported
+    `1 passed, 1 warning`.
 
-    **Driven, not waited for.** The unfixed defect appears in about one ordinary run of the hammer
-    test in eight, which is no use as a regression signal. Here the walk is held *inside* the
-    manifest read, on a barrier, while an attachment is posted from another thread — the exact
-    interleaving, every time. With the read under the lock the attach waits and succeeds; without
-    it the attach raises.
+    **Why this asserts the invariant instead of staging the collision.** Four versions of a threaded
+    test tried to drive the interleaving, and a seat refused every one of them:
 
-    The assertion is on the attachment, not on the walk, because that is what an operator loses:
-    before this change the route answered 500 with a raw `PermissionError`, and the blob was
-    already on disk with the new manifest stranded as `manifest.json.writing`.
+    1. it parked *after* the read had finished, so no handle was open across the barrier — green
+       with the repair reverted;
+    2. it held a real handle and released it after `time.sleep(0.3)` — a load-bearing window, and
+       under sixteen CPU burners one run in five went green with the repair reverted;
+    3. it signalled immediately *before* `os.replace`, which proves the wrapper was entered and not
+       that the replace was attempted while the handle was held;
+    4. the hold had its own timeout equal to the parent's worst case, so it could let go by itself.
+
+    The fifth refusal is the one that ended the approach: **no finite timeout fixes it.** Waiting a
+    bounded time for the writer to appear and treating its absence as "the lock held it" is an
+    inference from a timeout, and a writer slower than that bound makes the parent release the
+    handle and the reverted code succeed. Every version was green, and each was green for a
+    different reason.
+
+    What the repair actually establishes is one sentence — *the walk reads the store with the lock
+    held* — and a lock knows whether it is held. This asserts that, in the walk, with no threads, no
+    barrier and no deadline, and it fails in milliseconds when the `with self._lock` is taken out.
+
+    What it does **not** show is the consequence: that an attachment posted during a walk used to
+    come back 500. That is measured in `ACC-20260908-05` and is not something a test can hold
+    without staging the race this one gave up on.
     """
-    reading = threading.Event()
-    release = threading.Event()
-    at_replace = threading.Event()
-    replace_returned = threading.Event()
-    #: Every deadline in this test, and the arithmetic between them.
-    #:
-    #: `REACHED` is what the writer is given to get into `os.replace` and come back out. Derived,
-    #: not guessed: a seat measured it reaching the replace in 18-25 ms idle and **1.05-2.43 s**
-    #: under sixteen CPU burners on two cores, so this is about twice the worst load anyone has put
-    #: it under. It is spent only on the green side, where the signal never comes because the writer
-    #: is blocked in `attach`.
-    #:
-    #: `HELD` is how long the reader keeps the manifest open, and it is **three times** `REACHED`
-    #: for a reason a seat had to point out: the parent can spend `2 * REACHED` — once waiting to
-    #: see the writer arrive, once waiting for it to return — before it releases anything, and the
-    #: previous version gave the hold a flat ten seconds. Those two budgets could expire together,
-    #: the hold would let go **by itself**, the replace would then succeed, and the test would be
-    #: green with the lock reverted. A hold that can time out before the parent has finished
-    #: deciding is not a barrier, and the record's claim that "the parent releases nothing first"
-    #: was false while this number was independent of that one.
-    REACHED = 5.0
-    HELD = 3 * REACHED
+    seen = []
     real_order_paths = attach_mod.Store.order_paths
-    real_replace = attach_mod.paths.replace
 
-    def signalling_replace(src, dst):
-        """Say when the writer has actually reached the replace, instead of sleeping and hoping.
-
-        **A seat refused the first version of this test for the sleep it replaces.** That version
-        waited 0.3s and released the handle; if the writer had not reached `os.replace` by then the
-        handle closed first, the reverted code succeeded, and the test passed while guarding
-        nothing. The window was load-bearing and unsynchronised, on a machine nobody controls.
-
-        With the lock as it ships the writer never gets here at all — it is blocked in `attach`
-        waiting for the walk to finish its read — so this event does not fire and the wait below
-        times out, which is the *fixed* observation. With the lock reverted it always gets here,
-        however slow the machine, which is the *broken* one. Both directions are decided by what
-        happened, not by how long it took.
-        """
-        if not str(dst).endswith("manifest.json"):
-            return real_replace(src, dst)
-        at_replace.set()
-        try:
-            return real_replace(src, dst)
-        finally:
-            # **Entering the wrapper is not attempting the replace.** A seat refused the version
-            # that set one event before the call and nothing after: the writer could be descheduled
-            # between the two, the parent's join could expire without anyone asking whether the
-            # thread was still alive, the handle would be released, and the writer would then
-            # replace successfully — the reverted lock passing again. This fires when the call has
-            # returned or raised, and the parent asserts on it before releasing anything.
-            replace_returned.set()
-
-    def holding_order_paths(self):
-        """Hold the walk *inside* its manifest read, which is what a slow read is.
-
-        `order_paths` and not `all`, though `order_paths` reads through `all`: `all` is also called
-        by `start`, `instruct` and `attach`, every one of them **under the lock**, and a first
-        version of this fixture parked on `instruct`'s read instead of the walk's. The test then
-        failed on a stale version rather than on the race, which is a fixture measuring the wrong
-        moment — worth the two lines it takes to say so.
-        """
-        out = real_order_paths(self)
-        if not reading.is_set():
-            # **A handle, held.** The first version of this fixture parked *after* the read had
-            # finished, so nothing was open across the barrier and the test passed with the lock
-            # reverted — a guard that could not fail, in the change that exists because of one.
-            # What the defect needs is a reader holding `manifest.json` open while `Store.add`
-            # runs `os.replace` onto it, which is what `all()` does for a moment on every walk.
-            # This widens that moment to a barrier; it does not invent it.
-            from ai_sdlc_runner import paths
-
-            with paths.open_(self.manifest_path, encoding="utf-8"):
-                reading.set()
-                release.wait(HELD)
-        return out
+    def recording_order_paths(self):
+        seen.append(runner._lock._is_owned())
+        return real_order_paths(self)
 
     def walk(cfg):
         report = engine.RunReport()
@@ -1005,72 +952,20 @@ def test_a_walk_reading_the_manifest_does_not_break_an_attachment(tmp_path, monk
         walk=walk,
         make_config=lambda i, a, r, art=(), rej=(), hist=(): _make_config(i, a, r, art, rej, hist),
         store=attach_mod.Store(tmp_path / "att"))
-    runner.start("go", 0)
-    runner.attach(runner.state.version, "first.md", b"first")
 
-    posted = []
+    attach_mod.Store.order_paths = recording_order_paths
+    try:
+        runner.start("go", 0)
+        runner.attach(runner.state.version, "one.md", b"one")
+        runner.instruct(runner.state.version, "and again")
+    finally:
+        attach_mod.Store.order_paths = real_order_paths
 
-    def post():
-        """Post an attachment the way a client does: reload on a stale version, and only that.
-
-        The walk bumps `state.version` on its own account, so a fixed version read before the
-        barrier goes stale and `attach` refuses it — correctly, and that refusal is not what this
-        test is about. A `ServerError` about the version is retried, as a person reloading the tab
-        would; **anything else is the finding**, and is recorded rather than retried.
-        """
-        for _ in range(20):
-            try:
-                runner.attach(runner.state.version, "second.md", b"second")
-                posted.append("ok")
-                return
-            except server.ServerError as exc:
-                if "you answered version" not in str(exc):
-                    posted.append(f"ServerError: {exc}")
-                    return
-                time.sleep(0.02)
-            except BaseException as exc:                          # noqa: BLE001
-                posted.append(f"{type(exc).__name__}: {exc}")
-                return
-        posted.append("gave up on stale versions after 20 attempts")
-
-    monkeypatch.setattr(attach_mod.Store, "order_paths", holding_order_paths)
-    monkeypatch.setattr(attach_mod.paths, "replace", signalling_replace)
-    walker = threading.Thread(target=lambda: runner.instruct(runner.state.version, "again"))
-    walker.start()
-    assert reading.wait(HELD), "the walk never reached the manifest read; the fixture is wrong"
-    writer = threading.Thread(target=post)
-    writer.start()
-    # The five seconds are only spent when the lock is doing its job: the signal never comes,
-    # because the writer is blocked. Three runs each way on this version: reverted 10.80 / 0.92 /
-    # 0.98s and red, shipped 6.49 / 6.70 / 5.78s and green. The difference *is* the timeout, and
-    # paying it is what makes the green side mean something. The 10.80s red is the slow path a seat
-    # described — the writer arriving late — and it is red rather than green now only because
-    # `HELD` outlasts the parent's whole budget.
-    if at_replace.wait(REACHED):
-        # It got into the replace with the read still holding the manifest open — the interleaving
-        # this test exists for. **Wait for the call to come back**, and fail if it does not: the
-        # outcome must be the replace's own, not a matter of which thread the scheduler picked
-        # while the handle was being released.
-        assert replace_returned.wait(REACHED), (
-            "the writer entered `os.replace` and never returned from it; the manifest handle is "
-            "still held and nothing here can say what the replace did")
-    # Reaching here without `at_replace` is the *shipped* observation, not a timeout to be sorry
-    # about: the writer is blocked in `attach` waiting for the walk to give the lock back, so it
-    # cannot be at the replace. That wait is the only cost this test adds to a green run.
-    release.set()
-    writer.join(timeout=HELD)
-    walker.join(timeout=HELD)
-    # Both are joined on the same budget as the hold, and neither may outlive this test: a
-    # thread still running here would carry on driving a runner the assertions below have
-    # already read, which is the defect the hammer test above was repaired for.
-    assert not writer.is_alive() and not walker.is_alive(), (
-        f"a thread outlived the test: writer alive={writer.is_alive()}, "
-        f"walker alive={walker.is_alive()}")
-
-    assert posted == ["ok"], (
-        f"an attachment posted while a walk held the manifest open failed: {posted}. The walk's "
-        f"store read is outside the lock that `attach` takes, so `os.replace` landed on a file "
-        f"the reader still had open")
+    assert seen, "the walk never read the store; this test measured nothing"
+    assert all(seen), (
+        f"the walk read the attachment store without holding the lock on "
+        f"{seen.count(False)} of {len(seen)} walks. `attach` replaces `manifest.json` under that "
+        f"lock, and on Windows a replace onto a file this read still has open fails WinError 5")
 
 
 def test_the_gate_never_rests_with_something_still_flagged(tmp_path):

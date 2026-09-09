@@ -3727,7 +3727,7 @@ CHG-20260907-28 and built by no record yet.''',
             else:
                 order_paths = ()''',
         '''            order_paths = tuple(self._store.order_paths()) if self._store else ()''',
-        "tests/test_server.py::test_a_walk_reading_the_manifest_does_not_break_an_attachment"),
+        "tests/test_server.py::test_the_walk_reads_the_attachment_store_holding_the_lock"),
 
     Mutation(
         "ask-in-flight", "a rejection routes back to the step in front of the counted node",
