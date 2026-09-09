@@ -88,6 +88,25 @@ def test_the_context_manager_puts_both_views_back_when_the_body_raises():
     assert graph.BY_ID is original_by_id
 
 
+def test_a_node_that_is_not_a_panel_may_declare_panel_branches():
+    """The **scope**, from the other side: the rule stops at `SEAT_PANEL` deliberately.
+
+    A revision of this change widened it to every mode but `MODEL_PANEL`, and a seat measured that
+    wrong. `engine` reads the table a second time, after the branch, to name the word meaning
+    *ratified* — and for a node whose branches are its own words that read is the only way to name
+    it. `pm_signoff` offers `yes`/`no` and settles because it declares `{pass: "yes"}`; without the
+    declaration `ratified` is `pass`, which it does not offer.
+
+    So a `runner` node declaring the mapping is accepted, and this test says so, because the
+    widened rule passed every test in this file — nothing said what the scope was for.
+    """
+    runner_node = graph.BY_ID["plan_scope"]
+    assert runner_node.mode not in (graph.MODEL_PANEL, graph.SEAT_PANEL), (
+        f"this test needs a node that is neither panel; `plan_scope` is {runner_node.mode!r}")
+    landing = sorted(runner_node.branches)[0]
+    validate_with(_mutate("plan_scope", panel_branches={policy.PASS: landing}))
+
+
 def test_the_populations_the_panel_comments_count_are_the_ones_they_say():
     """`graph.py`'s `panel_branches` comment and `engine.py`'s branch-taking comment each state a
     count, and until CHG-20260908-03 neither said what it was counting — "three decision nodes"
@@ -142,18 +161,21 @@ def test_a_seat_panel_whose_branches_the_panel_cannot_name_is_refused():
 
 
 def test_a_seat_panel_declaring_panel_branches_is_refused():
-    """Because nothing **routes** on it there — and it is read, which is worse.
+    """Because on a seat panel it can only do harm — not merely because nothing routes on it.
 
-    `engine` maps a model panel's outcome through `panel_branches`; every other mode's branch comes
-    from somewhere else. But `engine` reads the table once more after the branch is taken, to name
-    the word meaning ratified, so a node that declares a mapping it does not route through computes
-    a `ratified` its own answer can never equal: a `settles_risk` node would silently never settle.
+    `engine` reads the table twice: it routes a model panel's outcome through it, and then reads it
+    again after the branch is taken to name the word meaning *ratified*. The rule above forces a
+    seat panel's branches to contain `pass`, so that second read already lands on a branch it
+    offers; a declaration can only move it to a word `_adjudicate` never returns, and a
+    `settles_risk` seat panel would then silently never settle.
 
-    The rule covers every mode that is not `MODEL_PANEL`. A seat measured a `runner` node declaring
-    it and `validate` accepting, when this rule named the seat mode alone.
+    Not widened past `SEAT_PANEL`. It was, for one revision, and a seat measured that wrong:
+    `pm_signoff` offers `yes`/`no` and settles **because** it declares `{pass: "yes"}`. Elsewhere
+    the declaration is the only way to name the ratified word, so refusing it would make a
+    `settles_risk` node with its own vocabulary inexpressible.
     """
-    with pytest.raises(graph.GraphError, match="only a model panel routes through"):
-        validate_with(_mutate("lead_review", panel_branches={policy.PASS: "qa_verify"}))
+    with pytest.raises(graph.GraphError, match="would misname the word meaning"):
+        validate_with(_mutate("lead_review", panel_branches={policy.PASS: policy.FAIL}))
 
 
 def test_a_step_may_not_have_no_successor():
@@ -502,7 +524,10 @@ def test_the_half_swap_used_to_certify_a_graph_that_does_not_run():
 
 
 def test_the_shared_swap_puts_both_views_back_when_validate_raises():
-    """One `finally` now serves 39 test functions, so it gets a test of its own.
+    """One `finally` now serves every caller of `validate_with`, so it gets a test of its own.
+
+    **44 of them**, counted by AST across the three modules that import it (CHG-20260908-03). This
+    line said 39 and nothing had measured it.
 
     Until CHG-20260907-25 the swap was written three times and nothing asserted that any of them
     restored anything: measured with the `finally` body removed and one mutating test run alone,

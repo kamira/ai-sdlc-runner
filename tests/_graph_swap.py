@@ -73,8 +73,14 @@ def validate_with(nodes):
     Exception-safe by construction: both originals are captured before anything is rebound, and the
     `finally` restores the objects themselves rather than rebuilding them.
     `test_graph_validation.py::test_the_shared_swap_puts_both_views_back_when_validate_raises`
-    asserts that by identity — 39 test functions share this one `finally`, and until that test was
-    written nothing named could notice it going.
+    asserts that by identity — **44 test functions** call `validate_with` (28 in
+    `test_graph_validation`, 15 in `test_execution_mode`, 1 in `test_risk_adjudicated`, counted by
+    AST), and until that test was written nothing named could notice this `finally` going. An
+    earlier figure here said 39 and CHG-20260908-03 re-asserted it without measuring; a seat
+    measured it. Two more copies went with it, in that test's docstring and in the mutation
+    registry. A third stands in `ACC-20260907-25`, which recorded 39 as its own measurement at the
+    time — closed records are not rewritten here, and `test_documented_numbers` excludes
+    `docs/acceptance/` for that reason.
 
     **Written in terms of `swapped_graph` (CHG-20260908-03).** The `with` exits before this returns,
     so the closed-before-return property those 39 functions rest on is unchanged. An earlier draft

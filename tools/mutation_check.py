@@ -170,7 +170,8 @@ MUTATIONS: List[Mutation] = [
 
     # ── graph-swap (CHG-20260907-25) ───────────────────────────────
     # Three modules each carried their own "swap both views, validate, restore"; they are one
-    # `tests/_graph_swap.validate_with` now, shared by 39 test functions. A shared helper is a
+    # `tests/_graph_swap.validate_with` now, shared by 44 test functions — this line said 39 until
+    # CHG-20260908-03 counted them. A shared helper is a
     # single point of failure for every guarantee that goes through it, which is what these two
     # entries are about.
     #
@@ -3741,11 +3742,22 @@ CHG-20260907-28 and built by no record yet.''',
         '''        if False and node.branches:''',
         "tests/test_graph_validation.py::test_a_seat_panel_whose_branches_the_panel_cannot_name_is_refused"),
     Mutation(
-        "panel-routability", "a node that does not route on the mapping may declare it again",
+        "panel-routability", "a seat panel may declare a mapping that misnames ratified again",
         SRC / "graph.py",
-        '''        if node.mode != MODEL_PANEL and node.panel_branches:''',
+        '''        if node.mode == SEAT_PANEL and node.panel_branches:''',
         '''        if False and node.panel_branches:''',
         "tests/test_graph_validation.py::test_a_seat_panel_declaring_panel_branches_is_refused"),
+    Mutation(
+        # Deleting a rule and **widening** it are different failures, and the entry above only pins
+        # the first. This change widened this rule to every mode but `MODEL_PANEL` for one
+        # revision; a seat measured that wrong, because elsewhere the declaration is the only way
+        # to name the word meaning ratified — `pm_signoff` settles because it declares one. So what
+        # needs pinning is that the rule does not reach past the seat panel.
+        "panel-routability", "the mapping rule may widen past the seat panel again",
+        SRC / "graph.py",
+        '''        if node.mode == SEAT_PANEL and node.panel_branches:''',
+        '''        if node.mode != MODEL_PANEL and node.panel_branches:''',
+        "tests/test_graph_validation.py::test_a_node_that_is_not_a_panel_may_declare_panel_branches"),
 
     # ── config-accounting (CHG-20260908-02) ─────────────────────────────────────────────────
     # One count in `tests/test_server.py`'s `NOT_ON_THE_CONSOLE` preamble was typed and never
