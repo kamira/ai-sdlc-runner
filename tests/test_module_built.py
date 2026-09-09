@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 
 from ai_sdlc_runner import engine, graph  # noqa: E402
+from _graph_swap import swapped_graph  # noqa: E402
 from test_flow import ANSWERS, DECISIONS, SPEC, THROUGH  # noqa: E402
 
 
@@ -164,12 +165,8 @@ def test_which_tree_a_node_works_in_is_asked_of_the_graph_each_time():
         dataclasses.replace(n, next="engineer_lint") if n.id == "engineer_selfverify" else n
         for n in graph.NODES) + (extra,)
 
-    original_nodes, original_by_id = graph.NODES, graph.BY_ID
-    graph.NODES, graph.BY_ID = nodes, {n.id: n for n in nodes}
-    try:
+    with swapped_graph(nodes):
         graph.validate()
         assert "engineer_lint" in graph.module_cycle()
         assert engine._workspace(graph.BY_ID["engineer_lint"], 1) == \
             engine._workspace(graph.BY_ID["engineer_selfverify"], 1) != ""
-    finally:
-        graph.NODES, graph.BY_ID = original_nodes, original_by_id

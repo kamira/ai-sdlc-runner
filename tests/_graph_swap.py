@@ -1,4 +1,8 @@
-"""Swap in a hypothetical graph, validate it, and put the real one back — once, for three files.
+"""Swap in a hypothetical graph and put the real one back — once, for the files that do it.
+
+Three helpers: `mutated` builds the hypothetical graph, `validate_with` validates it and restores
+before returning, and `swapped_graph` holds it open for a test that needs to look at it.
+
 
 `graph.py` keeps two views of one graph, `NODES` and `BY_ID`. A test that wants `validate()` to
 judge a graph other than the shipped one has to rebind **both** and restore both whatever happens.
@@ -25,7 +29,43 @@ against 39 test-function signatures. And a fixture would not merely cost more: f
 `graph.NODES` would read the hypothetical graph. The `try/finally` below is what makes that safe,
 and once it is kept the teardown buys nothing.
 """
+import contextlib
+import dataclasses
+
 from ai_sdlc_runner import graph
+
+
+def mutated(node_id, **changes):
+    """The real graph with one node changed — the shape a wrong hand-edit would actually take.
+
+    Two modules carried this as `_mutate`, with one docstring between them and bodies differing
+    only by an intermediate variable (CHG-20260908-03). It belongs beside `validate_with` because
+    every caller of one calls the other.
+    """
+    return tuple(dataclasses.replace(n, **changes) if n.id == node_id else n for n in graph.NODES)
+
+
+@contextlib.contextmanager
+def swapped_graph(nodes):
+    """Both views rebound to `nodes` for the body, and put back whatever happens.
+
+    `validate_with` cannot serve a test that wants to **look** at the swapped graph — it validates
+    and restores, so anything the test asserts runs after the restore. Two tests therefore wrote
+    the rebind and the `try`/`finally` out by hand in order to call `graph.module_cycle()` and
+    `engine._whole_change_rejected()` against a hypothetical graph. This is that shape, once.
+
+    `validate_with` is not rewritten in terms of this: its whole point is that the swap is closed
+    before the caller sees anything, and 39 test functions depend on that. The deliberate
+    half-swap in `test_graph_validation` is not folded in here either, for the reason its own
+    docstring gives — it exists to be wrong.
+    """
+    original_nodes, original_by_id = graph.NODES, graph.BY_ID
+    graph.NODES = tuple(nodes)
+    graph.BY_ID = {n.id: n for n in graph.NODES}
+    try:
+        yield graph.NODES
+    finally:
+        graph.NODES, graph.BY_ID = original_nodes, original_by_id
 
 
 def validate_with(nodes):

@@ -26,18 +26,14 @@ role and mode disagree is a build error instead of a run-time surprise. The dist
 reason `role` could go back into the design's inference-refusal clause after round 3 found it had
 been dropped without a reason.
 """
-import dataclasses
-
 import pytest
 
 from ai_sdlc_runner import graph
-from _graph_swap import validate_with
+from _graph_swap import mutated as _mutate, validate_with
 
 
-def _mutate(node_id, **changes):
-    """The real graph with one node changed — the shape a wrong hand-edit would actually take."""
-    nodes = tuple(dataclasses.replace(n, **changes) if n.id == node_id else n for n in graph.NODES)
-    return nodes
+# `_mutate` and `validate_with` both live in `_graph_swap`; this module carried its own copy of
+# the first until CHG-20260908-03.
 
 
 def test_every_node_declares_a_mode_from_the_closed_set():

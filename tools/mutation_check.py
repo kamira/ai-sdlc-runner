@@ -204,9 +204,26 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "graph-swap", "the shared swap may stop putting the shipped graph back",
         REPO / "tests" / "_graph_swap.py",
-        '''        graph.NODES, graph.BY_ID = original_nodes, original_by_id''',
-        '''        pass''',
+        # Anchored with the line above the restore. CHG-20260908-03 added a second helper to this
+        # module whose `finally` restores identically, and `test_every_shipped_mutation_has_a_
+        # unique_anchor` refused the bare restore line for naming two occurrences.
+        '''        graph.validate()
+    finally:
+        graph.NODES, graph.BY_ID = original_nodes, original_by_id''',
+        '''        graph.validate()
+    finally:
+        pass''',
         "tests/test_graph_validation.py::test_the_shared_swap_puts_both_views_back_when_validate_raises"),
+    Mutation(
+        "graph-swap", "the context manager may stop putting the shipped graph back",
+        REPO / "tests" / "_graph_swap.py",
+        '''        yield graph.NODES
+    finally:
+        graph.NODES, graph.BY_ID = original_nodes, original_by_id''',
+        '''        yield graph.NODES
+    finally:
+        pass''',
+        "tests/test_graph_validation.py::test_the_context_manager_puts_both_views_back_when_the_body_raises"),
 
     # ── single-model (CHG-20260907-18) ─────────────────────────────
     # `graph.py` says a SINGLE node is 'exactly one model, one session' and that three
@@ -3691,6 +3708,42 @@ CHG-20260907-28 and built by no record yet.''',
         '''            if stop.get("incomplete") and told > self.state.instructions_at_last_incomplete_stop:''',
         '''            if told > self.state.instructions_at_last_incomplete_stop:''',
         "tests/test_server.py::test_a_walk_that_finds_nothing_missing_does_not_move_the_mark"),
+
+    # ── panel-routability (CHG-20260908-03) ─────────────────────────────────────────────────
+    # `validate`'s panel-routability rule was written for `MODEL_PANEL` and guarded on it, and the
+    # other panel mode had no rule at all. Measured before writing one: renaming `lead_review`'s
+    # branches to `approve`/`reject` passed `validate`, and would then have died at `engine`'s
+    # branch lookup with `has no branch 'pass'` — which is the death CHG-20260901-11 was opened for
+    # and closed on one side.
+    #
+    # The seat rule is **stricter**, and that asymmetry is the reason it is a separate rule rather
+    # than a widened guard: a model panel's outcome is mapped through `panel_branches`
+    # (`engine`'s `node.panel_branches.get(outcome, outcome)`), so declaring that mapping is a real
+    # escape. A seat panel's comes back from `_adjudicate` as the branch name itself and the
+    # mapping is never read, so there is no escape and a declared mapping there is a no-op that
+    # reads as routing — refused by its own rule.
+    #
+    # The **first** entry pins a rule that had shipped for three rounds with no reverse test: this
+    # file's own docstring lists CHG-20260901-11's rule among nineteen such, and the repair that
+    # installed it is where the next defect was.
+    Mutation(
+        "panel-routability", "the model-panel branch check may stop looking again",
+        SRC / "graph.py",
+        '''        if node.mode == MODEL_PANEL and node.branches:''',
+        '''        if False and node.branches:''',
+        "tests/test_graph_validation.py::test_a_model_panel_whose_branches_the_panel_cannot_name_is_refused"),
+    Mutation(
+        "panel-routability", "the seat-panel branch check may stop looking",
+        SRC / "graph.py",
+        '''        if node.mode == SEAT_PANEL and node.branches:''',
+        '''        if False and node.branches:''',
+        "tests/test_graph_validation.py::test_a_seat_panel_whose_branches_the_panel_cannot_name_is_refused"),
+    Mutation(
+        "panel-routability", "a seat panel may declare a mapping nothing reads again",
+        SRC / "graph.py",
+        '''        if node.mode == SEAT_PANEL and node.panel_branches:''',
+        '''        if False and node.panel_branches:''',
+        "tests/test_graph_validation.py::test_a_seat_panel_declaring_panel_branches_is_refused"),
 
     # ── config-accounting (CHG-20260908-02) ─────────────────────────────────────────────────
     # One count in `tests/test_server.py`'s `NOT_ON_THE_CONSOLE` preamble was typed and never

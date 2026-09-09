@@ -27,12 +27,7 @@ import dataclasses
 import pytest
 
 from ai_sdlc_runner import graph, policy
-from _graph_swap import validate_with
-
-
-def _mutate(node_id, **changes):
-    """The real graph with one node changed — the shape a wrong hand-edit would actually take."""
-    return tuple(dataclasses.replace(n, **changes) if n.id == node_id else n for n in graph.NODES)
+from _graph_swap import mutated as _mutate, swapped_graph, validate_with
 
 
 def _first(**predicate):
@@ -72,6 +67,83 @@ def test_a_decision_may_not_offer_fewer_than_two_branches():
     # and its message — "whose 'fail' names no branch of its [...]" — contains the word too.
     with pytest.raises(graph.GraphError, match="needs at least two branches"):
         validate_with(_mutate(decision.id, branches=one))
+
+
+def test_the_context_manager_puts_both_views_back_when_the_body_raises():
+    """The twin of the swap test below, for the helper CHG-20260908-03 added.
+
+    `swapped_graph` holds the hypothetical graph open for the body instead of closing it before
+    returning, which is what two tests needed and `validate_with` cannot give them. That makes it a
+    **second** shared `finally`, and this module's docstring says what an unguarded one costs: the
+    first went unnoticed until a test named it. Asserted by identity, so that restoring an equal
+    object rather than the original one would still fail.
+    """
+    original_nodes, original_by_id = graph.NODES, graph.BY_ID
+    with pytest.raises(RuntimeError, match="from inside the swap"):
+        with swapped_graph(_mutate("intake", label="a label nobody shipped")):
+            assert graph.BY_ID["intake"].label == "a label nobody shipped", (
+                "the body must see the hypothetical graph, or this test measures nothing")
+            raise RuntimeError("from inside the swap")
+    assert graph.NODES is original_nodes
+    assert graph.BY_ID is original_by_id
+
+
+def test_the_populations_the_panel_comments_count_are_the_ones_they_say():
+    """`graph.py`'s `panel_branches` comment and `engine.py`'s branch-taking comment each state a
+    count, and until CHG-20260908-03 neither said what it was counting — "three decision nodes"
+    over a graph where **four** nodes name their branches `pass`/`fail`, three of them model panels
+    and one a seat panel that the table those comments describe does not serve.
+
+    Both now name the population. This holds the figures, so that the next node moves them here
+    rather than in prose nobody re-reads.
+    """
+    named = {n.id for n in graph.NODES
+             if {policy.PASS, policy.FAIL} <= set(n.branches or {})}
+    model = {n.id for n in graph.NODES if n.mode == graph.MODEL_PANEL and n.branches}
+    seat = {n.id for n in graph.NODES if n.mode == graph.SEAT_PANEL}
+
+    assert len(model) == 5, f"the comments say five model-panel nodes carry branches; found {model}"
+    assert len(named & model) == 3, (
+        f"the comments say three of those five name the panel's own words; found {named & model}")
+    assert seat == {"lead_review"}, f"the comments say one seat panel; found {seat}"
+    assert seat <= named, (
+        "the comments say the seat panel names `pass`/`fail` — which is why the rule refusing "
+        "anything else has never fired on the shipped graph")
+    assert len(named) == 4, f"the comments say four nodes name them in all; found {named}"
+
+
+def test_a_model_panel_whose_branches_the_panel_cannot_name_is_refused():
+    """CHG-20260901-11's rule, which had **no reverse test** — this file's own docstring lists it
+    among nineteen such, and it is the rule a repair installed.
+
+    `pm_confirm` offers `yes`/`no` and declares the mapping. Take the mapping away and the panel's
+    `pass` names nothing it offers, which is the state that killed every multi-model run at it.
+    """
+    with pytest.raises(graph.GraphError, match="is routed by a panel"):
+        validate_with(_mutate("pm_confirm", panel_branches={}))
+
+
+def test_a_seat_panel_whose_branches_the_panel_cannot_name_is_refused():
+    """The same question for the other panel mode, where `validate` asked nothing at all until
+    CHG-20260908-03.
+
+    Measured before the rule existed: renaming `lead_review`'s branches to `approve`/`reject`
+    passed `validate` and would have died at `engine`'s branch lookup with `has no branch 'pass'`,
+    which is what CHG-20260901-11 was opened for.
+    """
+    seat = graph.BY_ID["lead_review"]
+    renamed = {"approve": seat.branches[policy.PASS], "reject": seat.branches[policy.FAIL]}
+    with pytest.raises(graph.GraphError, match="routed by the review seats"):
+        validate_with(_mutate("lead_review", branches=renamed))
+
+
+def test_a_seat_panel_declaring_panel_branches_is_refused():
+    """Because nothing reads it there. `engine` maps a model panel's outcome through
+    `panel_branches`; a seat panel's comes back from `_adjudicate` as the branch name itself. A
+    declaration that reads as routing and routes nothing is the shape this file exists against.
+    """
+    with pytest.raises(graph.GraphError, match="never read it"):
+        validate_with(_mutate("lead_review", panel_branches={policy.PASS: "qa_verify"}))
 
 
 def test_a_step_may_not_have_no_successor():
@@ -224,14 +296,10 @@ def test_the_whole_change_bound_reads_the_graph_rather_than_a_written_list():
 
     extra = dataclasses.replace(graph.BY_ID["fix_pass"], id="another_failure",
                                 next="change_retry", branches={})
-    original = graph.NODES
-    try:
-        graph.NODES = graph.NODES + (extra,)
+    with swapped_graph(graph.NODES + (extra,)):
         assert "another_failure" in engine._whole_change_rejected(), (
             "a node routing into `change_retry` is a whole-change rejection, and the bound is "
             "reading a list that cannot know about it")
-    finally:
-        graph.NODES = original
 
 
 def test_where_each_refusal_goes_is_pinned():

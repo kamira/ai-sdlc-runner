@@ -137,12 +137,21 @@ class Node:
     #:
     #: A panel answers in `pass` / `fail` / `undecided` — `policy.adjudicate`'s vocabulary, and the
     #: only thing `engine` has to route on, because reading one of several voices would make a panel
-    #: into whichever model was asked first. A node answers in its own words. Three decision nodes
-    #: happen to name their branches `pass` and `fail` and so need nothing here. Two — `pm_confirm`
-    #: and `pm_signoff` — ask a person-shaped question and offer `yes` and `no`, and **had no route
-    #: at all**: the outcome named no branch of theirs, so any run with more than one model
-    #: configured on either died there with `has no branch 'pass'`. Untested, because the panel
-    #: tests only ever configured the `pass`/`fail` nodes (CHG-20260901-11).
+    #: into whichever model was asked first. A node answers in its own words.
+    #:
+    #: **This table serves `MODEL_PANEL` nodes only**, and the count below is of those. Three of the
+    #: five happen to name their branches `pass` and `fail` and so need nothing here. Two —
+    #: `pm_confirm` and `pm_signoff` — ask a person-shaped question and offer `yes` and `no`, and
+    #: **had no route at all**: the outcome named no branch of theirs, so any run with more than one
+    #: model configured on either died there with `has no branch 'pass'`. Untested, because the
+    #: panel tests only ever configured the `pass`/`fail` nodes (CHG-20260901-11).
+    #:
+    #: A fourth node names `pass`/`fail` too — `lead_review`, the one `SEAT_PANEL` — and is **not**
+    #: counted above, because this table is not what routes it: `engine._adjudicate` returns the
+    #: outcome as the branch name and never reads this. It therefore has no escape here and must
+    #: name its branches in the panel's words, which `validate` refuses it for since
+    #: CHG-20260908-03. Until then it was asked nothing at all, and the sentence above said
+    #: *"three decision nodes"* without saying three of what.
     #:
     #: Declared, never inferred. Reading `yes` as the affirmative *because the string says yes* is a
     #: name standing in for a constraint, which is the defect this whole file is written against —
@@ -564,6 +573,31 @@ def validate() -> None:
                         f"node {node.id!r} is routed by a panel, whose {outcome!r} names no branch "
                         f"of its {sorted(node.branches)}. Declare `panel_branches` on it, or name "
                         f"its branches in the panel's own words")
+        # The same question for the **other** panel mode, where the answer is stricter. The rule
+        # above was written for `MODEL_PANEL` and guarded on it, and a seat panel was left with no
+        # rule at all: measured by renaming `lead_review`'s branches to `approve`/`reject`, which
+        # `validate` accepted and which would have died at `engine`'s branch lookup with the same
+        # `has no branch 'pass'` CHG-20260901-11 was opened for.
+        #
+        # Stricter because **`panel_branches` is not an option here.** A model panel's outcome is
+        # mapped through it (`engine`'s `node.panel_branches.get(outcome, outcome)`); a seat panel's
+        # comes back from `_adjudicate` as the branch name itself and that mapping is never read. So
+        # the escape the message above offers — *declare `panel_branches` on it* — is not one, and
+        # this message must not offer it.
+        if node.mode == SEAT_PANEL and node.branches:
+            for outcome in (policy.PASS, policy.FAIL):
+                if outcome not in node.branches:
+                    raise GraphError(
+                        f"node {node.id!r} is routed by the review seats, whose {outcome!r} names "
+                        f"no branch of its {sorted(node.branches)}. A seat panel must name its "
+                        f"branches in the panel's own words: `panel_branches` routes a model "
+                        f"panel's outcome and is never read on this path")
+        if node.mode == SEAT_PANEL and node.panel_branches:
+            # A declaration that reads as routing and routes nothing. Refused rather than ignored,
+            # because the thing this file is written against is a name standing in for a constraint.
+            raise GraphError(
+                f"node {node.id!r} declares `panel_branches` and is routed by the review seats, "
+                f"which never read it. Name its branches in the panel's own words instead")
         for outcome, landed in node.panel_branches.items():
             if landed not in node.branches:
                 raise GraphError(
