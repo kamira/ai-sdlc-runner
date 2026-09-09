@@ -3732,8 +3732,10 @@ CHG-20260907-28 and built by no record yet.''',
     # none the record lists came back with none. The eight ordinary runs cited three paragraphs up
     # are a different thing — seven of those had none, which is why the undriven defect was no
     # regression signal. And this is a floor under those measurements, not under the scheduler:
-    # land every write on a manifest no other thread has open — writers and readers both, per the
-    # paragraph below — and there is no collision to kill anyone. So a `NOT CAUGHT` here is a
+    # serialise every store write against every other reader and writer — neither `manifest.json`
+    # nor the fixed `manifest.json.writing` open by another thread when the write lands, per the
+    # counterparties enumerated two paragraphs below — and there is no collision to kill anyone.
+    # So a `NOT CAUGHT` here is a
     # reason to re-run and then to look, not by itself proof of a regression.
     #
     # The counts and the mix live in `ACC-20260908-05` and are not repeated here — not as a rule,
