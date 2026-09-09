@@ -136,6 +136,14 @@ per-node configure control at all, so there has never been anything to grey.
 appears in `by_model` even with empty `nodes` and `seats` — that is how "configured but unused"
 becomes visible.
 
+**`known` is built here and read by nothing**, like `assignable` above it and like the
+per-assignment provenance: `server.py` writes it in the six places that build this answer and reads
+it back nowhere, and no shipped console asks for it. It is **nested** inside `by_model`, which is
+why no guard has ever said so — the rule that catches an unrendered key iterates the run snapshot,
+and none of this route's keys are on it. Whether an unread key should ship at all is the question
+CHG-20260907-28 left open for `assignable`; this entry only stops the page implying somebody reads
+this one.
+
 ### `GET /whoami`
 ```jsonc
 { "operator": "<name>" }
@@ -166,7 +174,20 @@ If the version does not match the run's current one:
                 before answering again." }
 ```
 
-**Every POST except `/models` returns the run snapshot** ([§3](#3--the-run-snapshot)) with `200`.
+**Every POST under `/run` and `/attachments` returns the run snapshot**
+([§3](#3--the-run-snapshot)) with `200`. `POST /models` does not, and neither do the three
+`/config/*` writes: they go through one function (`server.py`'s `_config_edit`) and answer the
+merged assignment with its provenance and the new version —
+
+```jsonc
+{ "node_models": { "<node id>": ["<model id>", …] },
+  "seat_models": { "<seat>": "<model id or joined command line>" },
+  "source": { "node_models.<node id>": "plan" | "store", … },
+  "version": 7 }
+```
+
+which is `GET /config/nodes`'s first three keys and the version the edit advanced to, and not a run
+snapshot. This page said otherwise from the round that wrote the sentence until CHG-20260908-02.
 
 | Route | Body | Refuses when |
 |---|---|---|

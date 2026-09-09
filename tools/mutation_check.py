@@ -3692,6 +3692,29 @@ CHG-20260907-28 and built by no record yet.''',
         '''            if told > self.state.instructions_at_last_incomplete_stop:''',
         "tests/test_server.py::test_a_walk_that_finds_nothing_missing_does_not_move_the_mark"),
 
+    # ── config-accounting (CHG-20260908-02) ─────────────────────────────────────────────────
+    # One count in `tests/test_server.py`'s `NOT_ON_THE_CONSOLE` preamble was typed and never
+    # asserted: it said the snapshot has **19** keys and the snapshot has 21. The two counts
+    # beside it in the same paragraph — `RunReport().as_dict()`'s 30 fields and the inventory's
+    # fifteen entries — were both right, and both are held by a test. That is the whole finding:
+    # in this file a number is asserted or it is a claim, and this was the one nobody held.
+    #
+    # The repair is the assertion, not a corrected number, so the mutation adds a key to
+    # `RunState.snapshot()` and expects the size guard to go red. It also proves the guard is not
+    # vacuous, which a constant compared against itself would not.
+    #
+    # What is **not** registered: the assertion message corrected in the same round. It said the
+    # console renders nothing for the keys it names while the search only asks whether the token
+    # occurs, and a message is not reachable by a mutation that keeps the test green — the test
+    # passes, so the message is never built. Read instead.
+    Mutation(
+        "config-accounting", "a key joins the snapshot and the size guard does not notice",
+        SRC / "server.py",
+        '''            "retired_approvals": list(self.retired_approvals),''',
+        '''            "retired_approvals": list(self.retired_approvals),
+            "an_unheld_key": None,''',
+        "tests/test_server.py::test_the_inventory_is_fifteen_and_the_two_renamed_ones_are_not_in_it"),
+
     # ── manifest-race (CHG-20260908-05) ──────────────────────────────────────────────────────
     # Two defects, one landing unit, and each half is registered against the node that goes red
     # when it alone is undone.

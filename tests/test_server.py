@@ -1363,7 +1363,13 @@ def test_every_key_the_server_sends_reaches_the_console():
     unreached = [key for key in snapshot
                  if not re.search(r"\b%s\b" % re.escape(key), page)]
 
-    assert unreached == [], f"the server sends these and the console renders nothing for them: {unreached}"
+    # What this asserts is that the key's **token occurs** in the console's code — not that
+    # anything draws it. A key named in a `const` and rendered nowhere passes, and the message
+    # used to say the console rendered nothing for them, which is a stronger claim than the
+    # search makes (CHG-20260908-02). Going from *appears* to *renders* needs a renderer to ask;
+    # the view that would be asked is named in CHG-20260907-28 and built by no record yet.
+    assert unreached == [], (
+        f"the server sends these and the console's code does not mention them at all: {unreached}")
 
 
 # ── what a panel already said about the node being decided (CHG-20260904-11) ──────────────────
@@ -2374,8 +2380,10 @@ def test_the_rule_looks_at_the_three_methods_that_exist():
 
 #: A report field the console does not render, and **why**. Not an exemption list — an inventory.
 #:
-#: `test_every_key_the_server_sends_reaches_the_console` (CHG-20260903-29) watches the 19 keys
-#: `RunState.snapshot()` builds. `RunReport().as_dict()` has 30 fields, and CHG-20260903-24 retired
+#: `test_every_key_the_server_sends_reaches_the_console` (CHG-20260903-29) watches every key
+#: `RunState.snapshot()` builds — the count is asserted below rather than written here, because it
+#: was typed as 19 and measured as 21, and a key added to the snapshot moves it again.
+#: `RunReport().as_dict()` has 30 fields, and CHG-20260903-24 retired
 #: `CHG-20260901-15` task 24 on the ground that the `-29` rule would catch the next one to go
 #: unrendered. It cannot: a field that never enters the snapshot cannot fail a rule that iterates
 #: the snapshot. The rule is honestly named — *the server sends* — and the citation was not.
@@ -2513,8 +2521,18 @@ def test_the_inventory_is_fifteen_and_the_two_renamed_ones_are_not_in_it():
     and `halt_reason` as `reason`, so two of the seventeen are rendered — a name-based count of a
     thing that is renamed, which is the class of error this whole review round has been finding,
     inside one of the round's own findings.
+
+    The snapshot's own size is asserted here too (CHG-20260908-02). The preamble above stated it
+    as **19** and it measured **21** — the one count in that paragraph that no test held, beside
+    two that tests do hold and that were both right. A number a reader checks the record against
+    is either asserted or it is a claim, and this file already knew that about the other two.
     """
     page = _console()
+    assert len(server.RunState().snapshot()) == 21, (
+        f"the snapshot is {len(server.RunState().snapshot())} keys, not 21. Update this number in "
+        f"the same commit that adds or removes a key: the guard above iterates the snapshot, so a "
+        f"new key changes what it covers, and the preamble points here for the size")
+
     assert len(NOT_ON_THE_CONSOLE) == 15, (
         f"the inventory is {len(NOT_ON_THE_CONSOLE)} entries; if the console grew a view, delete "
         f"the entry rather than leaving it — the test above already refuses a listed-and-rendered "
