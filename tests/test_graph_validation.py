@@ -23,6 +23,7 @@ test here — `test_execution_mode` has one of those, and finding it was worth m
 would have been.
 """
 import dataclasses
+import pathlib
 
 import pytest
 
@@ -107,6 +108,42 @@ def test_a_node_that_is_not_a_panel_may_declare_panel_branches():
     validate_with(_mutate("plan_scope", panel_branches={policy.PASS: landing}))
 
 
+def test_the_number_of_callers_the_swap_states_is_the_real_one():
+    """`_graph_swap` says how many test functions its one `finally` serves, in three places.
+
+    That figure was 39, correct when CHG-20260907-25 wrote it and stale by the time this change
+    read it — this change then re-asserted it without measuring, and a seat measured 44. A number
+    stated in three shipped places and held by nothing is what this record spent four rounds on, so
+    it is asserted here rather than restated a fourth time.
+
+    Counted the way the docstring says it counts: functions in the importing modules whose body
+    calls `validate_with`.
+    """
+    import ast
+
+    root = pathlib.Path(__file__).resolve().parent
+    per_module = {}
+    for path in sorted(root.glob("test_*.py")):
+        source = path.read_text(encoding="utf-8")
+        if "validate_with" not in source:
+            continue
+        calls = 0
+        for fn in [n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef)]:
+            if any(isinstance(c.func, ast.Name) and c.func.id == "validate_with"
+                   for c in ast.walk(fn) if isinstance(c, ast.Call)):
+                calls += 1
+        if calls:
+            per_module[path.name] = calls
+
+    assert per_module == {"test_execution_mode.py": 15,
+                          "test_graph_validation.py": 28,
+                          "test_risk_adjudicated.py": 1}, per_module
+    assert sum(per_module.values()) == 44, (
+        f"`_graph_swap` states 44 callers in three places; the tree has {sum(per_module.values())}. "
+        f"Move the figure in the same commit that moves the callers — it said 39 for two records "
+        f"after it stopped being true")
+
+
 def test_the_populations_the_panel_comments_count_are_the_ones_they_say():
     """`graph.py`'s `panel_branches` comment and `engine.py`'s branch-taking comment each state a
     count, and until CHG-20260908-03 neither said what it was counting — "three decision nodes"
@@ -166,15 +203,16 @@ def test_a_seat_panel_declaring_panel_branches_is_refused():
     `engine` reads the table twice: it routes a model panel's outcome through it, and then reads it
     again after the branch is taken to name the word meaning *ratified*. The rule above forces a
     seat panel's branches to contain `pass`, so that second read already lands on a branch it
-    offers; a declaration can only move it to a word `_adjudicate` never returns, and a
-    `settles_risk` seat panel would then silently never settle.
+    offers — and **no declaration can improve that**. Measured: `{pass: pass}` and `{fail: fail}`
+    leave `ratified` at `pass`, the word `_adjudicate` returns; `{pass: fail}` moves it, and a
+    `settles_risk` seat panel would then silently never settle. The case below is that one.
 
     Not widened past `SEAT_PANEL`. It was, for one revision, and a seat measured that wrong:
     `pm_signoff` offers `yes`/`no` and settles **because** it declares `{pass: "yes"}`. Elsewhere
     the declaration is the only way to name the ratified word, so refusing it would make a
     `settles_risk` node with its own vocabulary inexpressible.
     """
-    with pytest.raises(graph.GraphError, match="would misname the word meaning"):
+    with pytest.raises(graph.GraphError, match="cannot name the word meaning"):
         validate_with(_mutate("lead_review", panel_branches={policy.PASS: policy.FAIL}))
 
 

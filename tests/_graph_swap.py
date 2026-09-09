@@ -24,7 +24,7 @@ fixture, before the measurement existed; both seats of CHG-20260907-25 reversed 
 it. The helper takes nothing from pytest, `tests/` is already on `sys.path` under the default
 `prepend` import mode, and this suite already shares helpers by bare sibling import (`from
 test_flow import DECISIONS, SPEC`, in eight modules). So the module costs three import lines
-against 39 test-function signatures. And a fixture would not merely cost more: fixture teardown runs
+against 44 test-function signatures. And a fixture would not merely cost more: fixture teardown runs
 *after* the test body, so a test that catches the expected `GraphError` and then looks at
 `graph.NODES` would read the hypothetical graph. The `try/finally` below is what makes that safe,
 and once it is kept the teardown buys nothing.
@@ -83,7 +83,7 @@ def validate_with(nodes):
     `docs/acceptance/` for that reason.
 
     **Written in terms of `swapped_graph` (CHG-20260908-03).** The `with` exits before this returns,
-    so the closed-before-return property those 39 functions rest on is unchanged. An earlier draft
+    so the closed-before-return property those 44 functions rest on is unchanged. An earlier draft
     kept a second copy of the rebind here and gave that property as the reason; a seat measured the
     fold and it passes every caller, so the reason was not one. There is one restore in this module
     again, which is what its first line claims.

@@ -140,7 +140,11 @@ class Node:
     #: into whichever model was asked first. A node answers in its own words.
     #:
     #: **Only a `MODEL_PANEL` routes through this table**, and `validate` refuses a declaration on
-    #: any other mode. Six nodes are model panels and five of those carry branches — `lead_assess`
+    #: a `SEAT_PANEL` — there and nowhere else. Every other mode may declare one, because `engine`
+    #: reads this table a second time after the branch is taken, to name the word meaning
+    #: *ratified*, and for a node whose branches are its own words that read is the only way to
+    #: name it. `test_a_node_that_is_not_a_panel_may_declare_panel_branches` holds that. Six nodes are model
+    #: panels and five of those carry branches — `lead_assess`
     #: is the sixth and carries none. Three of the five happen to name their branches `pass` and
     #: `fail` and so need nothing here. Two —
     #: `pm_confirm` and `pm_signoff` — ask a person-shaped question and offer `yes` and `no`, and
@@ -602,10 +606,16 @@ def validate() -> None:
             # `engine` reads this table twice. It routes a model panel's outcome through it, and
             # then — after the branch is taken, for every branching node — reads it again to name
             # the word that means *ratified*. The rule above forces a seat panel's branches to
-            # contain `pass`, so that second read already resolves to a branch it offers. A
-            # declaration can only move it to some other word, and `_adjudicate` returns `pass`, so
-            # `choice == ratified` would stop holding: a `settles_risk` seat panel would silently
-            # never settle the grade — the shape of CHG-20260901-18.
+            # contain `pass`, so that second read **already** resolves to a branch it offers.
+            #
+            # So a declaration here can never improve anything, and one shape of it breaks the
+            # settling. Measured on `lead_review`: `{}` and `{pass: pass}` and `{fail: fail}` all
+            # leave `ratified` at `pass`, which is what `_adjudicate` returns; `{pass: fail}` moves
+            # it to `fail`, so `choice == ratified` never holds and a `settles_risk` seat panel
+            # would silently never settle — the shape of CHG-20260901-18. A seat refused an earlier
+            # comment here that said a declaration *can only misname* it: two of the four shapes
+            # are harmless. What is true of all four is that none of them helps, and a declaration
+            # that cannot help is a name standing in for a constraint.
             #
             # **This rule was briefly widened to every mode but `MODEL_PANEL` and that was wrong.**
             # Elsewhere the branches are arbitrary and the second read is the *only* way to name
@@ -617,8 +627,10 @@ def validate() -> None:
             # mapping and passing, which is correct, not a gap.
             raise GraphError(
                 f"node {node.id!r} is routed by the review seats and declares `panel_branches`, "
-                f"which nothing routes through there — and it would misname the word meaning "
-                f"ratified. Name its branches in the panel's own words instead")
+                f"which nothing routes through there and which cannot name the word meaning "
+                f"ratified any better than the default already does — while one mapping of it "
+                f"stops the grade settling. Remove the declaration: a seat panel's branch "
+                f"comes back from `_adjudicate` already in the panel's words, and needs no mapping")
         for outcome, landed in node.panel_branches.items():
             if landed not in node.branches:
                 raise GraphError(
