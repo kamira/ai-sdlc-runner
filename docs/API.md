@@ -195,8 +195,10 @@ merged assignment with its provenance and the new version —
 Three of `GET /config/nodes`'s keys — `node_models`, `seat_models` and `source` — and the version
 the edit advanced to. `seat_models` values are **not** joined here the way that route joins them;
 this one answers the stored id. [Below](#the-three-assignment-routes-return-the-resolved-assignment)
-says the same thing about the same routes, and said it while the sentence above this table said the
-opposite, from the round that wrote them until CHG-20260908-02.
+now says the same thing about the same routes. Until CHG-20260908-02 it did not: it said **two**
+routes and **three** keys, while the sentence above this table said all of them return the run
+snapshot. Two descriptions of one thing, wrong in different directions, which is why neither caught
+the other.
 
 | Route | Body | Refuses when |
 |---|---|---|
@@ -252,8 +254,10 @@ It also **writes `models.json`** when the server was given a registry path.
 
 ## 3 · The run snapshot
 
-Returned by `GET /run`, by every SSE frame, and by every POST except `/models`. One shape, so a
-caller never has to know which of the three it is holding.
+Returned by `GET /run`, by every SSE frame, and by every POST under `/run` and `/attachments`.
+Not by `POST /models`, and not by the [three assignment
+routes](#the-three-assignment-routes-return-the-resolved-assignment), which answer their own shape.
+One shape across the rest, so a caller never has to know which of them it is holding.
 
 ```jsonc
 {
