@@ -3724,11 +3724,20 @@ CHG-20260907-28 and built by no record yet.''',
     # the lock, and the write keeps its own `try`/`except AttachmentError`. A first version of
     # it moved the call above the version check and out of its `try` as well, and a seat
     # refused it: a compound mutation's `CAUGHT` cannot be attributed to any one of the things
-    # it changed. Unlocked, six workers die of `PermissionError` in `paths.replace`, and the
-    # accounting reports it: a seat measured 5 of 5 runs red that way while the invariant test
-    # stayed green. So the pair covers both sides — the invariant holds the reader under the lock,
-    # this holds the writer under it — and the record's claim that the consequence was pinned by
-    # nothing was too pessimistic by one mutation.
+    # it changed. Unlocked, workers die in the store's manifest write path and the accounting
+    # reports it, while the invariant test stays green. How many die varies between runs and
+    # machines, and so does the error — an earlier draft of this comment said six workers of
+    # `PermissionError` in `paths.replace`, and nobody had measured either the count or that it
+    # was the only error. The counts and the error mix live in `ACC-20260908-05` and are not
+    # restated here: a number written in two places goes stale in one of them.
+    #
+    # What this entry establishes is that **the write belongs under the lock**. It does not isolate
+    # what the unlocked write collides with. `Store.add` reads `manifest.json` before it writes
+    # (`attachments.py:177`), `_refresh_attachments` reads it under the lock, and the walk reads it
+    # too, so a replace onto an open handle can be against any of them. The walk's side is held by
+    # the first entry, which asserts the lock is held rather than catching a collision. Between
+    # them the pair pins the reader unlocked and the writer unlocked — not the accounting, which is
+    # the paragraph above, and not the consequence: a walk-time 500 is still pinned by nothing.
     Mutation(
         "manifest-race", "the walk reads the store outside the lock again",
         SRC / "server.py",
