@@ -170,14 +170,15 @@ MUTATIONS: List[Mutation] = [
 
     # ── graph-swap (CHG-20260907-25) ───────────────────────────────
     # Three modules each carried their own "swap both views, validate, restore"; they are one
-    # `tests/_graph_swap.validate_with` now, shared by 44 functions — 43 tests and one helper, and
-    # this line said 39 until
+    # `tests/_graph_swap.validate_with` now, shared by 44 functions — 43 test functions and one
+    # helper, and this line said 39 until
     # CHG-20260908-03 counted them. A shared helper is a
     # single point of failure for every guarantee that goes through it, which is what these two
     # entries are about.
     #
-    # **Both name a test node, and the first has to.** Dropping the `BY_ID` rebind fails 43 of
-    # the 74 tests in those three files, and 41 of the 43 fail collaterally: `validate` raises
+    # **Both name a test node, and the first has to.** Dropping the `BY_ID` rebind failed 43 of
+    # the 74 tests in those three files **at CHG-20260907-25** — that record's measurement, stated
+    # here in the present tense until CHG-20260908-03 dated it; the three files collect 82 now, and 41 of the 43 fail collaterally: `validate` raises
     # its identity refusal and their own `match=` string no longer matches the message. Measured
     # over all 34 distinct `match=` patterns in the three files, exactly one — `"rebound
     # separately"`, the deliberate half-swap's own — matches that message. So a file-level
@@ -3719,9 +3720,9 @@ CHG-20260907-28 and built by no record yet.''',
     # no escape and the message must not offer one. The mapping is refused there because it cannot
     # help — the branch rule already puts `pass` among its branches, so the second read that names
     # *ratified* lands correctly with no declaration at all — and because one shape of it,
-    # `{pass: fail}`, stops the grade settling. **Three of the four declarations it can see are
-    # inert**; none is useful. Two earlier comments got that arithmetic wrong in opposite
-    # directions, and both were refused.
+    # a `pass` key pointing elsewhere, stops the grade settling where the grade is settled. **No
+    # declaration helps**; the harm has an exact condition and is not a count, after four counts of
+    # this set were each refused for stopping short of it.
     #
     # The third entry's rule refuses a declared mapping on a **`SEAT_PANEL` only**, and the fourth
     # pins that it stays there. Three corrections got it to that, each from a seat:
@@ -3735,9 +3736,9 @@ CHG-20260907-28 and built by no record yet.''',
     #     declaration is the only way to name that word, so the widening made a `settles_risk` node
     #     with its own vocabulary inexpressible. Withdrawn.
     #   - and the reason left behind — a declaration on a seat panel *can only misname* ratified —
-    #     is refuted by three of its four shapes: `{pass: pass}`, `{fail: pass}` and
-    #     `{fail: fail}` all leave it at `pass`. What holds is that none of them helps, because
-    #     rule 1 already puts `pass` among a seat panel's branches.
+    #     is refuted by every declaration that does not point a `pass` key elsewhere — most of
+    #     them. What holds is that none helps, because rule 1 already puts `pass` among a seat
+    #     panel's branches.
     #
     # The **first** entry pins a rule that had shipped for three rounds with no reverse test: this
     # file's own docstring lists CHG-20260901-11's rule among nineteen such, and the repair that

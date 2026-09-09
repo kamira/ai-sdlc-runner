@@ -75,8 +75,10 @@ def validate_with(nodes):
     `test_graph_validation.py::test_the_shared_swap_puts_both_views_back_when_validate_raises`
     asserts that by identity — **44 functions** call `validate_with` (28 in
     `test_graph_validation`, 15 in `test_execution_mode`, and in `test_risk_adjudicated` the
-    module-level helper `_validate_one`, which pytest does not collect — so 43 collected tests and
-    one helper, counted by AST), and until that test was written nothing named could notice this
+    module-level helper `_validate_one`, which pytest does not collect — so 43 collected test
+    functions and one helper, counted by AST; one of the 43 is parametrised four ways, so the
+    modules collect more items than they define functions), and until that test was written
+    nothing named could notice this
     `finally` going. An
     earlier figure here said 39 and CHG-20260908-03 re-asserted it without measuring; a seat
     measured it. Two more copies went with it, in that test's docstring and in the mutation

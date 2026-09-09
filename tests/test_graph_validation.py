@@ -134,7 +134,7 @@ CALLER_COUNT_IS_STATED_IN = (
 
 
 def test_the_number_of_callers_the_swap_states_is_the_real_one():
-    """`_graph_swap` says how many test functions its one `finally` serves, and so do two other files.
+    """`_graph_swap` says how many functions its one `finally` serves, and so do two other files.
 
     That figure was 39, correct when CHG-20260907-25 wrote it and stale by the time this change
     read it — this change then re-asserted it without measuring, and a seat measured 44.
@@ -277,10 +277,12 @@ def test_a_seat_panel_declaring_panel_branches_is_refused():
     `engine` reads the table twice: it routes a model panel's outcome through it, and then reads it
     again after the branch is taken to name the word meaning *ratified*. The rule above forces a
     seat panel's branches to contain `pass`, so that second read already lands on a branch it
-    offers — and **no declaration can improve that**. There are eight it can see; five are inert
-    and three move `ratified` off `pass`, which are the three whose `pass` key maps to `fail`. At
-    such a node, if it settles the grade, `choice == ratified` never holds and it silently never
-    settles. The case below is one of the three.
+    offers — and **no declaration can improve that**. What harms is exact: `ratified` moves iff
+    the mapping carries a `pass` key pointing elsewhere. At a node that settles the grade the
+    settling then **swaps sides** — a passing panel stops settling and a rejecting one starts — so
+    the run is graded at what a panel that refused it agreed. The case below is one of those; four
+    earlier versions of this sentence counted the set instead and each count was short, and three
+    said the node *never settles*, which is milder than what happens.
 
     Not widened past `SEAT_PANEL`. It was, for one revision, and a seat measured that wrong:
     `pm_signoff` offers `yes`/`no` and settles **because** it declares `{pass: "yes"}`. Elsewhere
@@ -640,9 +642,11 @@ def test_the_shared_swap_puts_both_views_back_when_validate_raises():
     """One `finally` now serves every caller of `validate_with`, so it gets a test of its own.
 
     **44 of them**, counted by AST across the three modules that import it (CHG-20260908-03) — 43
-    collected tests and `test_risk_adjudicated._validate_one`, a module-level helper pytest does
-    not collect, which is why these sentences say *functions* and not *test functions*. This line
-    said 39 and nothing had measured it.
+    collected test functions and `test_risk_adjudicated._validate_one`, a module-level helper
+    pytest does not collect, which is why these sentences say *functions* and not *test
+    functions*. (*Test functions*, not *tests*: one of the 43 is parametrised four ways, so the
+    three modules collect more items than they define functions.) This line said 39 and nothing
+    had measured it.
 
     Until CHG-20260907-25 the swap was written three times and nothing asserted that any of them
     restored anything: measured with the `finally` body removed and one mutating test run alone,

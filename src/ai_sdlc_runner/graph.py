@@ -605,27 +605,34 @@ def validate() -> None:
             #
             # `engine` reads this table twice. It routes a model panel's outcome through it, and
             # then — after the branch is taken, for every branching node — reads it again to name
-            # the word that means *ratified*. The rule above forces a seat panel's branches to
-            # contain `pass`, so that second read **already** resolves to a branch it offers.
+            # the word that means *ratified*. The rule above requires a seat panel's branches to
+            # **contain** `pass`, so that second read already resolves to a branch it offers.
             #
-            # So a declaration here can never improve anything, and some shapes of it break the
-            # settling. A seat panel's branches are `pass` and `fail`, and the generic loop below
-            # requires each mapped value to be one of them, so the declarations this rule can see
-            # are the **eight** with a non-empty subset of those words as keys: two one-key on
-            # `pass`, two on `fail`, four two-key. Measured on `lead_review`: **five are inert and
-            # three harm**, and the three are exactly those whose `pass` key maps to `fail` —
-            # `ratified` becomes `fail`, `_adjudicate` returns `pass`, so `choice == ratified`
-            # never holds and a node that settles the grade silently never settles it, which is
-            # the shape of CHG-20260901-18.
+            # So a declaration here can never improve anything, and some of them break the
+            # settling. The condition is exact and is not a count: **`ratified` moves iff the
+            # mapping carries a `pass` key pointing somewhere other than `pass`.** Only that key is
+            # read; every other declaration leaves `ratified` at `pass` and says nothing the
+            # default did not.
             #
-            # **None of the eight helps**, and a declaration that cannot help is a name standing in
-            # for a constraint. Three earlier comments here got this wrong and each was refused:
-            # one said a declaration *can only misname*; its correction said *two of four* were
-            # harmless, counting `{}` — which is not a declaration and cannot reach a rule guarded
-            # on the mapping being non-empty; and the correction of that said *three of four*,
-            # still enumerating only single-key mappings, when both shipped declarations
-            # (`pm_confirm`, `pm_signoff`) are two-key and that is the shape anyone copying them
-            # would write.
+            # And what a moved `ratified` does is **not** that the node stops settling. `engine`
+            # tests `choice == ratified` against `_adjudicate`'s own word, so with `{pass: fail}`
+            # the settling **swaps sides**: a passing panel no longer settles the grade and a
+            # rejecting one does, recording the run as graded at what a panel that refused it
+            # agreed. Three versions of this sentence said *never settles*, which is a milder
+            # failure than the one the code has.
+            #
+            # **No declaration helps**, and one that cannot help is a name standing in for a
+            # constraint. Four earlier versions of this comment were counts and each was refused:
+            # *can only misname*; *two of four*, counting `{}`, which a rule guarded on a non-empty
+            # mapping never sees; *three of four*, enumerating only single-key mappings when both
+            # shipped declarations are two-key; and *five of eight*, which counted the mappings
+            # whose keys **and** values are drawn from `{pass, fail}` and called that the space
+            # this rule sees. It is not. On a seat panel this `raise` fires before the loop below
+            # ever runs, and that loop constrains the mapped *values* and refuses only an
+            # `undecided` key — so `{"weird": "pass"}` is accepted, and so is `{"pass": "escalate"}`
+            # on a seat panel carrying a third branch, since the rule above requires `pass` and
+            # `fail` to be **among** the branches and not to be all of them.
+            # A count of this set invites a fifth wrong number; the condition does not.
             #
             # **This rule was briefly widened to every mode but `MODEL_PANEL` and that was wrong.**
             # Elsewhere the branches are arbitrary and the second read is the *only* way to name
@@ -639,9 +646,9 @@ def validate() -> None:
                 f"node {node.id!r} is routed by the review seats and declares `panel_branches`, "
                 f"which nothing routes through there and which cannot name the word meaning "
                 f"ratified any better than the default already does — and which, if it maps `pass` "
-                f"elsewhere, stops the grade settling at a node that settles it. Remove the "
-                f"declaration: a seat panel's branch comes back from `_adjudicate` already in the "
-                f"panel's words, and needs no mapping")
+                f"elsewhere, makes a node that settles the grade settle it on a rejection instead "
+                f"of on a pass. Remove the declaration: a seat panel's branch comes back from "
+                f"`_adjudicate` already in the panel's words, and needs no mapping")
         for outcome, landed in node.panel_branches.items():
             if landed not in node.branches:
                 raise GraphError(
