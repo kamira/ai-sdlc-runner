@@ -176,14 +176,19 @@ MUTATIONS: List[Mutation] = [
     # single point of failure for every guarantee that goes through it, which is what these two
     # entries are about.
     #
-    # **Both name a test node, and the first has to.** Dropping the `BY_ID` rebind failed 43 of
-    # the 74 tests in those three files **at CHG-20260907-25** — that record's measurement, stated
-    # here in the present tense until CHG-20260908-03 dated it; the three files collect 82 now, and 41 of the 43 fail collaterally: `validate` raises
-    # its identity refusal and their own `match=` string no longer matches the message. Measured
-    # over all 34 distinct `match=` patterns in the three files, exactly one — `"rebound
-    # separately"`, the deliberate half-swap's own — matches that message. So a file-level
-    # CAUGHT here would be reporting 41 regexes missing, not the swap. The node registered is the
-    # one whose stated guarantee IS that both views move.
+    # **Both name a test node, and the first has to.** Dropping the `BY_ID` rebind makes most of
+    # the tests in those three files fail collaterally: `validate` raises its identity refusal and
+    # their own `match=` string no longer matches the message. Exactly one pattern in those files
+    # does match it — `"rebound separately"`, the deliberate half-swap's own. So a file-level
+    # CAUGHT here would be reporting missing regexes, not the swap. The node registered is the one
+    # whose stated guarantee IS that both views move.
+    #
+    # **The figures behind that are CHG-20260907-25's**: 43 of 74 tests failing, 41 of them
+    # collaterally, over 34 distinct `match=` patterns. They stood here in the present tense until
+    # CHG-20260908-03, when a seat measured them at 82 tests and 39 patterns. The conclusion is
+    # re-measured and unchanged — one of the 39 matches the identity refusal — so the numbers are
+    # left where they were taken rather than restated here, and the argument above no longer needs
+    # them.
     #
     # The second entry is registered **because its test was written for it**. Measured first:
     # with the `finally` body removed and one mutating node run alone the result is `1 passed` —
@@ -3720,9 +3725,10 @@ CHG-20260907-28 and built by no record yet.''',
     # no escape and the message must not offer one. The mapping is refused there because it cannot
     # help — the branch rule already puts `pass` among its branches, so the second read that names
     # *ratified* lands correctly with no declaration at all — and because one shape of it,
-    # a `pass` key pointing elsewhere, stops the grade settling where the grade is settled. **No
-    # declaration helps**; the harm has an exact condition and is not a count, after four counts of
-    # this set were each refused for stopping short of it.
+    # a `pass` key pointing elsewhere, makes that word the one the grade settles on: `fail` puts
+    # the settling on a rejection, any other branch puts it on nothing. **No declaration helps**;
+    # the harm has an exact condition and is not a count, after four counts of this set were each
+    # refused for stopping short of it, and two descriptions of it named one outcome each.
     #
     # The third entry's rule refuses a declared mapping on a **`SEAT_PANEL` only**, and the fourth
     # pins that it stays there. Three corrections got it to that, each from a seat:

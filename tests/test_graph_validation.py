@@ -278,11 +278,11 @@ def test_a_seat_panel_declaring_panel_branches_is_refused():
     again after the branch is taken to name the word meaning *ratified*. The rule above forces a
     seat panel's branches to contain `pass`, so that second read already lands on a branch it
     offers — and **no declaration can improve that**. What harms is exact: `ratified` moves iff
-    the mapping carries a `pass` key pointing elsewhere. At a node that settles the grade the
-    settling then **swaps sides** — a passing panel stops settling and a rejecting one starts — so
-    the run is graded at what a panel that refused it agreed. The case below is one of those; four
-    earlier versions of this sentence counted the set instead and each count was short, and three
-    said the node *never settles*, which is milder than what happens.
+    the mapping carries a `pass` key pointing elsewhere, and the word it points at becomes the one
+    that settles: `{pass: fail}` makes a **rejection** settle the grade, and a `pass` key on any
+    branch no panel returns makes **nothing** settle. The case below is the first. Four earlier
+    versions of this sentence counted the set instead and each count was short; three then named
+    only the second outcome, and one named only the first.
 
     Not widened past `SEAT_PANEL`. It was, for one revision, and a seat measured that wrong:
     `pm_signoff` offers `yes`/`no` and settles **because** it declares `{pass: "yes"}`. Elsewhere

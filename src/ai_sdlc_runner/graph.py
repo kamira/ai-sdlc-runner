@@ -614,12 +614,18 @@ def validate() -> None:
             # read; every other declaration leaves `ratified` at `pass` and says nothing the
             # default did not.
             #
-            # And what a moved `ratified` does is **not** that the node stops settling. `engine`
-            # tests `choice == ratified` against `_adjudicate`'s own word, so with `{pass: fail}`
-            # the settling **swaps sides**: a passing panel no longer settles the grade and a
-            # rejecting one does, recording the run as graded at what a panel that refused it
-            # agreed. Three versions of this sentence said *never settles*, which is a milder
-            # failure than the one the code has.
+            # `ratified` **is** the settling condition — `engine` tests `choice == ratified`
+            # against `_adjudicate`'s own word — so whichever word `pass` is pointed at becomes the
+            # one that settles. Two outcomes follow, and this sentence has been written wrongly as
+            # each of them alone:
+            #
+            #   `{pass: fail}`      `ratified` is `fail`, which the panel does return, so the
+            #                       settling **swaps sides**: a rejection settles the grade and a
+            #                       pass no longer does, recording the run as graded at what a
+            #                       panel that refused it agreed.
+            #   `{pass: <other>}`   `ratified` is a branch word no adjudication returns, so
+            #                       **nothing settles** — the milder failure, and the one three
+            #                       earlier versions named as though it were the only one.
             #
             # **No declaration helps**, and one that cannot help is a name standing in for a
             # constraint. Four earlier versions of this comment were counts and each was refused:
@@ -646,9 +652,10 @@ def validate() -> None:
                 f"node {node.id!r} is routed by the review seats and declares `panel_branches`, "
                 f"which nothing routes through there and which cannot name the word meaning "
                 f"ratified any better than the default already does — and which, if it maps `pass` "
-                f"elsewhere, makes a node that settles the grade settle it on a rejection instead "
-                f"of on a pass. Remove the declaration: a seat panel's branch comes back from "
-                f"`_adjudicate` already in the panel's words, and needs no mapping")
+                f"elsewhere, makes that word the one a node settles the grade on: a rejection if "
+                f"it maps to `fail`, and nothing at all if it maps to a branch no panel returns. "
+                f"Remove the declaration: a seat panel's branch comes back from `_adjudicate` "
+                f"already in the panel's words, and needs no mapping")
         for outcome, landed in node.panel_branches.items():
             if landed not in node.branches:
                 raise GraphError(
