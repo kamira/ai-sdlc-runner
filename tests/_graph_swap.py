@@ -24,7 +24,7 @@ fixture, before the measurement existed; both seats of CHG-20260907-25 reversed 
 it. The helper takes nothing from pytest, `tests/` is already on `sys.path` under the default
 `prepend` import mode, and this suite already shares helpers by bare sibling import (`from
 test_flow import DECISIONS, SPEC`, in eight modules). So the module costs three import lines
-against 44 test-function signatures. And a fixture would not merely cost more: fixture teardown runs
+against 44 call-site signatures. And a fixture would not merely cost more: fixture teardown runs
 *after* the test body, so a test that catches the expected `GraphError` and then looks at
 `graph.NODES` would read the hypothetical graph. The `try/finally` below is what makes that safe,
 and once it is kept the teardown buys nothing.
@@ -73,9 +73,11 @@ def validate_with(nodes):
     Exception-safe by construction: both originals are captured before anything is rebound, and the
     `finally` restores the objects themselves rather than rebuilding them.
     `test_graph_validation.py::test_the_shared_swap_puts_both_views_back_when_validate_raises`
-    asserts that by identity — **44 test functions** call `validate_with` (28 in
-    `test_graph_validation`, 15 in `test_execution_mode`, 1 in `test_risk_adjudicated`, counted by
-    AST), and until that test was written nothing named could notice this `finally` going. An
+    asserts that by identity — **44 functions** call `validate_with` (28 in
+    `test_graph_validation`, 15 in `test_execution_mode`, and in `test_risk_adjudicated` the
+    module-level helper `_validate_one`, which pytest does not collect — so 43 collected tests and
+    one helper, counted by AST), and until that test was written nothing named could notice this
+    `finally` going. An
     earlier figure here said 39 and CHG-20260908-03 re-asserted it without measuring; a seat
     measured it. Two more copies went with it, in that test's docstring and in the mutation
     registry. A third stands in `ACC-20260907-25`, which recorded 39 as its own measurement at the

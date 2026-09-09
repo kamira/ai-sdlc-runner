@@ -117,12 +117,19 @@ def test_a_node_that_is_not_a_panel_may_declare_panel_branches():
 #: missed *"those 44 functions"* — a pattern narrow enough to miss a rewording is the failure this
 #: whole guard replaces. Reword one of these and the test fails, which is the point: a reworded
 #: sentence is one nobody has re-checked.
+#:
+#: **What is deliberately not in the list**, so that the next reader does not take it for another
+#: miss: this test's own docstrings say 44 three times while narrating how the figure got here —
+#: *"a seat measured 44"*, *"change every stated 44 to 77"*, *"missed those 44 functions"*. Those
+#: are past-tense accounts and stay true when the figure moves. The list holds the sentences that
+#: assert the count **now**. A sixth such sentence could be added without this list noticing; the
+#: list is maintained by hand and one was found missing from it by a seat.
 CALLER_COUNT_IS_STATED_IN = (
-    ("tests/_graph_swap.py", "against {n} test-function signatures"),
-    ("tests/_graph_swap.py", "**{n} test functions** call `validate_with`"),
+    ("tests/_graph_swap.py", "against {n} call-site signatures"),
+    ("tests/_graph_swap.py", "**{n} functions** call `validate_with`"),
     ("tests/_graph_swap.py", "those {n} functions rest on"),
     ("tests/test_graph_validation.py", "**{n} of them**, counted by AST"),
-    ("tools/mutation_check.py", "shared by {n} test functions"),
+    ("tools/mutation_check.py", "shared by {n} functions"),
 )
 
 
@@ -264,14 +271,16 @@ def test_a_seat_panel_whose_branches_the_panel_cannot_name_is_refused():
 
 
 def test_a_seat_panel_declaring_panel_branches_is_refused():
-    """Because on a seat panel it can only do harm — not merely because nothing routes on it.
+    """Because on a seat panel it can never help and can harm — not merely because nothing routes
+    on it.
 
     `engine` reads the table twice: it routes a model panel's outcome through it, and then reads it
     again after the branch is taken to name the word meaning *ratified*. The rule above forces a
     seat panel's branches to contain `pass`, so that second read already lands on a branch it
-    offers — and **no declaration can improve that**. Measured: `{pass: pass}` and `{fail: fail}`
-    leave `ratified` at `pass`, the word `_adjudicate` returns; `{pass: fail}` moves it, and a
-    `settles_risk` seat panel would then silently never settle. The case below is that one.
+    offers — and **no declaration can improve that**. There are eight it can see; five are inert
+    and three move `ratified` off `pass`, which are the three whose `pass` key maps to `fail`. At
+    such a node, if it settles the grade, `choice == ratified` never holds and it silently never
+    settles. The case below is one of the three.
 
     Not widened past `SEAT_PANEL`. It was, for one revision, and a seat measured that wrong:
     `pm_signoff` offers `yes`/`no` and settles **because** it declares `{pass: "yes"}`. Elsewhere
@@ -630,8 +639,10 @@ def test_the_half_swap_used_to_certify_a_graph_that_does_not_run():
 def test_the_shared_swap_puts_both_views_back_when_validate_raises():
     """One `finally` now serves every caller of `validate_with`, so it gets a test of its own.
 
-    **44 of them**, counted by AST across the three modules that import it (CHG-20260908-03). This
-    line said 39 and nothing had measured it.
+    **44 of them**, counted by AST across the three modules that import it (CHG-20260908-03) — 43
+    collected tests and `test_risk_adjudicated._validate_one`, a module-level helper pytest does
+    not collect, which is why these sentences say *functions* and not *test functions*. This line
+    said 39 and nothing had measured it.
 
     Until CHG-20260907-25 the swap was written three times and nothing asserted that any of them
     restored anything: measured with the `finally` body removed and one mutating test run alone,

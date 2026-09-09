@@ -600,27 +600,32 @@ def validate() -> None:
                         f"branches in the panel's own words: `panel_branches` routes a model "
                         f"panel's outcome and is never what routes this one")
         if node.mode == SEAT_PANEL and node.panel_branches:
-            # On a **seat panel** the mapping can only do harm, which is why the refusal is here
-            # and not on every mode that fails to route through it.
+            # On a **seat panel** the mapping can never help and can harm, which is why the
+            # refusal is here and not on every mode that fails to route through it.
             #
             # `engine` reads this table twice. It routes a model panel's outcome through it, and
             # then — after the branch is taken, for every branching node — reads it again to name
             # the word that means *ratified*. The rule above forces a seat panel's branches to
             # contain `pass`, so that second read **already** resolves to a branch it offers.
             #
-            # So a declaration here can never improve anything, and one shape of it breaks the
+            # So a declaration here can never improve anything, and some shapes of it break the
             # settling. A seat panel's branches are `pass` and `fail`, and the generic loop below
-            # requires each mapped value to be one of them, so there are exactly four declarations
-            # this rule can see. Measured on `lead_review`: `{pass: pass}`, `{fail: pass}` and
-            # `{fail: fail}` all leave `ratified` at `pass`, which is what `_adjudicate` returns;
-            # `{pass: fail}` moves it to `fail`, so `choice == ratified` never holds and a
-            # `settles_risk` seat panel would silently never settle — the shape of CHG-20260901-18.
+            # requires each mapped value to be one of them, so the declarations this rule can see
+            # are the **eight** with a non-empty subset of those words as keys: two one-key on
+            # `pass`, two on `fail`, four two-key. Measured on `lead_review`: **five are inert and
+            # three harm**, and the three are exactly those whose `pass` key maps to `fail` —
+            # `ratified` becomes `fail`, `_adjudicate` returns `pass`, so `choice == ratified`
+            # never holds and a node that settles the grade silently never settles it, which is
+            # the shape of CHG-20260901-18.
             #
-            # **Three of the four are inert and one harms; none helps**, and a declaration that
-            # cannot help is a name standing in for a constraint. Two earlier comments here got
-            # this wrong: one said a declaration *can only misname*, and the correction of it said
-            # *two* of four were harmless by counting `{}` — which is not a declaration and cannot
-            # reach this rule — while omitting `{fail: pass}`.
+            # **None of the eight helps**, and a declaration that cannot help is a name standing in
+            # for a constraint. Three earlier comments here got this wrong and each was refused:
+            # one said a declaration *can only misname*; its correction said *two of four* were
+            # harmless, counting `{}` — which is not a declaration and cannot reach a rule guarded
+            # on the mapping being non-empty; and the correction of that said *three of four*,
+            # still enumerating only single-key mappings, when both shipped declarations
+            # (`pm_confirm`, `pm_signoff`) are two-key and that is the shape anyone copying them
+            # would write.
             #
             # **This rule was briefly widened to every mode but `MODEL_PANEL` and that was wrong.**
             # Elsewhere the branches are arbitrary and the second read is the *only* way to name
@@ -633,9 +638,10 @@ def validate() -> None:
             raise GraphError(
                 f"node {node.id!r} is routed by the review seats and declares `panel_branches`, "
                 f"which nothing routes through there and which cannot name the word meaning "
-                f"ratified any better than the default already does — while one mapping of it "
-                f"stops the grade settling. Remove the declaration: a seat panel's branch "
-                f"comes back from `_adjudicate` already in the panel's words, and needs no mapping")
+                f"ratified any better than the default already does — and which, if it maps `pass` "
+                f"elsewhere, stops the grade settling at a node that settles it. Remove the "
+                f"declaration: a seat panel's branch comes back from `_adjudicate` already in the "
+                f"panel's words, and needs no mapping")
         for outcome, landed in node.panel_branches.items():
             if landed not in node.branches:
                 raise GraphError(

@@ -170,7 +170,8 @@ MUTATIONS: List[Mutation] = [
 
     # ── graph-swap (CHG-20260907-25) ───────────────────────────────
     # Three modules each carried their own "swap both views, validate, restore"; they are one
-    # `tests/_graph_swap.validate_with` now, shared by 44 test functions — this line said 39 until
+    # `tests/_graph_swap.validate_with` now, shared by 44 functions — 43 tests and one helper, and
+    # this line said 39 until
     # CHG-20260908-03 counted them. A shared helper is a
     # single point of failure for every guarantee that goes through it, which is what these two
     # entries are about.
