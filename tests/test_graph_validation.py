@@ -24,6 +24,7 @@ would have been.
 """
 import dataclasses
 import pathlib
+import re
 
 import pytest
 
@@ -108,18 +109,69 @@ def test_a_node_that_is_not_a_panel_may_declare_panel_branches():
     validate_with(_mutate("plan_scope", panel_branches={policy.PASS: landing}))
 
 
+#: Every place the caller count is written down, as the sentence it is written in. The test below
+#: puts the measured number into each and requires the result to be in the file, so the figure has
+#: one source and five echoes rather than six copies.
+#:
+#: **Fragments, not a pattern.** The first version matched `<n> test-function|caller` by regex and
+#: missed *"those 44 functions"* — a pattern narrow enough to miss a rewording is the failure this
+#: whole guard replaces. Reword one of these and the test fails, which is the point: a reworded
+#: sentence is one nobody has re-checked.
+CALLER_COUNT_IS_STATED_IN = (
+    ("tests/_graph_swap.py", "against {n} test-function signatures"),
+    ("tests/_graph_swap.py", "**{n} test functions** call `validate_with`"),
+    ("tests/_graph_swap.py", "those {n} functions rest on"),
+    ("tests/test_graph_validation.py", "**{n} of them**, counted by AST"),
+    ("tools/mutation_check.py", "shared by {n} test functions"),
+)
+
+
 def test_the_number_of_callers_the_swap_states_is_the_real_one():
-    """`_graph_swap` says how many test functions its one `finally` serves, in three places.
+    """`_graph_swap` says how many test functions its one `finally` serves, and so do two other files.
 
     That figure was 39, correct when CHG-20260907-25 wrote it and stale by the time this change
-    read it — this change then re-asserted it without measuring, and a seat measured 44. A number
-    stated in three shipped places and held by nothing is what this record spent four rounds on, so
-    it is asserted here rather than restated a fourth time.
+    read it — this change then re-asserted it without measuring, and a seat measured 44.
+
+    **The first version of this test did not read the statements.** It counted the tree and compared
+    against a literal of its own, so a seat could change every stated 44 to 77 and it stayed green:
+    a test named for what the prose says, holding only what the tree does, and adding a sixth copy
+    of the number while it was at it. It now reads each statement back.
 
     Counted the way the docstring says it counts: functions in the importing modules whose body
-    calls `validate_with`.
+    calls `validate_with`, **under whatever name that module imported it as**, and through the
+    module object as well as bare. A seat refused the first version of this counter for exactly the
+    defect it exists to prevent — it matched only a bare `validate_with(...)`, so
+    `_graph_swap.validate_with(...)`, `from _graph_swap import validate_with as check`, and an
+    `async def` all added a caller without moving the number, while the message below told the
+    reader the number moves with the callers.
     """
     import ast
+
+    def _names_for(tree):
+        """What this module calls the helper: its aliases, and the modules it reaches it through."""
+        bare, through = set(), set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module in ("_graph_swap", "tests._graph_swap"):
+                for alias in node.names:
+                    if alias.name == "validate_with":
+                        bare.add(alias.asname or alias.name)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in ("_graph_swap", "tests._graph_swap"):
+                        through.add(alias.asname or alias.name.split(".")[-1])
+        return bare, through
+
+    def _calls(fn, bare, through):
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Name) and func.id in bare:
+                return True
+            if (isinstance(func, ast.Attribute) and func.attr == "validate_with"
+                    and isinstance(func.value, ast.Name) and func.value.id in through):
+                return True
+        return False
 
     root = pathlib.Path(__file__).resolve().parent
     per_module = {}
@@ -127,21 +179,35 @@ def test_the_number_of_callers_the_swap_states_is_the_real_one():
         source = path.read_text(encoding="utf-8")
         if "validate_with" not in source:
             continue
-        calls = 0
-        for fn in [n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef)]:
-            if any(isinstance(c.func, ast.Name) and c.func.id == "validate_with"
-                   for c in ast.walk(fn) if isinstance(c, ast.Call)):
-                calls += 1
+        tree = ast.parse(source)
+        bare, through = _names_for(tree)
+        assert bare or through, (
+            f"{path.name} mentions `validate_with` and this counter cannot see how it reaches it; "
+            f"the count below would be wrong and silent")
+        defs = (ast.FunctionDef, ast.AsyncFunctionDef)
+        calls = sum(1 for fn in ast.walk(tree)
+                    if isinstance(fn, defs) and _calls(fn, bare, through))
         if calls:
             per_module[path.name] = calls
 
     assert per_module == {"test_execution_mode.py": 15,
                           "test_graph_validation.py": 28,
                           "test_risk_adjudicated.py": 1}, per_module
-    assert sum(per_module.values()) == 44, (
-        f"`_graph_swap` states 44 callers in three places; the tree has {sum(per_module.values())}. "
-        f"Move the figure in the same commit that moves the callers — it said 39 for two records "
-        f"after it stopped being true")
+    measured = sum(per_module.values())
+
+    # And now the half the name is about: what the files *say*, read back.
+    repo = pathlib.Path(__file__).resolve().parents[1]
+    unstated = []
+    for rel, fragment in CALLER_COUNT_IS_STATED_IN:
+        text = (repo / rel).read_text(encoding="utf-8")
+        if fragment.format(n=measured) not in text:
+            unstated.append((rel, fragment.format(n=measured)))
+
+    assert not unstated, (
+        f"the tree has {measured} callers ({per_module}), and these sentences do not say so — "
+        f"either the figure moved and they did not, or one was reworded and needs re-checking "
+        f"here: {unstated}. This figure said 39 for two records after it stopped being true, "
+        f"which is why every copy is read back rather than trusted")
 
 
 def test_the_populations_the_panel_comments_count_are_the_ones_they_say():

@@ -609,13 +609,18 @@ def validate() -> None:
             # contain `pass`, so that second read **already** resolves to a branch it offers.
             #
             # So a declaration here can never improve anything, and one shape of it breaks the
-            # settling. Measured on `lead_review`: `{}` and `{pass: pass}` and `{fail: fail}` all
-            # leave `ratified` at `pass`, which is what `_adjudicate` returns; `{pass: fail}` moves
-            # it to `fail`, so `choice == ratified` never holds and a `settles_risk` seat panel
-            # would silently never settle — the shape of CHG-20260901-18. A seat refused an earlier
-            # comment here that said a declaration *can only misname* it: two of the four shapes
-            # are harmless. What is true of all four is that none of them helps, and a declaration
-            # that cannot help is a name standing in for a constraint.
+            # settling. A seat panel's branches are `pass` and `fail`, and the generic loop below
+            # requires each mapped value to be one of them, so there are exactly four declarations
+            # this rule can see. Measured on `lead_review`: `{pass: pass}`, `{fail: pass}` and
+            # `{fail: fail}` all leave `ratified` at `pass`, which is what `_adjudicate` returns;
+            # `{pass: fail}` moves it to `fail`, so `choice == ratified` never holds and a
+            # `settles_risk` seat panel would silently never settle — the shape of CHG-20260901-18.
+            #
+            # **Three of the four are inert and one harms; none helps**, and a declaration that
+            # cannot help is a name standing in for a constraint. Two earlier comments here got
+            # this wrong: one said a declaration *can only misname*, and the correction of it said
+            # *two* of four were harmless by counting `{}` — which is not a declaration and cannot
+            # reach this rule — while omitting `{fail: pass}`.
             #
             # **This rule was briefly widened to every mode but `MODEL_PANEL` and that was wrong.**
             # Elsewhere the branches are arbitrary and the second read is the *only* way to name

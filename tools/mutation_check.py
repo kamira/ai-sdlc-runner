@@ -3718,8 +3718,9 @@ CHG-20260907-28 and built by no record yet.''',
     # no escape and the message must not offer one. The mapping is refused there because it cannot
     # help — the branch rule already puts `pass` among its branches, so the second read that names
     # *ratified* lands correctly with no declaration at all — and because one shape of it,
-    # `{pass: fail}`, stops the grade settling. Two of the four shapes are harmless; none is
-    # useful, and a seat refused an earlier comment claiming they all misname.
+    # `{pass: fail}`, stops the grade settling. **Three of the four declarations it can see are
+    # inert**; none is useful. Two earlier comments got that arithmetic wrong in opposite
+    # directions, and both were refused.
     #
     # The third entry's rule refuses a declared mapping on a **`SEAT_PANEL` only**, and the fourth
     # pins that it stays there. Three corrections got it to that, each from a seat:
@@ -3733,9 +3734,9 @@ CHG-20260907-28 and built by no record yet.''',
     #     declaration is the only way to name that word, so the widening made a `settles_risk` node
     #     with its own vocabulary inexpressible. Withdrawn.
     #   - and the reason left behind — a declaration on a seat panel *can only misname* ratified —
-    #     is refuted by two of its four shapes: `{pass: pass}` and `{fail: fail}` leave it at
-    #     `pass`. What holds is that none of them helps, because rule 1 already puts `pass` among a
-    #     seat panel's branches.
+    #     is refuted by three of its four shapes: `{pass: pass}`, `{fail: pass}` and
+    #     `{fail: fail}` all leave it at `pass`. What holds is that none of them helps, because
+    #     rule 1 already puts `pass` among a seat panel's branches.
     #
     # The **first** entry pins a rule that had shipped for three rounds with no reverse test: this
     # file's own docstring lists CHG-20260901-11's rule among nineteen such, and the repair that
