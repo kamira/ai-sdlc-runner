@@ -728,12 +728,20 @@ def test_an_ipv6_origin_is_refused_because_nothing_serves_one(live, origin):
 # (`_require_suspension`). **`attach()` is the one that gates only on version** — which is exactly
 # what fable-seat wrote, and what these tests therefore use.
 
-def _gated_runner(tmp_path, walks, gate):
-    """A runner whose walk blocks on `gate`, so a second caller is guaranteed to arrive mid-walk."""
+def _gated_runner(tmp_path, walks, gate, gave_up):
+    """A runner whose walk blocks on `gate`, so a second caller is guaranteed to arrive mid-walk.
+
+    `gave_up` is how the walk says the gate never opened. It cannot say it by asserting: `Runner`
+    catches what a walk raises and reports a stopped run, so the assertion would be swallowed and
+    the test would blame the runner for stopping. A walk released by the timeout instead of by the
+    gate was never in flight when the attachment arrived, and every count below it is about a
+    different run than the one the test is named for.
+    """
 
     def walk(cfg):
         walks.append(tuple(cfg.instructions))
-        gate.wait(timeout=10)
+        if not gate.wait(timeout=10):
+            gave_up.append(len(walks))
         report = engine.RunReport()
         report.state = engine.FINISHED
         return report
@@ -757,15 +765,22 @@ def _start_a_blocked_walk(runner, walks):
 def test_an_attachment_during_a_walk_does_not_start_a_second_walk(tmp_path):
     """`attach()` mutates the state under `_lock`, releases it, and calls `_advance()`. With no
     gate, both threads entered the walk — two walks over one run and one `Conversation`."""
-    walks, gate = [], threading.Event()
-    runner = _gated_runner(tmp_path, walks, gate)
+    walks, gate, gave_up = [], threading.Event(), []
+    runner = _gated_runner(tmp_path, walks, gate, gave_up)
     thread = _start_a_blocked_walk(runner, walks)
 
     runner.attach(runner.state.version, "spec.md", b"the spec")
+    assert not gave_up, (
+        "the gated walk was released by its own timeout rather than by the gate, so "
+        "nothing was in flight when the attachment arrived, and the count below is about "
+        "a different run than the one this test is named for")
     assert len(walks) == 1, f"a second walk started: {walks}"
 
     gate.set()
     thread.join(timeout=10)
+    assert not thread.is_alive(), (
+        "the walk did not finish inside the join's timeout, so what follows would "
+        "blame the attachment for something the wait did not do")
     assert len(walks) == 2, "the attachment was never walked"
 
 
@@ -774,30 +789,44 @@ def test_the_attachment_that_arrives_during_a_walk_is_not_dropped(tmp_path):
     what the operator did: an attachment reaches **every** work order, and the walk in flight built
     its config before that attachment existed. Recorded-and-never-acted-on is this project's own
     worst failure shape, so the running walk goes round again instead."""
-    walks, gate = [], threading.Event()
-    runner = _gated_runner(tmp_path, walks, gate)
+    walks, gate, gave_up = [], threading.Event(), []
+    runner = _gated_runner(tmp_path, walks, gate, gave_up)
     thread = _start_a_blocked_walk(runner, walks)
 
     runner.attach(runner.state.version, "spec.md", b"the spec")
     gate.set()
     thread.join(timeout=10)
+    assert not thread.is_alive(), (
+        "the walk did not finish inside the join's timeout, so what follows would "
+        "blame the attachment for something the wait did not do")
 
+    assert not gave_up, (
+        "the gated walk was released by its own timeout rather than by the gate, so "
+        "nothing was in flight when the attachment arrived, and the count below is about "
+        "a different run than the one this test is named for")
     assert len(walks) == 2, f"expected exactly one further walk, got {len(walks)}"
     assert runner.state.attachments, "the attachment is not in the state at all"
 
 
 def test_several_attachments_during_one_walk_coalesce_into_one_further_walk(tmp_path):
     """Not one further walk each — that would be the same storm, serialised."""
-    walks, gate = [], threading.Event()
-    runner = _gated_runner(tmp_path, walks, gate)
+    walks, gate, gave_up = [], threading.Event(), []
+    runner = _gated_runner(tmp_path, walks, gate, gave_up)
     thread = _start_a_blocked_walk(runner, walks)
 
     for n in range(4):
         runner.attach(runner.state.version, f"a{n}.md", f"body {n}".encode())
+    assert not gave_up, (
+        "the gated walk was released by its own timeout rather than by the gate, so "
+        "nothing was in flight when the attachment arrived, and the count below is about "
+        "a different run than the one this test is named for")
     assert len(walks) == 1, f"{len(walks)} walks ran while one was in flight"
 
     gate.set()
     thread.join(timeout=10)
+    assert not thread.is_alive(), (
+        "the walk did not finish inside the join's timeout, so what follows would "
+        "blame the attachment for something the wait did not do")
     assert len(walks) == 2, f"four attachments produced {len(walks) - 1} further walks"
 
 
@@ -863,14 +892,21 @@ def test_an_action_arriving_as_the_walk_decides_to_stop_is_not_stranded(tmp_path
     on its *second* call while another thread attaches.
     """
 
-    walks, entered_second = [], threading.Event()
-    release_second = threading.Event()
+    walks, ran_on = [], []
+    entered = {1: threading.Event(), 2: threading.Event()}
+    release = {1: threading.Event(), 2: threading.Event()}
+    gave_up = []
 
     def walk(cfg):
         walks.append(tuple(cfg.instructions))
-        if len(walks) == 2:
-            entered_second.set()
-            release_second.wait(timeout=10)
+        ran_on.append(threading.current_thread())
+        held = len(walks)
+        if held in entered:
+            entered[held].set()
+            # Recorded, not asserted: this runs in the walk, and `Runner` turns what a walk raises
+            # into a stopped run. The test thread reads it below.
+            if not release[held].wait(timeout=10):
+                gave_up.append(held)
         report = engine.RunReport()
         report.state = engine.FINISHED
         return report
@@ -880,19 +916,46 @@ def test_an_action_arriving_as_the_walk_decides_to_stop_is_not_stranded(tmp_path
         make_config=lambda i, a, r, art=(), rej=(), hist=(): _make_config(i, a, r, art, rej, hist),
         store=attach_mod.Store(tmp_path / "att"))
 
-    # First walk runs to completion; during it, one attachment arrives, so the gate loops. The
-    # second walk blocks, and a further attachment arrives while it is inside.
+    # **The first walk blocks too, and that is the whole of the arrangement** (CHG-20260908-01).
+    # `attach` ends in `_advance`, and `_advance` walks on the *calling* thread when nothing is in
+    # flight. With the first walk returning at once, the attach below ran the second walk itself,
+    # on this thread, and sat in it for the full ten seconds — so the walk the third attachment was
+    # meant to interrupt had ended before the attachment was posted, and `first` had been finished
+    # since the first millisecond. The test passed on the count. Holding the first walk keeps the
+    # gate loop, and not the attaching thread, as the thing that runs the second.
     first = threading.Thread(target=lambda: runner.start("go", 0), daemon=True)
     first.start()
-    while not walks:
-        time.sleep(0.01)
+
+    assert entered[1].wait(timeout=10), "the first walk never started"
     runner.attach(runner.state.version, "one.md", b"1")
+    release[1].set()
 
-    assert entered_second.wait(timeout=10), "the gate never looped for the first attachment"
+    assert entered[2].wait(timeout=10), "the gate never looped for the first attachment"
     runner.attach(runner.state.version, "two.md", b"2")
-    release_second.set()
+    release[2].set()
     first.join(timeout=10)
+    assert not first.is_alive(), (
+        "the first walk did not finish inside the join's timeout, so what follows would blame "
+        "the second attachment for something the wait did not do")
+    assert not gave_up, (
+        f"walk(s) {gave_up} were released by their own timeout rather than by the test, so the "
+        f"attachment that follows each did not arrive inside a walk at all")
 
+    # The thread itself, not `first.name`: names are labels and two threads can carry the same
+    # one, so a comparison of names can hold while the walk ran somewhere else (a seat).
+    #
+    # What this line establishes and what it does not: it says no walk ran anywhere but on `first`,
+    # which is what makes `attach` a mid-walk arrival rather than a walk of its own. That the
+    # arrival *was* mid-walk is established by `entered[2]` and `gave_up` above, not here.
+    #
+    # This line is what a defect landing on the **third** walk refuses, and nothing else does:
+    # `walk` blocks only for walks 1 and 2, so a third walk that runs on the attaching thread
+    # leaves `gave_up` empty, `first` finished and the count at 3. Registered as a mutation, and
+    # measured at 1.02s. Two drafts of this comment said no small mutation could reach this line;
+    # a seat built one both times.
+    assert set(ran_on) == {first}, (
+        f"the walks ran on {sorted(t.name for t in set(ran_on))}; a walk anywhere but on `first` "
+        f"is one `attach` ran itself, on the thread that was supposed to be interrupting it")
     assert len(walks) == 3, (
         f"the second attachment was stranded: {len(walks)} walks for two mid-walk attachments")
     assert runner._walk_again is False
@@ -2615,6 +2678,7 @@ def _config_nodes_keys():
     httpd = server.serve(_runner(), operator, port=0)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
+    raised = False
     try:
         port = httpd.server_address[1]
         req = urllib.request.Request(f"http://127.0.0.1:{port}/config/nodes", method="GET")
@@ -2622,15 +2686,52 @@ def _config_nodes_keys():
         req.add_header("Host", f"127.0.0.1:{port}")
         with urllib.request.urlopen(req, timeout=10) as resp:
             return set(json.loads(resp.read().decode("utf-8")))
+    except BaseException:
+        raised = True
+        raise
     finally:
         # `shutdown()` stops the loop; `server_close()` is what releases the listening socket, and
-        # the join is what makes the thread gone rather than going. Three guards call this helper,
-        # in a file that also asserts on `threading.active_count()`
-        # (`test_a_connection_that_says_nothing_does_not_hold_a_thread_forever`) — a helper that
-        # leaves a thread finishing is a flake for somebody else to diagnose.
+        # the join is what makes the thread gone rather than going.
+        # Three guards call this helper, and **nothing in this file reports a thread it leaves
+        # behind** — measured, by forcing the leak and running the file: no test fails.
+        # `test_a_connection_that_says_nothing_does_not_hold_a_thread_forever` was named here as
+        # the victim and is not one; it takes its own `threading.active_count()` baseline after
+        # this helper has already run, so a leaked thread is inside that baseline, and its closing
+        # assertion is `<=`. The leak makes it pass more easily, not less (a seat). That is what
+        # makes the check below the only thing that would say so.
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=10)
+        # **Not an `assert`.** This runs in a `finally`, so raising unconditionally would replace
+        # whatever the body was already failing with — the real diagnosis swapped for this one.
+        #
+        # The question asked is whether **this** `try` is failing, and `raised` is set by the body's
+        # own `except`. `sys.exc_info()` was here first and is not the same question: it reports
+        # whatever exception the *thread* is handling, so this helper called from inside an
+        # `except` block would have suppressed itself on the return path, with nothing in flight
+        # here at all. No caller does that today; the next one would not have been told (a seat).
+        if thread.is_alive():
+            note = ("the server thread outlived `_config_nodes_keys`. Nothing else in this "
+                    "file reports that — measured — so this is the only place it is said: a "
+                    "daemon thread is still holding a server this helper was finished with")
+            if not raised:
+                raise AssertionError(note)
+            # Already failing. Raising would replace the real diagnosis with this one — but saying
+            # nothing leaves a live thread behind and no record that it was left, which is what
+            # this branch did until a seat asked what it costs.
+            #
+            # **`stderr`, not `warnings.warn`.** A warning is configurable into an exception —
+            # `-W error`, `PYTHONWARNINGS=error` — and raising is the one thing this branch exists
+            # to not do. pytest shows captured output for the test that failed, which is the only
+            # case this line runs in (a seat).
+            #
+            # The `except` is not decoration: a closed or broken `sys.stderr` raises, and this
+            # branch exists so that nothing here replaces the diagnosis already in flight. *"`print`
+            # cannot raise"* stood here for one revision (a seat, again).
+            try:
+                print(note, file=sys.stderr)
+            except Exception:
+                pass
 
 
 def test_every_key_of_the_node_config_route_is_named_by_the_console_or_written_down():
@@ -3734,7 +3835,10 @@ def test_a_content_length_that_lies_does_not_hold_the_thread_forever(wire):
 
     assert "409" in reply.splitlines()[0], reply.splitlines()[0] or "(no reply at all)"
     assert "did not arrive" in reply
-    assert took < 6.0
+    assert took < 6.0, (
+        f"the promised bytes never came and the reply took {took:.1f}s against a 6.0s ceiling. "
+        f"Either the read deadline did not fire, or this machine is loaded enough to reach the "
+        f"ceiling with it working. Before this record the assertion said neither")
 
 
 def test_a_connection_that_says_nothing_does_not_hold_a_thread_forever(wire):
@@ -3745,12 +3849,33 @@ def test_a_connection_that_says_nothing_does_not_hold_a_thread_forever(wire):
     _send, idle, _httpd, _operator, _runner = wire
     before = threading.active_count()
     idle(8)
+    opened = time.monotonic()
     time.sleep(0.7)
     assert threading.active_count() > before, "the connections were never accepted"
 
-    time.sleep(3.0)                                   # past the fixture's 2s deadline
-    assert threading.active_count() <= before, (
-        "a connection that said nothing still holds its thread")
+    # **Waited for, not slept through** (CHG-20260908-01). This was `time.sleep(3.0)` with a
+    # comment saying *"past the fixture's 2s deadline"*, and it is a wall clock: on a loaded
+    # machine the deadline fires late, the threads are on their way out, and the assertion below
+    # told the reader a connection was still holding one. Measured — one failure in a three-file
+    # run of 225 tests, passing alone and on a re-run of the same three files.
+    #
+    # Ten seconds is not the deadline and is not a measurement of the machine. It is the point at
+    # which "the threads have not gone" stops being a question about load, and the message says
+    # which of the two it is reporting.
+    # The two figures in the message below are computed, not typed. Typed, they were the bound and
+    # the bound minus two, and both were short by the 0.7s already slept above — and untied to the
+    # bound, so raising it would have left the sentence saying the old number (a seat).
+    started = time.monotonic()
+    while threading.active_count() > before and time.monotonic() - started < 10.0:
+        time.sleep(0.05)
+
+    still, waited = threading.active_count(), time.monotonic() - opened
+    assert still <= before, (
+        f"{still - before} thread(s) over the count this test started at, {waited:.1f}s after "
+        f"eight connections that said nothing were opened and {waited - 2.0:.1f}s past the "
+        f"fixture's 2s deadline. Either the deadline is not closing them, or this machine did not "
+        f"schedule them out in that time — the first is the defect, the second is why this waits "
+        f"for the count rather than sleeping a fixed three")
 
 
 @pytest.mark.parametrize("length,says", [
@@ -4346,3 +4471,452 @@ def test_a_burst_of_connections_is_queued_rather_than_refused(tmp_path):
         f"{len(refused)} of 20 connections were refused {sorted(set(refused))} while the server "
         f"was listening. `request_queue_size` is what the OS holds between `accept` calls, and a "
         f"caller past it is told nothing is there.")
+# --- a bounded wait says when it did not complete (CHG-20260908-01) ------------------------------
+
+def _own_statements(fn):
+    """`fn`'s own statements: nested `def`s left to themselves, a lambda's expressions kept.
+
+    A lambda's **defaults** are kept for a different reason than its body: they are evaluated in
+    this frame, at the `lambda` itself. Dropping them made `g = lambda ok=t.join(timeout=1): ok`
+    invisible and `g = lambda ok=t.is_alive(): ok` a refusal (a seat).
+
+    The summary said *"and lambdas left to themselves"* for a round after the comment below
+    withdrew it — the fifth round in which a retraction reached one copy and not another.
+
+    Two of the waits below sit in a `walk` closure — one in `_gated_runner`, a module-level
+    helper, and one inside the test that reads it — and attributing a nested function's wait to the
+    enclosing one would let a guard in either place answer for a wait in the other. A seat counted
+    this; the sentence before it said three, and put both in the tests.
+    """
+    stack, out = list(fn.body), []
+    while stack:
+        node = stack.pop()
+        # A `lambda` is **not** skipped, and is not its own scope either. It has no statements, so
+        # a wait inside one can never be answered within it: making lambdas their own scope, for
+        # one round, refused `run = lambda: t.join(timeout=1); run(); assert not t.is_alive()` —
+        # correct code, in the idiom this file already uses twice. Its expressions belong to the
+        # function that writes it, where a guard can live (a seat, after another seat had asked
+        # for lambdas to be examined at all).
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Its statements are its own; its **defaults, decorators and annotations** are written
+            # inside it and evaluated here, at the `def`. `def g(ok=t.is_alive())` right after a
+            # join is a guard, and was refused for a round because these were dropped with the
+            # body (a seat). A lambda's `args` are kept below for the same reason.
+            stack.extend(node.args.defaults)
+            stack.extend(d for d in node.args.kw_defaults if d)
+            stack.extend(node.decorator_list)
+            stack.extend(a.annotation for a in ast.walk(node.args)
+                         if isinstance(a, ast.arg) and a.annotation)
+            if node.returns:
+                stack.append(node.returns)
+            continue
+        if isinstance(node, ast.Lambda):
+            stack.append(node.body)
+            stack.append(node.args)
+            continue
+        out.append(node)
+        stack.extend(ast.iter_child_nodes(node))
+    return out
+
+
+def _bounded(node, name):
+    """A `<something>.<name>(...)` call with a ceiling on it — `timeout=...`, or a bare number.
+
+    The keyword alone was the first version of this, and a seat constructed what it let through:
+    `first.join(10)` with its guard deleted passed. The reason given for keying on the keyword —
+    *a wait with no timeout cannot return early* — is true of a wait with **no argument**, and was
+    written as if it were true of everything the key missed.
+
+    Positionally the argument is recognised only for `join` and `wait`, and only as a **numeric
+    literal**. `Lock.acquire(1)` means `blocking=1` and has no ceiling at all; `Condition.wait_for`
+    takes a predicate first. A seat ran both through an earlier version, where `lock.acquire(1)`
+    was refused for discarding an answer to a question it had not asked. `str.join` is the same
+    syntax with a different meaning, and *this* rule — one function at a time, matching on a name,
+    with no types — cannot separate `t.join(deadline)` from `sep.join(parts)`. An analysis that
+    followed the constructor could; that is a different tool, and saying "nothing static can" was
+    a claim about static analysis rather than about this rule (a seat). Counting any positional
+    argument reported `''.join(...)` as an unguarded thread join, measured. So a ceiling held in a
+    variable escapes, and that is the price of not reporting every string join in the suite.
+    """
+    func = getattr(node, "func", None)
+    if not (isinstance(node, ast.Call) and isinstance(func, ast.Attribute) and func.attr == name):
+        return False
+    if any(kw.arg == "timeout" for kw in node.keywords):
+        return True
+    if name not in ("join", "wait"):
+        return False          # `acquire`'s first positional is `blocking`; `wait_for`'s is a
+                              # predicate. Only these two put the ceiling there.
+    return (len(node.args) == 1 and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, (int, float))
+            and not isinstance(node.args[0].value, bool))
+
+
+#: The calls that hand back whether they completed. `Thread.join` is not among them — it returns
+#: `None` either way, which is why it needs `is_alive()` and they need only reading.
+#:
+#: Matched by **name**, like everything else here, so the boundary is the docstring's rather than
+#: a type's: see the false positives at the end of the rule's docstring. Written down rather than
+#: typed away (a seat).
+_ANSWERING = ("wait", "wait_for", "acquire")
+
+
+def _under_a_loop(body):
+    """The ids of every node inside a `for` or a comprehension in `body`.
+
+    A join made once a turn and guarded once afterwards is a question about the last turn. The one
+    loop join in this file guards inside a comprehension, which is what makes that distinguishable
+    at all (a seat). `While` is here because a seat constructed `while pending: thread.join(...)`
+    against a version that listed only `for` and the comprehensions — the docstring said *a loop*
+    and the code meant four of the five kinds.
+    """
+    out = set()
+    for node in body:
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.While, ast.ListComp, ast.SetComp,
+                             ast.DictComp, ast.GeneratorExp)):
+            out.update(id(inner) for inner in ast.walk(node))
+    return out
+
+
+def _silent_waits(text, where):
+    """The bounded waits in `text` that **this rule can see** time out without saying so.
+
+    Not every one. Its limits are listed on `test_every_bounded_wait_says_when_it_did_not_complete`
+    and run as cases in `BOUNDED_WAIT_CASES`; no count of them is given here, because this record
+    has now miscounted that list three times and the list is where it lives. The summary line said
+    *"every"* for a round, which is the shape this record's own row 7 is about.
+
+    Split out of the test so those cases run **this** code and not a copy of it.
+    """
+    silent = []
+    for fn in [n for n in ast.walk(ast.parse(text))
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+        body = _own_statements(fn)
+        # **`body`, not `ast.walk(fn)`.** A guard inside a nested `def` may never be called, so
+        # counting it would let a never-run closure answer for a join in the enclosing function.
+        # The cost is the mirror image, and it is a false positive on correct code: a join guarded
+        # by a helper the function defines and calls is refused here — a real program, and one the
+        # cases below construct on purpose. Both directions are wrong for some program; this one
+        # is wrong for a program no file under `tests/` contains (two seats: one asked which way
+        # it had been decided, the other refused the dismissal that first answered it).
+        # **A guard written in a lambda counts.** For one round it did not, on the argument that
+        # it may never run — and that refused `check = lambda: t.is_alive(); assert not check()`,
+        # correct code, while `is_alive` inside a lambda occurs **zero times** anywhere under
+        # `tests/`. Nothing held, a false positive paid: the same trade two seats ruled against
+        # for this rule's third branch, settled the same way. The shape it aimed at is an escape.
+        asked = {}
+        for n in body:
+            if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and n.func.attr == "is_alive"):
+                asked.setdefault(ast.unparse(n.func.value), []).append(id(n))
+        looping = _under_a_loop(body)
+        for node in body:
+            if _bounded(node, "join"):
+                who = ast.unparse(node.func.value)
+                if who not in asked:
+                    silent.append(f"{where}:{node.lineno} {fn.name}() waits on "
+                                  f"{who}.join(timeout=...) and never asks {who}.is_alive()")
+                elif id(node) in looping and not any(i in looping for i in asked[who]):
+                    silent.append(f"{where}:{node.lineno} {fn.name}() joins {who} once a turn and "
+                                  f"asks {who}.is_alive() once, outside the loop — a question "
+                                  f"about the last turn only")
+            for name in _ANSWERING:
+                if isinstance(node, ast.Expr) and _bounded(node.value, name):
+                    who = ast.unparse(node.value.func.value)
+                    silent.append(f"{where}:{node.lineno} {fn.name}() throws away the answer "
+                                  f"{who}.{name}(timeout=...) gives it")
+    return silent
+
+
+#: What the rule says about shapes this suite does not contain. Each is run through `_silent_waits`
+#: by the test below, so the boundary is executed rather than described. It was a table pasted into
+#: `ACC-20260908-01.md` from a script nobody could run, which a seat refused (KN-8: a check nobody
+#: has watched fail is a check nobody should rely on).
+BOUNDED_WAIT_CASES = (
+    ("a guarded join", False, """
+def f(t):
+    t.join(timeout=10)
+    assert not t.is_alive()
+"""),
+    ("a join with nothing after it", True, """
+def f(t):
+    t.join(timeout=10)
+"""),
+    ("a ceiling passed positionally, unguarded", True, """
+def f(t):
+    t.join(10)
+"""),
+    ("a string join, which is not a wait", False, """
+def f(parts):
+    return ", ".join(parts)
+"""),
+    ("a guard named but not called", True, """
+def f(t):
+    t.join(timeout=10)
+    assert not t.is_alive
+"""),
+    ("a for loop's joins, guarded outside", True, """
+def f(threads):
+    for t in threads:
+        t.join(timeout=10)
+    assert not t.is_alive()
+"""),
+    ("a for loop's joins, guarded over the loop", False, """
+def f(threads):
+    for t in threads:
+        t.join(timeout=10)
+    assert [t.name for t in threads if t.is_alive()] == []
+"""),
+    ("a while loop's joins, guarded outside", True, """
+def f(t, pending):
+    while pending:
+        t.join(timeout=10)
+        pending.pop()
+    assert not t.is_alive()
+"""),
+    ("a while loop's joins, guarded inside", False, """
+def f(t, pending):
+    while pending:
+        t.join(timeout=10)
+        assert not t.is_alive()
+        pending.pop()
+"""),
+    ("an answer dropped as a statement", True, """
+def f(ev):
+    ev.wait(timeout=1)
+"""),
+    ("acquire with a ceiling, answer dropped", True, """
+def f(lock):
+    lock.acquire(timeout=10)
+"""),
+    ("acquire(1) — blocking, not a ceiling", False, """
+def f(lock):
+    lock.acquire(1)
+"""),
+    ("a lambda joining, guarded by the function that calls it", False, """
+def f(t):
+    run = lambda: t.join(timeout=1)
+    run()
+    assert not t.is_alive()
+"""),
+    ("a lambda joining, with no guard anywhere", True, """
+def f(t):
+    run = lambda: t.join(timeout=1)
+    run()
+"""),
+    ("a join guarded by a helper the function calls", True, """
+def f(t):
+    t.join(timeout=5)
+    def report():
+        assert not t.is_alive()
+    report()
+"""),
+    ("escape: a guard in a lambda nothing calls", False, """
+def f(t):
+    t.join(timeout=1)
+    check = lambda: t.is_alive()
+    return check
+"""),
+    ("a guard in a lambda bound to a name and called", False, """
+def f(t):
+    t.join(timeout=1)
+    check = lambda: t.is_alive()
+    assert not check()
+"""),
+    ("a guard in a nested `def`'s default", False, """
+def f(t):
+    t.join(timeout=1)
+    def g(ok=t.is_alive()):
+        return ok
+    assert not g()
+"""),
+    ("a guard in a nested `def`'s annotation", False, """
+def f(t):
+    t.join(timeout=1)
+    def g() -> t.is_alive():
+        return 1
+    g()
+"""),
+    ("an answer a lambda returns, which this rule cannot follow", False, """
+def f(ev):
+    run = lambda: ev.wait(timeout=1)
+    run()
+"""),
+
+    # -- lambdas, nested `def`s, and when their expressions run ------------------------------------------------------------------------------
+    ("a guard in a lambda called where it is written", False, """
+def f(t):
+    t.join(timeout=1)
+    assert not (lambda: t.is_alive())()
+"""),
+    ("a guard in a lambda's default", False, """
+def f(t):
+    t.join(timeout=1)
+    g = lambda ok=t.is_alive(): ok
+    assert not g()
+"""),
+    ("a wait in a lambda's default", True, """
+def f(t):
+    g = lambda ok=t.join(timeout=1): ok
+    g()
+"""),
+
+    # -- the escapes the docstring names, as rows ------------------------------------------------
+    # Accepted, every one, and that is the point: an escape nobody can run is an escape that can
+    # close or widen with nothing to say so (a seat). Each of these is a line to change on purpose.
+    ("escape: a ceiling held in a variable", False, """
+def f(t, deadline):
+    t.join(deadline)
+"""),
+    ("escape: a ceiling passed as **kwargs", False, """
+def f(t):
+    t.join(**{"timeout": 10})
+"""),
+    ("escape: a positional ceiling on `wait_for`", False, """
+def f(cond, pred):
+    cond.wait_for(pred, 10)
+"""),
+    ("escape: an answer kept in a name", False, """
+def f(ev):
+    done = ev.wait(timeout=1)
+    assert 1 == 1
+"""),
+    ("escape: an `is_alive()` nothing acts on", False, """
+def f(t, failures):
+    t.join(timeout=10)
+    assert not failures, f"still alive: {t.is_alive()}"
+"""),
+    ("escape: a positional ceiling on `acquire`", False, """
+def f(lock):
+    lock.acquire(10)
+"""),
+    ("the false positive: a wait that raises on timeout", True, """
+def f(proc):
+    proc.wait(timeout=5)
+"""),
+    ("escape: an inverted guard", False, """
+def f(t):
+    t.join(timeout=10)
+    assert t.is_alive()
+"""),
+    ("escape: an awaited answer", False, """
+async def f(ev):
+    await ev.wait(timeout=1)
+"""),
+)
+
+
+def test_the_rule_over_bounded_waits_refuses_what_it_says_it_refuses():
+    """The rule's boundary, run rather than described.
+
+    Two rows are not defects the rule catches, and are labelled so: the **false positives** the
+    docstring names — a join guarded by a helper the function defines and calls, and a `wait` on
+    something that reports a timeout by raising. They are in the table so that the boundary is run
+    rather than only described. Naming them rather than pointing at a position is deliberate: two
+    earlier sentences here said *"the last case"*, and both went stale the next time a row was
+    appended.
+    """
+    wrong = []
+    for label, refused, source in BOUNDED_WAIT_CASES:
+        found = _silent_waits(source, label.replace(" ", "-"))
+        if bool(found) != refused:
+            wrong.append(f"{label}: expected {'a refusal' if refused else 'no refusal'}, "
+                         f"got {found or 'none'}")
+    assert not wrong, "the rule does not sort its own cases:\n  " + "\n  ".join(wrong)
+
+
+def test_every_bounded_wait_says_when_it_did_not_complete():
+    """A bounded wait that times out is silent, and the next line takes the blame.
+
+    Constructed rather than argued (CHG-20260908-01): shorten the join in
+    `test_an_attachment_during_a_walk_does_not_start_a_second_walk` so it cannot complete, and the
+    test reported **"the attachment was never walked"** — while the attachment *was* walked, and
+    what had not happened was the wait. The reader is sent after a dropped attachment that is
+    sitting in the store.
+
+    Two shapes, because the two calls answer differently:
+
+    * `Thread.join(timeout=...)` returns nothing whether it completed or not, so the function must
+      ask `is_alive()` separately.
+    * `Event.wait`, `Condition.wait_for` and `Lock.acquire` **return the answer**, so dropping it
+      as a statement is the same silence. Keeping it in a name is not held here — that was a third
+      branch for five rounds and is now the first entry in the escape list, with the measurement
+      that took it out.
+
+    Three limits, then a list of what escapes. Each limit is a decision about what this rule is
+    for; the list after them is shapes, and it is counted in bullets rather than in cases — several
+    bullets hold more than one spelling of the same escape.
+
+    It asks that a liveness check exist in the same function — not that it follow the join, and not
+    that it be an `assert`. The wait in `_config_nodes_keys` runs in a `finally`, where raising
+    unconditionally would replace whatever the body was already failing with, so it checks and
+    raises conditionally instead. The question must be **asked**, though: `assert thread.is_alive`,
+    the attribute without its parentheses, is an inert guard that an earlier version of this rule
+    accepted, because it looked for the attribute.
+
+    It matches **by expression, and expression identity here is textual**. That cuts both ways, and
+    the second way is the one worth knowing: the loop join in
+    `test_the_gate_never_rests_with_something_still_flagged` is guarded by a comprehension over the
+    same collection, and passes only because the comprehension's variable is spelled `t` like the
+    loop's. Rename either and the rule refuses a guard that is correct. What it buys is
+    the other direction — a function that joins `thread` and asks about `first` has copied a guard
+    rather than written one, and is refused.
+
+    It holds this package's tests only. `src/` and `tools/` have no bounded `Thread.join` or
+    `Event.wait` at all; `src/` does set a 30-second socket timeout on the request handler, which
+    is a ceiling that **raises** when it is reached and so cannot go unreported. The neighbouring
+    `test_the_server_waits_and_the_walk_does_not` is not a wider version of this rule and is not
+    cited as one: it reads one method's source and refuses three literal substrings, one of which
+    is `".join()"` with empty parentheses — which no bounded join is spelled with.
+
+    **What still escapes, named rather than left to be found.** Each of these was constructed by a
+    seat and run through this rule, which accepted it:
+
+    * a ceiling held in a variable, `t.join(deadline)` — `_bounded`'s stated price, since
+      `sep.join(parts)` is the same syntax;
+    * one passed as `**{"timeout": 10}`;
+    * a positional ceiling on `acquire` or `wait_for`, whose first argument is not the ceiling;
+    * **an answer kept in a name at all** — `done = ev.wait(timeout=1)`, read or not. This was a
+      third branch of the rule for five rounds, with a scope walk behind it. Measured, it held
+      **none** of the seven sites this record repairs, and the shape it looks for occurs nowhere
+      under `tests/`; measured against that, it was the source of every false positive this record
+      produced, one per round, each closed and reopened one scope down. Both seats were asked
+      whether it should ship and both said remove. What it aimed at is here instead, in this list,
+      and as a case row that keeps it visible. How long this list is is not stated anywhere: the
+      figure has been wrong four times, and the list is where it lives;
+    * an `is_alive()` whose result nothing acts on — `assert not failures,
+      f"still alive: {t.is_alive()}"`. A rule about meaning rather than shape;
+    * a guard **written in a lambda that is never called** — `check = lambda: t.is_alive()` and
+      nothing calls `check`. Refused for one round, on the argument that it may never run; that
+      argument is true of this shape and false of the two spellings beside it, and the rule cannot
+      tell them apart without following the name. `is_alive` occurs inside no lambda anywhere in
+      `tests/`, so what the refusal held was nothing and what it cost was correct code;
+    * an inverted guard: `assert thread.is_alive()` after the join asks the question and accepts
+      the wrong answer;
+    * an answer **returned by a lambda**: `run = lambda: ev.wait(timeout=1)` is accepted while
+      `run = lambda: t.join(timeout=1)` is refused, because the answering half keys on statements
+      and a lambda body is never one. A lambda hands its value back and this rule cannot see who
+      takes it, so the lambda rule reaches `join` and says so;
+    * `await ev.wait(timeout=1)`, whose statement is an `Await` wrapping the call. No `async def`
+      in this suite contains a bounded wait, and the rule walks `AsyncFunctionDef` and `AsyncFor`,
+      so it looks wider here than it is.
+
+    **And two false positives, for the same reason.** The first: a call by one of these names
+    that reports a timeout by **raising** rather than returning — `subprocess.Popen.wait` and
+    `threading.Barrier.wait` are the two in the standard library — where discarding the answer is
+    correct and this rule would refuse it. Not every non-lock `acquire` is one; the shape is
+    "raises on timeout", not "is not a lock", which is how this sentence read for a revision.
+    No call by those *names* is in `tests/` today — `examples/demo/make_fixture.py` has two
+    `Popen.wait`s, outside this rule's reach — but the family is here: `tests/test_store.py`'s
+    `job.result(timeout=30)` is the same kind of wait under a name this rule does not read.
+
+    The second is `asked` being scope-local, in the body above: a join guarded by a helper the
+    function defines **and calls** is refused, because a guard is counted only in the function it
+    is written in. The reason is at that line, and the case is a row.
+    """
+    silent = []
+    for path in sorted(pathlib.Path(__file__).parent.glob("*.py")):
+        silent += _silent_waits(path.read_text(encoding="utf-8"), path.name)
+
+    assert not silent, (
+        "a bounded wait can time out here without saying so, and the assertion after it blames "
+        "the effect for something the wait did not do:\n  " + "\n  ".join(sorted(silent)))

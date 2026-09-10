@@ -3906,6 +3906,184 @@ CHG-20260907-28 and built by no record yet.''',
         '''    Node("acceptance_failed", STEP, "back into the module loop", next="intake", mode=RUNNER),''',
         "tests/test_server.py::"
         "test_nothing_asks_anybody_before_the_node_the_append_guard_counts_over"),
+
+    # -- bounded-wait (CHG-20260908-01) -----------------------------------------------------
+    # Seven bounded waits in `test_server.py` could time out without saying so: five joins with
+    # no `is_alive()` after them, and two `Event.wait(timeout=)` answers thrown away. Shortening
+    # one join made the test report "the attachment was never walked" while the attachment was
+    # walked, so the reader is sent after a dropped file that is sitting in the store.
+    #
+    # **When the wait times out**, no behavioural test fails if one of these guards is deleted:
+    # the run reaches the same next line and fails there, with the same wrong sentence it had
+    # before. That condition is the whole record, and it has now been dropped twice -- first as
+    # "deleting an `assert` makes no test fail", which the first entry here refutes, and then as a
+    # sentence whose colon promised a justification and delivered "the run fails there", which is a
+    # behavioural test failing (both seats).
+    #
+    # Most entries below are therefore caught by the rule and not by the test they sit in. Three
+    # are not: the arrangement group, which the stranded test refuses itself.
+    #
+    # Two of them — `a guard names the question without asking it` and `a ceiling passed
+    # positionally stops counting as a ceiling` — are escapes a seat constructed against the rule's
+    # first version. Both passed it, and they were "the last two" until later entries went in
+    # between them. Naming them is what a position could not do — and the two sentences that
+    # replaced the position were each wrong about the entries that had moved since, which is why
+    # this one counts nothing (a seat, three times).
+    Mutation(
+        "bounded-wait", "a join's timeout goes back to being silent",
+        REPO / "tests" / "test_server.py",
+        '''    thread.join(timeout=10)
+    assert not thread.is_alive(), (
+        "the walk did not finish inside the join's timeout, so what follows would "
+        "blame the attachment for something the wait did not do")
+
+    assert not gave_up, (''',
+        '''    thread.join(timeout=10)
+
+    assert not gave_up, (''',
+        "tests/test_server.py::test_every_bounded_wait_says_when_it_did_not_complete"),
+
+    Mutation(
+        "bounded-wait", "the wait in a `finally` goes back to discarding its result",
+        REPO / "tests" / "test_server.py",
+        '''        if thread.is_alive():
+            note = ("the server thread outlived `_config_nodes_keys`. Nothing else in this "
+                    "file reports that — measured — so this is the only place it is said: a "
+                    "daemon thread is still holding a server this helper was finished with")''',
+        '''        if False:
+            note = ("the server thread outlived `_config_nodes_keys`. Nothing else in this "
+                    "file reports that — measured — so this is the only place it is said: a "
+                    "daemon thread is still holding a server this helper was finished with")''',
+        "tests/test_server.py::test_every_bounded_wait_says_when_it_did_not_complete"),
+
+    # By expression, not by presence. A guard copied from the function next door names a thread
+    # this one never joined, and would pass a rule that only asked whether `is_alive` appeared.
+    #
+    # `httpd` rather than a name nothing binds, so the mutation is a copied guard and not a
+    # `NameError` (a seat). It does not isolate cleanly either: `httpd` has no
+    # `is_alive`, so the mutated helper would also raise `AttributeError` at every call site. The
+    # rule refuses it first, at author time, and no in-scope name in that function has the
+    # attribute — so this entry shows the rule reading the expression and not what it would cost
+    # at runtime (a seat, again).
+    Mutation(
+        "bounded-wait", "a guard asks about something this function never waited on",
+        REPO / "tests" / "test_server.py",
+        '''        if thread.is_alive():
+            note = (''',
+        '''        if httpd.is_alive():
+            note = (''',
+        "tests/test_server.py::test_every_bounded_wait_says_when_it_did_not_complete"),
+
+    Mutation(
+        "bounded-wait", "a walk throws away the answer its wait gave it",
+        REPO / "tests" / "test_server.py",
+        '''            if not release[held].wait(timeout=10):
+                gave_up.append(held)''',
+        '''            release[held].wait(timeout=10)''',
+        "tests/test_server.py::test_every_bounded_wait_says_when_it_did_not_complete"),
+
+    # The arrangement the rule cannot see. `attach` ends in `_advance`, which walks on the
+    # *calling* thread when nothing is in flight, so with the first walk returning at once the
+    # attach below ran the second walk itself and sat in it for the full ten seconds. Every walk
+    # ran, the count came out right, and the mid-walk arrival the test is named for never
+    # happened. Holding the first walk is what puts it back.
+    Mutation(
+        "bounded-wait", "the walk that must block stops blocking, and `attach` walks it itself",
+        REPO / "tests" / "test_server.py",
+        '''        if held in entered:''',
+        '''        if held == 2:''',
+        "tests/test_server.py::test_an_action_arriving_as_the_walk_decides_to_stop_is_not_stranded"),
+
+    # **Which line refuses, measured rather than assumed.** A seat pointed out that the mutation
+    # above is caught by `entered[1].wait` — with `held == 2` the first walk never signals, so the
+    # test dies ten seconds in and `ran_on` is never reached. The seat proposed this one as the
+    # entry that would put `ran_on` on the stand. Run: it is caught by `gave_up`, not by `ran_on`,
+    # at 12.34s. From those two runs this comment concluded **nothing puts `ran_on` on the
+    # stand, and no small mutation can** — and stood on that for a round after
+    # `the last attachment arrives after the walk it was to interrupt has ended`
+    # refuted it. The reason was true of walks 1 and 2 only. Three entries now pin the
+    # arrangement, from three sides, and the third of them is what puts `ran_on` on the stand.
+    Mutation(
+        "bounded-wait", "the first walk signals and does not hold, so `attach` walks the second",
+        REPO / "tests" / "test_server.py",
+        '''            # into a stopped run. The test thread reads it below.
+            if not release[held].wait(timeout=10):''',
+        '''            # into a stopped run. The test thread reads it below.
+            if held != 1 and not release[held].wait(timeout=10):''',
+        "tests/test_server.py::test_an_action_arriving_as_the_walk_decides_to_stop_is_not_stranded"),
+
+    # A join made once a turn, guarded once outside the turn. The guard here is correct — it is a
+    # comprehension over the whole collection — and moving it out of the loop is the shape the rule
+    # learned to refuse this round.
+    Mutation(
+        "bounded-wait", "a loop's joins are answered for by the last turn only",
+        REPO / "tests" / "test_server.py",
+        '''    alive = [t.name for t in threads if t.is_alive()]''',
+        '''    alive = [] if not t.is_alive() else [t.name]''',
+        "tests/test_server.py::test_every_bounded_wait_says_when_it_did_not_complete"),
+
+    Mutation(
+        "bounded-wait", "a guard names the question without asking it",
+        REPO / "tests" / "test_server.py",
+        '''    assert not thread.is_alive(), (
+        "the walk did not finish inside the join's timeout, so what follows would "
+        "blame the attachment for something the wait did not do")
+    assert len(walks) == 2, "the attachment was never walked"''',
+        '''    assert thread.is_alive, (
+        "the walk did not finish inside the join's timeout, so what follows would "
+        "blame the attachment for something the wait did not do")
+    assert len(walks) == 2, "the attachment was never walked"''',
+        "tests/test_server.py::test_every_bounded_wait_says_when_it_did_not_complete"),
+
+    # **This is the entry that puts `ran_on` on the stand**, and it exists because a seat built
+    # what two rounds of this record called impossible. `walk` blocks only for walks 1 and 2, so an
+    # arrangement defect that lands on the **third** produces no `gave_up` entry and no timeout:
+    # move the last attachment to after the join and `_advance` runs walk 3 on the main thread,
+    # `first` is not alive, the count is still 3, and `ran_on` is the only line that refuses.
+    # Measured at 1.02s, deterministic — the join orders it.
+    Mutation(
+        "bounded-wait", "the last attachment arrives after the walk it was to interrupt has ended",
+        REPO / "tests" / "test_server.py",
+        '''    runner.attach(runner.state.version, "two.md", b"2")
+    release[2].set()
+    first.join(timeout=10)''',
+        '''    release[2].set()
+    first.join(timeout=10)
+    runner.attach(runner.state.version, "two.md", b"2")''',
+        "tests/test_server.py::test_an_action_arriving_as_the_walk_decides_to_stop_is_not_stranded"),
+
+    # The one wait this record repaired that is not a `join` or an `Event`: a fixed
+    # `time.sleep(3.0)` before an assertion on `threading.active_count()`, which failed once in a
+    # three-file run and passed alone. It waits for the count now. This mutation stops the
+    # connections being closed at all, so the wait can only end at its bound — which is what the
+    # repaired assertion has to keep refusing.
+    Mutation(
+        "bounded-wait", "nothing closes a connection that says nothing",
+        REPO / "tests" / "test_server.py",
+        '''    httpd.RequestHandlerClass.timeout = 2      # 30 in the shipped code; short enough to test''',
+        '''    httpd.RequestHandlerClass.timeout = 600    # 30 in the shipped code; short enough to test''',
+        "tests/test_server.py::test_a_connection_that_says_nothing_does_not_hold_a_thread_forever"),
+
+    # The rule's own boundary is a table of constructed cases in the test file, and a table is a
+    # thing that can quietly stop matching the code beside it. This mutates the rule and expects
+    # the table to refuse, which is the only entry here whose subject is the cases rather than the
+    # tree.
+    Mutation(
+        "bounded-wait", "a `while` stops being a loop",
+        REPO / "tests" / "test_server.py",
+        '''        if isinstance(node, (ast.For, ast.AsyncFor, ast.While, ast.ListComp, ast.SetComp,''',
+        '''        if isinstance(node, (ast.For, ast.AsyncFor, ast.ListComp, ast.SetComp,''',
+        "tests/test_server.py::test_the_rule_over_bounded_waits_refuses_what_it_says_it_refuses"),
+
+    Mutation(
+        "bounded-wait", "a ceiling passed positionally stops counting as a ceiling",
+        REPO / "tests" / "test_server.py",
+        '''    first.join(timeout=10)
+    assert not first.is_alive(), (
+        "the first walk did not finish inside the join's timeout, so what follows would blame "
+        "the second attachment for something the wait did not do")''',
+        '''    first.join(10)''',
+        "tests/test_server.py::test_every_bounded_wait_says_when_it_did_not_complete"),
 ]
 
 
