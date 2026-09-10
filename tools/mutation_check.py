@@ -3925,10 +3925,10 @@ CHG-20260907-28 and built by no record yet.''',
     #
     # Two of them — `a guard names the question without asking it` and `a ceiling passed
     # positionally stops counting as a ceiling` — are escapes a seat constructed against the rule's
-    # first version. Both passed it, and they were "the last two" until two later entries went in
-    # between them. Naming them is what a position could not do — and the sentence that replaced
-    # the position was wrong about where the first of those went, and out of date about the second
-    # before it was written (a seat, twice).
+    # first version. Both passed it, and they were "the last two" until later entries went in
+    # between them. Naming them is what a position could not do — and the two sentences that
+    # replaced the position were each wrong about the entries that had moved since, which is why
+    # this one counts nothing (a seat, three times).
     Mutation(
         "bounded-wait", "a join's timeout goes back to being silent",
         REPO / "tests" / "test_server.py",
@@ -4052,10 +4052,6 @@ CHG-20260907-28 and built by no record yet.''',
     runner.attach(runner.state.version, "two.md", b"2")''',
         "tests/test_server.py::test_an_action_arriving_as_the_walk_decides_to_stop_is_not_stranded"),
 
-    # The rule's own boundary is a table of constructed cases in the test file, and a table is a
-    # thing that can quietly stop matching the code beside it. This mutates the rule and expects
-    # the table to refuse, which is the only entry here whose subject is the cases rather than the
-    # tree.
     # The one wait this record repaired that is not a `join` or an `Event`: a fixed
     # `time.sleep(3.0)` before an assertion on `threading.active_count()`, which failed once in a
     # three-file run and passed alone. It waits for the count now. This mutation stops the
@@ -4068,6 +4064,10 @@ CHG-20260907-28 and built by no record yet.''',
         '''    httpd.RequestHandlerClass.timeout = 600    # 30 in the shipped code; short enough to test''',
         "tests/test_server.py::test_a_connection_that_says_nothing_does_not_hold_a_thread_forever"),
 
+    # The rule's own boundary is a table of constructed cases in the test file, and a table is a
+    # thing that can quietly stop matching the code beside it. This mutates the rule and expects
+    # the table to refuse, which is the only entry here whose subject is the cases rather than the
+    # tree.
     Mutation(
         "bounded-wait", "a `while` stops being a loop",
         REPO / "tests" / "test_server.py",

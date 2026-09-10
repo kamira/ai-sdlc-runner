@@ -3849,6 +3849,7 @@ def test_a_connection_that_says_nothing_does_not_hold_a_thread_forever(wire):
     _send, idle, _httpd, _operator, _runner = wire
     before = threading.active_count()
     idle(8)
+    opened = time.monotonic()
     time.sleep(0.7)
     assert threading.active_count() > before, "the connections were never accepted"
 
@@ -3861,17 +3862,20 @@ def test_a_connection_that_says_nothing_does_not_hold_a_thread_forever(wire):
     # Ten seconds is not the deadline and is not a measurement of the machine. It is the point at
     # which "the threads have not gone" stops being a question about load, and the message says
     # which of the two it is reporting.
-    deadline = time.monotonic() + 10.0
-    while threading.active_count() > before and time.monotonic() < deadline:
+    # The two figures in the message below are computed, not typed. Typed, they were the bound and
+    # the bound minus two, and both were short by the 0.7s already slept above — and untied to the
+    # bound, so raising it would have left the sentence saying the old number (a seat).
+    started = time.monotonic()
+    while threading.active_count() > before and time.monotonic() - started < 10.0:
         time.sleep(0.05)
 
-    still = threading.active_count()
+    still, waited = threading.active_count(), time.monotonic() - opened
     assert still <= before, (
-        f"{still - before} thread(s) over the count this test started at, {10.0:.0f}s after eight "
-        f"connections that said nothing were opened, and {8.0:.0f}s past the fixture's 2s "
-        f"deadline. Either the deadline is not closing them, or this machine did not schedule "
-        f"them out in ten seconds — the first is the defect, the second is why this waits for the "
-        f"count rather than sleeping a fixed three")
+        f"{still - before} thread(s) over the count this test started at, {waited:.1f}s after "
+        f"eight connections that said nothing were opened and {waited - 2.0:.1f}s past the "
+        f"fixture's 2s deadline. Either the deadline is not closing them, or this machine did not "
+        f"schedule them out in that time — the first is the defect, the second is why this waits "
+        f"for the count rather than sleeping a fixed three")
 
 
 @pytest.mark.parametrize("length,says", [
@@ -4472,6 +4476,10 @@ def test_a_burst_of_connections_is_queued_rather_than_refused(tmp_path):
 def _own_statements(fn):
     """`fn`'s own statements: nested `def`s left to themselves, a lambda's expressions kept.
 
+    A lambda's **defaults** are kept for a different reason than its body: they are evaluated in
+    this frame, at the `lambda` itself. Dropping them made `g = lambda ok=t.join(timeout=1): ok`
+    invisible and `g = lambda ok=t.is_alive(): ok` a refusal (a seat).
+
     The summary said *"and lambdas left to themselves"* for a round after the comment below
     withdrew it — the fifth round in which a retraction reached one copy and not another.
 
@@ -4496,6 +4504,7 @@ def _own_statements(fn):
             continue
         if isinstance(node, ast.Lambda):
             stack.append(node.body)
+            stack.append(node.args)
             continue
         out.append(node)
         stack.extend(ast.iter_child_nodes(node))
@@ -4511,10 +4520,17 @@ def _lambda_nodes(fn):
     not counted — and a lambda's **parameter** is a different name from `fn`'s (a seat constructed
     both).
     """
+    called = {id(n.func) for n in ast.walk(fn)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Lambda)}
     ids, bound = set(), set()
     for lam in [n for n in ast.walk(fn) if isinstance(n, ast.Lambda)]:
-        ids |= {id(n) for n in ast.walk(lam.body)}
         bound |= {a.arg for a in ast.walk(lam.args) if isinstance(a, ast.arg)}
+        # A lambda **called where it is written** runs, so its guard is not a guard that may never
+        # run. `assert not (lambda: t.is_alive())()` was refused for a round, on a reason that is
+        # false of exactly that shape — and refused it while the answering half was left open for
+        # `assert (lambda: ev.wait(...))()`, the identical construction (a seat).
+        if id(lam) not in called:
+            ids |= {id(n) for n in ast.walk(lam.body)}
     return ids, bound
 
 
@@ -4562,10 +4578,15 @@ _ANSWERING = ("wait", "wait_for", "acquire")
 def _binds(fn):
     """The names `fn` binds itself, which are the ones a load inside it does not read from outside.
 
-    Six ways, because a first version knew two — arguments and `Name` in `Store` — and a seat built
-    the third: `def done(): ...` binds `done` through a field on the node, not through a `Name`.
-    `class` and the two `as` forms bind the same way. `global` and `nonlocal` say the opposite in
-    so many words, so they are taken back out.
+    Every node that binds a name in its own scope, which is not a list this record has managed to
+    enumerate: a first version knew two — arguments and `Name` in `Store` — a seat built the third
+    (`def done(): ...`, which binds through a field on the node rather than a `Name`), and a later
+    read added the three `match` patterns to a docstring that had just said *"six ways"*. The count
+    is gone; the rule is the sentence above it.
+
+    `nonlocal` is the one exception, and `global` was written as a second one for a round: they do
+    not say the same thing. `nonlocal done` means the name **is** the enclosing scope's, so it is
+    taken back out; `global done` means it can never be, so it stays a binding.
     """
     out = {a.arg for a in ast.walk(fn.args) if isinstance(a, ast.arg)}
     unbound = set()
@@ -4578,8 +4599,14 @@ def _binds(fn):
             out.add(n.asname or n.name.split(".")[0])
         elif isinstance(n, ast.ExceptHandler) and n.name:
             out.add(n.name)
-        elif isinstance(n, (ast.Global, ast.Nonlocal)):
+        elif isinstance(n, ast.Global):
+            out |= set(n.names)
+        elif isinstance(n, ast.Nonlocal):
             unbound |= set(n.names)
+        elif isinstance(n, (ast.MatchAs, ast.MatchStar)) and n.name:
+            out.add(n.name)
+        elif isinstance(n, ast.MatchMapping) and n.rest:
+            out.add(n.rest)
     return out - unbound
 
 
@@ -4593,31 +4620,43 @@ def _reads(fn):
     only two of the six ways Python binds one, let `def done(): ...` through. Every one was
     constructed by a seat.
 
-    Four, then: a lambda's parameter and a comprehension's target are names of their own, and
-    `lambda done: done` and `[done for done in xs]` both read as reads of `fn`'s `done` until they
-    are subtracted. A seat constructed both.
+    Five, and the fifth is the one that made this a walk rather than a filter. Subtracting the
+    *names* a lambda or comprehension binds took them out of every load in the function, so
+    `h = lambda done: done` two lines above a genuine `assert done` refused correct code; and
+    taking defaults off every descendant charged `def h(x=done)` inside `g`, where `done` is `g`'s
+    own local, to `fn`. Both were constructed by a seat and run before this was written. A scope is
+    read here, then each scope written directly inside it, minus what that scope binds.
     """
     shadowed = set()
+    for lam in [n for n in ast.walk(fn) if isinstance(n, ast.Lambda)]:
+        bound = {a.arg for a in ast.walk(lam.args) if isinstance(a, ast.arg)}
+        shadowed |= {id(n) for n in ast.walk(lam.body)
+                     if isinstance(n, ast.Name) and n.id in bound}
     for comp in [n for n in ast.walk(fn)
                  if isinstance(n, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp))]:
-        shadowed |= {n.id for gen in comp.generators for n in ast.walk(gen.target)
-                     if isinstance(n, ast.Name)}
-    _, lambda_bound = _lambda_nodes(fn)
-    shadowed |= lambda_bound
+        bound = {n.id for gen in comp.generators for n in ast.walk(gen.target)
+                 if isinstance(n, ast.Name)}
+        shadowed |= {id(n) for n in ast.walk(comp)
+                     if isinstance(n, ast.Name) and n.id in bound}
+
     out = {n.id for n in _own_statements(fn)
-           if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id not in shadowed}
-    for inner in [n for n in ast.walk(fn)
-                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n is not fn]:
-        bound = _binds(inner)
-        out |= {n.id for n in _own_statements(inner)
-                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id not in bound}
-        # A default and a decorator are written inside `inner` and **evaluated in `fn`**, so a name
-        # read there is read by `fn` whatever `inner` binds. `def g(done=done)` was refused for a
-        # round (a seat).
+           if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and id(n) not in shadowed}
+    for inner in [n for n in _own_statements(fn)
+                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+        # A default, a decorator and an annotation are written inside `inner` and **evaluated
+        # here**, so a name read there is read by this scope whatever `inner` binds.
+        # `def g(done=done)` was refused for a round; then every descendant's defaults were taken,
+        # which charged a deeper function's own local to this one; then annotations were left out
+        # of the list, which refused `def g() -> done` (a seat, all three times). There is no
+        # `from __future__ import annotations` in this file, so an annotation is evaluated.
+        annotations = [a.annotation for a in ast.walk(inner.args)
+                       if isinstance(a, ast.arg) and a.annotation]
         for expr in (list(inner.args.defaults) + [d for d in inner.args.kw_defaults if d]
-                     + list(inner.decorator_list)):
+                     + list(inner.decorator_list) + annotations
+                     + ([inner.returns] if inner.returns else [])):
             out |= {n.id for n in ast.walk(expr)
                     if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+        out |= _reads(inner) - _binds(inner)
     return out
 
 
@@ -4641,10 +4680,10 @@ def _under_a_loop(body):
 def _silent_waits(text, where):
     """The bounded waits in `text` that **this rule can see** time out without saying so.
 
-    Not every one: its limits are six escapes and two false positives, listed on
-    `test_every_bounded_wait_says_when_it_did_not_complete` and run as cases in
-    `BOUNDED_WAIT_CASES`. The summary line said *"every"* for a round, which is the shape this
-    record's own row 7 is about.
+    Not every one. Its limits are listed on `test_every_bounded_wait_says_when_it_did_not_complete`
+    and run as cases in `BOUNDED_WAIT_CASES`; no count of them is given here, because this record
+    has now miscounted that list three times and the list is where it lives. The summary line said
+    *"every"* for a round, which is the shape this record's own row 7 is about.
 
     Split out of the test so those cases run **this** code and not a copy of it.
     """
@@ -4898,6 +4937,116 @@ def f(ev, use):
 def f(ev):
     run = lambda: ev.wait(timeout=1)
     run()
+"""),
+
+    # -- the scopes ------------------------------------------------------------------------------
+    ("a read, with a lambda parameter sharing the name", False, """
+def f(ev):
+    done = ev.wait(timeout=1)
+    g = lambda done: done
+    assert done
+"""),
+    ("a read, with a comprehension target sharing it", False, """
+def f(ev, xs):
+    done = ev.wait(timeout=1)
+    ys = [done for done in xs]
+    assert done and ys
+"""),
+    ("a deep default reading the middle scope's own local", True, """
+def f(ev):
+    done = ev.wait(timeout=1)
+    def g():
+        done = 1
+        def h(x=done):
+            return x
+        return h()
+    return g()
+"""),
+    ("a lambda parameter inside a nested `def`", True, """
+def f(ev):
+    done = ev.wait(timeout=1)
+    def g():
+        return lambda done: done
+    g()
+"""),
+    ("a `match` pattern binding the name", True, """
+def f(ev, x):
+    done = ev.wait(timeout=1)
+    def g():
+        match x:
+            case done:
+                return done
+    assert g()
+"""),
+    ("a nested `global` of the same name", True, """
+def f(ev):
+    done = ev.wait(timeout=1)
+    def g():
+        global done
+        return done
+    assert g()
+"""),
+    ("an annotation reading the answer", False, """
+def f(ev):
+    done = ev.wait(timeout=1)
+    def g() -> done:
+        return 1
+    g()
+"""),
+    ("a guard in a lambda called where it is written", False, """
+def f(t):
+    t.join(timeout=1)
+    assert not (lambda: t.is_alive())()
+"""),
+    ("a guard in a lambda's default", False, """
+def f(t):
+    t.join(timeout=1)
+    g = lambda ok=t.is_alive(): ok
+    assert not g()
+"""),
+    ("a wait in a lambda's default", True, """
+def f(t):
+    g = lambda ok=t.join(timeout=1): ok
+    g()
+"""),
+
+    # -- the escapes the docstring names, as rows ------------------------------------------------
+    # Accepted, every one, and that is the point: an escape nobody can run is an escape that can
+    # close or widen with nothing to say so (a seat). Each of these is a line to change on purpose.
+    ("escape: a ceiling held in a variable", False, """
+def f(t, deadline):
+    t.join(deadline)
+"""),
+    ("escape: a ceiling passed as **kwargs", False, """
+def f(t):
+    t.join(**{"timeout": 10})
+"""),
+    ("escape: a positional ceiling on `wait_for`", False, """
+def f(cond, pred):
+    cond.wait_for(pred, 10)
+"""),
+    ("escape: an answer assigned to something that is not a name", False, """
+def f(self, ev):
+    self.ok = ev.wait(timeout=1)
+"""),
+    ("escape: an answer read once and ignored", False, """
+def f(ev):
+    ok = ev.wait(timeout=1)
+    return repr(ok) and None
+"""),
+    ("escape: an `is_alive()` nothing acts on", False, """
+def f(t, failures):
+    t.join(timeout=10)
+    assert not failures, f"still alive: {t.is_alive()}"
+"""),
+    ("escape: an inverted guard", False, """
+def f(t):
+    t.join(timeout=10)
+    assert t.is_alive()
+"""),
+    ("escape: an awaited answer", False, """
+async def f(ev):
+    await ev.wait(timeout=1)
 """),
 )
 
