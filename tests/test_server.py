@@ -4498,6 +4498,17 @@ def _own_statements(fn):
         # function that writes it, where a guard can live (a seat, after another seat had asked
         # for lambdas to be examined at all).
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Its statements are its own; its **defaults, decorators and annotations** are written
+            # inside it and evaluated here, at the `def`. `def g(ok=t.is_alive())` right after a
+            # join is a guard, and was refused for a round because these were dropped with the
+            # body (a seat). A lambda's `args` are kept below for the same reason.
+            stack.extend(node.args.defaults)
+            stack.extend(d for d in node.args.kw_defaults if d)
+            stack.extend(node.decorator_list)
+            stack.extend(a.annotation for a in ast.walk(node.args)
+                         if isinstance(a, ast.arg) and a.annotation)
+            if node.returns:
+                stack.append(node.returns)
             continue
         if isinstance(node, ast.Lambda):
             stack.append(node.body)
@@ -4506,31 +4517,6 @@ def _own_statements(fn):
         out.append(node)
         stack.extend(ast.iter_child_nodes(node))
     return out
-
-
-def _lambda_nodes(fn):
-    """The ids inside a `lambda` in `fn` **whose guard may never run**.
-
-    Not everything inside a lambda: one called where it is written does run, and its ids are left
-    out. It also returned the names those lambdas bind, for a caller that stopped reading them and
-    then stopped existing — the summary advertised both for a round after each stopped being true.
-
-    A lambda's expressions are `fn`'s (see `_own_statements`), which is what lets a bounded `join`
-    inside one be answered by the function that writes it. What must not follow is that a guard
-    written in a lambda counts: unless it is called on the spot, it may never run, which is the
-    reason a nested `def`'s guard is not counted either.
-    """
-    called = {id(n.func) for n in ast.walk(fn)
-              if isinstance(n, ast.Call) and isinstance(n.func, ast.Lambda)}
-    ids = set()
-    for lam in [n for n in ast.walk(fn) if isinstance(n, ast.Lambda)]:
-        # A lambda **called where it is written** runs, so its guard is not a guard that may never
-        # run. `assert not (lambda: t.is_alive())()` was refused for a round, on a reason that is
-        # false of exactly that shape — and refused it while the answering half was left open for
-        # `assert (lambda: ev.wait(...))()`, the identical construction (a seat).
-        if id(lam) not in called:
-            ids |= {id(n) for n in ast.walk(lam.body)}
-    return ids
 
 
 def _bounded(node, name):
@@ -4612,15 +4598,15 @@ def _silent_waits(text, where):
         # cases below construct on purpose. Both directions are wrong for some program; this one
         # is wrong for a program no file under `tests/` contains (two seats: one asked which way
         # it had been decided, the other refused the dismissal that first answered it).
-        # A guard written in a lambda does not count, for the reason a guard in a nested `def`
-        # does not: it may never run. `t.join(timeout=1); check = lambda: t.is_alive()` was
-        # accepted for a round, with the strict rule applied to `def` and the lax one to `lambda`
-        # (a seat).
-        in_a_lambda = _lambda_nodes(fn)
+        # **A guard written in a lambda counts.** For one round it did not, on the argument that
+        # it may never run — and that refused `check = lambda: t.is_alive(); assert not check()`,
+        # correct code, while `is_alive` inside a lambda occurs **zero times** anywhere under
+        # `tests/`. Nothing held, a false positive paid: the same trade two seats ruled against
+        # for this rule's third branch, settled the same way. The shape it aimed at is an escape.
         asked = {}
         for n in body:
             if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                    and n.func.attr == "is_alive" and id(n) not in in_a_lambda):
+                    and n.func.attr == "is_alive"):
                 asked.setdefault(ast.unparse(n.func.value), []).append(id(n))
         looping = _under_a_loop(body)
         for node in body:
@@ -4724,11 +4710,31 @@ def f(t):
         assert not t.is_alive()
     report()
 """),
-    ("a guard written in a lambda, which may never run", True, """
+    ("escape: a guard in a lambda nothing calls", False, """
 def f(t):
     t.join(timeout=1)
     check = lambda: t.is_alive()
     return check
+"""),
+    ("a guard in a lambda bound to a name and called", False, """
+def f(t):
+    t.join(timeout=1)
+    check = lambda: t.is_alive()
+    assert not check()
+"""),
+    ("a guard in a nested `def`'s default", False, """
+def f(t):
+    t.join(timeout=1)
+    def g(ok=t.is_alive()):
+        return ok
+    assert not g()
+"""),
+    ("a guard in a nested `def`'s annotation", False, """
+def f(t):
+    t.join(timeout=1)
+    def g() -> t.is_alive():
+        return 1
+    g()
 """),
     ("an answer a lambda returns, which this rule cannot follow", False, """
 def f(ev):
@@ -4736,7 +4742,7 @@ def f(ev):
     run()
 """),
 
-    # -- the scopes ------------------------------------------------------------------------------
+    # -- lambdas, nested `def`s, and when their expressions run ------------------------------------------------------------------------------
     ("a guard in a lambda called where it is written", False, """
 def f(t):
     t.join(timeout=1)
@@ -4802,9 +4808,12 @@ async def f(ev):
 def test_the_rule_over_bounded_waits_refuses_what_it_says_it_refuses():
     """The rule's boundary, run rather than described.
 
-    The last case is the false positive the rule's docstring names: a guard written in a helper the
-    function defines and calls. It is here so that the cost of `asked` being scope-local is a line
-    somebody has to change deliberately, not a paragraph.
+    Two rows are not defects the rule catches, and are labelled so: the **false positives** the
+    docstring names — a join guarded by a helper the function defines and calls, and a `wait` on
+    something that reports a timeout by raising. They are in the table so that the boundary is run
+    rather than only described. Naming them rather than pointing at a position is deliberate: two
+    earlier sentences here said *"the last case"*, and both went stale the next time a row was
+    appended.
     """
     wrong = []
     for label, refused, source in BOUNDED_WAIT_CASES:
@@ -4876,6 +4885,11 @@ def test_every_bounded_wait_says_when_it_did_not_complete():
       figure has been wrong four times, and the list is where it lives;
     * an `is_alive()` whose result nothing acts on — `assert not failures,
       f"still alive: {t.is_alive()}"`. A rule about meaning rather than shape;
+    * a guard **written in a lambda that is never called** — `check = lambda: t.is_alive()` and
+      nothing calls `check`. Refused for one round, on the argument that it may never run; that
+      argument is true of this shape and false of the two spellings beside it, and the rule cannot
+      tell them apart without following the name. `is_alive` occurs inside no lambda anywhere in
+      `tests/`, so what the refusal held was nothing and what it cost was correct code;
     * an inverted guard: `assert thread.is_alive()` after the join asks the question and accepts
       the wrong answer;
     * an answer **returned by a lambda**: `run = lambda: ev.wait(timeout=1)` is accepted while
