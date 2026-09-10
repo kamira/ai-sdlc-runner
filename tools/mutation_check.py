@@ -3925,8 +3925,9 @@ CHG-20260907-28 and built by no record yet.''',
     #
     # Two of them — `a guard names the question without asking it` and `a ceiling passed
     # positionally stops counting as a ceiling` — are escapes a seat constructed against the rule's
-    # first version. Both passed it. They were "the last two" until a tenth entry was inserted
-    # above them; naming them is what a position could not do.
+    # first version. Both passed it. They were "the last two" until a tenth entry went in between
+    # them; naming them is what a position could not do, and the sentence that said so was itself
+    # wrong about where the entry went (a seat).
     Mutation(
         "bounded-wait", "a join's timeout goes back to being silent",
         REPO / "tests" / "test_server.py",
@@ -3997,8 +3998,8 @@ CHG-20260907-28 and built by no record yet.''',
     # test dies ten seconds in and `ran_on` is never reached. The seat proposed this one as the
     # entry that would put `ran_on` on the stand. Run: it is caught by `gave_up`, not by `ran_on`,
     # at 12.34s. From those two runs this comment concluded **nothing puts `ran_on` on the
-    # stand, and no small mutation can** — and stood on that for a round after the entry three
-    # below refuted it. The reason was true of walks 1 and 2 only. Three entries now pin the
+    # stand, and no small mutation can** — and stood on that for a round after
+    # `the last attachment arrives after the walk it was to interrupt has ended` refuted it. The reason was true of walks 1 and 2 only. Three entries now pin the
     # arrangement, from three sides, and the third of them is what puts `ran_on` on the stand.
     Mutation(
         "bounded-wait", "the first walk signals and does not hold, so `attach` walks the second",
@@ -4048,6 +4049,17 @@ CHG-20260907-28 and built by no record yet.''',
     first.join(timeout=10)
     runner.attach(runner.state.version, "two.md", b"2")''',
         "tests/test_server.py::test_an_action_arriving_as_the_walk_decides_to_stop_is_not_stranded"),
+
+    # The rule's own boundary is a table of constructed cases in the test file, and a table is a
+    # thing that can quietly stop matching the code beside it. This mutates the rule and expects
+    # the table to refuse, which is the only entry here whose subject is the cases rather than the
+    # tree.
+    Mutation(
+        "bounded-wait", "a `while` stops being a loop, and the constructed cases do not notice",
+        REPO / "tests" / "test_server.py",
+        '''        if isinstance(node, (ast.For, ast.AsyncFor, ast.While, ast.ListComp, ast.SetComp,''',
+        '''        if isinstance(node, (ast.For, ast.AsyncFor, ast.ListComp, ast.SetComp,''',
+        "tests/test_server.py::test_the_rule_over_bounded_waits_refuses_what_it_says_it_refuses"),
 
     Mutation(
         "bounded-wait", "a ceiling passed positionally stops counting as a ceiling",

@@ -4460,13 +4460,19 @@ def _own_statements(fn):
     enclosing one would let a guard in either place answer for a wait in the other. A seat counted
     this; the sentence before it said three, and put both in the tests.
     """
-    # A `lambda`'s body is one expression, not a list. It is here because nothing else examined
-    # lambdas at all: nested `def`s survive this function because `ast.walk` re-examines each as
-    # its own function, and a lambda was dropped by both (a seat).
-    stack, out = (list(fn.body) if isinstance(fn.body, list) else [fn.body]), []
+    stack, out = list(fn.body), []
     while stack:
         node = stack.pop()
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        # A `lambda` is **not** skipped, and is not its own scope either. It has no statements, so
+        # a wait inside one can never be answered within it: making lambdas their own scope, for
+        # one round, refused `run = lambda: t.join(timeout=1); run(); assert not t.is_alive()` —
+        # correct code, in the idiom this file already uses twice. Its expressions belong to the
+        # function that writes it, where a guard can live (a seat, after another seat had asked
+        # for lambdas to be examined at all).
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if isinstance(node, ast.Lambda):
+            stack.append(node.body)
             continue
         out.append(node)
         stack.extend(ast.iter_child_nodes(node))
@@ -4509,13 +4515,31 @@ def _bounded(node, name):
 #: `None` either way, which is why it needs `is_alive()` and they need only reading.
 #:
 #: Matched by **name**, like everything else here, so the boundary is the docstring's rather than
-#: a type's: see *"one false positive"* below. Written down rather than typed away (a seat).
+#: a type's: see the false positives at the end of the rule's docstring. Written down rather than
+#: typed away (a seat).
 _ANSWERING = ("wait", "wait_for", "acquire")
 
 
-def _named(fn):
-    """What to call a function in a refusal. A `lambda` has no `name`."""
-    return "%s()" % fn.name if hasattr(fn, "name") else "a lambda"
+def _reads(fn):
+    """The names `fn` loads, counting a nested function's loads only where they can be `fn`'s.
+
+    Two revisions here, each closing what the other opened. Built from `fn`'s own statements, an
+    answer read only inside a closure read as an answer nobody reads — a false positive on correct
+    code. Built from the whole function, a closure that binds its **own** `done` reported the outer
+    `done` as read, which is an escape. Both were constructed by a seat; this asks each nested
+    function whether the name could be its.
+    """
+    out = {n.id for n in _own_statements(fn)
+           if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    for inner in [n for n in ast.walk(fn)
+                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
+                  and n is not fn]:
+        bound = {a.arg for a in ast.walk(inner.args) if isinstance(a, ast.arg)}
+        bound |= {n.id for n in ast.walk(inner)
+                  if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+        out |= {n.id for n in ast.walk(inner)
+                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id not in bound}
+    return out
 
 
 def _under_a_loop(body):
@@ -4533,6 +4557,220 @@ def _under_a_loop(body):
                              ast.DictComp, ast.GeneratorExp)):
             out.update(id(inner) for inner in ast.walk(node))
     return out
+
+
+def _silent_waits(text, where):
+    """Every bounded wait in `text` that could time out without saying so.
+
+    Split out of the test so the constructed cases below run **this** code and not a copy of it.
+    """
+    silent = []
+    for fn in [n for n in ast.walk(ast.parse(text))
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+        body = _own_statements(fn)
+        # **`body`, not `ast.walk(fn)` — the opposite of `loaded` below, on purpose.** A guard
+        # inside a nested `def` may never be called, so counting it would let a never-run closure
+        # answer for a join in the enclosing function. The cost is the mirror image, and it is a
+        # false positive on correct code: a join guarded by a helper the function defines and
+        # calls is refused here — a real program, and one the cases below construct on purpose.
+        # Both directions are wrong for some program; this one is wrong for a program no file
+        # under `tests/` contains (two seats: one asked which way it had been decided, the other
+        # refused the dismissal that first answered it).
+        asked = {}
+        for n in body:
+            if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and n.func.attr == "is_alive"):
+                asked.setdefault(ast.unparse(n.func.value), []).append(id(n))
+        looping = _under_a_loop(body)
+        loaded = _reads(fn)
+        for node in body:
+            if _bounded(node, "join"):
+                who = ast.unparse(node.func.value)
+                if who not in asked:
+                    silent.append(f"{where}:{node.lineno} {fn.name}() waits on "
+                                  f"{who}.join(timeout=...) and never asks {who}.is_alive()")
+                elif id(node) in looping and not any(i in looping for i in asked[who]):
+                    silent.append(f"{where}:{node.lineno} {fn.name}() joins {who} once a turn and "
+                                  f"asks {who}.is_alive() once, outside the loop — a question "
+                                  f"about the last turn only")
+            for name in _ANSWERING:
+                if isinstance(node, ast.Expr) and _bounded(node.value, name):
+                    who = ast.unparse(node.value.func.value)
+                    silent.append(f"{where}:{node.lineno} {fn.name}() throws away the answer "
+                                  f"{who}.{name}(timeout=...) gives it")
+                    continue
+                # `AnnAssign` as well as `Assign`: `done: bool = ev.wait(timeout=1)` is the same
+                # bare name kept and never read, and was accepted for one revision because the
+                # check knew only one of the two nodes (a seat).
+                if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                    target = node.targets[0]
+                elif isinstance(node, ast.AnnAssign):
+                    target = node.target
+                else:
+                    continue
+                if not (_bounded(getattr(node, "value", None), name)
+                        and isinstance(target, ast.Name)):
+                    continue
+                who = ast.unparse(node.value.func.value)
+                if target.id not in loaded:
+                    silent.append(f"{where}:{node.lineno} {fn.name}() keeps the answer "
+                                  f"{who}.{name}(timeout=...) gives it in `{target.id}` and never "
+                                  f"reads it")
+                elif id(node) in looping and not any(
+                        id(n) in looping for n in body
+                        if isinstance(n, ast.Name) and n.id == target.id
+                        and isinstance(n.ctx, ast.Load)):
+                    # The same last-turn question as the join above, in the other of the two
+                    # shapes this rule opens with. It was held for `join` only, through two
+                    # rounds that widened the loop rule (a seat).
+                    silent.append(f"{where}:{node.lineno} {fn.name}() answers "
+                                  f"{who}.{name}(timeout=...) once a turn into `{target.id}` and "
+                                  f"reads it once, outside the loop — the last turn only")
+    return silent
+
+
+#: What the rule says about shapes this suite does not contain. Each is run through `_silent_waits`
+#: by the test below, so the boundary is executed rather than described. It was a table pasted into
+#: `ACC-20260908-01.md` from a script nobody could run, which a seat refused (KN-8: a check nobody
+#: has watched fail is a check nobody should rely on).
+BOUNDED_WAIT_CASES = (
+    ("a guarded join", False, """
+def f(t):
+    t.join(timeout=10)
+    assert not t.is_alive()
+"""),
+    ("a join with nothing after it", True, """
+def f(t):
+    t.join(timeout=10)
+"""),
+    ("a ceiling passed positionally, unguarded", True, """
+def f(t):
+    t.join(10)
+"""),
+    ("a string join, which is not a wait", False, """
+def f(parts):
+    return ", ".join(parts)
+"""),
+    ("a guard named but not called", True, """
+def f(t):
+    t.join(timeout=10)
+    assert not t.is_alive
+"""),
+    ("a for loop's joins, guarded outside", True, """
+def f(threads):
+    for t in threads:
+        t.join(timeout=10)
+    assert not t.is_alive()
+"""),
+    ("a for loop's joins, guarded over the loop", False, """
+def f(threads):
+    for t in threads:
+        t.join(timeout=10)
+    assert [t.name for t in threads if t.is_alive()] == []
+"""),
+    ("a while loop's joins, guarded outside", True, """
+def f(t, pending):
+    while pending:
+        t.join(timeout=10)
+        pending.pop()
+    assert not t.is_alive()
+"""),
+    ("a while loop's joins, guarded inside", False, """
+def f(t, pending):
+    while pending:
+        t.join(timeout=10)
+        assert not t.is_alive()
+        pending.pop()
+"""),
+    ("an answer dropped as a statement", True, """
+def f(ev):
+    ev.wait(timeout=1)
+"""),
+    ("an answer kept and never read", True, """
+def f(ev):
+    ok = ev.wait(timeout=1)
+    assert 1 == 1
+"""),
+    ("an annotated answer, never read", True, """
+def f(ev):
+    ok: bool = ev.wait(timeout=1)
+    assert 1 == 1
+"""),
+    ("an answer kept and read", False, """
+def f(ev):
+    ok = ev.wait(timeout=1)
+    assert ok
+"""),
+    ("an answer read only inside a closure", False, """
+def f(ev):
+    ok = ev.wait(timeout=1)
+    def g():
+        return ok
+    assert g()
+"""),
+    ("an answer a closure shadows and never reads", True, """
+def f(ev):
+    ok = ev.wait(timeout=1)
+    def g():
+        ok = True
+        return ok
+    g()
+"""),
+    ("a loop's answers, read once outside", True, """
+def f(events):
+    for ev in events:
+        done = ev.wait(timeout=1)
+    assert done
+"""),
+    ("a loop's answers, read inside", False, """
+def f(events):
+    for ev in events:
+        done = ev.wait(timeout=1)
+        assert done
+"""),
+    ("acquire with a ceiling, answer dropped", True, """
+def f(lock):
+    lock.acquire(timeout=10)
+"""),
+    ("acquire(1) — blocking, not a ceiling", False, """
+def f(lock):
+    lock.acquire(1)
+"""),
+    ("a lambda joining, guarded by the function that calls it", False, """
+def f(t):
+    run = lambda: t.join(timeout=1)
+    run()
+    assert not t.is_alive()
+"""),
+    ("a lambda joining, with no guard anywhere", True, """
+def f(t):
+    run = lambda: t.join(timeout=1)
+    run()
+"""),
+    ("a join guarded by a helper the function calls", True, """
+def f(t):
+    t.join(timeout=5)
+    def report():
+        assert not t.is_alive()
+    report()
+"""),
+)
+
+
+def test_the_rule_over_bounded_waits_refuses_what_it_says_it_refuses():
+    """The rule's boundary, run rather than described.
+
+    The last case is the false positive the rule's docstring names: a guard written in a helper the
+    function defines and calls. It is here so that the cost of `asked` being scope-local is a line
+    somebody has to change deliberately, not a paragraph.
+    """
+    wrong = []
+    for label, refused, source in BOUNDED_WAIT_CASES:
+        found = _silent_waits(source, label.replace(" ", "-"))
+        if bool(found) != refused:
+            wrong.append(f"{label}: expected {'a refusal' if refused else 'no refusal'}, "
+                         f"got {found or 'none'}")
+    assert not wrong, "the rule does not sort its own cases:\n  " + "\n  ".join(wrong)
 
 
 def test_every_bounded_wait_says_when_it_did_not_complete():
@@ -4592,9 +4830,11 @@ def test_every_bounded_wait_says_when_it_did_not_complete():
     * an inverted guard: `assert thread.is_alive()` after the join asks the question and accepts
       the wrong answer.
 
-    **And two false positives, for the same reason.** The first: `subprocess.Popen.wait`,
-    `threading.Barrier.wait` and a bounded `acquire` on something that is not a lock report a
-    timeout by **raising**, so discarding their answer is correct and this rule would refuse it.
+    **And two false positives, for the same reason.** The first: a call by one of these names
+    that reports a timeout by **raising** rather than returning — `subprocess.Popen.wait` and
+    `threading.Barrier.wait` are the two in the standard library — where discarding the answer is
+    correct and this rule would refuse it. Not every non-lock `acquire` is one; the shape is
+    "raises on timeout", not "is not a lock", which is how this sentence read for a revision.
     No call by those *names* is in `tests/` today — `examples/demo/make_fixture.py` has two
     `Popen.wait`s, outside this rule's reach — but the family is here: `tests/test_store.py`'s
     `job.result(timeout=30)` is the same kind of wait under a name this rule does not read.
@@ -4605,58 +4845,7 @@ def test_every_bounded_wait_says_when_it_did_not_complete():
     """
     silent = []
     for path in sorted(pathlib.Path(__file__).parent.glob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for fn in [n for n in ast.walk(tree)
-                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))]:
-            body = _own_statements(fn)
-            # **`body`, not `ast.walk(fn)` — the opposite of `loaded` below, on purpose.** A
-            # guard inside a nested `def` may never be called, so counting it would let a
-            # never-run closure answer for a join in the enclosing function. The cost is the
-            # mirror image, and it is a false positive on correct code: a join guarded by a
-            # helper the function defines and calls is refused here. Both directions are wrong
-            # for some program; this one is wrong for the program nobody writes (a seat asked
-            # which way this was decided, and it had not been written down anywhere).
-            asked = {}
-            for n in body:
-                if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                        and n.func.attr == "is_alive"):
-                    asked.setdefault(ast.unparse(n.func.value), []).append(id(n))
-            looping = _under_a_loop(body)
-            # `ast.walk(fn)`, not `body`: `body` stops at nested `def`s, so an answer read only
-            # inside a closure read as an answer nobody reads (a seat).
-            loaded = {n.id for n in ast.walk(fn)
-                      if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
-            for node in body:
-                if _bounded(node, "join"):
-                    who = ast.unparse(node.func.value)
-                    if who not in asked:
-                        silent.append(f"{path.name}:{node.lineno} {_named(fn)} waits on "
-                                      f"{who}.join(timeout=...) and never asks {who}.is_alive()")
-                    elif id(node) in looping and not any(i in looping for i in asked[who]):
-                        silent.append(f"{path.name}:{node.lineno} {_named(fn)} joins {who} once a "
-                                      f"turn and asks {who}.is_alive() once, outside the loop — a "
-                                      f"question about the last turn only")
-                for name in _ANSWERING:
-                    if isinstance(node, ast.Expr) and _bounded(node.value, name):
-                        who = ast.unparse(node.value.func.value)
-                        silent.append(f"{path.name}:{node.lineno} {_named(fn)} throws away the "
-                                      f"answer {who}.{name}(timeout=...) gives it")
-                    else:
-                        # `AnnAssign` as well as `Assign`: `done: bool = ev.wait(timeout=1)` is the
-                        # same bare name kept and never read, and was accepted for one revision
-                        # because the check knew only one of the two nodes (a seat).
-                        if isinstance(node, ast.Assign) and len(node.targets) == 1:
-                            target = node.targets[0]
-                        elif isinstance(node, ast.AnnAssign):
-                            target = node.target
-                        else:
-                            continue
-                        if (_bounded(getattr(node, "value", None), name)
-                                and isinstance(target, ast.Name) and target.id not in loaded):
-                            who = ast.unparse(node.value.func.value)
-                            silent.append(f"{path.name}:{node.lineno} {_named(fn)} keeps the answer "
-                                          f"{who}.{name}(timeout=...) gives it in "
-                                          f"`{target.id}` and never reads it")
+        silent += _silent_waits(path.read_text(encoding="utf-8"), path.name)
 
     assert not silent, (
         "a bounded wait can time out here without saying so, and the assertion after it blames "
