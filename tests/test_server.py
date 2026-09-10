@@ -728,12 +728,20 @@ def test_an_ipv6_origin_is_refused_because_nothing_serves_one(live, origin):
 # (`_require_suspension`). **`attach()` is the one that gates only on version** — which is exactly
 # what fable-seat wrote, and what these tests therefore use.
 
-def _gated_runner(tmp_path, walks, gate):
-    """A runner whose walk blocks on `gate`, so a second caller is guaranteed to arrive mid-walk."""
+def _gated_runner(tmp_path, walks, gate, gave_up):
+    """A runner whose walk blocks on `gate`, so a second caller is guaranteed to arrive mid-walk.
+
+    `gave_up` is how the walk says the gate never opened. It cannot say it by asserting: `Runner`
+    catches what a walk raises and reports a stopped run, so the assertion would be swallowed and
+    the test would blame the runner for stopping. A walk released by the timeout instead of by the
+    gate was never in flight when the attachment arrived, and every count below it is about a
+    different run than the one the test is named for.
+    """
 
     def walk(cfg):
         walks.append(tuple(cfg.instructions))
-        gate.wait(timeout=10)
+        if not gate.wait(timeout=10):
+            gave_up.append(len(walks))
         report = engine.RunReport()
         report.state = engine.FINISHED
         return report
@@ -757,15 +765,22 @@ def _start_a_blocked_walk(runner, walks):
 def test_an_attachment_during_a_walk_does_not_start_a_second_walk(tmp_path):
     """`attach()` mutates the state under `_lock`, releases it, and calls `_advance()`. With no
     gate, both threads entered the walk — two walks over one run and one `Conversation`."""
-    walks, gate = [], threading.Event()
-    runner = _gated_runner(tmp_path, walks, gate)
+    walks, gate, gave_up = [], threading.Event(), []
+    runner = _gated_runner(tmp_path, walks, gate, gave_up)
     thread = _start_a_blocked_walk(runner, walks)
 
     runner.attach(runner.state.version, "spec.md", b"the spec")
+    assert not gave_up, (
+        "the gated walk was released by its own timeout rather than by the gate, so "
+        "nothing was in flight when the attachment arrived, and the count below is about "
+        "a different run than the one this test is named for")
     assert len(walks) == 1, f"a second walk started: {walks}"
 
     gate.set()
     thread.join(timeout=10)
+    assert not thread.is_alive(), (
+        "the walk did not finish inside the join's timeout, so what follows would "
+        "blame the attachment for something the wait did not do")
     assert len(walks) == 2, "the attachment was never walked"
 
 
@@ -774,30 +789,44 @@ def test_the_attachment_that_arrives_during_a_walk_is_not_dropped(tmp_path):
     what the operator did: an attachment reaches **every** work order, and the walk in flight built
     its config before that attachment existed. Recorded-and-never-acted-on is this project's own
     worst failure shape, so the running walk goes round again instead."""
-    walks, gate = [], threading.Event()
-    runner = _gated_runner(tmp_path, walks, gate)
+    walks, gate, gave_up = [], threading.Event(), []
+    runner = _gated_runner(tmp_path, walks, gate, gave_up)
     thread = _start_a_blocked_walk(runner, walks)
 
     runner.attach(runner.state.version, "spec.md", b"the spec")
     gate.set()
     thread.join(timeout=10)
+    assert not thread.is_alive(), (
+        "the walk did not finish inside the join's timeout, so what follows would "
+        "blame the attachment for something the wait did not do")
 
+    assert not gave_up, (
+        "the gated walk was released by its own timeout rather than by the gate, so "
+        "nothing was in flight when the attachment arrived, and the count below is about "
+        "a different run than the one this test is named for")
     assert len(walks) == 2, f"expected exactly one further walk, got {len(walks)}"
     assert runner.state.attachments, "the attachment is not in the state at all"
 
 
 def test_several_attachments_during_one_walk_coalesce_into_one_further_walk(tmp_path):
     """Not one further walk each — that would be the same storm, serialised."""
-    walks, gate = [], threading.Event()
-    runner = _gated_runner(tmp_path, walks, gate)
+    walks, gate, gave_up = [], threading.Event(), []
+    runner = _gated_runner(tmp_path, walks, gate, gave_up)
     thread = _start_a_blocked_walk(runner, walks)
 
     for n in range(4):
         runner.attach(runner.state.version, f"a{n}.md", f"body {n}".encode())
+    assert not gave_up, (
+        "the gated walk was released by its own timeout rather than by the gate, so "
+        "nothing was in flight when the attachment arrived, and the count below is about "
+        "a different run than the one this test is named for")
     assert len(walks) == 1, f"{len(walks)} walks ran while one was in flight"
 
     gate.set()
     thread.join(timeout=10)
+    assert not thread.is_alive(), (
+        "the walk did not finish inside the join's timeout, so what follows would "
+        "blame the attachment for something the wait did not do")
     assert len(walks) == 2, f"four attachments produced {len(walks) - 1} further walks"
 
 
@@ -863,14 +892,21 @@ def test_an_action_arriving_as_the_walk_decides_to_stop_is_not_stranded(tmp_path
     on its *second* call while another thread attaches.
     """
 
-    walks, entered_second = [], threading.Event()
-    release_second = threading.Event()
+    walks, ran_on = [], []
+    entered = {1: threading.Event(), 2: threading.Event()}
+    release = {1: threading.Event(), 2: threading.Event()}
+    gave_up = []
 
     def walk(cfg):
         walks.append(tuple(cfg.instructions))
-        if len(walks) == 2:
-            entered_second.set()
-            release_second.wait(timeout=10)
+        ran_on.append(threading.current_thread().name)
+        held = len(walks)
+        if held in entered:
+            entered[held].set()
+            # Recorded, not asserted: this runs in the walk, and `Runner` turns what a walk raises
+            # into a stopped run. The test thread reads it below.
+            if not release[held].wait(timeout=10):
+                gave_up.append(held)
         report = engine.RunReport()
         report.state = engine.FINISHED
         return report
@@ -880,19 +916,34 @@ def test_an_action_arriving_as_the_walk_decides_to_stop_is_not_stranded(tmp_path
         make_config=lambda i, a, r, art=(), rej=(), hist=(): _make_config(i, a, r, art, rej, hist),
         store=attach_mod.Store(tmp_path / "att"))
 
-    # First walk runs to completion; during it, one attachment arrives, so the gate loops. The
-    # second walk blocks, and a further attachment arrives while it is inside.
+    # **The first walk blocks too, and that is the whole of the arrangement** (CHG-20260908-01).
+    # `attach` ends in `_advance`, and `_advance` walks on the *calling* thread when nothing is in
+    # flight. With the first walk returning at once, the attach below ran the second walk itself,
+    # on this thread, and sat in it for the full ten seconds — so the walk the third attachment was
+    # meant to interrupt had ended before the attachment was posted, and `first` had been finished
+    # since the first millisecond. The test passed on the count. Holding the first walk keeps the
+    # gate loop, and not the attaching thread, as the thing that runs the second.
     first = threading.Thread(target=lambda: runner.start("go", 0), daemon=True)
     first.start()
-    while not walks:
-        time.sleep(0.01)
+
+    assert entered[1].wait(timeout=10), "the first walk never started"
     runner.attach(runner.state.version, "one.md", b"1")
+    release[1].set()
 
-    assert entered_second.wait(timeout=10), "the gate never looped for the first attachment"
+    assert entered[2].wait(timeout=10), "the gate never looped for the first attachment"
     runner.attach(runner.state.version, "two.md", b"2")
-    release_second.set()
+    release[2].set()
     first.join(timeout=10)
+    assert not first.is_alive(), (
+        "the first walk did not finish inside the join's timeout, so what follows would blame "
+        "the second attachment for something the wait did not do")
+    assert not gave_up, (
+        f"walk(s) {gave_up} were released by their own timeout rather than by the test, so the "
+        f"attachment that follows each did not arrive inside a walk at all")
 
+    assert set(ran_on) == {first.name}, (
+        f"the walks ran on {sorted(set(ran_on))}; a walk on the attaching thread means `attach` "
+        f"walked it synchronously, and nothing arrived mid-walk")
     assert len(walks) == 3, (
         f"the second attachment was stranded: {len(walks)} walks for two mid-walk attachments")
     assert runner._walk_again is False
@@ -2631,6 +2682,17 @@ def _config_nodes_keys():
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=10)
+        # **Not an `assert`.** This runs in a `finally`, so raising unconditionally would replace
+        # whatever the body was already failing with — the real diagnosis swapped for this one.
+        # `sys.exc_info()` is the in-flight exception here, so this speaks only when nothing else
+        # is. Until CHG-20260908-01 the join's result was discarded, and the comment above says
+        # what that costs: the thread outlives the helper and the flake lands on
+        # `test_a_connection_that_says_nothing_does_not_hold_a_thread_forever`, which counts
+        # threads and has no idea this helper exists.
+        if thread.is_alive() and sys.exc_info()[0] is None:
+            raise AssertionError(
+                "the server thread outlived `_config_nodes_keys`; `threading.active_count()` is "
+                "asserted elsewhere in this file and would fail there instead of here")
 
 
 def test_every_key_of_the_node_config_route_is_named_by_the_console_or_written_down():
@@ -4346,3 +4408,83 @@ def test_a_burst_of_connections_is_queued_rather_than_refused(tmp_path):
         f"{len(refused)} of 20 connections were refused {sorted(set(refused))} while the server "
         f"was listening. `request_queue_size` is what the OS holds between `accept` calls, and a "
         f"caller past it is told nothing is there.")
+# --- a bounded wait says when it did not complete (CHG-20260908-01) ------------------------------
+
+def _own_statements(fn):
+    """`fn`'s own statements, with nested `def`s and lambdas left to themselves.
+
+    Three of the waits below sit in a `walk` closure defined inside the test that reads them, and
+    attributing a nested function's wait to the enclosing one would let a guard in either place
+    answer for a wait in the other.
+    """
+    stack, out = list(fn.body), []
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        out.append(node)
+        stack.extend(ast.iter_child_nodes(node))
+    return out
+
+
+def _bounded(node, name):
+    """A `<something>.<name>(..., timeout=...)` call. The keyword is the whole of the rule's key:
+    a wait with no timeout cannot return early, so it cannot misreport — it hangs, which is a
+    different failure and not the one held here."""
+    func = getattr(node, "func", None)
+    return (isinstance(node, ast.Call) and isinstance(func, ast.Attribute) and func.attr == name
+            and any(kw.arg == "timeout" for kw in node.keywords))
+
+
+def test_every_bounded_wait_says_when_it_did_not_complete():
+    """A bounded wait that times out is silent, and the next line takes the blame.
+
+    Constructed rather than argued (CHG-20260908-01): shorten the join in
+    `test_an_attachment_during_a_walk_does_not_start_a_second_walk` so it cannot complete, and the
+    test reported **"the attachment was never walked"** — while the attachment *was* walked, and
+    what had not happened was the wait. The reader is sent after a dropped attachment that is
+    sitting in the store.
+
+    Two shapes, because the two calls answer differently:
+
+    * `Thread.join(timeout=...)` returns nothing whether it completed or not, so the function must
+      ask `is_alive()` separately.
+    * `Event.wait(timeout=...)` **returns the answer**, so discarding it is the same silence with a
+      shorter repair: read it.
+
+    Three limits, stated here rather than left to be discovered.
+
+    It asks that a liveness check exist in the same function — not that it follow the join, and not
+    that it be an `assert`. The wait in `_config_nodes_keys` runs in a `finally`, where raising
+    unconditionally would replace whatever the body was already failing with, so it checks and
+    raises conditionally instead.
+
+    It matches **by expression, not by presence**: a function that joins `thread` and asks about
+    `first` has copied a guard rather than written one, and is refused here.
+
+    It holds this package's tests only. That is where every bounded wait in the repository is —
+    `src/` and `tools/` have none, and `src/`'s freedom from blocking calls is held separately by
+    `test_the_server_waits_and_the_walk_does_not`.
+    """
+    silent = []
+    for path in sorted(pathlib.Path(__file__).parent.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for fn in [n for n in ast.walk(tree)
+                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+            body = _own_statements(fn)
+            asked = {ast.unparse(n.value) for n in body
+                     if isinstance(n, ast.Attribute) and n.attr == "is_alive"}
+            for node in body:
+                if _bounded(node, "join"):
+                    who = ast.unparse(node.func.value)
+                    if who not in asked:
+                        silent.append(f"{path.name}:{node.lineno} {fn.name}() waits on "
+                                      f"{who}.join(timeout=...) and never asks {who}.is_alive()")
+                if isinstance(node, ast.Expr) and _bounded(node.value, "wait"):
+                    who = ast.unparse(node.value.func.value)
+                    silent.append(f"{path.name}:{node.lineno} {fn.name}() throws away the answer "
+                                  f"{who}.wait(timeout=...) gives it")
+
+    assert not silent, (
+        "a bounded wait can time out here without saying so, and the assertion after it blames "
+        "the effect for something the wait did not do:\n  " + "\n  ".join(sorted(silent)))
