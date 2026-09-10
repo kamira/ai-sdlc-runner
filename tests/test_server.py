@@ -31,7 +31,6 @@ import sys
 import tempfile
 import threading
 import time
-import warnings
 import urllib.error
 import urllib.request
 
@@ -948,8 +947,11 @@ def test_an_action_arriving_as_the_walk_decides_to_stop_is_not_stranded(tmp_path
     # What this line establishes and what it does not: it says no walk ran anywhere but on `first`,
     # which is what makes `attach` a mid-walk arrival rather than a walk of its own. That the
     # arrival *was* mid-walk is established by `entered[2]` and `gave_up` above, not here. And
-    # nothing pins this line: every mutation of the arrangement is caught by `gave_up` first,
-    # because a walk on the attaching thread waits there for a release only that thread can send.
+    # This line is what a defect landing on the **third** walk refuses, and nothing else does:
+    # `walk` blocks only for walks 1 and 2, so a third walk that runs on the attaching thread
+    # leaves `gave_up` empty, `first` finished and the count at 3. Registered as a mutation, and
+    # measured at 1.02s. Two drafts of this comment said no small mutation could reach this line;
+    # a seat built one both times.
     assert set(ran_on) == {first}, (
         f"the walks ran on {sorted(t.name for t in set(ran_on))}; a walk anywhere but on `first` "
         f"is one `attach` ran itself, on the thread that was supposed to be interrupting it")
@@ -2708,15 +2710,20 @@ def _config_nodes_keys():
         # `except` block would have suppressed itself on the return path, with nothing in flight
         # here at all. No caller does that today; the next one would not have been told (a seat).
         if thread.is_alive():
-            note = ("the server thread outlived `_config_nodes_keys`; `threading.active_count()` "
-                    "is asserted elsewhere in this file and would fail there instead of here")
+            note = ("the server thread outlived `_config_nodes_keys`. Nothing else in this "
+                    "file reports that — measured — so this is the only place it is said: a "
+                    "daemon thread is still holding a server this helper was finished with")
             if not raised:
                 raise AssertionError(note)
             # Already failing. Raising would replace the real diagnosis with this one — but saying
             # nothing leaves a live thread behind and no record that it was left, which is what
-            # this branch did until a seat asked what it costs. A warning reaches pytest's summary
-            # without taking the failure away.
-            warnings.warn(note, stacklevel=2)
+            # this branch did until a seat asked what it costs.
+            #
+            # **`stderr`, not `warnings.warn`.** A warning is configurable into an exception —
+            # `-W error`, `PYTHONWARNINGS=error` — and raising is the one thing this branch exists
+            # to not do. `print` cannot raise, and pytest shows captured output for the test that
+            # failed, which is the only case this line runs in (a seat).
+            print(note, file=sys.stderr)
 
 
 def test_every_key_of_the_node_config_route_is_named_by_the_console_or_written_down():
@@ -3821,9 +3828,9 @@ def test_a_content_length_that_lies_does_not_hold_the_thread_forever(wire):
     assert "409" in reply.splitlines()[0], reply.splitlines()[0] or "(no reply at all)"
     assert "did not arrive" in reply
     assert took < 6.0, (
-        f"the read deadline did not fire: the promised bytes never came and the handler was still "
-        f"waiting {took:.1f}s later. This is a wall clock, so a loaded machine can reach it with "
-        f"the deadline working — but silence here reported neither")
+        f"the promised bytes never came and the reply took {took:.1f}s against a 6.0s ceiling. "
+        f"Either the read deadline did not fire, or this machine is loaded enough to reach the "
+        f"ceiling with it working. Before this record the assertion said neither")
 
 
 def test_a_connection_that_says_nothing_does_not_hold_a_thread_forever(wire):
@@ -4463,17 +4470,25 @@ def _bounded(node, name):
     *a wait with no timeout cannot return early* — is true of a wait with **no argument**, and was
     written as if it were true of everything the key missed.
 
-    Positionally the argument is recognised only as a **numeric literal**. `str.join` is the same
-    syntax with a different meaning, and nothing static separates `t.join(deadline)` from
-    `sep.join(parts)`; counting any positional argument reported `''.join(...)` as an unguarded
-    thread join. So a ceiling held in a variable still escapes, and that is the price of not
-    reporting every string join in the suite.
+    Positionally the argument is recognised only for `join` and `wait`, and only as a **numeric
+    literal**. `Lock.acquire(1)` means `blocking=1` and has no ceiling at all; `Condition.wait_for`
+    takes a predicate first. A seat ran both through an earlier version, where `lock.acquire(1)`
+    was refused for discarding an answer to a question it had not asked. `str.join` is the same
+    syntax with a different meaning, and *this* rule — one function at a time, matching on a name,
+    with no types — cannot separate `t.join(deadline)` from `sep.join(parts)`. An analysis that
+    followed the constructor could; that is a different tool, and saying "nothing static can" was
+    a claim about static analysis rather than about this rule (a seat). Counting any positional
+    argument reported `''.join(...)` as an unguarded thread join, measured. So a ceiling held in a
+    variable escapes, and that is the price of not reporting every string join in the suite.
     """
     func = getattr(node, "func", None)
     if not (isinstance(node, ast.Call) and isinstance(func, ast.Attribute) and func.attr == name):
         return False
     if any(kw.arg == "timeout" for kw in node.keywords):
         return True
+    if name not in ("join", "wait"):
+        return False          # `acquire`'s first positional is `blocking`; `wait_for`'s is a
+                              # predicate. Only these two put the ceiling there.
     return (len(node.args) == 1 and isinstance(node.args[0], ast.Constant)
             and isinstance(node.args[0].value, (int, float))
             and not isinstance(node.args[0].value, bool))
@@ -4481,6 +4496,10 @@ def _bounded(node, name):
 
 #: The calls that hand back whether they completed. `Thread.join` is not among them — it returns
 #: `None` either way, which is why it needs `is_alive()` and they need only reading.
+#:
+#: Matched by **name**, like everything else here: a bounded `acquire` on something that is not a
+#: lock, and that reports a timeout by raising, would be refused for an answer it does not give.
+#: Nothing in this suite calls one; the boundary is written down rather than typed away (a seat).
 _ANSWERING = ("wait", "wait_for", "acquire")
 
 
@@ -4489,11 +4508,13 @@ def _under_a_loop(body):
 
     A join made once a turn and guarded once afterwards is a question about the last turn. The one
     loop join in this file guards inside a comprehension, which is what makes that distinguishable
-    at all (a seat).
+    at all (a seat). `While` is here because a seat constructed `while pending: thread.join(...)`
+    against a version that listed only `for` and the comprehensions — the docstring said *a loop*
+    and the code meant four of the five kinds.
     """
     out = set()
     for node in body:
-        if isinstance(node, (ast.For, ast.AsyncFor, ast.ListComp, ast.SetComp,
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.While, ast.ListComp, ast.SetComp,
                              ast.DictComp, ast.GeneratorExp)):
             out.update(id(inner) for inner in ast.walk(node))
     return out
@@ -4541,11 +4562,25 @@ def test_every_bounded_wait_says_when_it_did_not_complete():
     cited as one: it reads one method's source and refuses three literal substrings, one of which
     is `".join()"` with empty parentheses — which no bounded join is spelled with.
 
-    **What still escapes, named rather than left to be found.** A ceiling held in a variable
-    (`t.join(deadline)`) — `_bounded`'s stated price, since `sep.join(parts)` is the same syntax.
-    One passed as `**{"timeout": 10}`. An answer read into a name that is loaded once and ignored,
-    which is a rule about meaning rather than shape. And an inverted guard: `assert
-    thread.is_alive()` after the join asks the question and accepts the wrong answer.
+    **What still escapes, named rather than left to be found.** Each of these was constructed by a
+    seat and run through this rule, which accepted it:
+
+    * a ceiling held in a variable, `t.join(deadline)` — `_bounded`'s stated price, since
+      `sep.join(parts)` is the same syntax;
+    * one passed as `**{"timeout": 10}`;
+    * a positional ceiling on `acquire` or `wait_for`, whose first argument is not the ceiling;
+    * an answer assigned somewhere that is not a bare name — `self.ok = ev.wait(timeout=1)`,
+      `d["ok"] = ...`;
+    * an answer read into a name that is loaded once and ignored, and an `is_alive()` whose result
+      nothing acts on — `assert failures, f"still alive: {t.is_alive()}"`. Both are rules about
+      meaning rather than shape;
+    * an inverted guard: `assert thread.is_alive()` after the join asks the question and accepts
+      the wrong answer.
+
+    **And one false positive, for the same reason.** `subprocess.Popen.wait(timeout=...)` and
+    `threading.Barrier.wait(timeout=...)` report a timeout by **raising**, so discarding their
+    return value is correct, and this rule would refuse it. `tests/` has neither today;
+    `examples/demo/make_fixture.py` has two of the first, outside this rule's reach.
     """
     silent = []
     for path in sorted(pathlib.Path(__file__).parent.glob("*.py")):
@@ -4559,7 +4594,9 @@ def test_every_bounded_wait_says_when_it_did_not_complete():
                         and n.func.attr == "is_alive"):
                     asked.setdefault(ast.unparse(n.func.value), []).append(id(n))
             looping = _under_a_loop(body)
-            loaded = {n.id for n in body
+            # `ast.walk(fn)`, not `body`: `body` stops at nested `def`s, so an answer read only
+            # inside a closure read as an answer nobody reads (a seat).
+            loaded = {n.id for n in ast.walk(fn)
                       if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
             for node in body:
                 if _bounded(node, "join"):
