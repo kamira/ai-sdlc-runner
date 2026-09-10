@@ -3923,8 +3923,10 @@ CHG-20260907-28 and built by no record yet.''',
     # Most entries below are therefore caught by the rule and not by the test they sit in. Three
     # are not: the arrangement group, which the stranded test refuses itself.
     #
-    # The last two are escapes a seat constructed against the rule's first version: a guard that
-    # names `is_alive` without calling it, and a ceiling passed positionally. Both passed.
+    # Two of them — `a guard names the question without asking it` and `a ceiling passed
+    # positionally stops counting as a ceiling` — are escapes a seat constructed against the rule's
+    # first version. Both passed it. They were "the last two" until a tenth entry was inserted
+    # above them; naming them is what a position could not do.
     Mutation(
         "bounded-wait", "a join's timeout goes back to being silent",
         REPO / "tests" / "test_server.py",
@@ -3994,10 +3996,10 @@ CHG-20260907-28 and built by no record yet.''',
     # above is caught by `entered[1].wait` — with `held == 2` the first walk never signals, so the
     # test dies ten seconds in and `ran_on` is never reached. The seat proposed this one as the
     # entry that would put `ran_on` on the stand. Run: it is caught by `gave_up`, not by `ran_on`,
-    # at 12.34s. **Nothing puts `ran_on` on the stand**, and no small mutation can: a walk that
-    # runs on the attaching thread waits there for a release only that thread can deliver, so the
-    # timeout it takes is always seen first. The two entries pin the arrangement from two sides;
-    # `ran_on` states the property in the test's own words and is held by nothing else.
+    # at 12.34s. From those two runs this comment concluded **nothing puts `ran_on` on the
+    # stand, and no small mutation can** — and stood on that for a round after the entry three
+    # below refuted it. The reason was true of walks 1 and 2 only. Three entries now pin the
+    # arrangement, from three sides, and the third of them is what puts `ran_on` on the stand.
     Mutation(
         "bounded-wait", "the first walk signals and does not hold, so `attach` walks the second",
         REPO / "tests" / "test_server.py",
