@@ -4512,7 +4512,10 @@ def _own_statements(fn):
 
 
 def _lambda_nodes(fn):
-    """The ids of everything inside a `lambda` in `fn`, and the names those lambdas bind.
+    """The ids inside a `lambda` in `fn` whose guard may never run, and the names lambdas bind.
+
+    Not everything inside a lambda: one called where it is written does run, and its ids are left
+    out. The summary said *"everything"* for a round after the body stopped meaning it.
 
     A lambda's expressions are `fn`'s (see `_own_statements`), which is what lets a bounded `join`
     inside one be answered by the function that writes it. Two things must not follow from that: a
@@ -4575,6 +4578,14 @@ def _bounded(node, name):
 _ANSWERING = ("wait", "wait_for", "acquire")
 
 
+#: `match` arrived in 3.10 and `pyproject.toml` says `requires-python = ">=3.9"`, so these node
+#: types are not there to be named on the oldest Python this repository runs on. Referencing them
+#: directly raised `AttributeError` at import on py3.9 while py3.13 was green, and CI is what said
+#: so — this machine is 3.11, and neither seat was asked to read the change on 3.9.
+_MATCH_NAMED = tuple(getattr(ast, name) for name in ("MatchAs", "MatchStar") if hasattr(ast, name))
+_MATCH_MAPPING = tuple(getattr(ast, name) for name in ("MatchMapping",) if hasattr(ast, name))
+
+
 def _binds(fn):
     """The names `fn` binds itself, which are the ones a load inside it does not read from outside.
 
@@ -4603,9 +4614,9 @@ def _binds(fn):
             out |= set(n.names)
         elif isinstance(n, ast.Nonlocal):
             unbound |= set(n.names)
-        elif isinstance(n, (ast.MatchAs, ast.MatchStar)) and n.name:
+        elif _MATCH_NAMED and isinstance(n, _MATCH_NAMED) and n.name:
             out.add(n.name)
-        elif isinstance(n, ast.MatchMapping) and n.rest:
+        elif _MATCH_MAPPING and isinstance(n, _MATCH_MAPPING) and n.rest:
             out.add(n.rest)
     return out - unbound
 
@@ -4636,8 +4647,12 @@ def _reads(fn):
                  if isinstance(n, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp))]:
         bound = {n.id for gen in comp.generators for n in ast.walk(gen.target)
                  if isinstance(n, ast.Name)}
+        # **The first iterable is not inside the comprehension's scope.** Python evaluates it in
+        # the enclosing frame, so `[done for done in ([1] if done else [])]` reads the outer
+        # `done` — and shadowing the whole node refused that (a seat).
+        outer = {id(n) for n in ast.walk(comp.generators[0].iter)}
         shadowed |= {id(n) for n in ast.walk(comp)
-                     if isinstance(n, ast.Name) and n.id in bound}
+                     if isinstance(n, ast.Name) and n.id in bound and id(n) not in outer}
 
     out = {n.id for n in _own_statements(fn)
            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and id(n) not in shadowed}
@@ -4952,6 +4967,16 @@ def f(ev, xs):
     ys = [done for done in xs]
     assert done and ys
 """),
+    ("a read in a comprehension's first iterable", False, """
+def f(ev):
+    done = ev.wait(timeout=1)
+    return [done for done in ([1] if done else [])]
+"""),
+    ("a comprehension target shadowing, and no other read", True, """
+def f(ev, xs):
+    done = ev.wait(timeout=1)
+    return [done for done in xs]
+"""),
     ("a deep default reading the middle scope's own local", True, """
 def f(ev):
     done = ev.wait(timeout=1)
@@ -4968,15 +4993,6 @@ def f(ev):
     def g():
         return lambda done: done
     g()
-"""),
-    ("a `match` pattern binding the name", True, """
-def f(ev, x):
-    done = ev.wait(timeout=1)
-    def g():
-        match x:
-            case done:
-                return done
-    assert g()
 """),
     ("a nested `global` of the same name", True, """
 def f(ev):
@@ -5049,6 +5065,24 @@ async def f(ev):
     await ev.wait(timeout=1)
 """),
 )
+
+
+if sys.version_info >= (3, 10):
+    # Appended rather than written in place: on py3.9 this source does not parse, so a `match`
+    # case cannot sit in a tuple that py3.9 reads. The rule's `match` branches are guarded the same
+    # way, and both were `AttributeError` and `SyntaxError` on the oldest supported Python until
+    # CI said so.
+    BOUNDED_WAIT_CASES += (
+        ("a `match` pattern binding the name", True, """
+def f(ev, x):
+    done = ev.wait(timeout=1)
+    def g():
+        match x:
+            case done:
+                return done
+    assert g()
+"""),
+    )
 
 
 def test_the_rule_over_bounded_waits_refuses_what_it_says_it_refuses():
