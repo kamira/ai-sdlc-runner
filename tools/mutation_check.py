@@ -3925,9 +3925,10 @@ CHG-20260907-28 and built by no record yet.''',
     #
     # Two of them — `a guard names the question without asking it` and `a ceiling passed
     # positionally stops counting as a ceiling` — are escapes a seat constructed against the rule's
-    # first version. Both passed it. They were "the last two" until a tenth entry went in between
-    # them; naming them is what a position could not do, and the sentence that said so was itself
-    # wrong about where the entry went (a seat).
+    # first version. Both passed it, and they were "the last two" until two later entries went in
+    # between them. Naming them is what a position could not do — and the sentence that replaced
+    # the position was wrong about where the first of those went, and out of date about the second
+    # before it was written (a seat, twice).
     Mutation(
         "bounded-wait", "a join's timeout goes back to being silent",
         REPO / "tests" / "test_server.py",
@@ -3999,7 +4000,8 @@ CHG-20260907-28 and built by no record yet.''',
     # entry that would put `ran_on` on the stand. Run: it is caught by `gave_up`, not by `ran_on`,
     # at 12.34s. From those two runs this comment concluded **nothing puts `ran_on` on the
     # stand, and no small mutation can** — and stood on that for a round after
-    # `the last attachment arrives after the walk it was to interrupt has ended` refuted it. The reason was true of walks 1 and 2 only. Three entries now pin the
+    # `the last attachment arrives after the walk it was to interrupt has ended`
+    # refuted it. The reason was true of walks 1 and 2 only. Three entries now pin the
     # arrangement, from three sides, and the third of them is what puts `ran_on` on the stand.
     Mutation(
         "bounded-wait", "the first walk signals and does not hold, so `attach` walks the second",
@@ -4054,8 +4056,20 @@ CHG-20260907-28 and built by no record yet.''',
     # thing that can quietly stop matching the code beside it. This mutates the rule and expects
     # the table to refuse, which is the only entry here whose subject is the cases rather than the
     # tree.
+    # The one wait this record repaired that is not a `join` or an `Event`: a fixed
+    # `time.sleep(3.0)` before an assertion on `threading.active_count()`, which failed once in a
+    # three-file run and passed alone. It waits for the count now. This mutation stops the
+    # connections being closed at all, so the wait can only end at its bound — which is what the
+    # repaired assertion has to keep refusing.
     Mutation(
-        "bounded-wait", "a `while` stops being a loop, and the constructed cases do not notice",
+        "bounded-wait", "nothing closes a connection that says nothing",
+        REPO / "tests" / "test_server.py",
+        '''    httpd.RequestHandlerClass.timeout = 2      # 30 in the shipped code; short enough to test''',
+        '''    httpd.RequestHandlerClass.timeout = 600    # 30 in the shipped code; short enough to test''',
+        "tests/test_server.py::test_a_connection_that_says_nothing_does_not_hold_a_thread_forever"),
+
+    Mutation(
+        "bounded-wait", "a `while` stops being a loop",
         REPO / "tests" / "test_server.py",
         '''        if isinstance(node, (ast.For, ast.AsyncFor, ast.While, ast.ListComp, ast.SetComp,''',
         '''        if isinstance(node, (ast.For, ast.AsyncFor, ast.ListComp, ast.SetComp,''',

@@ -3852,9 +3852,26 @@ def test_a_connection_that_says_nothing_does_not_hold_a_thread_forever(wire):
     time.sleep(0.7)
     assert threading.active_count() > before, "the connections were never accepted"
 
-    time.sleep(3.0)                                   # past the fixture's 2s deadline
-    assert threading.active_count() <= before, (
-        "a connection that said nothing still holds its thread")
+    # **Waited for, not slept through** (CHG-20260908-01). This was `time.sleep(3.0)` with a
+    # comment saying *"past the fixture's 2s deadline"*, and it is a wall clock: on a loaded
+    # machine the deadline fires late, the threads are on their way out, and the assertion below
+    # told the reader a connection was still holding one. Measured — one failure in a three-file
+    # run of 225 tests, passing alone and on a re-run of the same three files.
+    #
+    # Ten seconds is not the deadline and is not a measurement of the machine. It is the point at
+    # which "the threads have not gone" stops being a question about load, and the message says
+    # which of the two it is reporting.
+    deadline = time.monotonic() + 10.0
+    while threading.active_count() > before and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    still = threading.active_count()
+    assert still <= before, (
+        f"{still - before} thread(s) over the count this test started at, {10.0:.0f}s after eight "
+        f"connections that said nothing were opened, and {8.0:.0f}s past the fixture's 2s "
+        f"deadline. Either the deadline is not closing them, or this machine did not schedule "
+        f"them out in ten seconds — the first is the defect, the second is why this waits for the "
+        f"count rather than sleeping a fixed three")
 
 
 @pytest.mark.parametrize("length,says", [
@@ -4453,7 +4470,10 @@ def test_a_burst_of_connections_is_queued_rather_than_refused(tmp_path):
 # --- a bounded wait says when it did not complete (CHG-20260908-01) ------------------------------
 
 def _own_statements(fn):
-    """`fn`'s own statements, with nested `def`s and lambdas left to themselves.
+    """`fn`'s own statements: nested `def`s left to themselves, a lambda's expressions kept.
+
+    The summary said *"and lambdas left to themselves"* for a round after the comment below
+    withdrew it — the fifth round in which a retraction reached one copy and not another.
 
     Two of the waits below sit in a `walk` closure — one in `_gated_runner`, a module-level
     helper, and one inside the test that reads it — and attributing a nested function's wait to the
@@ -4470,6 +4490,9 @@ def _own_statements(fn):
         # function that writes it, where a guard can live (a seat, after another seat had asked
         # for lambdas to be examined at all).
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Kept, not descended into. The node itself is a **binding** of its own name, which is
+            # what `_binds` reads it for; its statements belong to it.
+            out.append(node)
             continue
         if isinstance(node, ast.Lambda):
             stack.append(node.body)
@@ -4477,6 +4500,22 @@ def _own_statements(fn):
         out.append(node)
         stack.extend(ast.iter_child_nodes(node))
     return out
+
+
+def _lambda_nodes(fn):
+    """The ids of everything inside a `lambda` in `fn`, and the names those lambdas bind.
+
+    A lambda's expressions are `fn`'s (see `_own_statements`), which is what lets a bounded `join`
+    inside one be answered by the function that writes it. Two things must not follow from that: a
+    guard written in a lambda is a guard that may never run — the reason a nested `def`'s guard is
+    not counted — and a lambda's **parameter** is a different name from `fn`'s (a seat constructed
+    both).
+    """
+    ids, bound = set(), set()
+    for lam in [n for n in ast.walk(fn) if isinstance(n, ast.Lambda)]:
+        ids |= {id(n) for n in ast.walk(lam.body)}
+        bound |= {a.arg for a in ast.walk(lam.args) if isinstance(a, ast.arg)}
+    return ids, bound
 
 
 def _bounded(node, name):
@@ -4520,25 +4559,65 @@ def _bounded(node, name):
 _ANSWERING = ("wait", "wait_for", "acquire")
 
 
+def _binds(fn):
+    """The names `fn` binds itself, which are the ones a load inside it does not read from outside.
+
+    Six ways, because a first version knew two — arguments and `Name` in `Store` — and a seat built
+    the third: `def done(): ...` binds `done` through a field on the node, not through a `Name`.
+    `class` and the two `as` forms bind the same way. `global` and `nonlocal` say the opposite in
+    so many words, so they are taken back out.
+    """
+    out = {a.arg for a in ast.walk(fn.args) if isinstance(a, ast.arg)}
+    unbound = set()
+    for n in _own_statements(fn):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
+            out.add(n.id)
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out.add(n.name)
+        elif isinstance(n, ast.alias):
+            out.add(n.asname or n.name.split(".")[0])
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            out.add(n.name)
+        elif isinstance(n, (ast.Global, ast.Nonlocal)):
+            unbound |= set(n.names)
+    return out - unbound
+
+
 def _reads(fn):
     """The names `fn` loads, counting a nested function's loads only where they can be `fn`'s.
 
-    Two revisions here, each closing what the other opened. Built from `fn`'s own statements, an
-    answer read only inside a closure read as an answer nobody reads — a false positive on correct
-    code. Built from the whole function, a closure that binds its **own** `done` reported the outer
-    `done` as read, which is an escape. Both were constructed by a seat; this asks each nested
-    function whether the name could be its.
+    Three revisions here, each closing what the one before opened. Built from `fn`'s own
+    statements, an answer read only inside a closure read as an answer nobody reads — a false
+    positive on correct code. Built from the whole function, a closure that binds its **own** `done`
+    reported the outer `done` as read — an escape. Asking whether the name is bound, but knowing
+    only two of the six ways Python binds one, let `def done(): ...` through. Every one was
+    constructed by a seat.
+
+    Four, then: a lambda's parameter and a comprehension's target are names of their own, and
+    `lambda done: done` and `[done for done in xs]` both read as reads of `fn`'s `done` until they
+    are subtracted. A seat constructed both.
     """
+    shadowed = set()
+    for comp in [n for n in ast.walk(fn)
+                 if isinstance(n, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp))]:
+        shadowed |= {n.id for gen in comp.generators for n in ast.walk(gen.target)
+                     if isinstance(n, ast.Name)}
+    _, lambda_bound = _lambda_nodes(fn)
+    shadowed |= lambda_bound
     out = {n.id for n in _own_statements(fn)
-           if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+           if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id not in shadowed}
     for inner in [n for n in ast.walk(fn)
-                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
-                  and n is not fn]:
-        bound = {a.arg for a in ast.walk(inner.args) if isinstance(a, ast.arg)}
-        bound |= {n.id for n in ast.walk(inner)
-                  if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
-        out |= {n.id for n in ast.walk(inner)
+                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n is not fn]:
+        bound = _binds(inner)
+        out |= {n.id for n in _own_statements(inner)
                 if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id not in bound}
+        # A default and a decorator are written inside `inner` and **evaluated in `fn`**, so a name
+        # read there is read by `fn` whatever `inner` binds. `def g(done=done)` was refused for a
+        # round (a seat).
+        for expr in (list(inner.args.defaults) + [d for d in inner.args.kw_defaults if d]
+                     + list(inner.decorator_list)):
+            out |= {n.id for n in ast.walk(expr)
+                    if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
     return out
 
 
@@ -4560,9 +4639,14 @@ def _under_a_loop(body):
 
 
 def _silent_waits(text, where):
-    """Every bounded wait in `text` that could time out without saying so.
+    """The bounded waits in `text` that **this rule can see** time out without saying so.
 
-    Split out of the test so the constructed cases below run **this** code and not a copy of it.
+    Not every one: its limits are six escapes and two false positives, listed on
+    `test_every_bounded_wait_says_when_it_did_not_complete` and run as cases in
+    `BOUNDED_WAIT_CASES`. The summary line said *"every"* for a round, which is the shape this
+    record's own row 7 is about.
+
+    Split out of the test so those cases run **this** code and not a copy of it.
     """
     silent = []
     for fn in [n for n in ast.walk(ast.parse(text))
@@ -4576,10 +4660,15 @@ def _silent_waits(text, where):
         # Both directions are wrong for some program; this one is wrong for a program no file
         # under `tests/` contains (two seats: one asked which way it had been decided, the other
         # refused the dismissal that first answered it).
+        # A guard written in a lambda does not count, for the reason a guard in a nested `def`
+        # does not: it may never run. `t.join(timeout=1); check = lambda: t.is_alive()` was
+        # accepted for a round, with the strict rule applied to `def` and the lax one to `lambda`
+        # (a seat).
+        in_a_lambda, _ = _lambda_nodes(fn)
         asked = {}
         for n in body:
             if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                    and n.func.attr == "is_alive"):
+                    and n.func.attr == "is_alive" and id(n) not in in_a_lambda):
                 asked.setdefault(ast.unparse(n.func.value), []).append(id(n))
         looping = _under_a_loop(body)
         loaded = _reads(fn)
@@ -4716,6 +4805,23 @@ def f(ev):
         return ok
     g()
 """),
+    ("an answer a nested `def` shadows by its own name", True, """
+def f(ev):
+    ok = ev.wait(timeout=1)
+    def g():
+        def ok():
+            return True
+        return ok()
+    assert g()
+"""),
+    ("an answer a nested `def` declares `nonlocal` and reads", False, """
+def f(ev):
+    ok = ev.wait(timeout=1)
+    def g():
+        nonlocal ok
+        return ok
+    assert g()
+"""),
     ("a loop's answers, read once outside", True, """
 def f(events):
     for ev in events:
@@ -4754,6 +4860,45 @@ def f(t):
         assert not t.is_alive()
     report()
 """),
+    ("a guard written in a lambda, which may never run", True, """
+def f(t):
+    t.join(timeout=1)
+    check = lambda: t.is_alive()
+    return check
+"""),
+    ("an answer a lambda parameter shadows", True, """
+def f(ev):
+    done = ev.wait(timeout=1)
+    g = lambda done: done
+    g(True)
+"""),
+    ("an answer a comprehension target shadows", True, """
+def f(ev, xs):
+    done = ev.wait(timeout=1)
+    return [done for done in xs]
+"""),
+    ("an answer read as a nested function's default", False, """
+def f(ev):
+    done = ev.wait(timeout=1)
+    def g(done=done):
+        return done
+    assert g()
+"""),
+    ("an answer read by a nested function's decorator", False, """
+def f(ev, use):
+    done = ev.wait(timeout=1)
+
+    @use(done)
+    def g():
+        done = 1
+        return done
+    assert g()
+"""),
+    ("an answer a lambda returns, which this rule cannot follow", False, """
+def f(ev):
+    run = lambda: ev.wait(timeout=1)
+    run()
+"""),
 )
 
 
@@ -4787,7 +4932,8 @@ def test_every_bounded_wait_says_when_it_did_not_complete():
     * `Thread.join(timeout=...)` returns nothing whether it completed or not, so the function must
       ask `is_alive()` separately.
     * `Event.wait`, `Condition.wait_for` and `Lock.acquire` **return the answer**, so it has to be
-      read. Dropped as a statement, or kept in a name nothing loads, is the same silence.
+      read. Dropped as a statement, kept in a name nothing loads, or answered once a turn inside a
+      loop and read once outside it, are the same silence.
 
     Three limits, then a list of what escapes. Each limit is a decision about what this rule is
     for; the list after them is shapes, and it is counted in bullets rather than in cases — several
@@ -4828,7 +4974,15 @@ def test_every_bounded_wait_says_when_it_did_not_complete():
       nothing acts on — `assert failures, f"still alive: {t.is_alive()}"`. Both are rules about
       meaning rather than shape;
     * an inverted guard: `assert thread.is_alive()` after the join asks the question and accepts
-      the wrong answer.
+      the wrong answer;
+    * an answer **returned by a lambda**: `run = lambda: ev.wait(timeout=1)` is accepted while
+      `run = lambda: t.join(timeout=1)` is refused, because the answering half keys on statements
+      and a lambda body is never one. Closing it would refuse `assert (lambda: ev.wait(...))()`,
+      where the caller does read the answer — a lambda hands its value back and this rule cannot
+      see who takes it. So the lambda rule reaches `join`, and says so;
+    * `await ev.wait(timeout=1)`, whose statement is an `Await` wrapping the call. No `async def`
+      in this suite contains a bounded wait, and the rule walks `AsyncFunctionDef` and `AsyncFor`,
+      so it looks wider here than it is.
 
     **And two false positives, for the same reason.** The first: a call by one of these names
     that reports a timeout by **raising** rather than returning — `subprocess.Popen.wait` and
