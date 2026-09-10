@@ -4498,9 +4498,6 @@ def _own_statements(fn):
         # function that writes it, where a guard can live (a seat, after another seat had asked
         # for lambdas to be examined at all).
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            # Kept, not descended into. The node itself is a **binding** of its own name, which is
-            # what `_binds` reads it for; its statements belong to it.
-            out.append(node)
             continue
         if isinstance(node, ast.Lambda):
             stack.append(node.body)
@@ -4512,29 +4509,28 @@ def _own_statements(fn):
 
 
 def _lambda_nodes(fn):
-    """The ids inside a `lambda` in `fn` whose guard may never run, and the names lambdas bind.
+    """The ids inside a `lambda` in `fn` **whose guard may never run**.
 
     Not everything inside a lambda: one called where it is written does run, and its ids are left
-    out. The summary said *"everything"* for a round after the body stopped meaning it.
+    out. It also returned the names those lambdas bind, for a caller that stopped reading them and
+    then stopped existing — the summary advertised both for a round after each stopped being true.
 
     A lambda's expressions are `fn`'s (see `_own_statements`), which is what lets a bounded `join`
-    inside one be answered by the function that writes it. Two things must not follow from that: a
-    guard written in a lambda is a guard that may never run — the reason a nested `def`'s guard is
-    not counted — and a lambda's **parameter** is a different name from `fn`'s (a seat constructed
-    both).
+    inside one be answered by the function that writes it. What must not follow is that a guard
+    written in a lambda counts: unless it is called on the spot, it may never run, which is the
+    reason a nested `def`'s guard is not counted either.
     """
     called = {id(n.func) for n in ast.walk(fn)
               if isinstance(n, ast.Call) and isinstance(n.func, ast.Lambda)}
-    ids, bound = set(), set()
+    ids = set()
     for lam in [n for n in ast.walk(fn) if isinstance(n, ast.Lambda)]:
-        bound |= {a.arg for a in ast.walk(lam.args) if isinstance(a, ast.arg)}
         # A lambda **called where it is written** runs, so its guard is not a guard that may never
         # run. `assert not (lambda: t.is_alive())()` was refused for a round, on a reason that is
         # false of exactly that shape — and refused it while the answering half was left open for
         # `assert (lambda: ev.wait(...))()`, the identical construction (a seat).
         if id(lam) not in called:
             ids |= {id(n) for n in ast.walk(lam.body)}
-    return ids, bound
+    return ids
 
 
 def _bounded(node, name):
@@ -4578,103 +4574,6 @@ def _bounded(node, name):
 _ANSWERING = ("wait", "wait_for", "acquire")
 
 
-#: `match` arrived in 3.10 and `pyproject.toml` says `requires-python = ">=3.9"`, so these node
-#: types are not there to be named on the oldest Python this repository runs on. Referencing them
-#: directly raised `AttributeError` at import on py3.9 while py3.13 was green, and CI is what said
-#: so — this machine is 3.11, and neither seat was asked to read the change on 3.9.
-_MATCH_NAMED = tuple(getattr(ast, name) for name in ("MatchAs", "MatchStar") if hasattr(ast, name))
-_MATCH_MAPPING = tuple(getattr(ast, name) for name in ("MatchMapping",) if hasattr(ast, name))
-
-
-def _binds(fn):
-    """The names `fn` binds itself, which are the ones a load inside it does not read from outside.
-
-    Every node that binds a name in its own scope, which is not a list this record has managed to
-    enumerate: a first version knew two — arguments and `Name` in `Store` — a seat built the third
-    (`def done(): ...`, which binds through a field on the node rather than a `Name`), and a later
-    read added the three `match` patterns to a docstring that had just said *"six ways"*. The count
-    is gone; the rule is the sentence above it.
-
-    `nonlocal` is the one exception, and `global` was written as a second one for a round: they do
-    not say the same thing. `nonlocal done` means the name **is** the enclosing scope's, so it is
-    taken back out; `global done` means it can never be, so it stays a binding.
-    """
-    out = {a.arg for a in ast.walk(fn.args) if isinstance(a, ast.arg)}
-    unbound = set()
-    for n in _own_statements(fn):
-        if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
-            out.add(n.id)
-        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            out.add(n.name)
-        elif isinstance(n, ast.alias):
-            out.add(n.asname or n.name.split(".")[0])
-        elif isinstance(n, ast.ExceptHandler) and n.name:
-            out.add(n.name)
-        elif isinstance(n, ast.Global):
-            out |= set(n.names)
-        elif isinstance(n, ast.Nonlocal):
-            unbound |= set(n.names)
-        elif _MATCH_NAMED and isinstance(n, _MATCH_NAMED) and n.name:
-            out.add(n.name)
-        elif _MATCH_MAPPING and isinstance(n, _MATCH_MAPPING) and n.rest:
-            out.add(n.rest)
-    return out - unbound
-
-
-def _reads(fn):
-    """The names `fn` loads, counting a nested function's loads only where they can be `fn`'s.
-
-    Three revisions here, each closing what the one before opened. Built from `fn`'s own
-    statements, an answer read only inside a closure read as an answer nobody reads — a false
-    positive on correct code. Built from the whole function, a closure that binds its **own** `done`
-    reported the outer `done` as read — an escape. Asking whether the name is bound, but knowing
-    only two of the six ways Python binds one, let `def done(): ...` through. Every one was
-    constructed by a seat.
-
-    Five, and the fifth is the one that made this a walk rather than a filter. Subtracting the
-    *names* a lambda or comprehension binds took them out of every load in the function, so
-    `h = lambda done: done` two lines above a genuine `assert done` refused correct code; and
-    taking defaults off every descendant charged `def h(x=done)` inside `g`, where `done` is `g`'s
-    own local, to `fn`. Both were constructed by a seat and run before this was written. A scope is
-    read here, then each scope written directly inside it, minus what that scope binds.
-    """
-    shadowed = set()
-    for lam in [n for n in ast.walk(fn) if isinstance(n, ast.Lambda)]:
-        bound = {a.arg for a in ast.walk(lam.args) if isinstance(a, ast.arg)}
-        shadowed |= {id(n) for n in ast.walk(lam.body)
-                     if isinstance(n, ast.Name) and n.id in bound}
-    for comp in [n for n in ast.walk(fn)
-                 if isinstance(n, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp))]:
-        bound = {n.id for gen in comp.generators for n in ast.walk(gen.target)
-                 if isinstance(n, ast.Name)}
-        # **The first iterable is not inside the comprehension's scope.** Python evaluates it in
-        # the enclosing frame, so `[done for done in ([1] if done else [])]` reads the outer
-        # `done` — and shadowing the whole node refused that (a seat).
-        outer = {id(n) for n in ast.walk(comp.generators[0].iter)}
-        shadowed |= {id(n) for n in ast.walk(comp)
-                     if isinstance(n, ast.Name) and n.id in bound and id(n) not in outer}
-
-    out = {n.id for n in _own_statements(fn)
-           if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and id(n) not in shadowed}
-    for inner in [n for n in _own_statements(fn)
-                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
-        # A default, a decorator and an annotation are written inside `inner` and **evaluated
-        # here**, so a name read there is read by this scope whatever `inner` binds.
-        # `def g(done=done)` was refused for a round; then every descendant's defaults were taken,
-        # which charged a deeper function's own local to this one; then annotations were left out
-        # of the list, which refused `def g() -> done` (a seat, all three times). There is no
-        # `from __future__ import annotations` in this file, so an annotation is evaluated.
-        annotations = [a.annotation for a in ast.walk(inner.args)
-                       if isinstance(a, ast.arg) and a.annotation]
-        for expr in (list(inner.args.defaults) + [d for d in inner.args.kw_defaults if d]
-                     + list(inner.decorator_list) + annotations
-                     + ([inner.returns] if inner.returns else [])):
-            out |= {n.id for n in ast.walk(expr)
-                    if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
-        out |= _reads(inner) - _binds(inner)
-    return out
-
-
 def _under_a_loop(body):
     """The ids of every node inside a `for` or a comprehension in `body`.
 
@@ -4706,26 +4605,24 @@ def _silent_waits(text, where):
     for fn in [n for n in ast.walk(ast.parse(text))
                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
         body = _own_statements(fn)
-        # **`body`, not `ast.walk(fn)` — the opposite of `loaded` below, on purpose.** A guard
-        # inside a nested `def` may never be called, so counting it would let a never-run closure
-        # answer for a join in the enclosing function. The cost is the mirror image, and it is a
-        # false positive on correct code: a join guarded by a helper the function defines and
-        # calls is refused here — a real program, and one the cases below construct on purpose.
-        # Both directions are wrong for some program; this one is wrong for a program no file
-        # under `tests/` contains (two seats: one asked which way it had been decided, the other
-        # refused the dismissal that first answered it).
+        # **`body`, not `ast.walk(fn)`.** A guard inside a nested `def` may never be called, so
+        # counting it would let a never-run closure answer for a join in the enclosing function.
+        # The cost is the mirror image, and it is a false positive on correct code: a join guarded
+        # by a helper the function defines and calls is refused here — a real program, and one the
+        # cases below construct on purpose. Both directions are wrong for some program; this one
+        # is wrong for a program no file under `tests/` contains (two seats: one asked which way
+        # it had been decided, the other refused the dismissal that first answered it).
         # A guard written in a lambda does not count, for the reason a guard in a nested `def`
         # does not: it may never run. `t.join(timeout=1); check = lambda: t.is_alive()` was
         # accepted for a round, with the strict rule applied to `def` and the lax one to `lambda`
         # (a seat).
-        in_a_lambda, _ = _lambda_nodes(fn)
+        in_a_lambda = _lambda_nodes(fn)
         asked = {}
         for n in body:
             if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                     and n.func.attr == "is_alive" and id(n) not in in_a_lambda):
                 asked.setdefault(ast.unparse(n.func.value), []).append(id(n))
         looping = _under_a_loop(body)
-        loaded = _reads(fn)
         for node in body:
             if _bounded(node, "join"):
                 who = ast.unparse(node.func.value)
@@ -4741,34 +4638,6 @@ def _silent_waits(text, where):
                     who = ast.unparse(node.value.func.value)
                     silent.append(f"{where}:{node.lineno} {fn.name}() throws away the answer "
                                   f"{who}.{name}(timeout=...) gives it")
-                    continue
-                # `AnnAssign` as well as `Assign`: `done: bool = ev.wait(timeout=1)` is the same
-                # bare name kept and never read, and was accepted for one revision because the
-                # check knew only one of the two nodes (a seat).
-                if isinstance(node, ast.Assign) and len(node.targets) == 1:
-                    target = node.targets[0]
-                elif isinstance(node, ast.AnnAssign):
-                    target = node.target
-                else:
-                    continue
-                if not (_bounded(getattr(node, "value", None), name)
-                        and isinstance(target, ast.Name)):
-                    continue
-                who = ast.unparse(node.value.func.value)
-                if target.id not in loaded:
-                    silent.append(f"{where}:{node.lineno} {fn.name}() keeps the answer "
-                                  f"{who}.{name}(timeout=...) gives it in `{target.id}` and never "
-                                  f"reads it")
-                elif id(node) in looping and not any(
-                        id(n) in looping for n in body
-                        if isinstance(n, ast.Name) and n.id == target.id
-                        and isinstance(n.ctx, ast.Load)):
-                    # The same last-turn question as the join above, in the other of the two
-                    # shapes this rule opens with. It was held for `join` only, through two
-                    # rounds that widened the loop rule (a seat).
-                    silent.append(f"{where}:{node.lineno} {fn.name}() answers "
-                                  f"{who}.{name}(timeout=...) once a turn into `{target.id}` and "
-                                  f"reads it once, outside the loop — the last turn only")
     return silent
 
 
@@ -4829,65 +4698,6 @@ def f(t, pending):
 def f(ev):
     ev.wait(timeout=1)
 """),
-    ("an answer kept and never read", True, """
-def f(ev):
-    ok = ev.wait(timeout=1)
-    assert 1 == 1
-"""),
-    ("an annotated answer, never read", True, """
-def f(ev):
-    ok: bool = ev.wait(timeout=1)
-    assert 1 == 1
-"""),
-    ("an answer kept and read", False, """
-def f(ev):
-    ok = ev.wait(timeout=1)
-    assert ok
-"""),
-    ("an answer read only inside a closure", False, """
-def f(ev):
-    ok = ev.wait(timeout=1)
-    def g():
-        return ok
-    assert g()
-"""),
-    ("an answer a closure shadows and never reads", True, """
-def f(ev):
-    ok = ev.wait(timeout=1)
-    def g():
-        ok = True
-        return ok
-    g()
-"""),
-    ("an answer a nested `def` shadows by its own name", True, """
-def f(ev):
-    ok = ev.wait(timeout=1)
-    def g():
-        def ok():
-            return True
-        return ok()
-    assert g()
-"""),
-    ("an answer a nested `def` declares `nonlocal` and reads", False, """
-def f(ev):
-    ok = ev.wait(timeout=1)
-    def g():
-        nonlocal ok
-        return ok
-    assert g()
-"""),
-    ("a loop's answers, read once outside", True, """
-def f(events):
-    for ev in events:
-        done = ev.wait(timeout=1)
-    assert done
-"""),
-    ("a loop's answers, read inside", False, """
-def f(events):
-    for ev in events:
-        done = ev.wait(timeout=1)
-        assert done
-"""),
     ("acquire with a ceiling, answer dropped", True, """
 def f(lock):
     lock.acquire(timeout=10)
@@ -4920,17 +4730,6 @@ def f(t):
     check = lambda: t.is_alive()
     return check
 """),
-    ("an answer a lambda parameter shadows", True, """
-def f(ev):
-    done = ev.wait(timeout=1)
-    g = lambda done: done
-    g(True)
-"""),
-    ("an answer a comprehension target shadows", True, """
-def f(ev, xs):
-    done = ev.wait(timeout=1)
-    return [done for done in xs]
-"""),
     ("an answer read as a nested function's default", False, """
 def f(ev):
     done = ev.wait(timeout=1)
@@ -4955,60 +4754,6 @@ def f(ev):
 """),
 
     # -- the scopes ------------------------------------------------------------------------------
-    ("a read, with a lambda parameter sharing the name", False, """
-def f(ev):
-    done = ev.wait(timeout=1)
-    g = lambda done: done
-    assert done
-"""),
-    ("a read, with a comprehension target sharing it", False, """
-def f(ev, xs):
-    done = ev.wait(timeout=1)
-    ys = [done for done in xs]
-    assert done and ys
-"""),
-    ("a read in a comprehension's first iterable", False, """
-def f(ev):
-    done = ev.wait(timeout=1)
-    return [done for done in ([1] if done else [])]
-"""),
-    ("a comprehension target shadowing, and no other read", True, """
-def f(ev, xs):
-    done = ev.wait(timeout=1)
-    return [done for done in xs]
-"""),
-    ("a deep default reading the middle scope's own local", True, """
-def f(ev):
-    done = ev.wait(timeout=1)
-    def g():
-        done = 1
-        def h(x=done):
-            return x
-        return h()
-    return g()
-"""),
-    ("a lambda parameter inside a nested `def`", True, """
-def f(ev):
-    done = ev.wait(timeout=1)
-    def g():
-        return lambda done: done
-    g()
-"""),
-    ("a nested `global` of the same name", True, """
-def f(ev):
-    done = ev.wait(timeout=1)
-    def g():
-        global done
-        return done
-    assert g()
-"""),
-    ("an annotation reading the answer", False, """
-def f(ev):
-    done = ev.wait(timeout=1)
-    def g() -> done:
-        return 1
-    g()
-"""),
     ("a guard in a lambda called where it is written", False, """
 def f(t):
     t.join(timeout=1)
@@ -5041,19 +4786,23 @@ def f(t):
 def f(cond, pred):
     cond.wait_for(pred, 10)
 """),
-    ("escape: an answer assigned to something that is not a name", False, """
-def f(self, ev):
-    self.ok = ev.wait(timeout=1)
-"""),
-    ("escape: an answer read once and ignored", False, """
+    ("escape: an answer kept in a name", False, """
 def f(ev):
-    ok = ev.wait(timeout=1)
-    return repr(ok) and None
+    done = ev.wait(timeout=1)
+    assert 1 == 1
 """),
     ("escape: an `is_alive()` nothing acts on", False, """
 def f(t, failures):
     t.join(timeout=10)
     assert not failures, f"still alive: {t.is_alive()}"
+"""),
+    ("escape: a positional ceiling on `acquire`", False, """
+def f(lock):
+    lock.acquire(10)
+"""),
+    ("the false positive: a wait that raises on timeout", True, """
+def f(proc):
+    proc.wait(timeout=5)
 """),
     ("escape: an inverted guard", False, """
 def f(t):
@@ -5065,24 +4814,6 @@ async def f(ev):
     await ev.wait(timeout=1)
 """),
 )
-
-
-if sys.version_info >= (3, 10):
-    # Appended rather than written in place: on py3.9 this source does not parse, so a `match`
-    # case cannot sit in a tuple that py3.9 reads. The rule's `match` branches are guarded the same
-    # way, and both were `AttributeError` and `SyntaxError` on the oldest supported Python until
-    # CI said so.
-    BOUNDED_WAIT_CASES += (
-        ("a `match` pattern binding the name", True, """
-def f(ev, x):
-    done = ev.wait(timeout=1)
-    def g():
-        match x:
-            case done:
-                return done
-    assert g()
-"""),
-    )
 
 
 def test_the_rule_over_bounded_waits_refuses_what_it_says_it_refuses():
@@ -5151,18 +4882,21 @@ def test_every_bounded_wait_says_when_it_did_not_complete():
       `sep.join(parts)` is the same syntax;
     * one passed as `**{"timeout": 10}`;
     * a positional ceiling on `acquire` or `wait_for`, whose first argument is not the ceiling;
-    * an answer assigned somewhere that is not a bare name — `self.ok = ev.wait(timeout=1)`,
-      `d["ok"] = ...`;
-    * an answer read into a name that is loaded once and ignored, and an `is_alive()` whose result
-      nothing acts on — `assert failures, f"still alive: {t.is_alive()}"`. Both are rules about
-      meaning rather than shape;
+    * **an answer kept in a name at all** — `done = ev.wait(timeout=1)`, read or not. This was a
+      third branch of the rule for five rounds, with a scope walk behind it. Measured, it held
+      **none** of the seven sites this record repairs, and the shape it looks for occurs nowhere
+      under `tests/`; measured against that, it was the source of every false positive this record
+      produced, one per round, each closed and reopened one scope down. Both seats were asked
+      whether it should ship and both said remove. What it aimed at is here instead, where six
+      others already are, and where the case rows keep it visible;
+    * an `is_alive()` whose result nothing acts on — `assert not failures,
+      f"still alive: {t.is_alive()}"`. A rule about meaning rather than shape;
     * an inverted guard: `assert thread.is_alive()` after the join asks the question and accepts
       the wrong answer;
     * an answer **returned by a lambda**: `run = lambda: ev.wait(timeout=1)` is accepted while
       `run = lambda: t.join(timeout=1)` is refused, because the answering half keys on statements
-      and a lambda body is never one. Closing it would refuse `assert (lambda: ev.wait(...))()`,
-      where the caller does read the answer — a lambda hands its value back and this rule cannot
-      see who takes it. So the lambda rule reaches `join`, and says so;
+      and a lambda body is never one. A lambda hands its value back and this rule cannot see who
+      takes it, so the lambda rule reaches `join` and says so;
     * `await ev.wait(timeout=1)`, whose statement is an `Await` wrapping the call. No `async def`
       in this suite contains a bounded wait, and the rule walks `AsyncFunctionDef` and `AsyncFor`,
       so it looks wider here than it is.
@@ -5176,9 +4910,9 @@ def test_every_bounded_wait_says_when_it_did_not_complete():
     `Popen.wait`s, outside this rule's reach — but the family is here: `tests/test_store.py`'s
     `job.result(timeout=30)` is the same kind of wait under a name this rule does not read.
 
-    The second is the asymmetry between `asked` and `loaded`, in the body above: a join guarded by
-    a helper the function defines **and calls** is refused, because a guard is counted only in the
-    function it is written in. The reason is at that line.
+    The second is `asked` being scope-local, in the body above: a join guarded by a helper the
+    function defines **and calls** is refused, because a guard is counted only in the function it
+    is written in. The reason is at that line, and the case is a row.
     """
     silent = []
     for path in sorted(pathlib.Path(__file__).parent.glob("*.py")):
