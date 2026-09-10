@@ -31,6 +31,7 @@ import sys
 import tempfile
 import threading
 import time
+import warnings
 import urllib.error
 import urllib.request
 
@@ -899,7 +900,7 @@ def test_an_action_arriving_as_the_walk_decides_to_stop_is_not_stranded(tmp_path
 
     def walk(cfg):
         walks.append(tuple(cfg.instructions))
-        ran_on.append(threading.current_thread().name)
+        ran_on.append(threading.current_thread())
         held = len(walks)
         if held in entered:
             entered[held].set()
@@ -941,9 +942,17 @@ def test_an_action_arriving_as_the_walk_decides_to_stop_is_not_stranded(tmp_path
         f"walk(s) {gave_up} were released by their own timeout rather than by the test, so the "
         f"attachment that follows each did not arrive inside a walk at all")
 
-    assert set(ran_on) == {first.name}, (
-        f"the walks ran on {sorted(set(ran_on))}; a walk on the attaching thread means `attach` "
-        f"walked it synchronously, and nothing arrived mid-walk")
+    # The thread itself, not `first.name`: names are labels and two threads can carry the same
+    # one, so a comparison of names can hold while the walk ran somewhere else (a seat).
+    #
+    # What this line establishes and what it does not: it says no walk ran anywhere but on `first`,
+    # which is what makes `attach` a mid-walk arrival rather than a walk of its own. That the
+    # arrival *was* mid-walk is established by `entered[2]` and `gave_up` above, not here. And
+    # nothing pins this line: every mutation of the arrangement is caught by `gave_up` first,
+    # because a walk on the attaching thread waits there for a release only that thread can send.
+    assert set(ran_on) == {first}, (
+        f"the walks ran on {sorted(t.name for t in set(ran_on))}; a walk anywhere but on `first` "
+        f"is one `attach` ran itself, on the thread that was supposed to be interrupting it")
     assert len(walks) == 3, (
         f"the second attachment was stranded: {len(walks)} walks for two mid-walk attachments")
     assert runner._walk_again is False
@@ -2666,6 +2675,7 @@ def _config_nodes_keys():
     httpd = server.serve(_runner(), operator, port=0)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
+    raised = False
     try:
         port = httpd.server_address[1]
         req = urllib.request.Request(f"http://127.0.0.1:{port}/config/nodes", method="GET")
@@ -2673,26 +2683,40 @@ def _config_nodes_keys():
         req.add_header("Host", f"127.0.0.1:{port}")
         with urllib.request.urlopen(req, timeout=10) as resp:
             return set(json.loads(resp.read().decode("utf-8")))
+    except BaseException:
+        raised = True
+        raise
     finally:
         # `shutdown()` stops the loop; `server_close()` is what releases the listening socket, and
-        # the join is what makes the thread gone rather than going. Three guards call this helper,
-        # in a file that also asserts on `threading.active_count()`
-        # (`test_a_connection_that_says_nothing_does_not_hold_a_thread_forever`) — a helper that
-        # leaves a thread finishing is a flake for somebody else to diagnose.
+        # the join is what makes the thread gone rather than going.
+        # Three guards call this helper, and **nothing in this file reports a thread it leaves
+        # behind** — measured, by forcing the leak and running the file: no test fails.
+        # `test_a_connection_that_says_nothing_does_not_hold_a_thread_forever` was named here as
+        # the victim and is not one; it takes its own `threading.active_count()` baseline after
+        # this helper has already run, so a leaked thread is inside that baseline, and its closing
+        # assertion is `<=`. The leak makes it pass more easily, not less (a seat). That is what
+        # makes the check below the only thing that would say so.
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=10)
         # **Not an `assert`.** This runs in a `finally`, so raising unconditionally would replace
         # whatever the body was already failing with — the real diagnosis swapped for this one.
-        # `sys.exc_info()` is the in-flight exception here, so this speaks only when nothing else
-        # is. Until CHG-20260908-01 the join's result was discarded, and the comment above says
-        # what that costs: the thread outlives the helper and the flake lands on
-        # `test_a_connection_that_says_nothing_does_not_hold_a_thread_forever`, which counts
-        # threads and has no idea this helper exists.
-        if thread.is_alive() and sys.exc_info()[0] is None:
-            raise AssertionError(
-                "the server thread outlived `_config_nodes_keys`; `threading.active_count()` is "
-                "asserted elsewhere in this file and would fail there instead of here")
+        #
+        # The question asked is whether **this** `try` is failing, and `raised` is set by the body's
+        # own `except`. `sys.exc_info()` was here first and is not the same question: it reports
+        # whatever exception the *thread* is handling, so this helper called from inside an
+        # `except` block would have suppressed itself on the return path, with nothing in flight
+        # here at all. No caller does that today; the next one would not have been told (a seat).
+        if thread.is_alive():
+            note = ("the server thread outlived `_config_nodes_keys`; `threading.active_count()` "
+                    "is asserted elsewhere in this file and would fail there instead of here")
+            if not raised:
+                raise AssertionError(note)
+            # Already failing. Raising would replace the real diagnosis with this one — but saying
+            # nothing leaves a live thread behind and no record that it was left, which is what
+            # this branch did until a seat asked what it costs. A warning reaches pytest's summary
+            # without taking the failure away.
+            warnings.warn(note, stacklevel=2)
 
 
 def test_every_key_of_the_node_config_route_is_named_by_the_console_or_written_down():
@@ -3796,7 +3820,10 @@ def test_a_content_length_that_lies_does_not_hold_the_thread_forever(wire):
 
     assert "409" in reply.splitlines()[0], reply.splitlines()[0] or "(no reply at all)"
     assert "did not arrive" in reply
-    assert took < 6.0
+    assert took < 6.0, (
+        f"the read deadline did not fire: the promised bytes never came and the handler was still "
+        f"waiting {took:.1f}s later. This is a wall clock, so a loaded machine can reach it with "
+        f"the deadline working — but silence here reported neither")
 
 
 def test_a_connection_that_says_nothing_does_not_hold_a_thread_forever(wire):
@@ -4413,9 +4440,10 @@ def test_a_burst_of_connections_is_queued_rather_than_refused(tmp_path):
 def _own_statements(fn):
     """`fn`'s own statements, with nested `def`s and lambdas left to themselves.
 
-    Three of the waits below sit in a `walk` closure defined inside the test that reads them, and
-    attributing a nested function's wait to the enclosing one would let a guard in either place
-    answer for a wait in the other.
+    Two of the waits below sit in a `walk` closure — one in `_gated_runner`, a module-level
+    helper, and one inside the test that reads it — and attributing a nested function's wait to the
+    enclosing one would let a guard in either place answer for a wait in the other. A seat counted
+    this; the sentence before it said three, and put both in the tests.
     """
     stack, out = list(fn.body), []
     while stack:
@@ -4428,12 +4456,47 @@ def _own_statements(fn):
 
 
 def _bounded(node, name):
-    """A `<something>.<name>(..., timeout=...)` call. The keyword is the whole of the rule's key:
-    a wait with no timeout cannot return early, so it cannot misreport — it hangs, which is a
-    different failure and not the one held here."""
+    """A `<something>.<name>(...)` call with a ceiling on it — `timeout=...`, or a bare number.
+
+    The keyword alone was the first version of this, and a seat constructed what it let through:
+    `first.join(10)` with its guard deleted passed. The reason given for keying on the keyword —
+    *a wait with no timeout cannot return early* — is true of a wait with **no argument**, and was
+    written as if it were true of everything the key missed.
+
+    Positionally the argument is recognised only as a **numeric literal**. `str.join` is the same
+    syntax with a different meaning, and nothing static separates `t.join(deadline)` from
+    `sep.join(parts)`; counting any positional argument reported `''.join(...)` as an unguarded
+    thread join. So a ceiling held in a variable still escapes, and that is the price of not
+    reporting every string join in the suite.
+    """
     func = getattr(node, "func", None)
-    return (isinstance(node, ast.Call) and isinstance(func, ast.Attribute) and func.attr == name
-            and any(kw.arg == "timeout" for kw in node.keywords))
+    if not (isinstance(node, ast.Call) and isinstance(func, ast.Attribute) and func.attr == name):
+        return False
+    if any(kw.arg == "timeout" for kw in node.keywords):
+        return True
+    return (len(node.args) == 1 and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, (int, float))
+            and not isinstance(node.args[0].value, bool))
+
+
+#: The calls that hand back whether they completed. `Thread.join` is not among them — it returns
+#: `None` either way, which is why it needs `is_alive()` and they need only reading.
+_ANSWERING = ("wait", "wait_for", "acquire")
+
+
+def _under_a_loop(body):
+    """The ids of every node inside a `for` or a comprehension in `body`.
+
+    A join made once a turn and guarded once afterwards is a question about the last turn. The one
+    loop join in this file guards inside a comprehension, which is what makes that distinguishable
+    at all (a seat).
+    """
+    out = set()
+    for node in body:
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.ListComp, ast.SetComp,
+                             ast.DictComp, ast.GeneratorExp)):
+            out.update(id(inner) for inner in ast.walk(node))
+    return out
 
 
 def test_every_bounded_wait_says_when_it_did_not_complete():
@@ -4449,22 +4512,40 @@ def test_every_bounded_wait_says_when_it_did_not_complete():
 
     * `Thread.join(timeout=...)` returns nothing whether it completed or not, so the function must
       ask `is_alive()` separately.
-    * `Event.wait(timeout=...)` **returns the answer**, so discarding it is the same silence with a
-      shorter repair: read it.
+    * `Event.wait`, `Condition.wait_for` and `Lock.acquire` **return the answer**, so it has to be
+      read. Dropped as a statement, or kept in a name nothing loads, is the same silence.
 
-    Three limits, stated here rather than left to be discovered.
+    Four limits, stated here rather than left to be discovered. Three of them are limits a seat
+    constructed a case against; they are written down instead of closed because closing them costs
+    more legibility than the shapes are worth.
 
     It asks that a liveness check exist in the same function — not that it follow the join, and not
     that it be an `assert`. The wait in `_config_nodes_keys` runs in a `finally`, where raising
     unconditionally would replace whatever the body was already failing with, so it checks and
-    raises conditionally instead.
+    raises conditionally instead. The question must be **asked**, though: `assert thread.is_alive`,
+    the attribute without its parentheses, is an inert guard that an earlier version of this rule
+    accepted, because it looked for the attribute.
 
-    It matches **by expression, not by presence**: a function that joins `thread` and asks about
-    `first` has copied a guard rather than written one, and is refused here.
+    It matches **by expression, and expression identity here is textual**. That cuts both ways, and
+    the second way is the one worth knowing: the loop join in
+    `test_the_gate_never_rests_with_something_still_flagged` is guarded by a comprehension over the
+    same collection, and passes only because the comprehension's variable is spelled `t` like the
+    loop's. Rename either and the rule refuses a guard that is correct. What it buys is
+    the other direction — a function that joins `thread` and asks about `first` has copied a guard
+    rather than written one, and is refused.
 
-    It holds this package's tests only. That is where every bounded wait in the repository is —
-    `src/` and `tools/` have none, and `src/`'s freedom from blocking calls is held separately by
-    `test_the_server_waits_and_the_walk_does_not`.
+    It holds this package's tests only. `src/` and `tools/` have no bounded `Thread.join` or
+    `Event.wait` at all; `src/` does set a 30-second socket timeout on the request handler, which
+    is a ceiling that **raises** when it is reached and so cannot go unreported. The neighbouring
+    `test_the_server_waits_and_the_walk_does_not` is not a wider version of this rule and is not
+    cited as one: it reads one method's source and refuses three literal substrings, one of which
+    is `".join()"` with empty parentheses — which no bounded join is spelled with.
+
+    **What still escapes, named rather than left to be found.** A ceiling held in a variable
+    (`t.join(deadline)`) — `_bounded`'s stated price, since `sep.join(parts)` is the same syntax.
+    One passed as `**{"timeout": 10}`. An answer read into a name that is loaded once and ignored,
+    which is a rule about meaning rather than shape. And an inverted guard: `assert
+    thread.is_alive()` after the join asks the question and accepts the wrong answer.
     """
     silent = []
     for path in sorted(pathlib.Path(__file__).parent.glob("*.py")):
@@ -4472,18 +4553,37 @@ def test_every_bounded_wait_says_when_it_did_not_complete():
         for fn in [n for n in ast.walk(tree)
                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
             body = _own_statements(fn)
-            asked = {ast.unparse(n.value) for n in body
-                     if isinstance(n, ast.Attribute) and n.attr == "is_alive"}
+            asked = {}
+            for n in body:
+                if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                        and n.func.attr == "is_alive"):
+                    asked.setdefault(ast.unparse(n.func.value), []).append(id(n))
+            looping = _under_a_loop(body)
+            loaded = {n.id for n in body
+                      if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
             for node in body:
                 if _bounded(node, "join"):
                     who = ast.unparse(node.func.value)
                     if who not in asked:
                         silent.append(f"{path.name}:{node.lineno} {fn.name}() waits on "
                                       f"{who}.join(timeout=...) and never asks {who}.is_alive()")
-                if isinstance(node, ast.Expr) and _bounded(node.value, "wait"):
-                    who = ast.unparse(node.value.func.value)
-                    silent.append(f"{path.name}:{node.lineno} {fn.name}() throws away the answer "
-                                  f"{who}.wait(timeout=...) gives it")
+                    elif id(node) in looping and not any(i in looping for i in asked[who]):
+                        silent.append(f"{path.name}:{node.lineno} {fn.name}() joins {who} once a "
+                                      f"turn and asks {who}.is_alive() once, outside the loop — a "
+                                      f"question about the last turn only")
+                for name in _ANSWERING:
+                    if isinstance(node, ast.Expr) and _bounded(node.value, name):
+                        who = ast.unparse(node.value.func.value)
+                        silent.append(f"{path.name}:{node.lineno} {fn.name}() throws away the "
+                                      f"answer {who}.{name}(timeout=...) gives it")
+                    elif (isinstance(node, ast.Assign) and _bounded(node.value, name)
+                            and len(node.targets) == 1
+                            and isinstance(node.targets[0], ast.Name)
+                            and node.targets[0].id not in loaded):
+                        who = ast.unparse(node.value.func.value)
+                        silent.append(f"{path.name}:{node.lineno} {fn.name}() keeps the answer "
+                                      f"{who}.{name}(timeout=...) gives it in "
+                                      f"`{node.targets[0].id}` and never reads it")
 
     assert not silent, (
         "a bounded wait can time out here without saying so, and the assertion after it blames "
