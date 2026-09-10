@@ -4730,23 +4730,6 @@ def f(t):
     check = lambda: t.is_alive()
     return check
 """),
-    ("an answer read as a nested function's default", False, """
-def f(ev):
-    done = ev.wait(timeout=1)
-    def g(done=done):
-        return done
-    assert g()
-"""),
-    ("an answer read by a nested function's decorator", False, """
-def f(ev, use):
-    done = ev.wait(timeout=1)
-
-    @use(done)
-    def g():
-        done = 1
-        return done
-    assert g()
-"""),
     ("an answer a lambda returns, which this rule cannot follow", False, """
 def f(ev):
     run = lambda: ev.wait(timeout=1)
@@ -4845,9 +4828,10 @@ def test_every_bounded_wait_says_when_it_did_not_complete():
 
     * `Thread.join(timeout=...)` returns nothing whether it completed or not, so the function must
       ask `is_alive()` separately.
-    * `Event.wait`, `Condition.wait_for` and `Lock.acquire` **return the answer**, so it has to be
-      read. Dropped as a statement, kept in a name nothing loads, or answered once a turn inside a
-      loop and read once outside it, are the same silence.
+    * `Event.wait`, `Condition.wait_for` and `Lock.acquire` **return the answer**, so dropping it
+      as a statement is the same silence. Keeping it in a name is not held here — that was a third
+      branch for five rounds and is now the first entry in the escape list, with the measurement
+      that took it out.
 
     Three limits, then a list of what escapes. Each limit is a decision about what this rule is
     for; the list after them is shapes, and it is counted in bullets rather than in cases — several
@@ -4887,8 +4871,9 @@ def test_every_bounded_wait_says_when_it_did_not_complete():
       **none** of the seven sites this record repairs, and the shape it looks for occurs nowhere
       under `tests/`; measured against that, it was the source of every false positive this record
       produced, one per round, each closed and reopened one scope down. Both seats were asked
-      whether it should ship and both said remove. What it aimed at is here instead, where six
-      others already are, and where the case rows keep it visible;
+      whether it should ship and both said remove. What it aimed at is here instead, in this list,
+      and as a case row that keeps it visible. How long this list is is not stated anywhere: the
+      figure has been wrong four times, and the list is where it lives;
     * an `is_alive()` whose result nothing acts on — `assert not failures,
       f"still alive: {t.is_alive()}"`. A rule about meaning rather than shape;
     * an inverted guard: `assert thread.is_alive()` after the join asks the question and accepts
