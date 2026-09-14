@@ -412,6 +412,22 @@ class RunReport:
     effects: Dict[str, Dict[str, object]] = field(default_factory=dict)
     #: Asks answered from the journal rather than by opening a session, on a resumed run.
     resumed: List[str] = field(default_factory=list)
+    #: Did the intake survey **open a session** this lap? Measured over that node's seat asks alone
+    #: and before the escalation dispatches its own option ask, which is the whole point of it
+    #: being here: `cli.cmd_run` and `server.Runner._walk_once` both used to derive this from
+    #: `len(report.resumed) < len(report.asks)`, and that pair is the same number only while
+    #: `intake_review` is the only node that has asked anything *and* while the option ask replays
+    #: from the journal too. With the replay gone — an `_acceptable` rejection, or an order that
+    #: differs between runs — the only order that left the process was the escalation's, and both
+    #: callers' lines record an intake stop for it. **The command line reaches that lap; the server
+    #: is not known to.** `_walk_once` also requires the brief to have grown, and a grown brief
+    #: re-asks every seat, so a fully replayed survey and a grown brief are mutually exclusive
+    #: there (CHG-20260907-27's sweep). This field is the defect's repair on one caller and one
+    #: fact in one place on the other (CHG-20260914-01).
+    #:
+    #: False on a walk that never reached the survey, which is also every walk neither caller asks
+    #: this of: both read it only at an incomplete intake stop.
+    intake_asked_somebody: bool = False
     #: Which model a pool sent the work to, and which model a follows reused. Recorded because
     #: "at random" is only acceptable if the choice is afterwards visible: an unrecorded random
     #: dispatch is indistinguishable from a preference nobody declared.
@@ -496,6 +512,7 @@ class RunReport:
             "single_model_panels": list(self.single_model_panels),
             "effects": {k: dict(v) for k, v in self.effects.items()},
             "resumed": list(self.resumed),
+            "intake_asked_somebody": self.intake_asked_somebody,
             "rulings": list(self.rulings),
             "dispatches": list(self.dispatches),
             "rejections": list(self.rejections),
@@ -2842,6 +2859,12 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                 # The two inputs, resolved into the one number both readers below take.
                 asked_somebody = ((len(report.asks) - asks_before)
                                   > (len(report.resumed) - resumed_before))
+                # **Recorded, not only used** (CHG-20260914-01). Two callers need this exact fact
+                # after the walk and could not have it, so each rebuilt it out of two report-wide
+                # counters — and those count the option ask below, which the escalation dispatches
+                # itself. Assigned here rather than at the suspension because *here* is where the
+                # survey's asks end and nothing else has been asked yet.
+                report.intake_asked_somebody = asked_somebody
                 in_flight = cfg.intake_ask_in_flight and asked_somebody
 
                 survey = intake_mod.collect(said)

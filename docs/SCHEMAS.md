@@ -341,11 +341,23 @@ under pressure here; only the filename is."*
 ## 13 · Run report
 
 `visited · asks · state · suspended · halted_at · halt_reason · relaxations · verdicts · on_trust ·
-confirmations · adjudications · single_model_panels · effects · resumed · dispatches · survey ·
+confirmations · adjudications · single_model_panels · effects · resumed ·
+intake_asked_somebody · dispatches · survey ·
 options · panel_rounds · send_backs · rejections · rulings · store_errors · change_class ·
 relaxations_by_class · risk_proposed · risk_settled · risk_agreed · halts ·
 class_authorised_by ·
 relaxation_authorisers`
+
+`intake_asked_somebody` answers one question — *did the intake survey open a session this lap?*
+— measured over that node's seat asks alone and **before** the escalation dispatches its own option
+ask. It is on the report because two callers need it after the walk: `cli.cmd_run` and
+`server.Runner._walk_once` decide from it whether a run counts as an ask for
+`intake.times_asked`, and each used to rebuild it from `len(resumed) < len(asks)`. That pair is the
+same number only while `intake_review` is the only node that has asked anything *and* while the
+option ask replays from the journal — and with the replay gone, the one order that left the process
+was the escalation's own, and both callers' lines would record a stop for it. **The command line
+does reach that lap**; on the server the append also requires the brief to have grown, which
+re-asks every seat, so the shape is not known to arise there (CHG-20260914-01).
 
 `relaxation_authorisers` maps each note in `relaxations_by_class` to **who pre-authorised that
 gate** (CHG-20260903-41). `class_authorised_by` beside it is one name for the whole run, read from

@@ -1118,21 +1118,29 @@ def cmd_run(args: argparse.Namespace) -> int:
     if (journal and report.suspended and report.suspended.get("missing")
             # **A walk nobody was asked is not an ask** — the rule `server._walk_once` already
             # applies, written the way this entry point can know it. `report.resumed` is appended
-            # at the reuse decision rather than on journal membership (CHG-20260901-14), so this
-            # reads "at least one intake ask was dispatched this lap". Measured before the change:
+            # at the reuse decision rather than on journal membership (CHG-20260901-14), so the
+            # expression **that used to be here** read "at least one intake ask was dispatched this
+            # lap" — every node's, which is the half CHG-20260914-01 is about. Measured before it:
             # three `--resume` runs each printed *4 ask(s) answered from the journal, not
             # re-asked* and each advanced the count, 5 -> 8. The run said nobody was asked and
             # counted it as an ask in the same breath.
             #
-            # `report.asks` at an incomplete intake stop is exactly the survey's asks and any
-            # option ask: `intake_review` is the first asking node and nothing routes a rejection
-            # back to it, so the walk cannot have asked anywhere else yet. **That is an assumption
-            # about the graph, and this line and `server._walk_once` both rest their whole
-            # equivalence with the engine's node-scoped count on it** — insert an asking node ahead
-            # of `intake_review` and this expression counts asks the engine did not. Said in two
-            # comments and enforced by nothing until CHG-20260907-27's third round; it is now
-            # `test_nothing_asks_anybody_before_the_node_the_append_guard_counts_over`, which
-            # checks both halves of the sentence.
+            # **This line no longer derives that fact, and no longer rests on the graph**
+            # (CHG-20260914-01). It read `len(report.resumed) < len(report.asks)` — report-wide,
+            # and therefore the survey's asks **and the option ask the escalation dispatches
+            # itself**. Two conditions had to hold for that to mean "somebody was asked":
+            # `intake_review` is the only node that has asked anything yet, which is an assumption
+            # about the graph that
+            # `test_nothing_asks_anybody_before_the_node_the_append_guard_counts_over` pins; and
+            # the option ask replays from the journal too, which a refused option answer or an
+            # order that differs between runs takes away. With the replay gone the only order that
+            # left the process was the runner's own, and this line recorded a stop for it.
+            #
+            # **The expression was right where the engine evaluates it and wrong here**: at the
+            # engine's assignment the option ask has not been appended yet. The defect was the
+            # moment, not the expression, which is why putting the old form back at the engine's
+            # **assignment** changes nothing — putting it back at the engine's **suspension** is a
+            # registered mutation and is caught, and so is putting it back here.
             #
             # **`RunConfig.intake_ask_in_flight` is left at its default here on purpose, and the
             # engine covers what this line covers** (CHG-20260907-27). `serve` fills that field
@@ -1157,9 +1165,11 @@ def cmd_run(args: argparse.Namespace) -> int:
             # order changed (CHG-20260901-14), which is the normal way to answer an intake stop
             # here, and it would have started needing four asks instead of three.
             #
-            # **The state is still reachable, and this line stays honest only because the option
-            # ask replays too** (CHG-20260907-27, third round; the record said the engine had made
-            # it unreachable, and that was wrong). Driven the way this function drives a journal,
+            # **The state is still reachable, and this line used to stay honest only because the
+            # option ask replays too** (CHG-20260907-27, third round; the record said the engine
+            # had made it unreachable, and that was wrong). That dependency is gone —
+            # CHG-20260914-01 is the record the last paragraph of this comment asks for, and the
+            # paragraph is kept because the run it describes is what that record measured. Driven the way this function drives a journal,
             # three fresh runs recording a stop each and then `--resume` on the same brief:
             #
             #     run 4  --resume, same brief   resumed 4  asks 4  options YES  stops after 3
@@ -1171,8 +1181,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             # what an `_acceptable` rejection or an order that differs between runs leaves behind
             # — and the row reads `resumed 3  asks 4  options YES  stops after 4`: a fourth stop
             # recorded under a sentence that says *"asked 3 times"*. Stating this over the
-            # survey's asks alone is its own record.
-            and len(report.resumed) < len(report.asks)):
+            # survey's asks alone is its own record — written, as CHG-20260914-01.
+            and report.intake_asked_somebody):
         journal.record_intake_stop(report.suspended.get("missing") or ())
     if journal and report.suspended and report.suspended.get("unsafe"):
         # Written after the printing below has put them on the terminal — the marker's whole

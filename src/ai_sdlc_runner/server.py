@@ -1051,8 +1051,11 @@ class Runner:
             # record's own conjunct.
             #
             # So the **append** takes both halves — the mark below moves on the first alone, for
-            # the reason written at the guard itself — and they are the same two numbers the engine
-            # takes. `cli.cmd_run` already writes this half exactly this way; the engine measures
+            # the reason written at the guard itself — and they **were** the same two numbers the
+            # engine takes. Both callers read `report.intake_asked_somebody` since
+            # CHG-20260914-01; what follows describes the expression they had before it, and is
+            # kept because the retraction sixty lines down is about this paragraph.
+            # `cli.cmd_run` wrote this half exactly this way; the engine measures
             # its own node's asks (`asks_before`/`resumed_before`), and at an incomplete intake
             # stop those start at zero because `intake_review` is the first asking node and
             # nothing routes a rejection back to it — the sentence `cmd_run`'s own comment carries.
@@ -1108,12 +1111,21 @@ class Runner:
             # comment described a race the state machine forbids. This direction is the worse of
             # the two: what it is offered to prove is true, so nothing downstream looks wrong.
             #
-            # **This counts asks over the whole report; the engine counts them over one node.**
-            # They are the same pair of integers only because `intake_review` is the first node
-            # that asks anybody and nothing routes back to it — the sentence *"the engine
-            # measures its own node's asks"* above rests on, carried again by `cmd_run`'s comment,
-            # and pinned since the third round by
-            # `test_nothing_asks_anybody_before_the_node_the_append_guard_counts_over`.
+            # **That was written of an expression this line no longer has**
+            # (CHG-20260914-01). It counted asks over the whole report while the engine counted
+            # them over one node, and the two were the same pair of integers only because
+            # `intake_review` is the first node that asks anybody and nothing routes back to it —
+            # pinned since the third round by
+            # `test_nothing_asks_anybody_before_the_node_the_append_guard_counts_over`, which is
+            # still true and is no longer what makes this line right.
+            #
+            # **The sweep above still stands, and is no longer what this line rests on.** It shows
+            # the shape cannot arise *here* — a fully replayed survey means the brief did not grow,
+            # and the first conjunct is `told > mark`. That is a chain about work orders and
+            # journal keys, four inferences from anything the append can see. Reading the engine's
+            # own answer makes the line true on its face. The same expression **was** defective on
+            # the command line, where there is no mark guard: that is CHG-20260914-01's subject,
+            # and this half of it is one fact in one place rather than a second defect.
             #
             # **The mark moves on its own condition; only the append takes the third conjunct**
             # (CHG-20260907-27, fourth round, blocking on behaviour). The two shared one `if`
@@ -1169,7 +1181,13 @@ class Runner:
             told = len(self.state.instructions)
             if stop.get("incomplete") and told > self.state.instructions_at_last_incomplete_stop:
                 self.state.instructions_at_last_incomplete_stop = told
-                if len(report.resumed) < len(report.asks):
+                # **The engine's own count, not two report-wide counters** (CHG-20260914-01). This
+                # was `len(report.resumed) < len(report.asks)`, which counts the option ask the
+                # escalation dispatches itself, and so recorded a stop on a lap where the survey's
+                # answers all came back from the journal and the only order that went out was the
+                # runner's. `cli.cmd_run` had the same line for the same reason and has the same
+                # repair; the comment there says what the two conditions were.
+                if report.intake_asked_somebody:
                     self.state.intake_history.append(
                         {"missing": list(stop.get("missing") or ())})
             self.state.report = report

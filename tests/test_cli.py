@@ -1296,13 +1296,18 @@ def test_proceed_unsafe_is_refused_when_nothing_has_been_shown(
 # --------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("resumed,asks,counts", [
-    ([], ["a", "b", "c"], True),                 # three seats asked
-    (["a"], ["a", "b", "c"], True),              # one replayed, two asked
-    (["a", "b", "c"], ["a", "b", "c"], False),   # every one replayed: nobody was asked
+@pytest.mark.parametrize("resumed,asks,asked,counts", [
+    ([], ["a", "b", "c"], True, True),                  # three seats asked
+    (["a"], ["a", "b", "c"], True, True),               # one replayed, two asked
+    (["a", "b", "c"], ["a", "b", "c"], False, False),   # every one replayed: nobody was asked
+    # The escalation's own option ask, on a lap where the survey's three all replayed. The pair on
+    # the left says an ask was dispatched and one was; `asked` is the engine's answer to a
+    # different question — *did the **survey** open a session?* — and it is the one that decides
+    # (CHG-20260914-01).
+    (["a", "b", "c"], ["a", "b", "c", "options-flow"], False, False),
 ])
 def test_a_resume_that_asked_nobody_does_not_count_as_an_ask(
-        tmp_path, py_stub, capsys, monkeypatch, resumed, asks, counts):
+        tmp_path, py_stub, capsys, monkeypatch, resumed, asks, asked, counts):
     """Measured through the real CLI before this change: five plain invocations took the count
     from 1 to 5, and then three `--resume` runs took it to 8 — each of them printing
     *4 ask(s) answered from the journal, not re-asked* in the same output that advanced it. The
@@ -1312,6 +1317,13 @@ def test_a_resume_that_asked_nobody_does_not_count_as_an_ask(
     not an ask*). The command line's writer had no guard at all, and no executable pin either —
     `test_the_command_line_can_reach_the_escalation_it_documents` drives `AskJournal` directly and
     never calls `cmd_run`, so `cli.py`'s condition was unpinned until this test.
+
+    **The condition it pins moved** (CHG-20260914-01). It was `len(report.resumed) <
+    len(report.asks)`, which is report-wide and therefore counts the option ask the escalation
+    dispatches itself; the last row above is that lap, and it used to record a stop. `cmd_run`
+    reads `report.intake_asked_somebody` now — the engine's own count, over the survey's asks
+    alone and taken before the option ask goes out. The two left-hand columns are kept because they
+    are what a reader sees printed, and because the last row is only interesting beside them.
     """
     import json as _json
 
@@ -1319,7 +1331,12 @@ def test_a_resume_that_asked_nobody_does_not_count_as_an_ask(
     report.halted_at = "intake_review"
     report.state = engine.SUSPENDED
     report.resumed = list(resumed)
-    report.asks = [engine.Ask("intake_review", "seat", str(a), {}) for a in asks]
+    # `seat=None` for the option ask: that is how `engine._walk` appends it — a seat ask carries a
+    # seat and the escalation's does not. Nothing under test reads `.seat` (`cmd_run` reads only
+    # `len(report.asks)`), so this is the row saying what it is, not an assertion (a seat).
+    report.asks = [engine.Ask("intake_review", "seat", None if a.startswith("options-") else str(a),
+                              {}) for a in asks]
+    report.intake_asked_somebody = asked
     report.suspended = engine._suspension(
         node_id="intake_review", incomplete=True, undecided=False, unsafe=False,
         reason="the requirement does not say what the flow is", missing=["flow"])
