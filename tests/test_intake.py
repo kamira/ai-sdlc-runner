@@ -213,6 +213,71 @@ def test_a_refused_option_answer_is_journaled_as_refused_and_re_asked(tmp_path):
     assert report.suspended["options"] == {"flow": ["one", "two", "three"]}
 
 
+def test_every_ask_that_can_be_resumed_is_paired_with_the_ask_it_records():
+    """**The chain under CHG-20260914-01's risk line**, which was a sentence and held by nothing.
+
+    That record says the repair can only *remove* an intake stop, never add one. The proof is a
+    pairing: `_ask` appends **at most one** id to `report.resumed`, and every call site that hands
+    it `resumed=` appends **exactly one** `Ask` immediately afterwards. So `len(resumed)` can never
+    exceed `len(asks)`, and a node-scoped strict delta — which is what
+    `report.intake_asked_somebody` is — implies at least one unmatched ask report-wide, which is
+    what the expression the two callers used to read would have said. New true implies old true;
+    nothing newly counts as an ask.
+
+    A seat wrote that chain out and said the pairing it rests on is held by nothing. It is the
+    kind of claim that stays true until somebody adds a sixth caller, and then stops being true
+    silently — the class this repository's KN-8 is about. So it is read out of the source here.
+
+    **Immediately afterwards**, not "somewhere in the function": an append the caller reaches only
+    on one branch is not a pairing, and the counting argument needs every call to produce an ask.
+    """
+    import ast
+
+    source = (pathlib.Path(engine.__file__)).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    # **Every statement list, not just `body`** — `else:`, `finally:` and an `except` handler are
+    # separate fields, and reading only `body` missed one of the six call sites outright: the hole
+    # this test exists to close, in the test (measured while writing it).
+    blocks = []
+    for holder in ast.walk(tree):
+        for field in ("body", "orelse", "finalbody"):
+            got = getattr(holder, field, None)
+            if isinstance(got, list) and got and isinstance(got[0], ast.stmt):
+                blocks.append(got)
+
+    sites, unpaired = [], []
+    for body in blocks:
+        for i, stmt in enumerate(body):
+            if not isinstance(stmt, (ast.Assign, ast.Expr)):
+                continue
+            calls = [n for n in ast.walk(stmt)
+                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                     and n.func.id == "_ask"
+                     and any(kw.arg == "resumed" for kw in n.keywords)]
+            if not calls:
+                continue
+            sites.append(calls[0].lineno)
+            nxt = body[i + 1] if i + 1 < len(body) else None
+            paired = (isinstance(nxt, ast.Expr) and isinstance(nxt.value, ast.Call)
+                      and ast.unparse(nxt.value).startswith("report.asks.append(Ask("))
+            if not paired:
+                unpaired.append(f"engine.py:{calls[0].lineno} hands `_ask` the resumed list and "
+                                f"the next statement is "
+                                f"{ast.unparse(nxt).splitlines()[0][:60] if nxt else '<end>'}")
+
+    # Every `_ask` call in the module, so the enumeration above cannot quietly stop finding them.
+    every = {n.lineno for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Name) and n.func.id == "_ask"}
+    assert {s for s in sites} == every, (
+        f"the walk above found {sorted(sites)} and the module has `_ask` at {sorted(every)}; a "
+        f"call this test cannot see is a call it cannot hold")
+    assert not unpaired, (
+        "the pairing CHG-20260914-01's risk line rests on is broken, so `len(resumed)` can exceed "
+        "the asks it is counted against and the change stops being subtractive:\n  "
+        + "\n  ".join(unpaired))
+
+
 def test_the_ask_the_escalation_sent_is_not_an_ask_somebody_was_asked(tmp_path):
     """The escalation dispatches an ask of its own, and it was counted as one somebody answered.
 

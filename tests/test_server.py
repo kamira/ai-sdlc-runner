@@ -2531,8 +2531,10 @@ def test_the_rule_looks_at_the_three_methods_that_exist():
 #: So they are written down instead, and the count lives in the assertion below rather than in
 #: this sentence as well. Most of them are the record of **what governed the run** rather than what
 #: it did, which is the shape that made the list worth seeing in one place;
-#: `intake_asked_somebody` is the first that is neither — an input to one decision, kept off the
-#: console because the two numbers it was derived from are already there (CHG-20260914-01).
+#: `intake_asked_somebody` is the first that is neither — an input to one decision, and one the
+#: console could not show a reader how to check: it is a delta taken at a node, and the printed
+#: `asks` and `resumed` are the totals afterwards. This sentence said the two numbers were already
+#: there, which is the claim the record it cites exists to refute (CHG-20260914-01, a seat).
 NOT_ON_THE_CONSOLE = {
     # the grade a panel settled on
     "risk_proposed": "the per-model grades behind `risk_agreed`; the console shows neither yet",
@@ -3672,17 +3674,18 @@ def test_nothing_asks_anybody_before_the_node_the_append_guard_counts_over():
     """**The assumption that makes two differently scoped expressions one number**
     (CHG-20260907-27, third round).
 
-    `Runner._walk_once`'s `len(report.resumed) < len(report.asks)` is **report-wide**: it counts
-    every ask the walk dispatched, at any node. `engine.walk`'s `asked_somebody` is **node-scoped**
-    — `asks_before`/`resumed_before` are marked immediately before the halted node's seats and read
-    immediately after them. The two expressions are the same pair of integers only because, at an
-    incomplete intake stop, `intake_review` is the only node that has asked anything yet.
+    **What this holds changed under it** (CHG-20260914-01). It was written because
+    `Runner._walk_once` and `cli.cmd_run` each derived a node-scoped fact from report-wide
+    counters, and those two expressions are the same pair of integers only while `intake_review`
+    is the only node that has asked anything. Neither caller does that any more: both read
+    `report.intake_asked_somebody`, which the engine takes over one node's asks by construction.
 
-    That is stated twice — in `Runner._walk_once`'s own comment and in `cli.cmd_run`'s
-    `record_intake_stop` guard, which is written the same way for the same reason — and until this
-    test it was pinned by nothing. Put an asking node in front of `intake_review` and the server
-    counts asks the engine did not, and records a stop on a walk the engine called an ask nobody
-    was asked for: the blocker this record's second round was refused for, back.
+    **So this is now a property of the graph, held on its own account**, and one thing rests on it:
+    `tools/mutation_check.py`'s `intake-ask` group records that putting the report-wide expression
+    back *at the engine's assignment* changes nothing. That equivalence is true only while nothing
+    asks before this node — so if this test fails, the entry to reconsider is that one, and the
+    sentence to reconsider is the record's *"the defect is the moment, not the expression"*.
+    Nothing in `src/` reads an ask count report-wide any more.
 
     Two halves, because the comments make two claims: nothing asks on the way in, and nothing
     routes back afterwards. The second matters for the same reason as the first — a rejection
