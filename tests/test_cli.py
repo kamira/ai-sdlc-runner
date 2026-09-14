@@ -1331,7 +1331,10 @@ def test_a_resume_that_asked_nobody_does_not_count_as_an_ask(
     report.halted_at = "intake_review"
     report.state = engine.SUSPENDED
     report.resumed = list(resumed)
-    report.asks = [engine.Ask("intake_review", "seat", str(a), {}) for a in asks]
+    # `seat=None` for the option ask: that is how `engine._walk` appends it, and the row below
+    # that represents it is only the escalation's ask if it is shaped like one (a seat).
+    report.asks = [engine.Ask("intake_review", "seat", None if a.startswith("options-") else str(a),
+                              {}) for a in asks]
     report.intake_asked_somebody = asked
     report.suspended = engine._suspension(
         node_id="intake_review", incomplete=True, undecided=False, unsafe=False,

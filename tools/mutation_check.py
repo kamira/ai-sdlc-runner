@@ -926,7 +926,7 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "intake-count", "a resume that asked nobody is counted as an ask again",
         SRC / "cli.py",
-        '''            and len(report.resumed) < len(report.asks)):''',
+        '''            and report.intake_asked_somebody):''',
         '''            and True):''',
         "tests/test_cli.py"),
 
@@ -3647,8 +3647,8 @@ CHG-20260907-28 and built by no record yet.''',
     Mutation(
         "ask-in-flight", "the append guard stops asking whether a session was opened",
         SRC / "server.py",
-        '''                if len(report.resumed) < len(report.asks):''',
-        '''                if len(report.resumed) <= len(report.asks):''',
+        '''                if report.intake_asked_somebody:''',
+        '''                if True:''',
         "tests/test_server.py::test_the_same_brief_started_twice_says_one_number"),
 
     # The fourth round's blocking finding, and the reason the two lines above are two `if`s.
@@ -3657,16 +3657,11 @@ CHG-20260907-28 and built by no record yet.''',
     Mutation(
         "ask-in-flight", "the mark stops moving on a walk that recorded no stop",
         SRC / "server.py",
-        '''            if stop.get("incomplete") and told > self.state.instructions_at_last_incomplete_stop:
-                self.state.instructions_at_last_incomplete_stop = told
-                if len(report.resumed) < len(report.asks):
-                    self.state.intake_history.append(
-                        {"missing": list(stop.get("missing") or ())})''',
-        '''            if (stop.get("incomplete") and told > self.state.instructions_at_last_incomplete_stop
-                    and len(report.resumed) < len(report.asks)):
-                self.state.instructions_at_last_incomplete_stop = told
-                self.state.intake_history.append(
-                    {"missing": list(stop.get("missing") or ())})''',
+        '''                self.state.instructions_at_last_incomplete_stop = told
+                # **The engine's own count, not two report-wide counters** (CHG-20260914-01). This''',
+        '''                if report.intake_asked_somebody:
+                    self.state.instructions_at_last_incomplete_stop = told
+                # **The engine's own count, not two report-wide counters** (CHG-20260914-01). This''',
         "tests/test_server.py::test_an_attachment_after_a_replayed_start_is_not_an_ask"),
 
     Mutation(
@@ -4104,6 +4099,20 @@ CHG-20260907-28 and built by no record yet.''',
     # the expression, and reverting it at the source is a move rather than a substitution, which a
     # before/after string cannot be. The two caller entries below are the reversion, and they are
     # the same edit read from the other end.
+    # **The moment, which the three below do not pin.** This one moves the assignment to the
+    # suspension — after the escalation has dispatched its option ask — and leaves the expression
+    # alone. A seat wrote it after this group's comment claimed a move could not be staged as a
+    # before/after string; it can, because the destination is a unique two-line anchor.
+    Mutation(
+        "intake-ask", "the fact is taken at the suspension instead of at the survey's asks",
+        SRC / "engine.py",
+        '''                    report.halted_at = node.id
+                    report.halt_reason = said''',
+        '''                    report.intake_asked_somebody = len(report.resumed) < len(report.asks)
+                    report.halted_at = node.id
+                    report.halt_reason = said''',
+        "tests/test_intake.py::test_the_ask_the_escalation_sent_is_not_an_ask_somebody_was_asked"),
+
     Mutation(
         "intake-ask", "the engine stops recording whether the survey opened a session",
         SRC / "engine.py",

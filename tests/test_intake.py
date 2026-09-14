@@ -251,8 +251,9 @@ def test_the_ask_the_escalation_sent_is_not_an_ask_somebody_was_asked(tmp_path):
         "the expression both callers used to read — kept here so that what it says about this lap "
         "is on the record beside what the lap actually did")
     assert report.intake_asked_somebody is False, (
-        "nobody was asked: every survey ask was answered from the journal, and the one order that "
-        "went out was the escalation's own")
+        "the survey asked nobody: every survey ask was answered from the journal. A session was "
+        "opened on this lap — the escalation's own — and this field is deliberately narrower than "
+        "that")
 
 
 def test_a_survey_ask_that_did_open_a_session_still_counts(tmp_path):

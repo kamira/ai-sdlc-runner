@@ -966,9 +966,11 @@ def _report_the_escalation_asked_for():
     """Three survey asks replayed from the journal, one option ask dispatched, intake incomplete.
 
     The shape `tests/test_intake.py::test_the_ask_the_escalation_sent_is_not_an_ask_somebody_was_asked`
-    produces from a real walk. Built here rather than driven, because what this test is about is
-    what `_walk_once` does with such a report, and driving the engine through `Runner` would put
-    the thing under test behind a second mechanism.
+    produces from a real walk — **on the command line**. Built here rather than driven, and that is
+    a limit rather than a convenience: the sweep in `_walk_once`'s own comment says this lap cannot
+    arise on the server, because the append's first conjunct is `told > mark` and a grown brief
+    re-asks every seat. So this pins what the line does with such a report; it does not show the
+    server reaching one, and the first version of this record said it did (a seat).
     """
     report = engine.RunReport()
     for seat in ("defect", "conformance", "risk"):
@@ -986,10 +988,14 @@ def test_the_option_ask_the_escalation_sent_does_not_grow_the_intake_history(tmp
     """`intake_history` is what `intake.times_asked` counts, and it counted the runner's own ask.
 
     `_walk_once` recorded a stop on `len(report.resumed) < len(report.asks)`, which is report-wide,
-    so the escalation's option ask sat on the right-hand side of it. On the lap below every survey
-    ask came back from the journal and the only order that went out was the escalation's own — and
-    the runner appended a stop for it, under a suspension saying the aspect has been asked three
-    times (CHG-20260914-01). It reads the engine's own node-scoped count now.
+    so the escalation's option ask sat on the right-hand side of it. On the report below every
+    survey ask came back from the journal and the only order that went out was the escalation's
+    own, and the runner appended a stop for it.
+
+    **Whether the server can be driven to that report is a different question, and the answer on
+    today's evidence is no** — see `_report_the_escalation_asked_for`. This holds the line's
+    behaviour, which is what changed; the defect it is named for was measured on the command line
+    (CHG-20260914-01).
     """
     runner = server.Runner(
         walk=lambda cfg: _report_the_escalation_asked_for(),
@@ -2544,8 +2550,9 @@ NOT_ON_THE_CONSOLE = {
     "panel_rounds": "how many laps a panel took before it settled",
     "resumed": "asks answered from the journal rather than re-asked",
     "intake_asked_somebody": "whether the intake survey opened a session this lap — an input to "
-                             "one decision rather than a fact about the run, and the console "
-                             "already shows both numbers it was derived from",
+                             "one decision rather than a fact about the run, and not derivable "
+                             "from anything on the console: it is a delta taken at the node, and "
+                             "the printed `asks` and `resumed` are the totals after it",
     "single_model_panels": "panels that ran on one voice because that is all there was",
     # trust and the store
     "on_trust": "targets accepted because the operator vouched for the command",
@@ -2673,7 +2680,7 @@ def test_the_snapshot_is_twenty_one_keys():
         f"that guard covers, and nothing else says how many there are")
 
 
-def test_the_inventory_has_a_floor_and_the_two_renamed_ones_are_not_in_it():
+def test_the_inventory_is_exact_and_the_two_renamed_ones_are_not_in_it():
     """**The floor**, and the correction that produced this record's number.
 
     The count was in this test's name as well until CHG-20260914-01 added the sixteenth entry —
