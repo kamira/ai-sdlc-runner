@@ -1138,8 +1138,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             #
             # **The expression was right where the engine evaluates it and wrong here**: at the
             # engine's assignment the option ask has not been appended yet. The defect was the
-            # moment, not the expression, which is why putting the old form back at the engine
-            # changes nothing and putting it back here is caught.
+            # moment, not the expression, which is why putting the old form back at the engine's
+            # **assignment** changes nothing — putting it back at the engine's **suspension** is a
+            # registered mutation and is caught, and so is putting it back here.
             #
             # **`RunConfig.intake_ask_in_flight` is left at its default here on purpose, and the
             # engine covers what this line covers** (CHG-20260907-27). `serve` fills that field

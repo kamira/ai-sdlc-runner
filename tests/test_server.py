@@ -968,8 +968,11 @@ def _report_the_escalation_asked_for():
     The shape `tests/test_intake.py::test_the_ask_the_escalation_sent_is_not_an_ask_somebody_was_asked`
     produces from a real walk — **on the command line**. Built here rather than driven, and that is
     a limit rather than a convenience: the sweep in `_walk_once`'s own comment says this lap cannot
-    arise on the server, because the append's first conjunct is `told > mark` and a grown brief
-    re-asks every seat. So this pins what the line does with such a report; it does not show the
+    arise on the server. Its argument has two halves and the second is the one a reader checks:
+    the append's first conjunct is `told > mark`, and a grown brief re-asks every seat — **and the
+    one lap where `told > mark` survives a fully replayed survey is a replayed `start`**, whose
+    `RunState` has an empty `intake_history`, so `times_asked` is 0 and no option ask is dispatched
+    at all. So this pins what the line does with such a report; it does not show the
     server reaching one, and the first version of this record said it did (a seat).
     """
     report = engine.RunReport()
@@ -2531,10 +2534,10 @@ def test_the_rule_looks_at_the_three_methods_that_exist():
 #: So they are written down instead, and the count lives in the assertion below rather than in
 #: this sentence as well. Most of them are the record of **what governed the run** rather than what
 #: it did, which is the shape that made the list worth seeing in one place;
-#: `intake_asked_somebody` is the first that is neither — an input to one decision, and one the
-#: console could not show a reader how to check: it is a delta taken at a node, and the printed
-#: `asks` and `resumed` are the totals afterwards. This sentence said the two numbers were already
-#: there, which is the claim the record it cites exists to refute (CHG-20260914-01, a seat).
+#: `intake_asked_somebody` is the first that is neither — an input to one decision. This sentence
+#: said it was kept off because the numbers behind it are already on the console, which is the claim
+#: the record it cites exists to refute; then that it was derivable from nothing on the console,
+#: which is a universal and false on a lap with no option ask (CHG-20260914-01, a seat, twice).
 NOT_ON_THE_CONSOLE = {
     # the grade a panel settled on
     "risk_proposed": "the per-model grades behind `risk_agreed`; the console shows neither yet",
@@ -2552,9 +2555,9 @@ NOT_ON_THE_CONSOLE = {
     "panel_rounds": "how many laps a panel took before it settled",
     "resumed": "asks answered from the journal rather than re-asked",
     "intake_asked_somebody": "whether the intake survey opened a session this lap — an input to "
-                             "one decision rather than a fact about the run, and not derivable "
-                             "from anything on the console: it is a delta taken at the node, and "
-                             "the printed `asks` and `resumed` are the totals after it",
+                             "one decision rather than a fact about the run, and `resumed`, which "
+                             "a reader would need to check it, is four lines above in this same "
+                             "inventory",
     "single_model_panels": "panels that ran on one voice because that is all there was",
     # trust and the store
     "on_trust": "targets accepted because the operator vouched for the command",
@@ -3718,9 +3721,10 @@ def test_nothing_asks_anybody_before_the_node_the_append_guard_counts_over():
         f"the walk reaches {node.id!r} before `intake_review`, and it asks somebody "
         f"({node.role!r}). `Runner._walk_once` counts asks over the whole report while the engine "
         f"counts them over the halted node, and the two agree only while this is the first node "
-        f"that asks — so the append guard now records a stop on a walk that opened no session. "
-        f"Scope the server's expression to `report.suspended['node_id']`, or route this node "
-        f"after the intake stop")
+        f"that asks. Nothing in `src/` reads an ask count report-wide any more, so what this "
+        f"breaks is the `intake-ask` group's withdrawn entry: it is NOT CAUGHT only while this "
+        f"holds. Re-register it — it will be caught — and rewrite CHG-20260914-01's *the defect "
+        f"is the moment, not the expression*; or route this node after the intake stop")
 
     # Either node, because everything that reaches `intake` reaches `intake_review` next.
     targets = {"intake", "intake_review"}
@@ -3731,10 +3735,10 @@ def test_nothing_asks_anybody_before_the_node_the_append_guard_counts_over():
         if target in targets and (n.id, target) not in way_in)
     assert routes_back == [], (
         f"{routes_back} route back into the intake stop, so `intake_review` can be reached with "
-        f"other nodes' asks already in `report.asks` — and the server's report-wide count and the "
-        f"engine's node-scoped one stop being the same number. The same two comments rest on this "
-        f"half. Scope the server's expression to `report.suspended['node_id']`, or route this edge "
-        f"somewhere that is not the way back into intake")
+        f"other nodes' asks already in `report.asks`. Both callers read the engine's own count "
+        f"since CHG-20260914-01, so this half holds the same thing the first does: the registry's "
+        f"NOT CAUGHT verdict on the withdrawn `intake-ask` entry. Re-register that entry, or "
+        f"route this edge somewhere that is not the way back into intake")
 
 
 def test_the_ask_counter_still_counts_on_the_second_run_of_a_process(tmp_path):

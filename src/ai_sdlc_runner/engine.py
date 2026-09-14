@@ -419,7 +419,11 @@ class RunReport:
     #: `intake_review` is the only node that has asked anything *and* while the option ask replays
     #: from the journal too. With the replay gone — an `_acceptable` rejection, or an order that
     #: differs between runs — the only order that left the process was the escalation's, and both
-    #: callers recorded an intake stop for it (CHG-20260914-01).
+    #: callers' lines record an intake stop for it. **The command line reaches that lap; the server
+    #: is not known to.** `_walk_once` also requires the brief to have grown, and a grown brief
+    #: re-asks every seat, so a fully replayed survey and a grown brief are mutually exclusive
+    #: there (CHG-20260907-27's sweep). This field is the defect's repair on one caller and one
+    #: fact in one place on the other (CHG-20260914-01).
     #:
     #: False on a walk that never reached the survey, which is also every walk neither caller asks
     #: this of: both read it only at an incomplete intake stop.

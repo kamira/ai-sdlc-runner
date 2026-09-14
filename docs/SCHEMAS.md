@@ -355,7 +355,9 @@ ask. It is on the report because two callers need it after the walk: `cli.cmd_ru
 `intake.times_asked`, and each used to rebuild it from `len(resumed) < len(asks)`. That pair is the
 same number only while `intake_review` is the only node that has asked anything *and* while the
 option ask replays from the journal — and with the replay gone, the one order that left the process
-was the escalation's own, and both callers recorded a stop for it (CHG-20260914-01).
+was the escalation's own, and both callers' lines would record a stop for it. **The command line
+does reach that lap**; on the server the append also requires the brief to have grown, which
+re-asks every seat, so the shape is not known to arise there (CHG-20260914-01).
 
 `relaxation_authorisers` maps each note in `relaxations_by_class` to **who pre-authorised that
 gate** (CHG-20260903-41). `class_authorised_by` beside it is one name for the whole run, read from

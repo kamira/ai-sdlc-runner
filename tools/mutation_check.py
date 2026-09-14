@@ -3657,11 +3657,9 @@ CHG-20260907-28 and built by no record yet.''',
     Mutation(
         "ask-in-flight", "the mark stops moving on a walk that recorded no stop",
         SRC / "server.py",
-        '''                self.state.instructions_at_last_incomplete_stop = told
-                # **The engine's own count, not two report-wide counters** (CHG-20260914-01). This''',
+        '''                self.state.instructions_at_last_incomplete_stop = told''',
         '''                if report.intake_asked_somebody:
-                    self.state.instructions_at_last_incomplete_stop = told
-                # **The engine's own count, not two report-wide counters** (CHG-20260914-01). This''',
+                    self.state.instructions_at_last_incomplete_stop = told''',
         "tests/test_server.py::test_an_attachment_after_a_replayed_start_is_not_an_ask"),
 
     Mutation(
@@ -4092,17 +4090,22 @@ CHG-20260907-28 and built by no record yet.''',
     # The engine already had the answer, over that node's asks alone and taken before the option
     # ask goes out.
     #
-    # **What the registry cannot stage, and what that taught.** Putting the report-wide expression
-    # back *where the fact is computed* was registered here first and came back NOT CAUGHT — because
-    # at that point it is not the defect: the option ask has not been appended yet, so the two
-    # counters and the node-scoped delta give the same answer. The defect is the **moment**, not
-    # the expression, and reverting it at the source is a move rather than a substitution, which a
-    # before/after string cannot be. The two caller entries below are the reversion, and they are
-    # the same edit read from the other end.
-    # **The moment, which the three below do not pin.** This one moves the assignment to the
-    # suspension — after the escalation has dispatched its option ask — and leaves the expression
-    # alone. A seat wrote it after this group's comment claimed a move could not be staged as a
-    # before/after string; it can, because the destination is a unique two-line anchor.
+    # **What the first attempt taught.** Putting the report-wide expression back *where the fact is
+    # computed* was registered here first and came back NOT CAUGHT — because at that point it is
+    # not the defect: the option ask has not been appended yet, so the two counters and the
+    # node-scoped delta give the same answer. (Only while nothing asks before this node, which is
+    # `test_nothing_asks_anybody_before_the_node_the_append_guard_counts_over`'s subject; that test
+    # is the other half of this verdict.) The defect is the **moment**, not the expression.
+    #
+    # This group then said a move could not be staged as a before/after string. The entry below
+    # stages its **effect**, which is narrower than "a move is one substitution" and is the part
+    # that matters: a single insertion at the suspension, where the field's earlier write becomes a
+    # dead store — nothing reads it in between, and `in_flight` beside it uses the local — so the
+    # later write wins. That is what makes this one stageable, not moves in general (a seat).
+    # **The moment, which the three below do not pin.** It inserts a second write at the
+    # suspension — after the escalation has dispatched its option ask — in the report-wide form.
+    # The shipped assignment stays and becomes a dead store, so what runs is the old expression at
+    # the wrong moment, which is the defect. A seat wrote it.
     Mutation(
         "intake-ask", "the fact is taken at the suspension instead of at the survey's asks",
         SRC / "engine.py",

@@ -1051,8 +1051,11 @@ class Runner:
             # record's own conjunct.
             #
             # So the **append** takes both halves — the mark below moves on the first alone, for
-            # the reason written at the guard itself — and they are the same two numbers the engine
-            # takes. `cli.cmd_run` already writes this half exactly this way; the engine measures
+            # the reason written at the guard itself — and they **were** the same two numbers the
+            # engine takes. Both callers read `report.intake_asked_somebody` since
+            # CHG-20260914-01; what follows describes the expression they had before it, and is
+            # kept because the retraction sixty lines down is about this paragraph.
+            # `cli.cmd_run` wrote this half exactly this way; the engine measures
             # its own node's asks (`asks_before`/`resumed_before`), and at an incomplete intake
             # stop those start at zero because `intake_review` is the first asking node and
             # nothing routes a rejection back to it — the sentence `cmd_run`'s own comment carries.

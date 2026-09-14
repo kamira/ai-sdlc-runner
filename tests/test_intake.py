@@ -289,9 +289,11 @@ def test_the_ask_the_escalation_sent_is_not_an_ask_somebody_was_asked(tmp_path):
     above is the mechanism, one aisle over.
 
     So the lap below asks nobody — the survey's three answers all come back from the journal and
-    the only order that leaves the process is the escalation's — and both callers used to record a
-    fourth stop for it, which `intake.times_asked` then counts, under a suspension whose sentence
-    says the aspect has been asked three times (CHG-20260914-01).
+    the only order that leaves the process is the escalation's — and the command line used to
+    record a fourth stop for it, which `intake.times_asked` then counts, under a suspension whose
+    sentence says the aspect has been asked three times. The server's line read the same
+    expression; whether it can be driven to this lap is a separate question, answered *no* by the
+    sweep in its own comment (CHG-20260914-01).
 
     `report.intake_asked_somebody` is the engine's own count of that node's asks, taken before the
     option ask is dispatched, which is the only place and moment it is knowable.
