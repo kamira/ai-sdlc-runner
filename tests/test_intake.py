@@ -213,6 +213,62 @@ def test_a_refused_option_answer_is_journaled_as_refused_and_re_asked(tmp_path):
     assert report.suspended["options"] == {"flow": ["one", "two", "three"]}
 
 
+def test_the_ask_the_escalation_sent_is_not_an_ask_somebody_was_asked(tmp_path):
+    """The escalation dispatches an ask of its own, and it was counted as one somebody answered.
+
+    `cli.cmd_run` and `server.Runner._walk_once` both recorded an intake stop on
+    `len(report.resumed) < len(report.asks)` — report-wide counters, so the option ask the
+    escalation itself sends is on the right-hand side. That reads *"somebody was asked"* correctly
+    only while the option ask replays from the journal too, and a refused option answer is exactly
+    the case where it does not: `test_a_refused_option_answer_is_journaled_as_refused_and_re_asked`
+    above is the mechanism, one aisle over.
+
+    So the lap below asks nobody — the survey's three answers all come back from the journal and
+    the only order that leaves the process is the escalation's — and both callers used to record a
+    fourth stop for it, which `intake.times_asked` then counts, under a suspension whose sentence
+    says the aspect has been asked three times (CHG-20260914-01).
+
+    `report.intake_asked_somebody` is the engine's own count of that node's asks, taken before the
+    option ask is dispatched, which is the only place and moment it is knowable.
+    """
+    journal = engine.AskJournal(tmp_path / "asks")
+
+    report, _sent, exc = _walk_with_journal(journal, ["one", "two"], resume=False)
+    assert isinstance(exc, intake.IntakeError), "the option answer has to be refused to set this up"
+
+    report, sent, exc = _walk_with_journal(journal, ["one", "two", "three"], resume=True)
+    assert exc is None and sent == ["intake_review"], (
+        f"one order should leave the process, the escalation's own; got {sent}")
+
+    survey = [a for a in report.asks if a.seat is not None]
+    assert len(survey) == 3 and len(report.asks) == 4, (
+        f"the shape this is about: three survey asks and the option ask; got {len(survey)} and "
+        f"{len(report.asks)}")
+    assert len(report.resumed) == 3, (
+        f"the survey's three came back from the journal; got {report.resumed}")
+
+    assert len(report.resumed) < len(report.asks), (
+        "the expression both callers used to read — kept here so that what it says about this lap "
+        "is on the record beside what the lap actually did")
+    assert report.intake_asked_somebody is False, (
+        "nobody was asked: every survey ask was answered from the journal, and the one order that "
+        "went out was the escalation's own")
+
+
+def test_a_survey_ask_that_did_open_a_session_still_counts(tmp_path):
+    """The other direction, because a guard that never says yes would pass the test above.
+
+    A fresh walk opens a session for each seat, so the lap **is** an ask, and the stop both callers
+    record for it is the one `intake.times_asked` is counting.
+    """
+    journal = engine.AskJournal(tmp_path / "asks")
+    report, sent, exc = _walk_with_journal(journal, ["one", "two", "three"], resume=False)
+
+    assert exc is None and sent, "the walk asked nobody at all"
+    assert report.resumed == [], "a fresh walk replays nothing"
+    assert report.intake_asked_somebody is True
+
+
 def test_a_journal_poisoned_before_this_change_recovers_on_the_next_walk(tmp_path):
     """**The half that matters to somebody already stuck.**
 

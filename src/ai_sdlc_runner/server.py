@@ -1169,7 +1169,13 @@ class Runner:
             told = len(self.state.instructions)
             if stop.get("incomplete") and told > self.state.instructions_at_last_incomplete_stop:
                 self.state.instructions_at_last_incomplete_stop = told
-                if len(report.resumed) < len(report.asks):
+                # **The engine's own count, not two report-wide counters** (CHG-20260914-01). This
+                # was `len(report.resumed) < len(report.asks)`, which counts the option ask the
+                # escalation dispatches itself, and so recorded a stop on a lap where the survey's
+                # answers all came back from the journal and the only order that went out was the
+                # runner's. `cli.cmd_run` had the same line for the same reason and has the same
+                # repair; the comment there says what the two conditions were.
+                if report.intake_asked_somebody:
                     self.state.intake_history.append(
                         {"missing": list(stop.get("missing") or ())})
             self.state.report = report

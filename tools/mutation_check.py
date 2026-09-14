@@ -4084,6 +4084,47 @@ CHG-20260907-28 and built by no record yet.''',
         "the second attachment for something the wait did not do")''',
         '''    first.join(10)''',
         "tests/test_server.py::test_every_bounded_wait_says_when_it_did_not_complete"),
+
+    # -- intake-ask (CHG-20260914-01) ---------------------------------------------------------
+    # `cli.cmd_run` and `server.Runner._walk_once` both decided whether a lap counts as an intake
+    # ask from `len(report.resumed) < len(report.asks)` — report-wide counters, so the **option
+    # ask the escalation dispatches itself** is on the right-hand side. That reads correctly only
+    # while the option ask replays from the journal too, and a refused option answer is exactly
+    # where it does not: the survey's three come back from the journal, one order goes out, and
+    # both callers recorded a stop for it under a suspension saying the aspect has been asked
+    # three times.
+    #
+    # The engine already had the answer, over that node's asks alone and taken before the option
+    # ask goes out.
+    #
+    # **What the registry cannot stage, and what that taught.** Putting the report-wide expression
+    # back *where the fact is computed* was registered here first and came back NOT CAUGHT — because
+    # at that point it is not the defect: the option ask has not been appended yet, so the two
+    # counters and the node-scoped delta give the same answer. The defect is the **moment**, not
+    # the expression, and reverting it at the source is a move rather than a substitution, which a
+    # before/after string cannot be. The two caller entries below are the reversion, and they are
+    # the same edit read from the other end.
+    Mutation(
+        "intake-ask", "the engine stops recording whether the survey opened a session",
+        SRC / "engine.py",
+        '''                report.intake_asked_somebody = asked_somebody''',
+        '''                report.intake_asked_somebody = False''',
+        "tests/test_intake.py::test_a_survey_ask_that_did_open_a_session_still_counts"),
+
+    Mutation(
+        "intake-ask", "the server reads the two counters again",
+        SRC / "server.py",
+        '''                if report.intake_asked_somebody:''',
+        '''                if len(report.resumed) < len(report.asks):''',
+        "tests/test_server.py::"
+        "test_the_option_ask_the_escalation_sent_does_not_grow_the_intake_history"),
+
+    Mutation(
+        "intake-ask", "the command line reads the two counters again",
+        SRC / "cli.py",
+        '''            and report.intake_asked_somebody):''',
+        '''            and len(report.resumed) < len(report.asks)):''',
+        "tests/test_cli.py::test_a_resume_that_asked_nobody_does_not_count_as_an_ask"),
 ]
 
 

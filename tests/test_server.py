@@ -962,6 +962,69 @@ def test_an_action_arriving_as_the_walk_decides_to_stop_is_not_stranded(tmp_path
     assert runner._walking is False
 
 
+def _report_the_escalation_asked_for():
+    """Three survey asks replayed from the journal, one option ask dispatched, intake incomplete.
+
+    The shape `tests/test_intake.py::test_the_ask_the_escalation_sent_is_not_an_ask_somebody_was_asked`
+    produces from a real walk. Built here rather than driven, because what this test is about is
+    what `_walk_once` does with such a report, and driving the engine through `Runner` would put
+    the thing under test behind a second mechanism.
+    """
+    report = engine.RunReport()
+    for seat in ("defect", "conformance", "risk"):
+        report.asks.append(engine.Ask("intake_review", "seat", seat, {"missing": ["flow"]}))
+    report.asks.append(engine.Ask("intake_review", "seat", None, {"options": ["a", "b", "c"]}))
+    report.resumed.extend(["000-intake_review-defect", "001-intake_review-conformance",
+                           "002-intake_review-risk"])
+    report.state = engine.SUSPENDED
+    report.suspended = {"gate": "intake", "node_id": "intake_review", "incomplete": True,
+                        "missing": ["flow"], "options": {"flow": ["a", "b", "c"]}}
+    return report
+
+
+def test_the_option_ask_the_escalation_sent_does_not_grow_the_intake_history(tmp_path):
+    """`intake_history` is what `intake.times_asked` counts, and it counted the runner's own ask.
+
+    `_walk_once` recorded a stop on `len(report.resumed) < len(report.asks)`, which is report-wide,
+    so the escalation's option ask sat on the right-hand side of it. On the lap below every survey
+    ask came back from the journal and the only order that went out was the escalation's own — and
+    the runner appended a stop for it, under a suspension saying the aspect has been asked three
+    times (CHG-20260914-01). It reads the engine's own node-scoped count now.
+    """
+    runner = server.Runner(
+        walk=lambda cfg: _report_the_escalation_asked_for(),
+        make_config=lambda i, a, r, art=(), rej=(), hist=(): _make_config(i, a, r, art, rej, hist),
+        store=attach_mod.Store(tmp_path / "att"))
+
+    runner.start("build the thing", 0)
+    before = list(runner.state.intake_history)
+    runner.instruct(runner.state.version, "and also the other thing")
+
+    assert runner.state.intake_history == before, (
+        f"a stop was recorded for a lap whose only dispatched ask was the escalation's own: "
+        f"{runner.state.intake_history}")
+
+
+def test_a_lap_that_opened_a_session_still_grows_the_intake_history(tmp_path):
+    """The other direction. A guard that never records a stop would pass the test above, and
+    `intake.times_asked` would never reach `ASK_LIMIT`, so the escalation could not fire at all."""
+    report = _report_the_escalation_asked_for()
+    report.resumed.clear()
+    report.intake_asked_somebody = True
+
+    runner = server.Runner(
+        walk=lambda cfg: report,
+        make_config=lambda i, a, r, art=(), rej=(), hist=(): _make_config(i, a, r, art, rej, hist),
+        store=attach_mod.Store(tmp_path / "att"))
+
+    runner.start("build the thing", 0)
+    before = len(runner.state.intake_history)
+    runner.instruct(runner.state.version, "and also the other thing")
+
+    assert len(runner.state.intake_history) == before + 1, (
+        "a lap that opened a session is the ask the escalation counts, and was not recorded")
+
+
 def test_the_walk_reads_the_attachment_store_holding_the_lock(tmp_path):
     """**The property the repair establishes, asserted directly** (CHG-20260908-05).
 
@@ -2459,8 +2522,11 @@ def test_the_rule_looks_at_the_three_methods_that_exist():
 #: unrendered. It cannot: a field that never enters the snapshot cannot fail a rule that iterates
 #: the snapshot. The rule is honestly named — *the server sends* — and the citation was not.
 #:
-#: So the fifteen are written down instead. Every one of them is the record of **what governed the
-#: run** rather than what it did, which is the shape worth seeing in one place.
+#: So they are written down instead, and the count lives in the assertion below rather than in
+#: this sentence as well. Most of them are the record of **what governed the run** rather than what
+#: it did, which is the shape that made the list worth seeing in one place;
+#: `intake_asked_somebody` is the first that is neither — an input to one decision, kept off the
+#: console because the two numbers it was derived from are already there (CHG-20260914-01).
 NOT_ON_THE_CONSOLE = {
     # the grade a panel settled on
     "risk_proposed": "the per-model grades behind `risk_agreed`; the console shows neither yet",
@@ -2477,6 +2543,9 @@ NOT_ON_THE_CONSOLE = {
     "halts": "the permanent halts this run tripped",
     "panel_rounds": "how many laps a panel took before it settled",
     "resumed": "asks answered from the journal rather than re-asked",
+    "intake_asked_somebody": "whether the intake survey opened a session this lap — an input to "
+                             "one decision rather than a fact about the run, and the console "
+                             "already shows both numbers it was derived from",
     "single_model_panels": "panels that ran on one voice because that is all there was",
     # trust and the store
     "on_trust": "targets accepted because the operator vouched for the command",
@@ -2604,8 +2673,12 @@ def test_the_snapshot_is_twenty_one_keys():
         f"that guard covers, and nothing else says how many there are")
 
 
-def test_the_inventory_is_fifteen_and_the_two_renamed_ones_are_not_in_it():
+def test_the_inventory_has_a_floor_and_the_two_renamed_ones_are_not_in_it():
     """**The floor**, and the correction that produced this record's number.
+
+    The count was in this test's name as well until CHG-20260914-01 added the sixteenth entry —
+    two places to re-type one number, which is how the number in the sentence above the inventory
+    went stale in the same edit. It lives in the assertion only.
 
     The conformance seat counted seventeen by field name. `halted_at` reaches the console as `at`
     and `halt_reason` as `reason`, so two of the seventeen are rendered — a name-based count of a
@@ -2614,7 +2687,7 @@ def test_the_inventory_is_fifteen_and_the_two_renamed_ones_are_not_in_it():
 
     """
     page = _console()
-    assert len(NOT_ON_THE_CONSOLE) == 15, (
+    assert len(NOT_ON_THE_CONSOLE) == 16, (
         f"the inventory is {len(NOT_ON_THE_CONSOLE)} entries; if the console grew a view, delete "
         f"the entry rather than leaving it — the test above already refuses a listed-and-rendered "
         f"field, and this number is what a reader checks the record against")

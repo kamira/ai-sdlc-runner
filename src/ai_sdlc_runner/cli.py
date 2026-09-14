@@ -1124,15 +1124,21 @@ def cmd_run(args: argparse.Namespace) -> int:
             # re-asked* and each advanced the count, 5 -> 8. The run said nobody was asked and
             # counted it as an ask in the same breath.
             #
-            # `report.asks` at an incomplete intake stop is exactly the survey's asks and any
-            # option ask: `intake_review` is the first asking node and nothing routes a rejection
-            # back to it, so the walk cannot have asked anywhere else yet. **That is an assumption
-            # about the graph, and this line and `server._walk_once` both rest their whole
-            # equivalence with the engine's node-scoped count on it** — insert an asking node ahead
-            # of `intake_review` and this expression counts asks the engine did not. Said in two
-            # comments and enforced by nothing until CHG-20260907-27's third round; it is now
-            # `test_nothing_asks_anybody_before_the_node_the_append_guard_counts_over`, which
-            # checks both halves of the sentence.
+            # **This line no longer derives that fact, and no longer rests on the graph**
+            # (CHG-20260914-01). It read `len(report.resumed) < len(report.asks)` — report-wide,
+            # and therefore the survey's asks **and the option ask the escalation dispatches
+            # itself**. Two conditions had to hold for that to mean "somebody was asked":
+            # `intake_review` is the only node that has asked anything yet, which is an assumption
+            # about the graph that
+            # `test_nothing_asks_anybody_before_the_node_the_append_guard_counts_over` pins; and
+            # the option ask replays from the journal too, which a refused option answer or an
+            # order that differs between runs takes away. With the replay gone the only order that
+            # left the process was the runner's own, and this line recorded a stop for it.
+            #
+            # **The expression was right where the engine evaluates it and wrong here**: at the
+            # engine's assignment the option ask has not been appended yet. The defect was the
+            # moment, not the expression, which is why putting the old form back at the engine
+            # changes nothing and putting it back here is caught.
             #
             # **`RunConfig.intake_ask_in_flight` is left at its default here on purpose, and the
             # engine covers what this line covers** (CHG-20260907-27). `serve` fills that field
@@ -1172,7 +1178,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             # — and the row reads `resumed 3  asks 4  options YES  stops after 4`: a fourth stop
             # recorded under a sentence that says *"asked 3 times"*. Stating this over the
             # survey's asks alone is its own record.
-            and len(report.resumed) < len(report.asks)):
+            and report.intake_asked_somebody):
         journal.record_intake_stop(report.suspended.get("missing") or ())
     if journal and report.suspended and report.suspended.get("unsafe"):
         # Written after the printing below has put them on the terminal — the marker's whole
