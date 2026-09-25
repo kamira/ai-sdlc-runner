@@ -134,9 +134,8 @@ def test_it_finishes_with_every_model_panel_node_asked_of_two_models():
     assert report.state == engine.FINISHED, report.halt_reason
     assert agent.schemas("lead_assess")[0]["required"] == ["risk"]
     confirm = agent.schemas("pm_confirm")[0]["properties"]["verdict"]
-    assert confirm["enum"] == list(policy.VERDICTS)
-    assert "`pass` is this node's `yes`" in confirm["description"], (
-        "a panel voice is told what its word means at a node whose branches are yes/no")
+    assert confirm["enum"] == list(policy.VERDICTS), (
+        "a panel voice at a yes/no node is asked for the panel's words, not the node's branches")
 
 
 def test_the_option_ask_answered_from_reply_is_accepted():
@@ -183,6 +182,18 @@ def test_no_model_name_and_no_brief_text_reaches_reply():
         assert "SENTINEL-MODEL" not in workorder.to_json(order), order["node_id"]
         shown = json.dumps(order["reply"])
         assert "SENTINEL" not in shown, order["node_id"]
+    # And the brief's sentinels did reach the orders, elsewhere — or their absence above proves
+    # nothing.
+    assert all("SENTINEL-INSTRUCTION" in workorder.to_json(o) for o in agent.orders)
+    assert all("SENTINEL-ATTACHMENT" in workorder.to_json(o) for o in agent.orders)
+
+
+def test_an_unknown_dispatch_path_is_refused_not_read_as_one_voice():
+    """`voices` classifies, so it is closed (KN-9): a mistyped path must not fall through to the
+    one-voice schema — a panel told a single voice's words is the defect `reply` exists to end."""
+    cfg = engine.RunConfig(node_specs={}, decisions=dict(DECISIONS), risk="low")
+    with pytest.raises(engine.EngineError, match="not a dispatch path"):
+        engine._answer_schema(graph.BY_ID["pm_confirm"], cfg, "model")
 
 
 def test_the_seats_of_one_node_share_their_reply():
@@ -296,9 +307,135 @@ def test_the_runners_own_wording_does_not_ask_again(tmp_path, monkeypatch):
 @pytest.mark.parametrize("result, starts", [
     ({"missing": ["ui"], "problems": [], "unsafe": [], "why": "no screens named"}, "missing:"),
     ({"options": ["a", "b", "c"], "why": "three ways"}, "options:"),
+    ({"module": "alpha", "error": "tests fail"}, "error:"),
+    ({"module": "", "error": "tests fail"}, "error:"),
+    ({"risk": "high", "why": "touches billing"}, "risk:"),
     ({"why": "nothing is read here"}, "why:"),
 ])
 def test_why_does_not_hide_what_the_run_acted_on(result, starts):
     """Every order now invites `why`; the log line must still lead with the finding."""
     line = conversations._summary({"kind": conversations.ANSWER, "result": result})
     assert line.startswith(starts), line
+
+
+# ── a failed build stops at its ask, and a resume asks again ──────────────────────────────────
+
+
+def _fails_to_build(order):
+    return {"module": "", "error": "tests fail"} if order["node_id"] == "engineer_build" else None
+
+
+def test_a_failed_build_stops_at_its_own_ask(tmp_path):
+    """"The run stops at this order" is what the `error` description says, so nothing after the
+    build is asked — before, `engineer_selfverify` and `lead_task_review` ran first."""
+    agent = ReplyAgent(_fails_to_build)
+    _, journal, exc = _journal_walk(tmp_path, agent, resume=False)
+    assert isinstance(exc, engine.EngineError) and "could not build" in str(exc)
+    assert agent.orders[-1]["node_id"] == "engineer_build", [o["node_id"] for o in agent.orders]
+    status = {e["node_id"]: e["status"] for e in journal.entries()}
+    assert status["engineer_build"] == "refused"
+
+
+def test_a_resume_after_a_failed_build_asks_the_engineer_again(tmp_path):
+    """Journaled `answered`, the failure replayed on every resume and stopped again with nothing
+    asked — the only ways out were deleting the file or re-asking everything."""
+    _journal_walk(tmp_path, ReplyAgent(_fails_to_build), resume=False)
+    again = ReplyAgent()
+    report, _, exc = _journal_walk(tmp_path, again, resume=True)
+    assert exc is None and report.state == engine.FINISHED
+    asked = [o["node_id"] for o in again.orders]
+    assert asked[0] == "engineer_build" and "pm_plan" not in asked, asked
+
+
+def test_a_failure_journaled_answered_by_an_older_runner_is_asked_again(tmp_path):
+    """The entry an older runner wrote: `answered`, no `reply`, holding the failure."""
+    _, journal, _ = _journal_walk(tmp_path, ReplyAgent(_fails_to_build), resume=False)
+    _strip_reply(journal)
+    for entry in journal.entries():
+        if entry["node_id"] == "engineer_build":
+            entry["status"] = "answered"
+            (journal.dir / f"{entry['ask_id']}.json").write_text(json.dumps(entry),
+                                                                 encoding="utf-8")
+    again = ReplyAgent()
+    report, _, exc = _journal_walk(tmp_path, again, resume=True)
+    assert exc is None and report.state == engine.FINISHED
+    assert [o["node_id"] for o in again.orders][0] == "engineer_build"
+
+
+def test_a_named_module_beside_an_old_failure_key_is_still_a_build():
+    """Only `error` — the key the order offers — stops a named module. A backend that never read
+    `reply` and reports `errors: [...]` beside a module it did build was recorded as built before
+    this change, and still is."""
+    agent = ReplyAgent(lambda o: {"module": "alpha", "errors": ["lint warning"]}
+                       if o["node_id"] == "engineer_build" else None)
+    report = _walk(agent)
+    assert report.state == engine.FINISHED, report.halt_reason
+
+
+def test_a_journaled_answer_the_walk_refused_is_asked_again_with_reply_too(tmp_path):
+    """Not only the entries written before `reply`: any answer a reader refused, at any time."""
+    def prose_at_confirm(order):
+        return {"stdout": "shall I proceed?"} if order["node_id"] == "pm_confirm" else None
+
+    _, _, exc = _journal_walk(tmp_path, ReplyAgent(prose_at_confirm), resume=False)
+    assert isinstance(exc, engine.EngineError)
+    again = ReplyAgent()
+    report, _, exc = _journal_walk(tmp_path, again, resume=True)
+    assert exc is None and report.state == engine.FINISHED
+    assert [o["node_id"] for o in again.orders][0] == "pm_confirm"
+
+
+def test_an_old_journal_in_the_shapes_the_readers_accept_resumes_in_full(tmp_path):
+    """Built from the shapes older backends answered with, not from this schema: `branch` for a
+    decision, a survey naming one key of three, an engineer's prose. The readers accept all of
+    them, so the reuse check must too — stricter would re-ask, under `serve`, the builds this
+    rule exists to keep."""
+    def old_shapes(order):
+        node, seat = order["node_id"], order.get("seat")
+        if node == "intake_review" and seat:
+            return {"problems": []}
+        if seat:
+            return {"verdict": "pass"}
+        if node in ("pm_confirm", "pm_signoff"):
+            return {"branch": "yes"}
+        if node in ("lead_task_review", "re_review", "qa_accept"):
+            return {"outcome": "pass"}
+        if node == "engineer_build":
+            return {"summary": "built it"}
+        return {"summary": f"{node} done"}
+
+    first, journal, exc = _journal_walk(tmp_path, ReplyAgent(old_shapes), resume=False)
+    assert exc is None and first.state == engine.FINISHED, exc
+    _strip_reply(journal)
+    again = ReplyAgent()
+    report, _, exc = _journal_walk(tmp_path, again, resume=True)
+    assert exc is None and again.orders == [], [o["node_id"] for o in again.orders]
+    assert len(report.resumed) == len(first.asks)
+
+
+def test_the_module_built_backstop_stops_on_a_failure_it_is_handed():
+    """On the shipped graph the ask stops first; this pins the backstop by calling it directly."""
+    class _Ask:
+        def __init__(self, node_id, result):
+            self.node_id, self.result = node_id, result
+
+    report = engine.RunReport()
+    report.asks = [_Ask("engineer_build", {"module": "alpha", "error": "tests fail"})]
+    with pytest.raises(engine.EngineError, match="could not build"):
+        engine._module_built(report)
+
+
+def test_no_current_document_describes_the_rejected_draft():
+    """The first implementation shipped `reply.schema` while README, SCHEMAS and design.md still
+    described the draft the design panel rejected — `reply.keys`, `engine._reads`, `one_of`
+    descriptors — which is the first page a backend author reads (CHG-20260925-01). The ledger
+    (`docs/changes`, `docs/acceptance`, `docs/design`) keeps its history and is not scanned."""
+    root = Path(__file__).resolve().parents[1]
+    pages = [root / "README.md", root / "examples" / "minimal" / "agent.py",
+             *root.glob("docs/*.md"), *root.glob("docs/structure/*.md"),
+             *root.glob("examples/**/*.md")]
+    stale = [f"{page.relative_to(root)}: {word}"
+             for page in pages
+             for word in ("reply.keys", "_reads(", "engine._reads", '"one_of"', '"list_of"')
+             if word in page.read_text(encoding="utf-8")]
+    assert stale == [], stale

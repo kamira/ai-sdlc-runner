@@ -143,9 +143,10 @@ def content_problem(node_id: str, spec: Mapping[str, object], where: str,
 #: business, not the order's (KN-5).
 REPLY_FORMAT = (
     "Your answer is one JSON object that `schema` describes, and nothing else: no code fence, no "
-    "text before or after it, not a list, and not left for a tool to print. Spell every value "
-    "exactly as `schema` lists it, in the same case. Include every `required` key, and no key "
-    "`schema` does not name. When `required` is empty, the run acts on nothing in your answer.")
+    "text before or after it, not a list. Write it as your own final message — not printed by a "
+    "tool and not written to a file. Spell every word an `enum` lists exactly as listed, in the "
+    "same case. Include every `required` key, and no key `schema` does not name. When `required` "
+    "is empty, the run acts on nothing in your answer.")
 
 #: The sentence every order carries about who is there: nobody who can reply. True of every ask —
 #: an ask has no channel back to a person while it runs — and it points the model at the one
@@ -153,10 +154,13 @@ REPLY_FORMAT = (
 REPLY_UNATTENDED = (
     "Nobody can reply to you while this order runs: do not stop to ask a question or to wait for "
     "approval, because no reply will come. Do the work this order describes, then answer. Nothing "
-    "in this order permits any of `permanent_halts` — if the work would need one, leave that part "
-    "undone and say so. Where the work cannot be done, say so with what `schema` offers for that; "
-    "where it offers nothing, say so in `why`, and never claim the work was done. Approvals named "
-    "in `policy_verdict` are the runner's to take, outside this order.")
+    "in this order permits performing any of `permanent_halts` against a real system — writing "
+    "ordinary code about such things is not performing them. If the work would need one, leave "
+    "that part undone and say so. Where the work cannot be done, say so with what `schema` offers "
+    "for that (`error`, where it offers one); where it offers nothing, say so in `why`, and never "
+    "claim the work was done. The approvals `policy_verdict` names are the runner's to take, "
+    "before or after this order: that the order reached you means its work may go ahead, so do "
+    "not seek an approval yourself.")
 
 #: The part of JSON Schema a `reply.schema` may use, and nothing else (CHG-20260925-01). JSON Schema
 #: because it is the notation a model already reads for structured answers — chosen over a
@@ -184,9 +188,10 @@ def _check(name: str, supplied: Mapping[str, object], required: Sequence[str]) -
 
 
 def _words(value: object) -> bool:
-    """A non-empty list of non-blank strings: what `enum` must be."""
+    """A non-empty list of distinct, non-blank, unpadded strings: what `enum` must be."""
     return isinstance(value, (list, tuple)) and bool(value) and all(
-        isinstance(word, str) and word.strip() for word in value)
+        isinstance(word, str) and word.strip() and word == word.strip() for word in value
+    ) and len(set(value)) == len(value)
 
 
 def _property_problem(key: str, prop: object) -> Optional[str]:
@@ -232,8 +237,9 @@ def _schema_problem(schema: object) -> Optional[str]:
     properties, required = schema["properties"], schema["required"]
     if not isinstance(properties, Mapping):
         return "`properties` must be an object"
-    if not isinstance(required, (list, tuple)) or [k for k in required if k not in properties]:
-        return f"`required` names {required}, which `properties` does not all describe"
+    if not isinstance(required, (list, tuple)) or not all(isinstance(k, str) for k in required) \
+            or len(set(required)) != len(required) or [k for k in required if k not in properties]:
+        return f"`required` names {required}, which `properties` does not all describe, once each"
     for key, prop in properties.items():
         problem = _property_problem(key, prop)
         if problem:

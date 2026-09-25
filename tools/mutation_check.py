@@ -1617,7 +1617,7 @@ MUTATIONS: List[Mutation] = [
         "frontier", "an engineer reporting a failure is read as 'nothing left' again",
         SRC / "engine.py",
         # Re-anchored by CHG-20260925-01, which widened the condition to any reported failure.
-        '''        if _went_wrong(ask.result):
+        '''        if _build_failure(ask.result):
             # An empty `module` with a failure is "I could not build it", never "nothing left".''',
         '''        if False:
             # An empty `module` with a failure is "I could not build it", never "nothing left".''',
@@ -4130,15 +4130,19 @@ CHG-20260907-28 and built by no record yet.''',
     Mutation(
         "reply-contract", "an intake seat is told nothing is read",
         SRC / "engine.py",
-        '''    if voices == SURVEY:''',
-        '''    if False:''',
+        '''    if voices == SURVEY:
+        aspects = "; ".join(f"{name}: {what}" for name, what in intake_mod.ASPECTS)''',
+        '''    if False:
+        aspects = "; ".join(f"{name}: {what}" for name, what in intake_mod.ASPECTS)''',
         "tests/test_reply.py::test_an_agent_answering_from_reply_alone_finishes_the_default_flow"),
 
     Mutation(
         "reply-contract", "the engineer is not asked which module it built",
         SRC / "engine.py",
-        '''    elif node.id == "engineer_build":''',
-        '''    elif False:''',
+        '''    elif node.id == "engineer_build":
+        properties = {''',
+        '''    elif False:
+        properties = {''',
         "tests/test_reply.py::test_it_finishes_under_a_frontier_decision_where_module_and_modules_are_read"),
 
     Mutation(
@@ -4167,11 +4171,11 @@ CHG-20260907-28 and built by no record yet.''',
     Mutation(
         "reply-contract", "a build the engineer says failed is read as nothing built, and walks on",
         SRC / "engine.py",
-        '''        if _went_wrong(ask.result):
+        '''        if _build_failure(ask.result):
             # The same stop `_frontier` makes, on the path it does not reach (CHG-20260925-01).''',
         '''        if False:
             # The same stop `_frontier` makes, on the path it does not reach (CHG-20260925-01).''',
-        "tests/test_reply.py::test_a_build_the_engineer_says_failed_stops_the_run_under_either_decision"),
+        "tests/test_reply.py::test_the_module_built_backstop_stops_on_a_failure_it_is_handed"),
 
     Mutation(
         "reply-contract", "a journal written before `reply` is re-asked in full on the first resume",
@@ -4181,11 +4185,34 @@ CHG-20260907-28 and built by no record yet.''',
         "tests/test_reply.py::test_a_journal_written_before_reply_resumes_without_asking_again"),
 
     Mutation(
-        "reply-contract", "a reply-less answer the walk refused is replayed for good",
+        "reply-contract", "an answer the walk refused is replayed from the journal for good",
         SRC / "engine.py",
-        '''        return dict(previous) == rest and _conforms(answer, order["reply"]["schema"])''',
-        '''        return dict(previous) == rest''',
-        "tests/test_reply.py::test_a_pre_reply_answer_the_walk_refused_is_asked_again"),
+        '''                and (heard is None or heard(answered[ask_id]))''',
+        '''                and True''',
+        "tests/test_reply.py::test_a_journaled_answer_the_walk_refused_is_asked_again_with_reply_too"),
+
+    Mutation(
+        "reply-contract", "a failed build is no longer stopped at its own ask",
+        SRC / "engine.py",
+        '''accept=(_stop_on_failed_build if node.id == "engineer_build" else None))''',
+        '''accept=None)''',
+        "tests/test_reply.py::test_a_failed_build_stops_at_its_own_ask"),
+
+    Mutation(
+        "reply-contract", "a named module beside an old failure key stops the run again",
+        SRC / "engine.py",
+        '''    if not str(result.get("module") or ""):
+        return _went_wrong(result)''',
+        '''    if True:
+        return _went_wrong(result)''',
+        "tests/test_reply.py::test_a_named_module_beside_an_old_failure_key_is_still_a_build"),
+
+    Mutation(
+        "reply-contract", "an unknown dispatch path falls through to the one-voice schema",
+        SRC / "engine.py",
+        '''    if voices not in VOICES:''',
+        '''    if False:''',
+        "tests/test_reply.py::test_an_unknown_dispatch_path_is_refused_not_read_as_one_voice"),
 
     Mutation(
         "reply-contract", "a changed schema is reused as if nothing changed",
@@ -4198,7 +4225,7 @@ CHG-20260907-28 and built by no record yet.''',
     Mutation(
         "reply-contract", "rewording the runner's own sentences re-asks every journaled node",
         SRC / "engine.py",
-        '''        order["reply"] = _structure(shown.get("schema"))''',
+        '''        order["reply"] = schema''',
         '''        order["reply"] = shown''',
         "tests/test_reply.py::test_the_runners_own_wording_does_not_ask_again"),
 
@@ -4212,8 +4239,8 @@ CHG-20260907-28 and built by no record yet.''',
     Mutation(
         "reply-contract", "`why` hides the intake finding in the conversation again",
         SRC / "conversations.py",
-        '''        for key in ("verdict", "module", "modules", "options", "note"):''',
-        '''        for key in ("verdict", "module", "modules", "options", "note", "why"):''',
+        '''        for key in ("error", "verdict", "risk", "module", "modules", "options", "note"):''',
+        '''        for key in ("error", "verdict", "risk", "module", "modules", "options", "note", "why"):''',
         "tests/test_reply.py::test_why_does_not_hide_what_the_run_acted_on"),
 
     Mutation(

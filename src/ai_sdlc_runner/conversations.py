@@ -1447,7 +1447,9 @@ def _summary(turn: Mapping[str, object]) -> str:
         # — which is most review answers, since `{"missing": [], "problems": []}` means "nothing
         # wrong". A log of 150 lines reading "answered" is not a log (CHG-20260823-39).
         result = turn.get("result") or {}
-        for key in ("verdict", "module", "modules", "options", "note"):
+        # `error` first: it is the key that stops a build, and "module: m1" on the ask that stopped
+        # the run read as a success. `risk` because a grading panel's word sets the grade.
+        for key in ("error", "verdict", "risk", "module", "modules", "options", "note"):
             if key in result and result[key] not in (None, "", [], {}):
                 said = json.dumps(result[key], ensure_ascii=False).strip('"')
                 extra = f" · {result['why']}" if key == "verdict" and result.get("why") else ""

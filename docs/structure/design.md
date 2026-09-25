@@ -23,7 +23,7 @@ design doc that points at deleted files is worse than no design doc.
 | `graph.validate` | The flow agrees with itself and with `policy` | Raises `GraphError` naming the node. Every edge lands, everything is reachable, every gate and role exists, no gate phase without a gate, no `answer_decides` without a role |
 | `engine.walk` | Drive one change through the flow | `(RunConfig, dispatcher, enabled=True) -> RunReport`. Opt-in: it **refuses** rather than quietly doing nothing, so "flag off" cannot be mistaken for "ran and found nothing" |
 | `engine.AskJournal` | The question outlives the session | `pending` written before the session opens; `answered` after. `pending()` returns what a resumed run must re-ask |
-| `workorder.render` | One node's order | `(node, node_spec, verdict, seat=None, *, reads) -> dict`. **Exactly** the eighteen keys, asserted on every render; `reads` — what the run acts on in the answer — is required, never defaulted |
+| `workorder.render` | One node's order | `(node, node_spec, verdict, seat=None, *, answer_schema) -> dict`. **Exactly** the eighteen keys, asserted on every render; `answer_schema` — the answer the run acts on, as `reply.schema` — is required, never defaulted |
 | `effects.run` | Bring a sequence to completion from wherever it is | Nothing already true is applied — before the frontier or after it. Everything applied is re-probed. Anything true out of causal order is **surfaced**, not redone and not waved through |
 | `cli.session_factory` | Where an ask goes | `(config, seat_models) -> factory(seat=None) -> Session`. One process per ask; `--seat-model` routes a named seat elsewhere |
 | `cli._Process` | One ask, one process | The order in as JSON on stdin, the JSON printed back **parsed** as the answer. A non-zero exit raises: a failed backend answered nothing, and the journal keeps the question pending |
@@ -37,8 +37,9 @@ design doc that points at deleted files is worse than no design doc.
   permanent_halts, idempotence_probes, workdir, reply`. What is **excluded** is the load-bearing part:
   concrete tools, allowlists, a bootstrap line, session or prior-turn context, model and dispatch
   settings. An order carrying any of them runs on one harness only, however short it is.
-- **Answer** — what the order's `reply.keys` names, in one JSON object on stdout. A decision node's
-  answer must name its branch, as `branch`, `verdict` or `outcome`.
+- **Answer** — what the order's `reply.schema` describes, in one JSON object on stdout. A decision
+  node's answer must name its branch as `verdict`, the key the schema names (the reader also
+  tolerates `branch` and `outcome`, for backends written before it).
   An answer naming none is an error that names the node and lists the branches; an answer naming a
   branch that does not exist is refused. Neither is defaulted.
 - **Effect** — `{name, probe, apply, postcondition}`. **Constructing one without a probe raises**:

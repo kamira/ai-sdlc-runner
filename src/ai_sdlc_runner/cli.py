@@ -40,8 +40,8 @@ DEFAULT_CONFIG = "config/runner.yaml"
 
 #: Seconds one attempt at one ask may take before its process is killed, when `runner.yaml` names
 #: no `agent_timeout` (CHG-20260925-01). A **ceiling for a backend that has hung**, not an estimate
-#: of how long an ask takes: `engineer_build` asks for a whole module, and a current agentic model
-#: spends longer than the old 600 on that as a matter of course. What the kill costs is why the
+#: of how long an ask takes: `engineer_build` asks for a whole module, and current agentic models
+#: are reported to spend longer than the old 600 on that. What the kill costs is why the
 #: ceiling sits high — the direct child is killed and anything it started may keep running, the
 #: files written so far stay, a retry starts on top of them, and with no retry left the run stops
 #: with the question pending.
