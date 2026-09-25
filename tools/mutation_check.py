@@ -4194,9 +4194,82 @@ CHG-20260907-28 and built by no record yet.''',
     Mutation(
         "reply-contract", "a failed build is no longer stopped at its own ask",
         SRC / "engine.py",
-        '''accept=(_stop_on_failed_build if node.id == "engineer_build" else None))''',
-        '''accept=None)''',
+        '''        return _stop_on_failed_build''',
+        '''        return None''',
         "tests/test_reply.py::test_a_failed_build_stops_at_its_own_ask"),
+
+    Mutation(
+        "reply-contract", "an empty plan under a frontier decision walks on to a later stop",
+        SRC / "engine.py",
+        '''        return lambda result: _stop_on_empty_plan(result, report)''',
+        '''        return None''',
+        "tests/test_reply.py::test_an_empty_plan_under_a_frontier_decision_stops_at_its_own_ask"),
+
+    Mutation(
+        "reply-contract", "an empty `modules` list is taken as a plan",
+        SRC / "engine.py",
+        '''        if named:
+            return
+        said = "answered an empty `modules` list"''',
+        '''        if True:
+            return
+        said = "answered an empty `modules` list"''',
+        "tests/test_reply.py::test_an_empty_plan_under_a_frontier_decision_stops_at_its_own_ask"),
+
+    Mutation(
+        "reply-contract", "a re-plan with no list is refused though the reader keeps the earlier one",
+        SRC / "engine.py",
+        '''                    and isinstance(ask.result.get("modules"), (list, tuple)):
+                return
+        said = "answered no `modules` list, and no earlier plan has one"''',
+        '''                    and isinstance(ask.result.get("modules"), (list, tuple)):
+                pass
+        said = "answered no `modules` list, and no earlier plan has one"''',
+        "tests/test_reply.py::test_a_later_plan_with_no_list_keeps_the_earlier_one_as_the_reader_does"),
+
+    Mutation(
+        "reply-contract", "the reviews of a refused answer are reused after it is asked again",
+        SRC / "engine.py",
+        '''            answered.clear()''',
+        '''            pass''',
+        "tests/test_reply.py::test_nothing_said_after_a_refused_answer_is_reused"),
+
+    Mutation(
+        "reply-contract", "a changed question stops every later reuse too",
+        SRC / "engine.py",
+        '''        if same:
+            # **Asked the same and answered with what the walk refuses''',
+        '''        if 1 or same:
+            # **Asked the same and answered with what the walk refuses''',
+        "tests/test_reply.py::test_a_changed_question_does_not_stop_the_reuse_after_it"),
+
+    Mutation(
+        "reply-contract", "`error: true` beside a named module is recorded as built",
+        SRC / "engine.py",
+        '''        return "error" if said else ""''',
+        '''        return ""''',
+        "tests/test_reply.py::test_a_named_module_stops_on_a_true_error_and_not_on_a_blank_one"),
+
+    Mutation(
+        "reply-contract", "a blank `error` beside a named module stops the run",
+        SRC / "engine.py",
+        '''    return f"error: {str(said)[:120]}" if str(said or "").strip() else ""''',
+        '''    return f"error: {str(said)[:120]}" if said else ""''',
+        "tests/test_reply.py::test_a_named_module_stops_on_a_true_error_and_not_on_a_blank_one"),
+
+    Mutation(
+        "reply-contract", "a failed build's `why` reaches nobody",
+        SRC / "engine.py",
+        '''    told += f" Its `why`: {why[:2000]!r}." if why else ""''',
+        '''    told += ""''',
+        "tests/test_reply.py::test_a_failed_build_keeps_its_why_for_the_person_it_stops_for"),
+
+    Mutation(
+        "reply-contract", "a backstop says the journal was told when it was not",
+        SRC / "engine.py",
+        '''             if at_ask else "")''',
+        '''             if True else "")''',
+        "tests/test_reply.py::test_a_backstop_does_not_claim_the_journal_was_told"),
 
     Mutation(
         "reply-contract", "a named module beside an old failure key stops the run again",

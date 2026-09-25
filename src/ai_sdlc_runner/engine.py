@@ -914,8 +914,9 @@ def _answer_schema(node: graph.Node, cfg: "RunConfig", voices: str) -> Dict[str,
       seat that holds the veto, from `policy.SEATS`);
     * one voice at a node that decides on its answer → `_answered_branch` (the node's branches);
     * `engineer_build` → `_stop_on_failed_build`, `_module_built` and `_frontier` (`module`,
-      `error`); `pm_plan` → `_frontier` (`modules`), only when any decision is `"frontier"` — any
-      decision's value, because `check_decisions` lets any node carry it.
+      `error`); `pm_plan` → `_stop_on_empty_plan` and `_frontier` (`modules`), only when any
+      decision is `"frontier"` — any decision's value, because `check_decisions` lets any node
+      carry it.
 
     Every other ask is read by nothing and says so: no required key. The key **names** are the
     readers' literals, pinned by the walks in `tests/test_reply.py`, which answer from `reply`
@@ -967,17 +968,17 @@ def _answer_schema(node: graph.Node, cfg: "RunConfig", voices: str) -> Dict[str,
         properties = {
             "module": {"type": "string",
                        "description": "the id of the planned module this order built, exactly as "
-                                      "the plan names it; \"\" only when nothing is left to "
-                                      "build. If you could not build it, answer \"\" and set "
-                                      "`error`"},
+                                      "the plan names it; \"\" when nothing is left to build — "
+                                      "or, with `error` set, when you could not build it"},
             "error": {"type": "string",
                       "description": "only when you could not build: why. The run stops at this "
                                      "order for a person. Leave it out otherwise"}}
     elif node.id == "pm_plan" and frontier:
         properties = {"modules": {"type": "array", "items": {"type": "string"},
                                   "description": "every module the plan now has, as short ids, "
-                                                 "one string each; [] if you could not plan — "
-                                                 "the run then stops for a person"}}
+                                                 "one string each; [] only if you could not "
+                                                 "plan — the run then stops at this order for a "
+                                                 "person, who reads `why`"}}
     required = sorted(key for key in properties if key != "error")
     properties["why"] = dict(WHY)
     return {"type": "object", "properties": properties, "required": required,
@@ -1117,8 +1118,8 @@ def _comparable(order: Mapping[str, object]) -> Dict[str, object]:
     The two fixed sentences and every property's `description` are runner wording, the same for
     every order that shares a schema. Comparing them would make each future wording fix re-ask every
     journaled node — under `serve`, every `engineer_build` again. A changed key, word or requirement
-    still re-asks. Only property- and item-level `description`s are dropped, so a property that
-    happened to be *named* `description` would still count.
+    still re-asks. Only property-level `description`s are dropped (`workorder.ITEM_KEYS` allows none
+    inside `items`), so a property that happened to be *named* `description` would still count.
     """
     order = dict(order)
     shown = order.get("reply")
@@ -1158,11 +1159,14 @@ def _heard(node: graph.Node, voices: str, answer: Mapping[str, object]) -> bool:
     Asked of a journaled answer before it is reused (CHG-20260925-01). A journal writes `answered`
     before any reader runs, so an answer the walk then refused — prose at a decision node, a seat's
     `PASS` — was replayed on every resume and refused again, with nothing dispatched: stuck until
-    somebody deleted the file. Every reader is consulted here *as itself*, so this is exactly as
-    strict as the walk, never stricter (a failed build is `engineer_build`'s own `accept`, which
-    `_acceptable` already checks before reuse): a pre-`reply` journal whose answers the readers accepted —
-    `branch` for `verdict`, a survey naming one key of three, an engineer's prose — is reused as
-    before, and only what would be refused again is asked again.
+    somebody deleted the file. Every reader is consulted here *as itself*, so a pre-`reply` journal
+    whose answers the readers accepted — `branch` for `verdict`, a survey naming one key of three,
+    an engineer's prose — is reused as before. The two readers that stop the run later rather than
+    at the ask are not repeated here: a failed build and an empty plan under a frontier decision
+    are their ask's own `accept` (`_accept_for`), which `_acceptable` checks before reuse. What is
+    not checked is a gate that refuses after its node — the reuse cannot see the gate — so this is
+    no stricter than the walk, and a journaled answer a later reader refuses is asked again only
+    where one of these checks sees it.
     """
     if not isinstance(answer, Mapping):
         return False
@@ -1183,7 +1187,7 @@ def _heard(node: graph.Node, voices: str, answer: Mapping[str, object]) -> bool:
 def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object],
          seat: Optional[str] = None, journal: Optional[AskJournal] = None,
          ask_id: Optional[str] = None, node_id: str = "",
-         answered: Optional[Mapping[str, Mapping[str, object]]] = None,
+         answered: Optional[Dict[str, Mapping[str, object]]] = None,
          model: Optional[str] = None,
          asked_before: Optional[Mapping[str, Mapping[str, object]]] = None,
          conversation=None, role: str = "", workspace: str = "",
@@ -1210,7 +1214,8 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
         # a brand-new run on the same process hit the same file, because the journal has no run id
         # and an option order does not carry the brief. Checking here is what lets the next walk
         # re-ask and overwrite it.
-        if ((previous is None or _same_question(previous, order))
+        same = previous is None or _same_question(previous, order)
+        if (same
                 and (heard is None or heard(answered[ask_id]))
                 and _acceptable(accept, answered[ask_id])):
             # **Recorded here, where the decision is made.** The walk used to append to
@@ -1222,6 +1227,15 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
             if resumed is not None and ask_id is not None:
                 resumed.append(ask_id)
             return answered[ask_id]
+        if same:
+            # **Asked the same and answered with what the walk refuses: nothing after it is reused
+            # either** (CHG-20260925-01). What was said later was said about the refused answer — a
+            # journal from before `engineer_build` had its `accept` holds a failed build's
+            # `answered`, then the self-check and the task review of that failed attempt. Reusing
+            # those after asking the engineer again merged the rebuild on reviews of the failure;
+            # the verification panel measured it. A question that changed is not this case, and is
+            # left as it was: the later entries are reused where they still ask the same.
+            answered.clear()
     if journal is not None and ask_id is not None:
         journal.record(ask_id, node_id, seat, order)
     # The conversation gets the model. `journal.record` has never taken one, so the existing durable
@@ -1508,24 +1522,42 @@ def _build_failure(result: Mapping[str, object]) -> str:
     if not str(result.get("module") or ""):
         return _went_wrong(result)
     said = result.get("error")
-    return f"error: {str(said)[:120]}" if said and not isinstance(said, bool) else ""
+    if isinstance(said, bool):
+        # `true` is a failure said without a reason, as `_went_wrong` reads it; `false` is none.
+        return "error" if said else ""
+    return f"error: {str(said)[:120]}" if str(said or "").strip() else ""
 
 
-def _build_failed(node_id: str, result: Mapping[str, object]) -> "EngineError":
+def _build_failed(node_id: str, result: Mapping[str, object], *,
+                  at_ask: bool = False) -> "EngineError":
     """The stop for an engineer that reported a failure, whatever it put in `module`.
 
     An empty `module` with a failure is "I could not build it", never "nothing left to build". A
     named one with `error` (CHG-20260925-01) is not a build to record either: `record_module`
     ticks, commits and writes the worklog, and before this it did all three for a module whose
     engineer had said its tests failed — measured by the design panel's risk seat, on both paths.
+
+    The message carries the engineer's own `error` and `why` whole. Raised at the ask, it is the
+    only place they reach the conversation: `_ask` records a refused answer as an unanswered turn
+    whose text is this message, and a resumed run's re-ask overwrites the journaled result — the
+    verification panel measured a failed build's reason lost from both. ``at_ask`` says whether
+    the journal was told: only `_stop_on_failed_build`'s refusal journals the ask `refused`.
     """
     name = str(result.get("module") or "")
-    said = f"answered module {name!r}" if name else "answered an empty module"
+    said = (f"answered module {name!r}" if name
+            else "answered an empty module" if "module" in result else "answered no module")
+    error = result.get("error")
+    why = str(result.get("why") or "").strip()
+    told = (f" Its `error`: {str(error)[:2000]!r}."
+            if not isinstance(error, bool) and str(error or "").strip() else "")
+    told += f" Its `why`: {why[:2000]!r}." if why else ""
+    after = (" The ask is journaled as refused, so a resumed run asks the engineer again."
+             if at_ask else "")
     return EngineError(
         f"node {node_id!r}: the engineer could not build — it {said} with "
-        f"{_build_failure(result)!r}. A build that reports a failure is neither recorded as built "
-        f"nor read as 'nothing left to build': the run stops here so a person can read why. The "
-        f"ask is journaled as refused, so a resumed run asks the engineer again.")
+        f"{_build_failure(result)!r}.{told} A build that reports a failure is neither recorded as "
+        f"built nor read as 'nothing left to build': the run stops here so a person can read "
+        f"why.{after}")
 
 
 def _stop_on_failed_build(result: Mapping[str, object]) -> None:
@@ -1539,7 +1571,51 @@ def _stop_on_failed_build(result: Mapping[str, object]) -> None:
     resumed run asks the engineer again.
     """
     if _build_failure(result):
-        raise _build_failed("engineer_build", result)
+        raise _build_failed("engineer_build", result, at_ask=True)
+
+
+def _stop_on_empty_plan(result: Mapping[str, object], report: "RunReport") -> None:
+    """`pm_plan`'s `accept` when a decision is `"frontier"` (CHG-20260925-01).
+
+    `_frontier` reads the latest plan's `modules` and stops when it names none — but only when the
+    walk reaches a frontier decision, three asks later, with the plan already journaled
+    `answered`; every resume then replayed it and stopped again with nothing asked. The order's
+    `reply` tells a planner that could not plan to answer `[]`, so that answer has to stop *here*,
+    at the ask, the way a failed build does. A plan with no `modules` list is refused only when no
+    earlier plan named any, because otherwise `_frontier` reads the earlier one — this is exactly
+    as strict as the reader, not stricter.
+    """
+    named = result.get("modules") if isinstance(result, Mapping) else None
+    if isinstance(named, (list, tuple)):
+        if named:
+            return
+        said = "answered an empty `modules` list"
+    else:
+        for ask in report.asks:
+            if ask.node_id == "pm_plan" and isinstance(ask.result, Mapping) \
+                    and isinstance(ask.result.get("modules"), (list, tuple)):
+                return
+        said = "answered no `modules` list, and no earlier plan has one"
+    why = str(result.get("why") or "").strip() if isinstance(result, Mapping) else ""
+    told = f" Its `why`: {why[:2000]!r}." if why else ""
+    raise EngineError(
+        f"node 'pm_plan': the current plan names no modules — it {said}.{told} A decision in this "
+        f"run is read from the frontier, the modules the current plan names, and an empty frontier "
+        f"and an unstated one are not the same thing: the run stops here so a person can read why. "
+        f"The ask is journaled as refused, so a resumed run asks for the plan again.")
+
+
+def _accept_for(node: graph.Node, cfg: "RunConfig", report: "RunReport"):
+    """What a single voice's answer must be for the walk to take it: its `accept`, or `None`.
+
+    Only where a reader would stop the run on the answer later — so the stop is made at the ask,
+    journaled `refused`, and a resumed run asks again instead of replaying it.
+    """
+    if node.id == "engineer_build":
+        return _stop_on_failed_build
+    if node.id == "pm_plan" and any(value == FRONTIER for value in (cfg.decisions or {}).values()):
+        return lambda result: _stop_on_empty_plan(result, report)
+    return None
 
 
 def _module_built(report: "RunReport") -> str:
@@ -1718,9 +1794,11 @@ def _frontier(node: graph.Node, report: "RunReport") -> str:
     remaining = [m for m in planned if m not in built]
     if not planned:
         raise EngineError(
-            f"node {node.id!r} is decided from the frontier, but no plan has named any modules. "
-            f"`pm_plan` must answer with a `modules` list for the loop to know when it is done — "
-            f"an empty frontier and an unstated one are not the same thing.")
+            f"node {node.id!r} is decided from the frontier, but the current plan names no modules. "
+            f"An empty frontier and an unstated one are not the same thing, so the run stops for a "
+            f"person rather than assume either. `pm_plan`'s own ask stops on this first "
+            f"(`_stop_on_empty_plan`); this is the backstop for a record that reaches here another "
+            f"way.")
     if remaining and last_word == "":
         # Recorded, because **nothing downstream verifies it**. Both seats checked: `lead_review`
         # adjudicates whatever verdict strings the seats return, `qa_verify` is a branchless step
@@ -3195,7 +3273,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                     conversation=cfg.conversation, role=node.role, resumed=report.resumed,
                                   workspace=_workspace(node, build_cycles),
                                   heard=lambda a, _n=node: _heard(_n, ONE, a),
-                                  accept=(_stop_on_failed_build if node.id == "engineer_build" else None))
+                                  accept=_accept_for(node, cfg, report))
                 report.asks.append(Ask(node.id, node.role, None, result, model=model))
                 answers.append(result)
 

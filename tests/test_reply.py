@@ -277,14 +277,18 @@ def test_a_pre_reply_answer_the_walk_refused_is_asked_again(tmp_path):
 
 
 def test_a_changed_schema_is_asked_again_even_when_nothing_else_changed(tmp_path):
-    """A frontier decision changes what `pm_plan` and `engineer_build` are asked for and nothing in
-    their briefs, so this is the case "always ignore `reply`" would wrongly reuse."""
-    _journal_walk(tmp_path, ReplyAgent(), resume=False)
+    """A frontier decision changes what `pm_plan` is asked for and nothing in its brief, so this is
+    the case "always ignore `reply`" would wrongly reuse. The first plan already names modules, so
+    the plan's own `accept` would take it: only the comparison can ask it again."""
+    def plans_anyway(order):
+        return {"modules": list(ReplyAgent.PLANNED)} if order["node_id"] == "pm_plan" else None
+
+    _journal_walk(tmp_path, ReplyAgent(plans_anyway), resume=False)
     again = ReplyAgent()
     report, _, exc = _journal_walk(tmp_path, again, resume=True, decisions=dict(FRONTIER))
     assert exc is None, exc
     asked = {o["node_id"] for o in again.orders}
-    assert {"pm_plan", "engineer_build"} <= asked
+    assert "pm_plan" in asked, "asked for `modules` now, and answered before it was asked"
     assert "intake_review" not in asked, "an ask whose schema did not change is reused"
 
 
@@ -362,6 +366,140 @@ def test_a_failure_journaled_answered_by_an_older_runner_is_asked_again(tmp_path
     assert [o["node_id"] for o in again.orders][0] == "engineer_build"
 
 
+def test_nothing_said_after_a_refused_answer_is_reused(tmp_path):
+    """The journal an older runner actually wrote: it walked on past a failed build, so the
+    self-check, the task review and everything to `merge` were answered about the failed attempt.
+    Reusing them after asking the engineer again merged the rebuild on reviews of the failure —
+    the verification panel measured it with the pre-change runner writing the journal."""
+    def walks_past_a_failure(order):
+        if order["node_id"] == "engineer_build":
+            return {"module": "alpha"}
+        return None
+
+    first, journal, exc = _journal_walk(tmp_path, ReplyAgent(walks_past_a_failure), resume=False)
+    assert exc is None and first.state == engine.FINISHED, exc
+    _strip_reply(journal)
+    later = []
+    for entry in journal.entries():
+        if entry["node_id"] == "engineer_build":
+            entry["result"] = {"module": "", "error": "tests fail"}
+            (journal.dir / f"{entry['ask_id']}.json").write_text(json.dumps(entry),
+                                                                 encoding="utf-8")
+        elif later or any(e["node_id"] == "engineer_build" for e in journal.entries()
+                          if e["ask_id"] < entry["ask_id"]):
+            later.append(entry["node_id"])
+    assert "lead_task_review" in later, later
+
+    again = ReplyAgent()
+    report, _, exc = _journal_walk(tmp_path, again, resume=True)
+    assert exc is None and report.state == engine.FINISHED, exc
+    asked = [o["node_id"] for o in again.orders]
+    assert asked[0] == "engineer_build", asked
+    assert set(later) <= set(asked), (
+        f"said about the failed attempt, and reused: {sorted(set(later) - set(asked))}")
+    assert "pm_plan" not in asked, "what came before the refused answer is still reused"
+    assert len(report.resumed) == len(first.asks) - len(later) - 1, report.resumed
+
+
+def test_a_changed_question_does_not_stop_the_reuse_after_it(tmp_path):
+    """The clear is for an answer refused, not for a question that changed: a frontier decision
+    changes what `pm_plan` is asked, and the asks after it that did not change are still reused."""
+    _journal_walk(tmp_path, ReplyAgent(), resume=False)
+    again = ReplyAgent()
+    report, _, exc = _journal_walk(tmp_path, again, resume=True, decisions=dict(FRONTIER))
+    assert exc is None, exc
+    assert "pm_confirm" not in {o["node_id"] for o in again.orders}
+
+
+@pytest.mark.parametrize("error, stops", [
+    (True, True), ("tests fail", True), (False, False), ("   ", False), ("", False)])
+def test_a_named_module_stops_on_a_true_error_and_not_on_a_blank_one(error, stops):
+    """`error: true` is a failure said without a reason — as `_went_wrong` reads it beside an empty
+    module — and a blank string is the key left out."""
+    said = engine._build_failure({"module": "alpha", "error": error})
+    assert bool(said) is stops, said
+
+
+def test_a_failed_build_keeps_its_why_for_the_person_it_stops_for(tmp_path):
+    """A refused answer reaches the conversation only as the stop's message, and a resume's re-ask
+    overwrites the journaled one — so the message carries the engineer's `error` and `why` whole."""
+    long_error = "tests fail: " + "x" * 300
+    agent = ReplyAgent(lambda o: {"module": "", "error": long_error, "why": "the fixture is gone"}
+                       if o["node_id"] == "engineer_build" else None)
+    _, _, exc = _journal_walk(tmp_path, agent, resume=False)
+    assert long_error in str(exc) and "the fixture is gone" in str(exc), str(exc)
+    assert "journaled as refused" in str(exc)
+
+
+def test_a_backstop_does_not_claim_the_journal_was_told():
+    """Only the ask's own `accept` journals the answer `refused`; a backstop cannot."""
+    said = str(engine._build_failed("module_built", {"module": "", "error": "tests fail"}))
+    assert "could not build" in said and "journaled" not in said, said
+    said = str(engine._build_failed("module_built", {"errors": ["x"]}))
+    assert "answered no module" in said, said
+
+
+# ── an empty plan under a frontier decision stops at its ask ──────────────────────────────────
+
+
+def _plans_nothing(order):
+    return {"modules": [], "why": "the brief names no work"} if order["node_id"] == "pm_plan" \
+        else None
+
+
+def test_an_empty_plan_under_a_frontier_decision_stops_at_its_own_ask(tmp_path):
+    """The `modules` description offers `[]` to a planner that could not plan, so that answer has
+    to stop where it is given. Before, `pm_confirm`, `lead_assess` and `pm_signoff` were asked
+    first, the stop came at `next_module`, and every resume replayed it with nothing asked."""
+    agent = ReplyAgent(_plans_nothing)
+    _, journal, exc = _journal_walk(tmp_path, agent, resume=False, decisions=dict(FRONTIER))
+    assert isinstance(exc, engine.EngineError) and "names no modules" in str(exc), exc
+    assert "the brief names no work" in str(exc)
+    assert agent.orders[-1]["node_id"] == "pm_plan", [o["node_id"] for o in agent.orders]
+    assert {e["node_id"]: e["status"] for e in journal.entries()}["pm_plan"] == "refused"
+
+    again = ReplyAgent()
+    report, _, exc = _journal_walk(tmp_path, again, resume=True, decisions=dict(FRONTIER))
+    assert exc is None and report.state == engine.FINISHED, exc
+    assert [o["node_id"] for o in again.orders][0] == "pm_plan"
+
+
+def test_an_empty_plan_journaled_answered_by_an_older_runner_is_asked_again(tmp_path):
+    _journal_walk(tmp_path, ReplyAgent(_plans_nothing), resume=False, decisions=dict(FRONTIER))
+    for entry in engine.AskJournal(tmp_path / "asks").entries():
+        if entry["node_id"] == "pm_plan":
+            entry["status"] = "answered"
+            entry["result"] = {"modules": []}
+            (tmp_path / "asks" / f"{entry['ask_id']}.json").write_text(json.dumps(entry),
+                                                                       encoding="utf-8")
+    again = ReplyAgent()
+    report, _, exc = _journal_walk(tmp_path, again, resume=True, decisions=dict(FRONTIER))
+    assert exc is None and report.state == engine.FINISHED, exc
+    assert [o["node_id"] for o in again.orders][0] == "pm_plan"
+
+
+def test_a_plan_is_held_to_modules_only_under_a_frontier_decision():
+    """With the decisions a list nothing reads `modules`, so nothing stops on it."""
+    report = _walk(ReplyAgent(_plans_nothing))
+    assert report.state == engine.FINISHED, report.halt_reason
+
+
+def test_a_later_plan_with_no_list_keeps_the_earlier_one_as_the_reader_does():
+    """`_frontier` reads the latest plan that has a `modules` list, so a re-plan without one is not
+    refused where an earlier plan gave one — no stricter than the reader."""
+    class _Ask:
+        def __init__(self, node_id, result):
+            self.node_id, self.result = node_id, result
+
+    report = engine.RunReport()
+    with pytest.raises(engine.EngineError, match="names no modules"):
+        engine._stop_on_empty_plan({"summary": "planned"}, report)
+    report.asks = [_Ask("pm_plan", {"modules": ["alpha"]})]
+    engine._stop_on_empty_plan({"summary": "planned"}, report)
+    with pytest.raises(engine.EngineError, match="an empty `modules` list"):
+        engine._stop_on_empty_plan({"modules": []}, report)
+
+
 def test_a_named_module_beside_an_old_failure_key_is_still_a_build():
     """Only `error` — the key the order offers — stops a named module. A backend that never read
     `reply` and reports `errors: [...]` beside a module it did build was recorded as built before
@@ -428,7 +566,8 @@ def test_the_module_built_backstop_stops_on_a_failure_it_is_handed():
 def test_no_current_document_describes_the_rejected_draft():
     """The first implementation shipped `reply.schema` while README, SCHEMAS and design.md still
     described the draft the design panel rejected — `reply.keys`, `engine._reads`, `one_of`
-    descriptors — which is the first page a backend author reads (CHG-20260925-01). The ledger
+    descriptors — which is the first page a backend author reads (CHG-20260925-01). The needles
+    are the draft's own spellings, each found in that tree's pages, so the guard fails it. The ledger
     (`docs/changes`, `docs/acceptance`, `docs/design`) keeps its history and is not scanned."""
     root = Path(__file__).resolve().parents[1]
     pages = [root / "README.md", root / "examples" / "minimal" / "agent.py",
@@ -436,6 +575,6 @@ def test_no_current_document_describes_the_rejected_draft():
              *root.glob("examples/**/*.md")]
     stale = [f"{page.relative_to(root)}: {word}"
              for page in pages
-             for word in ("reply.keys", "_reads(", "engine._reads", '"one_of"', '"list_of"')
+             for word in ("reply.keys", "engine._reads", "*, reads", "`one_of`", "at_least")
              if word in page.read_text(encoding="utf-8")]
     assert stale == [], stale

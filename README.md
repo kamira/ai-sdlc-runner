@@ -541,7 +541,7 @@ answers every ask the minimal flow makes.
 
 **The answer contract travels in the order.** Every work order carries `reply`. Its `schema` is
 the answer's JSON Schema — the keys the run acts on (`required`), the words each accepts (`enum`),
-and no other key but `why` (`additionalProperties: false`) — computed for the path the ask was
+and no key it does not name (`additionalProperties: false`) — computed for the path the ask was
 dispatched on, because a panel reads different words from a single voice. Two fixed sentences sit
 beside it: `format`, on the answer's form, and `unattended`, saying that nobody can reply while
 the order runs. What `reply.schema` requires:
@@ -554,8 +554,8 @@ the order runs. What `reply.schema` requires:
 | a seat on the review panel | `verdict`: `pass`, `fail` or `undecided` |
 | a seat at intake | `missing` (aspect ids), `problems`, `unsafe` — lists; an empty one says none |
 | the intake option ask | `options`: at least 3 distinct |
-| `engineer_build` | `module` — or `""` for **nothing left to build**, which ends the module loop. Omitting the key is not the same thing: it means the question was not answered, and the loop stays open. `error` says the build failed: the run stops at that ask for a person, and a resumed run asks the engineer again |
-| `pm_plan` | `modules`, when a decision is `"frontier"` |
+| `engineer_build` | `module` — or `""` for **nothing left to build**, which ends the module loop. Omitting the key is not the same thing: it means the question was not answered, and the loop stays open. `error` says the build failed: the run stops at that ask for a person, and `--resume` asks the engineer again. An answer with `module` empty or left out that reports a failure in another key (`errors`, `failed`, …) stops the same way |
+| `pm_plan` | `modules`, when a decision is `"frontier"`. An empty list, or none where no earlier plan gave one, stops the run at that ask the same way |
 | anything else | `required: []` — nothing in the answer is acted on; `why` is still read by a person |
 
 The work order arrives as JSON on **stdin**; the answer goes to **stdout** as one JSON object. A
@@ -810,7 +810,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 2407 tests
+pytest -q          # 2421 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is
