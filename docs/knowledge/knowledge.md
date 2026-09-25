@@ -27,6 +27,7 @@
 | KN-11 | pattern | governance / trust boundaries | Read the **fact**, not the claim. A declaration is what somebody says an operation is; a target (`kubectl apply -f prod/`, `secrets/key.pem`) is what it will touch. Facts may overrule claims; prose may not. And where a trust boundary cannot be removed, **record it** — an operation nothing verified belongs in the report, not in silence. | active |
 | KN-10 | pattern | governance / red lines | A blacklist cannot be a safety guarantee. Two verifiers independently broke all six permanent halts with ordinary English containing no listed word, and a plan that simply **omitted** its operations was checked against nothing at all. The fix is the inversion: each operation **declares** its kind from a closed set, an undeclared one is refused, and word lists are demoted to a backstop that can only add a stop. | active |
 | KN-9 | pattern | governance / vocabularies | A vocabulary that classifies must be **closed**: an unrecognised value is a failure, never a pass. The ledger lint knew only "built", so `accepted`, `merged`, `completed` and `完成` all sailed past it with no acceptance record. And read the **field**, not the prose around it — `draft — all 9 tasks built` is a draft. | active |
+| DIR-1 | directive | governance / review | When `codex` cannot be reached, a review panel is **two `fable` seats and two `opus` seats, each in its own session** — independent, then cross-read. `codex` rejoins the panel as soon as it can be reached. | active |
 
 <!-- Append DIR-n (user directives) / KN-n (observed patterns) as anchored sections below and add
      one INDEX row each; register any new tag in vocabulary.json first. -->
@@ -633,3 +634,22 @@ days.
 **Left open on purpose:** whether the suite found 3 defects unprompted or 4. Settling it needs
 somebody who knows what the fifth item was; the user has decided the numbers stay as they are until
 then.
+
+## DIR-1 — The panel when `codex` cannot be reached
+
+*tags: governance · source: the user, 2026-09-25, CHG-20260925-01 · tier: directive*
+
+The user's words: *"如果沒辦法codex審議則由兩個各自獨立session fable和兩個各自獨立session的opus進行審議 /
+除非有辦法支援的codex"* — if `codex` cannot review, the review is done by two `fable` seats and two
+`opus` seats, each in its own independent session, unless there is a way to support `codex`.
+
+**The rule.** The recent panels here were two engines in separate sessions, `fable` and `codex`
+(ACC-20260907-25, ACC-20260906-03). Where `codex` cannot be reached — no binary, no credentials, or
+its API host blocked — the panel is four seats: two `fable`, two `opus`, each opened fresh and told
+it will not see the others, then each cross-reads the other three and marks every finding agree or
+disagree. A disagreement is escalated, never averaged. The record says plainly that `codex` was
+not on the panel and why, as ACC-20260907-24 did for a reduced panel.
+
+**What it does not relax.** It is a composition, not a quorum: four seats are asked, all four must
+report, and "all seats could not verify" is not a pass. It does not replace KN-14 — the tree the
+seats read is frozen until every seat has reported, cross-read included.
