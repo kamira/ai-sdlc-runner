@@ -1447,10 +1447,12 @@ def _summary(turn: Mapping[str, object]) -> str:
         # — which is most review answers, since `{"missing": [], "problems": []}` means "nothing
         # wrong". A log of 150 lines reading "answered" is not a log (CHG-20260823-39).
         result = turn.get("result") or {}
-        # `error` first: it is the key that stops a build, and "module: m1" on the ask that stopped
-        # the run read as a success. `risk` because a grading panel's word sets the grade.
+        # `error` first: it is the key that says a build failed, and "module: m1" beside one read as
+        # a success. `risk` because a grading panel's word sets the grade. `false` is no word at
+        # all: `error: false` is the key left out, as the walk reads it (CHG-20260925-01).
         for key in ("error", "verdict", "risk", "module", "modules", "options", "note"):
-            if key in result and result[key] not in (None, "", [], {}):
+            if key in result and result[key] not in (None, "", [], {}) \
+                    and result[key] is not False:
                 said = json.dumps(result[key], ensure_ascii=False).strip('"')
                 extra = f" · {result['why']}" if key == "verdict" and result.get("why") else ""
                 return f"{key}: {said}{extra}"[:110]

@@ -313,6 +313,7 @@ def test_the_runners_own_wording_does_not_ask_again(tmp_path, monkeypatch):
     ({"options": ["a", "b", "c"], "why": "three ways"}, "options:"),
     ({"module": "alpha", "error": "tests fail"}, "error:"),
     ({"module": "", "error": "tests fail"}, "error:"),
+    ({"module": "alpha", "error": False}, "module:"),
     ({"risk": "high", "why": "touches billing"}, "risk:"),
     ({"why": "nothing is read here"}, "why:"),
 ])
@@ -366,17 +367,10 @@ def test_a_failure_journaled_answered_by_an_older_runner_is_asked_again(tmp_path
     assert [o["node_id"] for o in again.orders][0] == "engineer_build"
 
 
-def test_nothing_said_after_a_refused_answer_is_reused(tmp_path):
-    """The journal an older runner actually wrote: it walked on past a failed build, so the
-    self-check, the task review and everything to `merge` were answered about the failed attempt.
-    Reusing them after asking the engineer again merged the rebuild on reviews of the failure —
-    the verification panel measured it with the pre-change runner writing the journal."""
-    def walks_past_a_failure(order):
-        if order["node_id"] == "engineer_build":
-            return {"module": "alpha"}
-        return None
-
-    first, journal, exc = _journal_walk(tmp_path, ReplyAgent(walks_past_a_failure), resume=False)
+def _journal_an_older_runner_wrote_past_a_failed_build(tmp_path):
+    """The journal the pre-change runner wrote: it walked on past a failed build, so the self-check,
+    the task review and everything to `merge` were answered about the failed attempt."""
+    first, journal, exc = _journal_walk(tmp_path, ReplyAgent(), resume=False)
     assert exc is None and first.state == engine.FINISHED, exc
     _strip_reply(journal)
     later = []
@@ -388,8 +382,15 @@ def test_nothing_said_after_a_refused_answer_is_reused(tmp_path):
         elif later or any(e["node_id"] == "engineer_build" for e in journal.entries()
                           if e["ask_id"] < entry["ask_id"]):
             later.append(entry["node_id"])
-    assert "lead_task_review" in later, later
+    assert "lead_task_review" in later and "merge" in later, later
+    return first, later
 
+
+def test_nothing_said_after_a_refused_answer_is_reused(tmp_path):
+    """Reusing the later entries after asking the engineer again merged the rebuild on reviews of
+    the failure — the verification panel measured it with the pre-change runner writing the
+    journal."""
+    first, later = _journal_an_older_runner_wrote_past_a_failed_build(tmp_path)
     again = ReplyAgent()
     report, _, exc = _journal_walk(tmp_path, again, resume=True)
     assert exc is None and report.state == engine.FINISHED, exc
@@ -399,6 +400,82 @@ def test_nothing_said_after_a_refused_answer_is_reused(tmp_path):
         f"said about the failed attempt, and reused: {sorted(set(later) - set(asked))}")
     assert "pm_plan" not in asked, "what came before the refused answer is still reused"
     assert len(report.resumed) == len(first.asks) - len(later) - 1, report.resumed
+
+
+@pytest.mark.parametrize("interrupted", ["the engineer fails again", "a gate suspends"])
+def test_the_cut_outlasts_a_resume_that_was_interrupted(tmp_path, interrupted):
+    """Clearing only the walk's copy lasted one walk: the final check measured the next resume
+    reusing the failed attempt's reviews — 9 of 9 — and the old run's `merge`. The journal forgets
+    what came after the refused answer, so no later walk can reuse it."""
+    _, later = _journal_an_older_runner_wrote_past_a_failed_build(tmp_path)
+    if interrupted == "a gate suspends":
+        report, _, exc = _journal_walk(tmp_path, ReplyAgent(), resume=True,
+                                       confirmed=tuple(g for g in ALL_GATES if g != "merge"))
+        assert exc is None and report.state == engine.SUSPENDED, (exc, report.state)
+    else:
+        _, _, exc = _journal_walk(tmp_path, ReplyAgent(_fails_to_build), resume=True)
+        assert isinstance(exc, engine.EngineError) and "could not build" in str(exc)
+
+    again = ReplyAgent()
+    report, _, exc = _journal_walk(tmp_path, again, resume=True)
+    assert exc is None and report.state == engine.FINISHED, exc
+    asked = {o["node_id"] for o in again.orders}
+    if interrupted == "a gate suspends":
+        # What the interrupted resume asked afresh, up to the gate, is reused; the old run's
+        # `merge` beyond it is not.
+        assert "merge" in asked, (sorted(asked), report.resumed)
+    else:
+        assert set(later) <= asked, sorted(set(later) - asked)
+
+
+def test_an_answer_that_is_not_an_object_is_journaled_refused_with_what_was_said(tmp_path):
+    """`refuse` raised on `dict()` for a list or a string, leaving the entry `pending`."""
+    journal = engine.AskJournal(tmp_path / "asks")
+    journal.record("007-engineer_build", "engineer_build", None, {"node_id": "engineer_build"})
+    journal.refuse("007-engineer_build", "EngineError: no object", ["built", "alpha"])
+    entry = journal.entries()[0]
+    assert entry["status"] == "refused" and "alpha" in entry["result"]["answer"], entry
+
+
+def test_the_journal_forgets_by_position_and_keeps_what_is_not_an_ask(tmp_path):
+    journal = engine.AskJournal(tmp_path / "asks")
+    for ask_id in ("000-intake", "001-pm_plan", "002-pm_confirm", "010-lead_review-conformance"):
+        journal.record(ask_id, ask_id.split("-")[1], None, {"node_id": ask_id})
+    journal.record_intake_stop(["ui"])
+    journal.record_unsafe_shown("abc123")
+    assert journal.forget_after("001-pm_plan") == ["002-pm_confirm", "010-lead_review-conformance"]
+    assert [e["ask_id"] for e in journal.entries()] == ["000-intake", "001-pm_plan"]
+    assert journal.intake_stops() and journal.unsafe_shown() == ["abc123"]
+
+
+def test_a_refused_answer_reaches_the_conversation_as_it_was_given():
+    """A refused answer is an unanswered turn; the planner's prose, or a failed build's `why`,
+    reached nobody once a resume's re-ask overwrote the journal (final check)."""
+    turns = []
+
+    class Conversation:
+        def ask(self, *args, **kwargs):
+            pass
+
+        def answer(self, *args, **kwargs):
+            turns.append(("answer", args))
+
+        def unanswered(self, ask_id, why):
+            turns.append(("unanswered", why))
+
+    class Session(engine.Session):
+        def ask(self, order):
+            return {"summary": "the brief names no work I can plan"}
+
+        def close(self):
+            pass
+
+    with pytest.raises(engine.EngineError, match="names no modules"):
+        engine._ask(lambda: Session(), {"node_id": "pm_plan"}, [], ask_id="003-pm_plan",
+                    node_id="pm_plan", conversation=Conversation(),
+                    accept=lambda r: engine._stop_on_empty_plan(r, engine.RunReport()))
+    assert [kind for kind, _ in turns] == ["unanswered"], turns
+    assert "the brief names no work I can plan" in turns[0][1], turns
 
 
 def test_a_changed_question_does_not_stop_the_reuse_after_it(tmp_path):

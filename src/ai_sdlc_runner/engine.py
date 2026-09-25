@@ -154,8 +154,35 @@ class AskJournal:
         # result was kept and did not keep it, which the `refused-answer` mutation reported as
         # NOT CAUGHT: `answers()` requires a `result`, so nothing was ever reused and the test
         # meant to prove the reuse check was hollow.
-        payload["result"] = dict(result)
+        # A session that answered with something other than an object is refused too, and this
+        # raised on `dict()` before: the entry stayed `pending` and no turn said why.
+        payload["result"] = (dict(result) if isinstance(result, Mapping)
+                             else {"answer": repr(result)})
         self._write(ask_id, payload)
+
+    def forget_after(self, ask_id: str) -> List[str]:
+        """Remove every ask journaled after ``ask_id``, by position; return their ids.
+
+        The durable half of `_ask`'s cut (CHG-20260925-01). Clearing only the walk's copy lasted one
+        walk: the final check measured an older runner's journal whose first resume was
+        interrupted — the engineer failing again, a gate suspending, a crash — reusing the failed
+        attempt's reviews, and the old run's `merge`, on the next one. This journal is a resume
+        index, mutable by design and overwritten as the walk goes; what was said stays in the
+        conversation store. By position, because the ids are: the three-digit count the walk
+        numbers asks with.
+        """
+        cut = _position(ask_id)
+        gone = []
+        if cut is None:
+            return gone
+        for name in paths.listdir(self.dir):
+            if not name.endswith(".json") or name.startswith(self._NOT_ASKS):
+                continue
+            at = _position(name[:-len(".json")])
+            if at is not None and at > cut:
+                paths.unlink(self.dir / name)
+                gone.append(name[:-len(".json")])
+        return sorted(gone)
 
     def pending(self) -> List[Dict[str, object]]:
         """Every ask written down but never answered — the re-ask list, in order."""
@@ -262,6 +289,12 @@ class AskJournal:
             self._path(ask_id),
             (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
             .encode("utf-8"))
+
+
+def _position(ask_id: str) -> Optional[int]:
+    """Where in the walk an ask id says it was asked: its leading count, or `None`."""
+    head = ask_id.split("-", 1)[0]
+    return int(head) if head.isdigit() else None
 
 
 @dataclass
@@ -1163,10 +1196,11 @@ def _heard(node: graph.Node, voices: str, answer: Mapping[str, object]) -> bool:
     whose answers the readers accepted — `branch` for `verdict`, a survey naming one key of three,
     an engineer's prose — is reused as before. The two readers that stop the run later rather than
     at the ask are not repeated here: a failed build and an empty plan under a frontier decision
-    are their ask's own `accept` (`_accept_for`), which `_acceptable` checks before reuse. What is
-    not checked is a gate that refuses after its node — the reuse cannot see the gate — so this is
-    no stricter than the walk, and a journaled answer a later reader refuses is asked again only
-    where one of these checks sees it.
+    are their ask's own `accept` (`_accept_for`), which `_acceptable` checks before reuse. It is
+    stricter than the walk by one ask in one place: an answer journaled while a `gate_when="after"`
+    gate suspends is never read if the person then rejects, and this asks it again — the reuse
+    cannot see the gate. A journaled answer a later reader refuses is asked again only where one of
+    these checks sees it.
     """
     if not isinstance(answer, Mapping):
         return False
@@ -1235,7 +1269,14 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
             # those after asking the engineer again merged the rebuild on reviews of the failure;
             # the verification panel measured it. A question that changed is not this case, and is
             # left as it was: the later entries are reused where they still ask the same.
+            #
+            # **By position, and on disk.** Everything numbered after this ask goes — a panel's
+            # other voices too, which were said beside the refused answer rather than about it:
+            # re-asking them costs asks, reusing a review of a failed build cost a merge. And the
+            # journal forgets them as well as this walk, or the next walk reused them again.
             answered.clear()
+            if journal is not None and ask_id is not None:
+                journal.forget_after(ask_id)
     if journal is not None and ask_id is not None:
         journal.record(ask_id, node_id, seat, order)
     # The conversation gets the model. `journal.record` has never taken one, so the existing durable
@@ -1248,9 +1289,17 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
     # to open, a session returned twice, or a `close()` that raised all left an ask with no outcome
     # beside it, which reads as "never answered" rather than "failed". The README said "each ask
     # that failed" while three of the four ways to fail were unrecorded.
-    def _failed(exc: BaseException) -> None:
+    def _failed(exc: BaseException, said: Optional[Mapping[str, object]] = None) -> None:
         if conversation is not None:
-            conversation.unanswered(ask_id or "", f"{type(exc).__name__}: {exc}")
+            why = f"{type(exc).__name__}: {exc}"
+            if said is not None:
+                # **What was said, beside why it was refused.** A refused answer is recorded as an
+                # unanswered turn, so without this the conversation kept only the refusal: a
+                # planner's prose, or a failed build's `why`, reached nobody once a resume's re-ask
+                # overwrote the journal (CHG-20260925-01, final check).
+                why += " The answer, as given: " + json.dumps(
+                    said, ensure_ascii=False, sort_keys=True, default=str)[:4000]
+            conversation.unanswered(ask_id or "", why)
 
     # Read off the order rather than threaded through six call sites, because the order **already
     # carries it**: `workorder.render` puts the resolved verdict in `policy_verdict`, and that
@@ -1298,7 +1347,7 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
         except Exception as exc:
             if journal is not None and ask_id is not None:
                 journal.refuse(ask_id, f"{type(exc).__name__}: {exc}", result)
-            _failed(exc)
+            _failed(exc, result if isinstance(result, Mapping) else {"answer": result})
             raise
     if journal is not None and ask_id is not None:
         journal.answered(ask_id, result)
@@ -1514,7 +1563,8 @@ def _reconciled(cfg: "RunConfig", report: "RunReport") -> str:
 def _build_failure(result: Mapping[str, object]) -> str:
     """The failure an engineer's answer reports, or "" — what stops a build (CHG-20260925-01).
 
-    With an empty `module`, any of `FAILURE_KEYS`: that rule predates this change. With a *named*
+    With `module` empty or left out, any of `FAILURE_KEYS` — the rule `_frontier` applied to an
+    empty `module` before this change; the half about a missing one is new here. With a *named*
     module, only `error`, the key the order's `reply` offers: a backend that never read `reply` and
     reports `"errors": ["lint warning"]` beside a module it did build was recorded as built before,
     and still is.
@@ -1537,22 +1587,22 @@ def _build_failed(node_id: str, result: Mapping[str, object], *,
     ticks, commits and writes the worklog, and before this it did all three for a module whose
     engineer had said its tests failed — measured by the design panel's risk seat, on both paths.
 
-    The message carries the engineer's own `error` and `why` whole. Raised at the ask, it is the
-    only place they reach the conversation: `_ask` records a refused answer as an unanswered turn
-    whose text is this message, and a resumed run's re-ask overwrites the journaled result — the
-    verification panel measured a failed build's reason lost from both. ``at_ask`` says whether
-    the journal was told: only `_stop_on_failed_build`'s refusal journals the ask `refused`.
+    The message carries the engineer's own `error` and `why`, up to 2000 characters each, for the
+    person reading the stop — the CLI prints it, and the conversation's unanswered turn carries it
+    beside the answer as given. ``at_ask`` says whether the journal was told: only
+    `_stop_on_failed_build`'s refusal journals the ask `refused`, and only where there is a journal.
     """
     name = str(result.get("module") or "")
     said = (f"answered module {name!r}" if name
             else "answered an empty module" if "module" in result else "answered no module")
     error = result.get("error")
     why = str(result.get("why") or "").strip()
+    # Only where `_build_failure` above cut it short: said once is enough.
     told = (f" Its `error`: {str(error)[:2000]!r}."
-            if not isinstance(error, bool) and str(error or "").strip() else "")
+            if not isinstance(error, bool) and len(str(error or "").strip()) > 120 else "")
     told += f" Its `why`: {why[:2000]!r}." if why else ""
-    after = (" The ask is journaled as refused, so a resumed run asks the engineer again."
-             if at_ask else "")
+    after = (" Where the run keeps an ask journal, the ask is journaled as refused, so --resume "
+             "asks the engineer again." if at_ask else "")
     return EngineError(
         f"node {node_id!r}: the engineer could not build — it {said} with "
         f"{_build_failure(result)!r}.{told} A build that reports a failure is neither recorded as "
@@ -1582,8 +1632,9 @@ def _stop_on_empty_plan(result: Mapping[str, object], report: "RunReport") -> No
     `answered`; every resume then replayed it and stopped again with nothing asked. The order's
     `reply` tells a planner that could not plan to answer `[]`, so that answer has to stop *here*,
     at the ask, the way a failed build does. A plan with no `modules` list is refused only when no
-    earlier plan named any, because otherwise `_frontier` reads the earlier one — this is exactly
-    as strict as the reader, not stricter.
+    earlier plan named any, because otherwise `_frontier` reads the earlier one. As strict as the
+    reader where it reads — and earlier: a `[]` that a re-plan replaced before any frontier
+    decision was never read, and stops here, which is what the order's text promises.
     """
     named = result.get("modules") if isinstance(result, Mapping) else None
     if isinstance(named, (list, tuple)):
@@ -1602,7 +1653,8 @@ def _stop_on_empty_plan(result: Mapping[str, object], report: "RunReport") -> No
         f"node 'pm_plan': the current plan names no modules — it {said}.{told} A decision in this "
         f"run is read from the frontier, the modules the current plan names, and an empty frontier "
         f"and an unstated one are not the same thing: the run stops here so a person can read why. "
-        f"The ask is journaled as refused, so a resumed run asks for the plan again.")
+        f"Where the run keeps an ask journal, the ask is journaled as refused, so --resume asks "
+        f"for the plan again.")
 
 
 def _accept_for(node: graph.Node, cfg: "RunConfig", report: "RunReport"):

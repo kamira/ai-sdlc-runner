@@ -227,10 +227,12 @@ answer is reused only if the ask's own reader would accept it (`engine._heard`):
 `answered` before any reader runs, so an answer the walk refused is asked again rather than replayed.
 A failed build is journaled `refused` at its ask (`_stop_on_failed_build`), and so is an empty plan
 under a `"frontier"` decision (`_stop_on_empty_plan`). **Once an entry asks the same question but its
-answer is not reused, nothing after it in that walk is reused either** (`_ask` clears what is left):
-what was said later was said about the refused answer — a journal an older runner wrote past a
-failed build holds the self-check and the review of that failed attempt. An entry whose question
-changed does not clear the rest; the later entries are still reused where they ask the same.
+answer is not reused, nothing journaled after it is reused either** — by position, so a panel's
+other voices go too — and the journal forgets those entries (`AskJournal.forget_after`), so no
+later walk reuses them: what was said later was said about the refused answer, and a journal an
+older runner wrote past a failed build holds the self-check and the review of that failed attempt.
+An entry whose question changed does not cut the rest; the later entries are still reused where
+they ask the same.
 
 **It carries no model and no operator turn.** That is why the conversation store is not derived
 from it.

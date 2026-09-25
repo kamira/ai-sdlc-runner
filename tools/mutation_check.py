@@ -4244,6 +4244,34 @@ CHG-20260907-28 and built by no record yet.''',
         "tests/test_reply.py::test_a_changed_question_does_not_stop_the_reuse_after_it"),
 
     Mutation(
+        "reply-contract", "the cut lasts one walk, and the next reuses the failed attempt's reviews",
+        SRC / "engine.py",
+        '''                journal.forget_after(ask_id)''',
+        '''                pass''',
+        "tests/test_reply.py::test_the_cut_outlasts_a_resume_that_was_interrupted"),
+
+    Mutation(
+        "reply-contract", "the journal forgets the refused ask itself as well",
+        SRC / "engine.py",
+        '''            if at is not None and at > cut:''',
+        '''            if at is not None and at >= cut:''',
+        "tests/test_reply.py::test_the_journal_forgets_by_position_and_keeps_what_is_not_an_ask"),
+
+    Mutation(
+        "reply-contract", "a refused answer's own words reach nobody",
+        SRC / "engine.py",
+        '''            _failed(exc, result if isinstance(result, Mapping) else {"answer": result})''',
+        '''            _failed(exc)''',
+        "tests/test_reply.py::test_a_refused_answer_reaches_the_conversation_as_it_was_given"),
+
+    Mutation(
+        "reply-contract", "an answer that is not an object leaves its entry pending",
+        SRC / "engine.py",
+        '''        payload["result"] = (dict(result) if isinstance(result, Mapping)''',
+        '''        payload["result"] = (dict(result) if True''',
+        "tests/test_reply.py::test_an_answer_that_is_not_an_object_is_journaled_refused_with_what_was_said"),
+
+    Mutation(
         "reply-contract", "`error: true` beside a named module is recorded as built",
         SRC / "engine.py",
         '''        return "error" if said else ""''',
@@ -4267,8 +4295,8 @@ CHG-20260907-28 and built by no record yet.''',
     Mutation(
         "reply-contract", "a backstop says the journal was told when it was not",
         SRC / "engine.py",
-        '''             if at_ask else "")''',
-        '''             if True else "")''',
+        '''             "asks the engineer again." if at_ask else "")''',
+        '''             "asks the engineer again." if True else "")''',
         "tests/test_reply.py::test_a_backstop_does_not_claim_the_journal_was_told"),
 
     Mutation(
@@ -4314,6 +4342,13 @@ CHG-20260907-28 and built by no record yet.''',
         SRC / "conversations.py",
         '''        for key in ("error", "verdict", "risk", "module", "modules", "options", "note"):''',
         '''        for key in ("error", "verdict", "risk", "module", "modules", "options", "note", "why"):''',
+        "tests/test_reply.py::test_why_does_not_hide_what_the_run_acted_on"),
+
+    Mutation(
+        "reply-contract", "the log line reads `error: false` as a failure said",
+        SRC / "conversations.py",
+        '''                    and result[key] is not False:''',
+        '''                    and True:''',
         "tests/test_reply.py::test_why_does_not_hide_what_the_run_acted_on"),
 
     Mutation(

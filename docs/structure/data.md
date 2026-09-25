@@ -22,9 +22,9 @@ two writes leaves the question on disk exactly as it was asked.
 |-------|------|------------|-------------|
 | `ask_id` | str | required, unique | `<sequence>-<node_id>[-<seat>]` — sorts into flow order |
 | `node_id` | str | required | Which node asked |
-| `status` | str (enum) | `pending` \| `answered` | `pending` is written first; `answered` replaces it |
+| `status` | str (enum) | `pending` \| `answered` \| `refused` | `pending` is written first; `answered` replaces it, or `refused` when the ask's own check would not take the answer (the answer is kept) |
 | `order` | object | required | The work order verbatim — the question itself, not a summary of it |
-| `result` | object | present when answered | Whatever the backend replied |
+| `result` | object | present when answered or refused | Whatever the backend replied |
 
 A reconstructed approximation of a question is not the question. The order is stored whole so a
 resumed run re-asks the same thing rather than something like it.
@@ -113,7 +113,7 @@ because it is the only one that is a fact rather than a claim.
 - **seat**: `conformance` (veto) `| defect | risk | idiom`
 - **gate phase**: `before | after`
 - **node kind**: `step | decision | loop | terminal`
-- **ask status**: `pending | answered`
+- **ask status**: `pending | answered | refused`
 
 ### config/settings.json
 

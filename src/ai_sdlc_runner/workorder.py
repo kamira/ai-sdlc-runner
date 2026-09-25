@@ -158,8 +158,8 @@ REPLY_UNATTENDED = (
     "ordinary code about such things is not performing them. If the work would need one, leave "
     "that part undone and say so. Where the work cannot be done, say so with what `schema` offers "
     "for that (`error`, where it offers one); where it offers nothing, say so in `why`, and never "
-    "claim the work was done. Whatever `policy_verdict` says, `confirm` or `halt`, is a gate the "
-    "runner takes, before or after this order: that the order reached you means its work may go "
+    "claim the work was done. Whatever `policy_verdict` says, any gate it names is the runner's "
+    "to take, before or after this order: that the order reached you means its work may go "
     "ahead, so do not seek an approval yourself.")
 
 #: The part of JSON Schema a `reply.schema` may use, and nothing else (CHG-20260925-01). JSON Schema
