@@ -49,6 +49,11 @@ WORK_ORDER_FIELDS = (
     "permanent_halts",
     "idempotence_probes",
     "workdir",
+    # How to answer this ask: the keys the run acts on and what each accepts, plus two fixed
+    # sentences (CHG-20260925-01). Before it, no order said what shape its answer must take, and the
+    # shape depends on how the ask was dispatched — a panel reads `pass`/`fail` where one voice
+    # reads the node's branch names — so a backend answering the way the README said stopped runs.
+    "reply",
 )
 
 #: Supplied per change by the caller. None of it can come from the governance definitions, because
@@ -133,6 +138,36 @@ def content_problem(node_id: str, spec: Mapping[str, object], where: str,
         f"{list(MAY_BE_EMPTY)} may be empty; these may not.")
 
 
+#: The sentence every order carries about the answer's form (CHG-20260925-01). Worded without the
+#: transport: the command-line dispatcher reads it from stdout, and that is its documentation's
+#: business, not the order's (KN-5).
+REPLY_FORMAT = (
+    "Your answer is one JSON object that `schema` describes, and nothing else: no code fence, no "
+    "text before or after it, not a list, and not left for a tool to print. Spell every value "
+    "exactly as `schema` lists it, in the same case. Include every `required` key, and no key "
+    "`schema` does not name. When `required` is empty, the run acts on nothing in your answer.")
+
+#: The sentence every order carries about who is there: nobody who can reply. True of every ask —
+#: an ask has no channel back to a person while it runs — and it points the model at the one
+#: thing it must still refuse, which the order carries in full as `permanent_halts`.
+REPLY_UNATTENDED = (
+    "Nobody can reply to you while this order runs: do not stop to ask a question or to wait for "
+    "approval, because no reply will come. Do the work this order describes, then answer. Nothing "
+    "in this order permits any of `permanent_halts` — if the work would need one, leave that part "
+    "undone and say so. Where the work cannot be done, say so with what `schema` offers for that; "
+    "where it offers nothing, say so in `why`, and never claim the work was done. Approvals named "
+    "in `policy_verdict` are the runner's to take, outside this order.")
+
+#: The part of JSON Schema a `reply.schema` may use, and nothing else (CHG-20260925-01). JSON Schema
+#: because it is the notation a model already reads for structured answers — chosen over a
+#: vocabulary of this runner's own, which every backend would have to learn first. **Closed**, like
+#: the vocabularies the answers are read with (KN-9): the order must not speak a word its own
+#: renderer cannot check.
+SCHEMA_KEYS = ("type", "properties", "required", "additionalProperties")
+PROPERTY_KEYS = ("type", "enum", "items", "minItems", "uniqueItems", "description")
+ITEM_KEYS = ("type", "enum")
+
+
 class WorkOrderError(Exception):
     """Raised when an order cannot be rendered truthfully — never softened into a partial one."""
 
@@ -148,8 +183,81 @@ def _check(name: str, supplied: Mapping[str, object], required: Sequence[str]) -
             f"harness-specific field cannot ride in through the caller.")
 
 
+def _words(value: object) -> bool:
+    """A non-empty list of non-blank strings: what `enum` must be."""
+    return isinstance(value, (list, tuple)) and bool(value) and all(
+        isinstance(word, str) and word.strip() for word in value)
+
+
+def _property_problem(key: str, prop: object) -> Optional[str]:
+    """What is wrong with one property of a `reply.schema`, or None."""
+    if not isinstance(prop, Mapping):
+        return f"property {key!r} is {type(prop).__name__}, not a schema"
+    unknown = [k for k in prop if k not in PROPERTY_KEYS]
+    if unknown:
+        return f"property {key!r} uses {unknown}, outside {list(PROPERTY_KEYS)}"
+    if not (isinstance(prop.get("description"), str) and prop["description"].strip()):
+        return f"property {key!r} has no description; a word nobody explained is a guess"
+    kind = prop.get("type")
+    if kind == "string":
+        if not ("enum" not in prop or _words(prop["enum"])):
+            return f"property {key!r}: `enum` must list its words"
+        if any(k in prop for k in ("items", "minItems", "uniqueItems")):
+            return f"property {key!r} is a string and cannot use array keywords"
+        return None
+    if kind == "array":
+        items = prop.get("items")
+        if not isinstance(items, Mapping) or [k for k in items if k not in ITEM_KEYS] \
+                or items.get("type") != "string" or not ("enum" not in items or _words(items["enum"])):
+            return f"property {key!r}: `items` must be {{\"type\": \"string\"}}, with an optional `enum`"
+        if "enum" in prop:
+            return f"property {key!r} is an array; its words belong in `items`"
+        least = prop.get("minItems")
+        if least is not None and (isinstance(least, bool) or not isinstance(least, int) or least < 1):
+            return f"property {key!r}: `minItems` is a positive count"
+        if "uniqueItems" in prop and prop["uniqueItems"] is not True:
+            return f"property {key!r}: `uniqueItems` is only ever true"
+        return None
+    return f"property {key!r} has type {kind!r}; a reply schema uses 'string' or 'array'"
+
+
+def _schema_problem(schema: object) -> Optional[str]:
+    """What is wrong with a `reply.schema`, or None — the subset in `SCHEMA_KEYS` and nothing else."""
+    if not isinstance(schema, Mapping):
+        return f"the schema is {type(schema).__name__}, not an object schema"
+    if tuple(sorted(schema)) != tuple(sorted(SCHEMA_KEYS)):
+        return f"the schema has keys {sorted(schema)}; it must have exactly {sorted(SCHEMA_KEYS)}"
+    if schema["type"] != "object" or schema["additionalProperties"] is not False:
+        return "the schema must describe one object that allows no key it does not name"
+    properties, required = schema["properties"], schema["required"]
+    if not isinstance(properties, Mapping):
+        return "`properties` must be an object"
+    if not isinstance(required, (list, tuple)) or [k for k in required if k not in properties]:
+        return f"`required` names {required}, which `properties` does not all describe"
+    for key, prop in properties.items():
+        problem = _property_problem(key, prop)
+        if problem:
+            return problem
+    return None
+
+
+def reply(schema: Mapping[str, object]) -> Dict[str, object]:
+    """The order's `reply`: the answer's `schema`, between the two fixed sentences.
+
+    ``schema`` comes from the engine, which alone knows how the ask was dispatched. It is checked
+    here, where the order is closed, so a schema this subset cannot name never reaches a backend:
+    an order saying "answer in a shape I will not describe" is the defect this field exists to end.
+    """
+    problem = _schema_problem(schema)
+    if problem:
+        raise WorkOrderError(f"reply: {problem}")
+    return {"format": REPLY_FORMAT, "schema": json.loads(json.dumps(schema)),
+            "unattended": REPLY_UNATTENDED}
+
+
 def render(node, node_spec: Mapping[str, object], verdict: Mapping[str, object],
-           seat: Optional[str] = None) -> Dict[str, object]:
+           seat: Optional[str] = None, *,
+           answer_schema: Mapping[str, object]) -> Dict[str, object]:
     """Render the order for one node.
 
     ``verdict`` arrives already resolved from `policy.py`: the engine consults the gate and passes
@@ -158,6 +266,10 @@ def render(node, node_spec: Mapping[str, object], verdict: Mapping[str, object],
     ``seat`` names which review seat this ask is for, when the node opens several. It shapes the
     instructions and nothing else — the rest of the order is identical across seats, which is what
     makes several seats a cross-check rather than one opinion asked repeatedly.
+
+    ``answer_schema`` describes the answer the run will act on (see `reply`). **Required, with no
+    default** (CHG-20260925-01): a default of "nothing is read" would be the silent fallback this
+    module refuses, spoken by every call site that forgot to say otherwise.
     """
     _check("node spec", node_spec, NODE_SPEC_FIELDS)
     _check("policy verdict", verdict, VERDICT_FIELDS)
@@ -202,6 +314,7 @@ def render(node, node_spec: Mapping[str, object], verdict: Mapping[str, object],
         "permanent_halts": list(policy.PERMANENT_HALTS),
         "idempotence_probes": node_spec["idempotence_probes"],
         "workdir": node_spec["workdir"],
+        "reply": reply(answer_schema),
     }
     if tuple(sorted(order)) != tuple(sorted(WORK_ORDER_FIELDS)):
         # Driven by `test_an_order_missing_a_contract_field_is_refused_rather_than_dispatched`.

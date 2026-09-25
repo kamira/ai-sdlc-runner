@@ -25,8 +25,9 @@ python3 -m ai_sdlc_runner.cli --config examples/minimal/runner.yaml run --plan e
 
 ## The answer contract
 
-This is the part worth reading. `agent.py` is where it is written down — which node must answer
-what, and what happens when it does not.
+This is the part worth reading. Every work order states it under `reply` — the keys the run acts
+on and what each accepts, for the way that ask was dispatched — and `agent.py` answers what the
+minimal flow's orders say:
 
 | node | must answer |
 |---|---|

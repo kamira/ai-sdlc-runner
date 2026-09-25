@@ -33,7 +33,7 @@ resumed run re-asks the same thing rather than something like it.
 
 ### The work order — a closed schema
 
-Seventeen fields, listed in `workorder.WORK_ORDER_FIELDS`, and a field outside the list is refused
+Eighteen fields, listed in `workorder.WORK_ORDER_FIELDS`, and a field outside the list is refused
 rather than passed through. What is **not** in it matters as much as what is: no tool list, no model
 name, no allowlist, no session context, and nothing any previous answer touched. A harness detail in
 the order is a harness the order cannot outlive.
@@ -49,6 +49,7 @@ the order is a harness the order cannot outlive.
 | `policy_verdict` | the gate's decision, already resolved — a node never re-derives it |
 | `capabilities` | `can_spawn` / `can_write` / `can_execute` for this role |
 | `permanent_halts` | all six, always, never filtered to "the ones this node might hit" |
+| `reply` | how to answer: the keys the run acts on in this answer and what each accepts, for the path the ask was dispatched on, plus two fixed sentences — the answer's form, and that no person is attached (CHG-20260925-01) |
 
 The order is what a backend receives, and it receives it through `workorder.to_json` — sorted keys,
 LF, UTF-8 — so the same order is the same bytes on every machine.

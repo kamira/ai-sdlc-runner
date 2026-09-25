@@ -190,9 +190,10 @@ they made.
   `kind`), `seat_models` and an optional `ship` block. `--risk` and `--seat-model` override the
   plan's own values. The config carries `agent_command` and `agent_timeout` — dispatch settings
   only.
-- A backend reads the work order as JSON on stdin and prints its answer as JSON. At a decision node
-  the answer must name its branch (`branch`, `verdict` or `outcome`); a non-zero exit means it
-  answered nothing, and the question stays pending.
+- A backend reads the work order as JSON on stdin and prints its answer as one JSON object — the
+  one the order's `reply.schema` describes (CHG-20260925-01). At a decision node the answer must
+  name its branch (`branch`, `verdict` or `outcome`); a non-zero exit means it answered nothing,
+  and the question stays pending.
 
 ## 8. Inviolable guardrails
 

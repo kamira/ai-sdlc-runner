@@ -17,7 +17,7 @@ miscounts its own subject is the thing it warns about, so the count is now check
 | 3 | Node spec | [`workorder.py`](../src/ai_sdlc_runner/workorder.py) | shipped · **closed** |
 | 4 | Operation | [`policy.py`](../src/ai_sdlc_runner/policy.py) | shipped |
 | 5 | Work order | [`workorder.py`](../src/ai_sdlc_runner/workorder.py) | shipped · **closed** |
-| 6 | Answer contract | [`examples/minimal/agent.py`](../examples/minimal/agent.py) | shipped |
+| 6 | Answer contract | [`engine.py`](../src/ai_sdlc_runner/engine.py) — carried in every order's `reply` | shipped |
 | 7 | Ask journal entry | [`engine.py`](../src/ai_sdlc_runner/engine.py) | shipped |
 | 8 | Conversation document + turn | [`conversations.py`](../src/ai_sdlc_runner/conversations.py) | shipped |
 | 9 | Export formats — CSV columns, HTML stops | [`conversations.py`](../src/ai_sdlc_runner/conversations.py) | shipped |
@@ -141,16 +141,25 @@ records itself as a relaxation.
 
 ## 5 · Work order — **closed**
 
-What every ask receives on stdin. Identical for every voice on a panel; only the answerer differs.
+What every ask receives on stdin. Identical for every voice on a model panel; the seats of a seat
+panel differ in `seat` and `instructions` only. The answerer is the rest of the difference.
 
 ```
 node_id · node_label · role · role_label · seat
 scope · objective · instructions · done_criteria · acceptance_predicate
 input_artifacts · expected_outputs
 policy_verdict · capabilities · permanent_halts · idempotence_probes · workdir
+reply
 ```
 
 `policy_verdict` has its own fixed shape: `gate · risk · verdict · source · tightened`.
+
+`reply` has its own fixed shape too: `format · keys · unattended` (CHG-20260925-01). `format` and
+`unattended` are two fixed sentences (`workorder.REPLY_FORMAT`, `workorder.REPLY_UNATTENDED`);
+`keys` maps each key the run acts on in this answer to a **descriptor** — exactly one of
+`one_of` (a word list), `list_of` (a word list, or `"text"`) or `text` (what the value says), plus an
+optional `at_least` beside `list_of` and an optional `means`. `workorder.render` refuses any other
+descriptor shape. `{}` says nothing in the answer is acted on.
 
 `source` carries **two facts concatenated into one string** — where the verdict came from, and any
 refused loosening. A consumer cannot separate them mechanically. Acknowledged in `policy.py` and
@@ -158,16 +167,23 @@ recorded here rather than left to be rediscovered.
 
 ## 6 · Answer contract — what a dispatched agent prints
 
-JSON on stdout. A non-zero exit is a failed attempt.
+One JSON object on stdout. A non-zero exit is a failed attempt.
 
-| The node | must answer |
+**The order states it.** `reply.keys` (§5) is computed per ask by `engine._reads`, from the path the
+ask was dispatched on and from the readers' own constants, so the table below is what an order
+says rather than a second copy of it to keep in step:
+
+| The ask | `reply.keys` |
 |---|---|
-| a decision node | `{"verdict": "<branch>"}` — one the node offers |
-| `pm_plan` | `{"modules": [...]}` when `next_module` is `"frontier"` |
-| `engineer_build` | `{"module": "<id>"}` |
-| a seat on a panel | `{"verdict": "pass"\|"fail", "why": "…"}` |
-| a seat at intake | `{"missing": [...], "problems": [...], "unsafe": [...]}` — **at least one** |
-| anything else | any JSON object |
+| a decision node, one voice | `verdict` ∈ the node's branches — read by `_answered_branch` |
+| a decision node, a panel of models | `verdict` ∈ `pass`/`fail`/`undecided` — `policy.adjudicate` |
+| a `grades_risk` node, a panel of models | `risk` ∈ `low`/`medium`/`high` — `policy.adjudicate_grade` |
+| a seat on the review panel | `verdict` ∈ `pass`/`fail`/`undecided` — `policy.adjudicate` |
+| a seat at intake | `missing` (aspect ids), `problems`, `unsafe` — **at least one**; `intake.collect` |
+| the intake option ask | `options`, at least 3 distinct — `intake.read_options` |
+| `engineer_build` | `module`, and `error` for a build that failed — `_module_built`, `_frontier` |
+| `pm_plan`, with a `"frontier"` decision | `modules` — `_frontier` |
+| every other ask | `{}` |
 
 **The intake row is enforced, and the row above it is why it had to be.** A seat at intake and a
 seat on a panel are one line apart in this table and answer with different shapes, and an agent
@@ -198,6 +214,10 @@ design**, and it overwrites.
 { "ask_id": "000-pm_plan", "node_id": "pm_plan", "seat": null,
   "status": "pending|answered", "order": { …schema 5… }, "result": { … } }
 ```
+
+**Two order shapes can sit in one journal.** An entry written before CHG-20260925-01 has no `reply`.
+A resumed run compares such an entry with the new order minus its `reply` and reuses the answer
+(`engine._same_question`); an entry that has a `reply` is compared whole.
 
 **It carries no model and no operator turn.** That is why the conversation store is not derived
 from it.

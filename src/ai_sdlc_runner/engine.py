@@ -889,10 +889,97 @@ def _brief(spec: Mapping[str, object], cfg: "RunConfig") -> Mapping[str, object]
     return spec
 
 
+#: Which path an ask is dispatched on (CHG-20260925-01). The answer's shape depends on it, not only
+#: on the node: `pm_confirm` asked once reads `yes`/`no`, and asked of a panel reads `pass`/`fail`.
+ONE, MODELS, SEATS, SURVEY, OPTIONS = "one", "models", "seats", "survey", "options"
+
+
+#: Every answer may carry `why`: read by no router, kept in the conversation for a person.
+WHY = {"type": "string",
+       "description": "what you assumed, and anything a person should read; the run decides "
+                      "nothing on it"}
+
+
+def _answer_schema(node: graph.Node, cfg: "RunConfig", voices: str) -> Dict[str, object]:
+    """The schema of the answer this ask's reader will act on — the order's `reply.schema`.
+
+    Each case is taken from the reader that will read the answer, and from that reader's own
+    constants, so the order cannot promise a word the reader refuses:
+
+    * a survey seat → `intake.collect` (`ASPECTS`); the option ask → `intake.read_options`
+      (`MIN_OPTIONS`, counted distinct);
+    * a model panel → `policy.adjudicate_grade` (`RISKS`) on a node that grades risk, else
+      `policy.adjudicate` (`VERDICTS`, and the node's `panel_branches`); a seat panel →
+      `policy.adjudicate` (`VERDICTS`);
+    * one voice at a node that decides on its answer → `_answered_branch` (the node's branches);
+    * `engineer_build` → `_module_built` (`module`, `error`), and `_frontier` too when any decision
+      is `"frontier"`; `pm_plan` → `_frontier` (`modules`), only when a decision is `"frontier"` —
+      the predicate is any decision's value, because `check_decisions` lets any node carry it.
+
+    Every other ask is read by nothing and says so: no required key. The key **names** are the
+    readers' literals, pinned by the walks in `tests/test_reply.py`, which answer from `reply`
+    alone and fail if a schema names a key its reader does not read.
+    """
+    frontier = any(value == FRONTIER for value in (cfg.decisions or {}).values())
+    properties: Dict[str, Dict[str, object]] = {}
+    if voices == SURVEY:
+        aspects = "; ".join(f"{name}: {what}" for name, what in intake_mod.ASPECTS)
+        properties = {
+            "missing": {"type": "array", "uniqueItems": True,
+                        "items": {"type": "string", "enum": list(intake_mod.ASPECT_IDS)},
+                        "description": "ids of the aspects of the requirement nobody has supplied, "
+                                       "exactly as written; [] when none is missing. " + aspects},
+            "problems": {"type": "array", "items": {"type": "string"},
+                         "description": "what is wrong with the requirement as given, one finding "
+                                        "per string; [] when nothing is"},
+            "unsafe": {"type": "array", "items": {"type": "string"},
+                       "description": "what in it would be unsafe to build, one per string; [] "
+                                      "when nothing is. Each entry stops the run for a person"},
+        }
+    elif voices == OPTIONS:
+        properties = {"options": {
+            "type": "array", "items": {"type": "string"}, "minItems": intake_mod.MIN_OPTIONS,
+            "uniqueItems": True,
+            "description": f"each option one string saying what it is and what it costs; at "
+                           f"least {intake_mod.MIN_OPTIONS} different ones; do not pick one"}}
+    elif voices == MODELS and node.grades_risk:
+        properties = {"risk": {"type": "string", "enum": list(policy.RISKS),
+                               "description": "your grade of this change's risk"}}
+    elif voices in (MODELS, SEATS):
+        said = "`undecided` counts as not passing" + (
+            ", and from the seat that holds a veto it is a veto" if voices == SEATS else "")
+        mapped = ", ".join(f"`{word}` is this node's `{branch}`"
+                           for word, branch in sorted(node.panel_branches.items()))
+        properties = {"verdict": {"type": "string", "enum": list(policy.VERDICTS),
+                                  "description": f"{said}. {mapped}" if mapped else said}}
+    elif node.answer_decides:
+        properties = {"verdict": {"type": "string", "enum": sorted(node.branches),
+                                  "description": "the branch you choose; the objective says what "
+                                                 "each decides"}}
+    elif node.id == "engineer_build":
+        properties = {
+            "module": {"type": "string",
+                       "description": "the id of the planned module this order built, exactly as "
+                                      "the plan names it; \"\" when nothing is left to build, or "
+                                      "when you could not build it"},
+            "error": {"type": "string",
+                      "description": "only when you could not build: why. The run stops there for "
+                                     "a person, whatever `module` says. Leave it out otherwise"}}
+    elif node.id == "pm_plan" and frontier:
+        properties = {"modules": {"type": "array", "items": {"type": "string"},
+                                  "description": "every module the plan now has, as short ids, "
+                                                 "one string each"}}
+    required = sorted(key for key in properties if key != "error")
+    properties["why"] = dict(WHY)
+    return {"type": "object", "properties": properties, "required": required,
+            "additionalProperties": False}
+
+
 def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
                seat: Optional[str] = None,
                carried: Optional[Sequence[Mapping[str, str]]] = None,
-               sent_back: Optional[Mapping[str, str]] = None) -> Dict[str, object]:
+               sent_back: Optional[Mapping[str, str]] = None, *,
+               voices: str) -> Dict[str, object]:
     spec = cfg.node_specs.get(node.id)
     if spec is None:
         raise EngineError(
@@ -939,12 +1026,14 @@ def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
         # information and is not any — and a model told only that it was refused will guess at what
         # to change, which is worse than being told nobody said.
         said.append(f"What they said: {why}" if why
-                    else "They gave no reason. Do not guess at one — say what you would need.")
+                    else "They gave no reason. Do not guess at one — say in `why` what you "
+                         "would need.")
         own = spec.get("instructions") or ()
         joiner = "\n"
         spec["instructions"] = (
             joiner.join([own] + said) if isinstance(own, str) else list(own) + said)
-    return workorder.render(node, spec, verdict, seat=seat)
+    return workorder.render(node, spec, verdict, seat=seat,
+                            answer_schema=_answer_schema(node, cfg, voices))
 
 
 def _workspace(node: graph.Node, cycle: int) -> str:
@@ -1013,6 +1102,81 @@ def _open(factory: SessionFactory, seat: Optional[str], model: Optional[str] = N
     return factory(**kwargs) if kwargs else factory()
 
 
+def _structure(value: object) -> object:
+    """A `reply.schema` with its descriptions dropped: what the answer must be, not how it is said."""
+    if isinstance(value, Mapping):
+        return {key: _structure(item) for key, item in value.items() if key != "description"}
+    if isinstance(value, (list, tuple)):
+        return [_structure(item) for item in value]
+    return value
+
+
+def _comparable(order: Mapping[str, object]) -> Dict[str, object]:
+    """An order as the reuse decision compares it: `reply` reduced to the structure of its schema.
+
+    The two fixed sentences and every description are runner wording, the same for every order that
+    shares a schema. Comparing them would make each future wording fix re-ask every journaled node —
+    under `serve`, every `engineer_build` again — the cost the reply-less rule below exists to
+    avoid. What the answer must *be* is compared; a changed key, word or requirement re-asks.
+    """
+    order = dict(order)
+    shown = order.get("reply")
+    if isinstance(shown, Mapping):
+        order["reply"] = _structure(shown.get("schema"))
+    return order
+
+
+def _conforms(answer: Mapping[str, object], schema: Mapping[str, object]) -> bool:
+    """Whether ``answer`` says what ``schema`` requires — the check a reply-less journal entry gets.
+
+    Loose where a mistake only costs an ask: an extra key is allowed, because backends answered with
+    `note` and `summary` long before `schema` existed. Strict where reuse would replay a refusal.
+    """
+    properties = schema.get("properties") or {}
+    if any(key not in answer for key in schema.get("required") or ()):
+        return False
+    for key, prop in properties.items():
+        if key == "why" or key not in answer:
+            continue
+        value = answer[key]
+        if prop.get("type") == "string":
+            if not isinstance(value, str) or ("enum" in prop and value not in prop["enum"]):
+                return False
+            continue
+        words = (prop.get("items") or {}).get("enum")
+        if not isinstance(value, (list, tuple)) or not all(isinstance(item, str) for item in value):
+            return False
+        if words is not None and any(item not in words for item in value):
+            return False
+        if len(set(value)) < int(prop.get("minItems") or 0):
+            return False
+    return True
+
+
+def _same_question(previous: Mapping[str, object], order: Mapping[str, object],
+                   answer: Mapping[str, object]) -> bool:
+    """Whether a journaled order asked what ``order`` asks, so that its ``answer`` may be reused.
+
+    **An order journaled before `reply` existed** (CHG-20260925-01) is compared with ``order`` minus
+    its `reply`, and its answer is reused only if it conforms to the schema this ask now carries.
+    Without the first half, the first resume after an upgrade re-asked every node — under `serve`,
+    which always resumes, every `engineer_build` again, in the worktree it had already written;
+    measured, 17 reused before the field and 0 after it. Without the second half the same rule
+    would keep an answer the walk refused reusable for good — a journal records `answered` before
+    any reader runs — so an operator upgrading to get a backend that answers in shape would stay
+    stuck on the old answer.
+
+    **Any other order** is compared with `_comparable`: whole, except the runner's own wording.
+
+    Permanent by design: journals on an unchanged brief keep their reply-less entries indefinitely,
+    because a reused entry is never rewritten.
+    """
+    if "reply" not in previous:
+        rest = {key: value for key, value in order.items() if key != "reply"}
+        return dict(previous) == rest and _conforms(answer, order["reply"]["schema"])
+    return _comparable(previous) == _comparable(order)
+
+
 def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object],
          seat: Optional[str] = None, journal: Optional[AskJournal] = None,
          ask_id: Optional[str] = None, node_id: str = "",
@@ -1042,7 +1206,7 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
         # a brand-new run on the same process hit the same file, because the journal has no run id
         # and an option order does not carry the brief. Checking here is what lets the next walk
         # re-ask and overwrite it.
-        if ((previous is None or dict(previous) == dict(order))
+        if ((previous is None or _same_question(previous, order, answered[ask_id]))
                 and _acceptable(accept, answered[ask_id])):
             # **Recorded here, where the decision is made.** The walk used to append to
             # `report.resumed` on `ask_id in already` — journal *membership* — while reuse also
@@ -1328,6 +1492,22 @@ def _reconciled(cfg: "RunConfig", report: "RunReport") -> str:
     return "conflict"
 
 
+def _build_failed(node_id: str, result: Mapping[str, object]) -> "EngineError":
+    """The stop for an engineer that reported a failure, whatever it put in `module`.
+
+    An empty `module` with a failure is "I could not build it", never "nothing left to build". A
+    named one with a failure (CHG-20260925-01) is not a build to record either: `record_module`
+    ticks, commits and writes the worklog, and before this it did all three for a module whose
+    engineer had said its tests failed — measured by the design panel's risk seat, on both paths.
+    """
+    name = str(result.get("module") or "")
+    said = f"answered module {name!r}" if name else "answered an empty module"
+    return EngineError(
+        f"node {node_id!r}: the engineer could not build — it {said} with "
+        f"{_went_wrong(result)!r}. A build that reports a failure is neither recorded as built "
+        f"nor read as 'nothing left to build': the run stops here so a person can read why.")
+
+
 def _module_built(report: "RunReport") -> str:
     """`yes` when this lap built something, `no` when the engineer said there was nothing
     (CHG-20260828-15).
@@ -1352,7 +1532,14 @@ def _module_built(report: "RunReport") -> str:
     for ask in reversed(report.asks):
         if ask.node_id != "engineer_build" or not isinstance(ask.result, Mapping):
             continue
-        return "yes" if str(ask.result.get("module") or "") else "no"
+        built = str(ask.result.get("module") or "")
+        if _went_wrong(ask.result):
+            # The same stop `_frontier` makes, on the path it does not reach (CHG-20260925-01).
+            # Without it, a run whose decisions are a list read "I could not build it" as "no" and
+            # walked on to `finished` — measured, 17 asks and nothing said — and read a named
+            # module with a failure as "yes", while the order's `reply` offers `error` for both.
+            raise _build_failed("module_built", ask.result)
+        return "yes" if built else "no"
     return "no"
 
 
@@ -1481,17 +1668,14 @@ def _frontier(node: graph.Node, report: "RunReport") -> str:
             # crashed, timed out or replied with prose must not be read as reporting completion.
             continue
         name = str(ask.result.get("module") or "")
-        if not name and _went_wrong(ask.result):
-            # "Nothing left to build" and "something failed" are two different claims, and an
-            # answer making both at once is not one this runner will resolve. It used to be read as
-            # completion: a seat drove `{"module": "", "error": "compiler failed"}` all the way to
-            # `merge` and `finished` with the planned module never written.
-            raise EngineError(
-                f"node {node.id!r}: the engineer answered with no module *and* reported a failure "
-                f"({_went_wrong(ask.result)!r}). Those are two different claims — 'there is "
-                f"nothing left to build' and 'I could not build it' — and this runner will not "
-                f"choose between them. Fix the backend so it answers one of them, or record the "
-                f"failure and stop.")
+        if _went_wrong(ask.result):
+            # An empty `module` with a failure is "I could not build it", never "nothing left".
+            # It used to be read as completion: a seat drove `{"module": "", "error": "compiler
+            # failed"}` all the way to `merge` and `finished` with the planned module never written.
+            # Since CHG-20260925-01 it is the answer the order's `reply` offers for a build that
+            # failed, so the message reports the failure rather than blaming the backend; and a
+            # *named* module with a failure stops too, instead of being counted as built.
+            raise _build_failed(node.id, ask.result)
         last_word = name
         if name:
             built.add(name)
@@ -2687,7 +2871,8 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                 silent: List[str] = []
                 for model in configured:
                     ask_id = f"{len(report.asks):03d}-{node.id}-{model}"
-                    result = _ask(factory, _order_for(node, cfg, verdict, carried=carried, sent_back=came_back),
+                    result = _ask(factory, _order_for(node, cfg, verdict, carried=carried, sent_back=came_back,
+                                                      voices=MODELS),
                                   opened, journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                                   answered=already, model=model, asked_before=asked_before,
                                   conversation=cfg.conversation, role=node.role, resumed=report.resumed,
@@ -2765,7 +2950,8 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                     verdicts, answers, silent = {}, [], []
                     for model in configured:
                         ask_id = f"{len(report.asks):03d}-{node.id}-{model}-r{rounds}"
-                        result = _ask(factory, _order_for(node, cfg, verdict, carried=carried, sent_back=came_back),
+                        result = _ask(factory, _order_for(node, cfg, verdict, carried=carried, sent_back=came_back,
+                                                          voices=MODELS),
                                       opened, journal=cfg.journal, ask_id=ask_id,
                                       node_id=node.id, answered=already, model=model,
                                       asked_before=asked_before,
@@ -2830,7 +3016,8 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                 for seat in policy.seat_names(seats):
                     ask_id = f"{len(report.asks):03d}-{node.id}-{seat}"
                     result = _ask(
-                        factory, _order_for(node, cfg, verdict, seat, sent_back=came_back), opened, seat=seat,
+                        factory, _order_for(node, cfg, verdict, seat, sent_back=came_back, voices=SURVEY),
+                        opened, seat=seat,
                         journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                         answered=already, asked_before=asked_before,
                         conversation=cfg.conversation, role=node.role, resumed=report.resumed,
@@ -2882,7 +3069,8 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                         spec["objective"] = request["question"]
                         answer = _ask(
                             factory,
-                            workorder.render(node, spec, verdict, seat=None),
+                            workorder.render(node, spec, verdict, seat=None,
+                                             answer_schema=_answer_schema(node, cfg, OPTIONS)),
                             opened, journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                             answered=already, asked_before=asked_before,
                             conversation=cfg.conversation, role=node.role, resumed=report.resumed,
@@ -2929,7 +3117,8 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                 before = len(opened)
                 for seat in policy.seat_names(seats):
                     result = _ask(
-                        factory, _order_for(node, cfg, verdict, seat, sent_back=came_back), opened, seat=seat,
+                        factory, _order_for(node, cfg, verdict, seat, sent_back=came_back, voices=SEATS),
+                        opened, seat=seat,
                         journal=cfg.journal, node_id=node.id, answered=already,
                         ask_id=f"{len(report.asks):03d}-{node.id}-{seat}",
                         asked_before=asked_before,
@@ -2960,7 +3149,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
 
                 ask_id = f"{len(report.asks):03d}-{node.id}"
                 result = _ask(
-                    factory, _order_for(node, cfg, verdict, sent_back=came_back), opened,
+                    factory, _order_for(node, cfg, verdict, sent_back=came_back, voices=ONE), opened,
                     journal=cfg.journal,
                     ask_id=ask_id, node_id=node.id, answered=already, model=model,
                     asked_before=asked_before,

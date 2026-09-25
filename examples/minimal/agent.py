@@ -4,7 +4,9 @@
 One process per ask. The work order arrives as JSON on **stdin**; the answer goes to **stdout** as
 JSON. That is the whole contract — nothing else is read, and a non-zero exit is a failed attempt.
 
-What each kind of node must answer is the part a README sentence cannot carry, so it is here:
+What each ask must answer travels in the order itself, under `reply`: the keys the run acts on and
+what each accepts, for the way that ask was dispatched. For this example — one voice per node, and
+`next_module` decided by "frontier" — it says:
 
   a decision node    {"verdict": "<branch>"}   one of the branches the node offers
   pm_plan            {"modules": [...]}        required when next_module is "frontier"
@@ -15,7 +17,11 @@ What each kind of node must answer is the part a README sentence cannot carry, s
                                                open (CHG-20260823-50)
   a seat on a panel  {"verdict": "pass"|"fail", "why": "..."}
   a seat at intake   {"missing": [...], "problems": [...], "unsafe": [...]}
-  anything else      any JSON object
+  anything else      any JSON object; nothing in it is acted on
+
+A decision node asked of a panel of models reads "pass" / "fail" / "undecided" instead of its
+branch names, and an engineer that could not build answers {"module": "", "error": "..."}; the
+order's `reply` says which applies.
 
 Run it:  runner --config examples/minimal/runner.yaml run --plan examples/minimal/plan.json --risk low
 """

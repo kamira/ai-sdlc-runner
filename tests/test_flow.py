@@ -28,6 +28,11 @@ SPEC = {
     "input_artifacts": [], "expected_outputs": [], "idempotence_probes": [], "workdir": ".",
 }
 
+#: The answer schema of an ask the run acts on nothing in — what a test that renders an order by
+#: hand passes when the answer is not what it is about (CHG-20260925-01).
+NOTHING_READ = {"type": "object", "additionalProperties": False, "required": [],
+                "properties": {"why": {"type": "string", "description": "anything to add"}}}
+
 #: Branches the runner picks itself, at the two decision nodes nobody is asked at.
 DECISIONS = {"next_module": ["module", "none"], "feedback": "done"}
 
@@ -235,14 +240,14 @@ def test_every_node_that_is_asked_to_decide_says_its_answer_decides():
 
 def test_an_order_has_exactly_the_closed_schema():
     order = workorder.render(graph.BY_ID["engineer_build"], SPEC,
-                             policy.verdict("self_verify", "low"))
+                             policy.verdict("self_verify", "low"), answer_schema=NOTHING_READ)
     assert sorted(order) == sorted(workorder.WORK_ORDER_FIELDS)
 
 
 def test_an_order_carries_no_harness_specific_field():
     """Checked by enumerating what is present against the whitelist — never by searching for banned
     words, which scores false positives on any real corpus."""
-    order = workorder.render(graph.BY_ID["qa_verify"], SPEC, policy.verdict("qa_verify", "low"))
+    order = workorder.render(graph.BY_ID["qa_verify"], SPEC, policy.verdict("qa_verify", "low"), answer_schema=NOTHING_READ)
     assert set(order["capabilities"]) == {"can_spawn", "can_write", "can_execute"}
     assert "tools" not in order and "model" not in order
 
@@ -250,21 +255,21 @@ def test_an_order_carries_no_harness_specific_field():
 def test_a_field_outside_the_contract_cannot_ride_in_through_the_caller():
     with pytest.raises(workorder.WorkOrderError) as exc:
         workorder.render(graph.BY_ID["pr"], dict(SPEC, model="something"),
-                         policy.verdict("pr", "low"))
+                         policy.verdict("pr", "low"), answer_schema=NOTHING_READ)
     assert "outside the contract" in str(exc.value)
 
 
 def test_a_missing_field_is_refused_rather_than_rendered_partial():
     spec = {k: v for k, v in SPEC.items() if k != "acceptance_predicate"}
     with pytest.raises(workorder.WorkOrderError) as exc:
-        workorder.render(graph.BY_ID["pr"], spec, policy.verdict("pr", "low"))
+        workorder.render(graph.BY_ID["pr"], spec, policy.verdict("pr", "low"), answer_schema=NOTHING_READ)
     assert "acceptance_predicate" in str(exc.value)
 
 
 def test_every_order_carries_the_permanent_halts_in_full():
     """Filtering them to the ones a node might hit needs a judgement about what the work will touch,
     and every omission is a gate quietly disarmed."""
-    order = workorder.render(graph.BY_ID["merge"], SPEC, policy.verdict("merge", "low"))
+    order = workorder.render(graph.BY_ID["merge"], SPEC, policy.verdict("merge", "low"), answer_schema=NOTHING_READ)
     assert order["permanent_halts"] == list(policy.PERMANENT_HALTS)
 
 
@@ -272,8 +277,8 @@ def test_a_seat_order_differs_only_in_its_instructions():
     """What makes several seats a cross-check rather than one opinion asked repeatedly."""
     verdict = policy.verdict("lead_review", "low")
     node = graph.BY_ID["lead_review"]
-    a = workorder.render(node, SPEC, verdict, seat="conformance")
-    b = workorder.render(node, SPEC, verdict, seat="defect")
+    a = workorder.render(node, SPEC, verdict, seat="conformance", answer_schema=NOTHING_READ)
+    b = workorder.render(node, SPEC, verdict, seat="defect", answer_schema=NOTHING_READ)
     assert a["instructions"] != b["instructions"]
     # `seat` is the one other field that differs, and has to: adjudication counts verdicts by seat,
     # so an answer nobody can attribute to a seat cannot be counted towards a majority.
@@ -286,7 +291,7 @@ def test_a_seat_order_differs_only_in_its_instructions():
 def test_an_unknown_seat_is_refused():
     with pytest.raises(workorder.WorkOrderError):
         workorder.render(graph.BY_ID["lead_review"], SPEC,
-                         policy.verdict("lead_review", "low"), seat="nobody")
+                         policy.verdict("lead_review", "low"), seat="nobody", answer_schema=NOTHING_READ)
 
 
 # --------------------------------------------------------------------------------------

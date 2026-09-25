@@ -38,6 +38,15 @@ from . import engine, models as models_mod, graph, policy, settings as settings_
 
 DEFAULT_CONFIG = "config/runner.yaml"
 
+#: Seconds one attempt at one ask may take before its process is killed, when `runner.yaml` names
+#: no `agent_timeout` (CHG-20260925-01). A **ceiling for a backend that has hung**, not an estimate
+#: of how long an ask takes: `engineer_build` asks for a whole module, and a current agentic model
+#: spends longer than the old 600 on that as a matter of course. What the kill costs is why the
+#: ceiling sits high — the direct child is killed and anything it started may keep running, the
+#: files written so far stay, a retry starts on top of them, and with no retry left the run stops
+#: with the question pending.
+DEFAULT_AGENT_TIMEOUT = 3600
+
 
 def _where(path: object) -> str:
     """A path recorded so it still means something in another shell.
@@ -293,7 +302,7 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
     """
     seat_models = seat_models or {}
     default = config.get("agent_command")
-    timeout = int(config.get("agent_timeout", 600))
+    timeout = int(config.get("agent_timeout", DEFAULT_AGENT_TIMEOUT))
     retries = int(config.get("agent_retries", 0))
     # Where the command runs (CHG-20260823-48). `load_config` defaults this to the directory the
     # runner.yaml is in, so a relative path in `agent_command` means one thing no matter where the

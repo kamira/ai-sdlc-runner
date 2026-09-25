@@ -1447,7 +1447,7 @@ def _summary(turn: Mapping[str, object]) -> str:
         # — which is most review answers, since `{"missing": [], "problems": []}` means "nothing
         # wrong". A log of 150 lines reading "answered" is not a log (CHG-20260823-39).
         result = turn.get("result") or {}
-        for key in ("verdict", "module", "modules", "note", "why"):
+        for key in ("verdict", "module", "modules", "options", "note"):
             if key in result and result[key] not in (None, "", [], {}):
                 said = json.dumps(result[key], ensure_ascii=False).strip('"')
                 extra = f" · {result['why']}" if key == "verdict" and result.get("why") else ""
@@ -1458,6 +1458,11 @@ def _summary(turn: Mapping[str, object]) -> str:
         for key in empties:
             if result[key]:
                 return f"{key}: {json.dumps(result[key], ensure_ascii=False)[:80]}"
+        # `why` last, after everything the run acts on (CHG-20260925-01). Every order now invites
+        # it, so reading it first would put a seat's aside where its intake finding used to be.
+        if result.get("why") not in (None, "", [], {}):
+            said = json.dumps(result["why"], ensure_ascii=False).strip('"')
+            return f"why: {said}"[:110]
         return "answered"
     if kind == DECISION:
         return f"{turn.get('decision')} at {turn.get('at_node')}"

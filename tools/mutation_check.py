@@ -644,8 +644,8 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "claim-referent", "a documented field count may drift from what it names again",
         REPO / "docs" / "structure" / "data.md",
+        '''Eighteen fields, listed in `workorder.WORK_ORDER_FIELDS`''',
         '''Seventeen fields, listed in `workorder.WORK_ORDER_FIELDS`''',
-        '''Sixteen fields, listed in `workorder.WORK_ORDER_FIELDS`''',
         "tests/test_documented_numbers.py"),
 
     Mutation(
@@ -1616,9 +1616,14 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "frontier", "an engineer reporting a failure is read as 'nothing left' again",
         SRC / "engine.py",
-        '''        if not name and _went_wrong(ask.result):''',
-        '''        if False:''',
-        "tests/test_frontier_latch.py"),
+        # Re-anchored by CHG-20260925-01, which widened the condition to any reported failure.
+        '''        if _went_wrong(ask.result):
+            # An empty `module` with a failure is "I could not build it", never "nothing left".''',
+        '''        if False:
+            # An empty `module` with a failure is "I could not build it", never "nothing left".''',
+        # Named since CHG-20260925-01: `module_built` now stops a walk first, so only a direct
+        # call reaches this check.
+        "tests/test_frontier_latch.py::test_the_frontier_itself_stops_on_a_build_that_reported_a_failure"),
 
     Mutation(
         "examples", "a --seat-model command is relocated into the config's directory again",
@@ -3406,7 +3411,8 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         'modules', 'silence is read as a build',
         SRC / 'engine.py',
-        '        return "yes" if str(ask.result.get("module") or "") else "no"',
+        # Re-anchored by CHG-20260925-01, which named the value `built` for the failure check.
+        '        return "yes" if built else "no"',
         '        return "yes"',
         'tests/test_module_built.py'),
 
@@ -4084,6 +4090,145 @@ CHG-20260907-28 and built by no record yet.''',
         "the second attachment for something the wait did not do")''',
         '''    first.join(10)''',
         "tests/test_server.py::test_every_bounded_wait_says_when_it_did_not_complete"),
+
+    # ── reply-contract (CHG-20260925-01) ─────────────────────────────────────────────────────
+    #
+    # Every order carries `reply.schema`, built from the reader that will read the answer. Each
+    # mutation below cuts one wire between the two; the walks in `test_reply.py` answer from the
+    # schema alone, so a wrong schema stops them. Named per test so the failure is the right one.
+    # No `after` here is the length of its `before`: two same-size rewrites inside one second let
+    # pytest import the previous mutation's `.pyc`, and the first draft's two `enum` swaps did
+    # exactly that — one reported NOT CAUGHT on alternate runs.
+    Mutation(
+        "reply-contract", "a panel voice is told the node's branch names instead of the panel's words",
+        SRC / "engine.py",
+        '''        properties = {"verdict": {"type": "string", "enum": list(policy.VERDICTS),''',
+        '''        properties = {"verdict": {"type": "string", "enum": sorted(node.branches or {}),''',
+        "tests/test_reply.py::test_it_finishes_with_every_model_panel_node_asked_of_two_models"),
+
+    Mutation(
+        "reply-contract", "one voice is told the panel's words instead of the node's branches",
+        SRC / "engine.py",
+        '''        properties = {"verdict": {"type": "string", "enum": sorted(node.branches),''',
+        '''        properties = {"verdict": {"type": "string", "enum": [*policy.VERDICTS],''',
+        "tests/test_reply.py::test_an_agent_answering_from_reply_alone_finishes_the_default_flow"),
+
+    Mutation(
+        "reply-contract", "a grading panel is asked for a verdict instead of a grade",
+        SRC / "engine.py",
+        '''    elif voices == MODELS and node.grades_risk:''',
+        '''    elif False:''',
+        "tests/test_reply.py::test_it_finishes_with_every_model_panel_node_asked_of_two_models"),
+
+    Mutation(
+        "reply-contract", "the option ask is told nothing is read",
+        SRC / "engine.py",
+        '''    elif voices == OPTIONS:''',
+        '''    elif False:''',
+        "tests/test_reply.py::test_the_option_ask_answered_from_reply_is_accepted"),
+
+    Mutation(
+        "reply-contract", "an intake seat is told nothing is read",
+        SRC / "engine.py",
+        '''    if voices == SURVEY:''',
+        '''    if False:''',
+        "tests/test_reply.py::test_an_agent_answering_from_reply_alone_finishes_the_default_flow"),
+
+    Mutation(
+        "reply-contract", "the engineer is not asked which module it built",
+        SRC / "engine.py",
+        '''    elif node.id == "engineer_build":''',
+        '''    elif False:''',
+        "tests/test_reply.py::test_it_finishes_under_a_frontier_decision_where_module_and_modules_are_read"),
+
+    Mutation(
+        "reply-contract", "the plan is not asked for its modules under a frontier decision",
+        SRC / "engine.py",
+        '''    elif node.id == "pm_plan" and frontier:''',
+        '''    elif False:''',
+        "tests/test_reply.py::test_it_finishes_under_a_frontier_decision_where_module_and_modules_are_read"),
+
+    Mutation(
+        "reply-contract", "a frontier decision stops being noticed",
+        SRC / "engine.py",
+        '''    frontier = any(value == FRONTIER for value in (cfg.decisions or {}).values())''',
+        '''    frontier = False''',
+        "tests/test_reply.py::test_it_finishes_under_a_frontier_decision_where_module_and_modules_are_read"),
+
+    Mutation(
+        "reply-contract", "a model panel's asks are rendered as if one voice answered",
+        SRC / "engine.py",
+        '''                    result = _ask(factory, _order_for(node, cfg, verdict, carried=carried, sent_back=came_back,
+                                                      voices=MODELS),''',
+        '''                    result = _ask(factory, _order_for(node, cfg, verdict, carried=carried, sent_back=came_back,
+                                                      voices=ONE),''',
+        "tests/test_reply.py::test_it_finishes_with_every_model_panel_node_asked_of_two_models"),
+
+    Mutation(
+        "reply-contract", "a build the engineer says failed is read as nothing built, and walks on",
+        SRC / "engine.py",
+        '''        if _went_wrong(ask.result):
+            # The same stop `_frontier` makes, on the path it does not reach (CHG-20260925-01).''',
+        '''        if False:
+            # The same stop `_frontier` makes, on the path it does not reach (CHG-20260925-01).''',
+        "tests/test_reply.py::test_a_build_the_engineer_says_failed_stops_the_run_under_either_decision"),
+
+    Mutation(
+        "reply-contract", "a journal written before `reply` is re-asked in full on the first resume",
+        SRC / "engine.py",
+        '''    if "reply" not in previous:''',
+        '''    if False:''',
+        "tests/test_reply.py::test_a_journal_written_before_reply_resumes_without_asking_again"),
+
+    Mutation(
+        "reply-contract", "a reply-less answer the walk refused is replayed for good",
+        SRC / "engine.py",
+        '''        return dict(previous) == rest and _conforms(answer, order["reply"]["schema"])''',
+        '''        return dict(previous) == rest''',
+        "tests/test_reply.py::test_a_pre_reply_answer_the_walk_refused_is_asked_again"),
+
+    Mutation(
+        "reply-contract", "a changed schema is reused as if nothing changed",
+        SRC / "engine.py",
+        '''    return _comparable(previous) == _comparable(order)''',
+        '''    return ({k: v for k, v in previous.items() if k != "reply"}
+            == {k: v for k, v in order.items() if k != "reply"})''',
+        "tests/test_reply.py::test_a_changed_schema_is_asked_again_even_when_nothing_else_changed"),
+
+    Mutation(
+        "reply-contract", "rewording the runner's own sentences re-asks every journaled node",
+        SRC / "engine.py",
+        '''        order["reply"] = _structure(shown.get("schema"))''',
+        '''        order["reply"] = shown''',
+        "tests/test_reply.py::test_the_runners_own_wording_does_not_ask_again"),
+
+    Mutation(
+        "reply-contract", "a schema key outside the subset reaches a backend",
+        SRC / "workorder.py",
+        '''    unknown = [k for k in prop if k not in PROPERTY_KEYS]''',
+        '''    unknown = []''',
+        "tests/test_reply.py::test_a_schema_outside_the_subset_is_refused"),
+
+    Mutation(
+        "reply-contract", "`why` hides the intake finding in the conversation again",
+        SRC / "conversations.py",
+        '''        for key in ("verdict", "module", "modules", "options", "note"):''',
+        '''        for key in ("verdict", "module", "modules", "options", "note", "why"):''',
+        "tests/test_reply.py::test_why_does_not_hide_what_the_run_acted_on"),
+
+    Mutation(
+        "reply-contract", "the default timeout stops reaching the process",
+        SRC / "cli.py",
+        '''    timeout = int(config.get("agent_timeout", DEFAULT_AGENT_TIMEOUT))''',
+        '''    timeout = int(config.get("agent_timeout", 600))''',
+        "tests/test_agent_timeout.py::test_with_no_timeout_configured_the_process_gets_the_default"),
+
+    Mutation(
+        "reply-contract", "the default timeout drifts from what README and runner.yaml say",
+        SRC / "cli.py",
+        '''DEFAULT_AGENT_TIMEOUT = 3600''',
+        '''DEFAULT_AGENT_TIMEOUT = 600''',
+        "tests/test_agent_timeout.py::test_the_documented_timeout_is_the_one_the_code_uses"),
 ]
 
 

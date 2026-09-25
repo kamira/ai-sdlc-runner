@@ -43,10 +43,17 @@ is absent.
 
 ```yaml
 agent_command: ["claude", "-p"]   # one process per ask; the work order arrives on stdin
-agent_timeout: 600
+agent_timeout: 3600                # seconds per attempt; a ceiling for a hung backend, not an estimate
 agent_retries: 0                  # retries are for a backend that FAILED TO ANSWER, never for an
-                                  # answer somebody dislikes — see policy on retries below
+                                  # answer somebody dislikes
 ```
+
+The command runs with nobody at the keyboard. Grant its tools up front, and only the ones the
+work needs — for `claude -p`, its permission settings — or a tool that needs approval is refused
+and the model ends by asking for it, which no order can fix. Where no sandbox mechanism is
+available (the run reports it), those grants are the only boundary around what the command can
+touch. A `runner.yaml` that still says `agent_timeout: 600` keeps 600: a value
+written in the file always wins over the default.
 
 ---
 
@@ -529,20 +536,28 @@ That **visits 21 of the 31 nodes** — eight are failure paths a green run never
 asks 17 questions, writes a real `examples/minimal/greet.py` beside the agent that wrote it, and
 finishes. It is three
 files: [`plan.json`](examples/minimal/plan.json) (15 node specs and 15 operation blocks),
-[`runner.yaml`](examples/minimal/runner.yaml), and [`agent.py`](examples/minimal/agent.py) — which
-is also the only place **the answer contract** is written down:
+[`runner.yaml`](examples/minimal/runner.yaml), and [`agent.py`](examples/minimal/agent.py), which
+answers every ask the minimal flow makes.
 
-| The node | must answer |
+**The answer contract travels in the order.** Every work order carries `reply`: the keys the run
+acts on in that answer and what each accepts — computed for the path the ask was dispatched on,
+because a panel reads different words from a single voice — plus two fixed sentences, one on the
+answer's form and one saying that no person is attached to the ask. What `reply.keys` says:
+
+| The ask | `reply.keys` |
 |---|---|
-| a decision node | `{"verdict": "<branch>"}` — one the node offers |
-| `pm_plan` | `{"modules": [...]}` when `next_module` is `"frontier"` |
-| `engineer_build` | `{"module": "<id>"}` — or `{"module": ""}` for **nothing left to build**, which ends the module loop. Omitting the key is not the same thing: it means the question was not answered, and the loop stays open |
-| a seat on a panel | `{"verdict": "pass"\|"fail", "why": "…"}` |
-| a seat at intake | `{"missing": [...], "problems": [...], "unsafe": [...]}` |
-| anything else | any JSON object |
+| a decision node, one voice | `verdict`: one of the branches the node offers |
+| a decision node, a panel of models | `verdict`: `pass`, `fail` or `undecided` |
+| `lead_assess`, a panel of models | `risk`: `low`, `medium` or `high` |
+| a seat on the review panel | `verdict`: `pass`, `fail` or `undecided` |
+| a seat at intake | `missing` (aspect ids), `problems`, `unsafe` — lists; an empty one says none |
+| the intake option ask | `options`: at least 3 distinct |
+| `engineer_build` | `module` — or `""` for **nothing left to build**, which ends the module loop. Omitting the key is not the same thing: it means the question was not answered, and the loop stays open. `error` says the build failed, and the run stops there for a person, whatever `module` says |
+| `pm_plan` | `modules`, when a decision is `"frontier"` |
+| anything else | `{}` — nothing in the answer is acted on |
 
-The work order arrives as JSON on **stdin**; the answer goes to **stdout** as JSON. A non-zero exit
-is a failed attempt.
+The work order arrives as JSON on **stdin**; the answer goes to **stdout** as one JSON object. A
+non-zero exit is a failed attempt.
 
 `decisions.next_module` may be `"frontier"`, which reads two recorded facts — what the PM most
 recently planned, and what the engineers have built — instead of a list written before the first
@@ -793,7 +808,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 2363 tests
+pytest -q          # 2395 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

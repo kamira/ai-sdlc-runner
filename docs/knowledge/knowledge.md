@@ -159,6 +159,13 @@ Two traps this repo has already fallen into, both recorded so the next reader do
   on its first run. Two instruments work: a closed key set, and a **sentinel** injected through the
   field you fear leaking, asserted absent from the serialised order by exact value.
 
+**`reply`, interpreted (CHG-20260925-01).** The order carries the schema of the answer its reader
+will act on. That schema reflects one consequence of dispatch — a panel reads `pass`/`fail`/
+`undecided` where one voice reads the node's branch names — because the answer must use those
+words, and an order that hides them makes a backend guess. It names no model, no route, no tool and
+no deadline, and it is built from runner constants and the graph only; `tests/test_reply.py` pins
+both with a sentinel. A later reader applying this entry strictly should not remove it.
+
 **Nine of thirteen declared roles cannot be rendered at all**, and that is deliberate: the shipped
 role table has four rows, and `orchestrator`, `integrator`, `reviewer` and the six `seat-*` roles
 have no capability data anywhere in the store. Rendering one is a hard error naming the role.

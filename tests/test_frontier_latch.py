@@ -205,9 +205,9 @@ FAILING_AGENT = AGENT.replace(
 def test_an_engineer_that_reports_a_failure_is_not_read_as_finished(tmp_path):
     """A seat drove exactly this to `merge` and `finished` with the planned module never written.
 
-    `{"module": "", "error": "compiler failed"}` makes two claims at once — "there is nothing left
-    to build" and "I could not build it" — and this runner refuses to choose between them, the same
-    way the importer refuses two conversations claiming one id.
+    `{"module": "", "error": "compiler failed"}` says "I could not build it" — never "there is
+    nothing left to build" — and since CHG-20260925-01 it is the shape the order's `reply` offers
+    for a build that failed. The run stops there for a person rather than finishing.
 
     Asserted against the run's **outcome**, not against a message: the point is that it does not
     finish.
@@ -218,8 +218,8 @@ def test_an_engineer_that_reports_a_failure_is_not_read_as_finished(tmp_path):
 
     assert "state:         finished" not in out, (
         f"an engineer reporting a failure produced a finished run:\n{out[-900:]}")
-    assert "two different claims" in out or "will not choose between them" in out, (
-        f"the refusal does not say what was contradictory:\n{out[-900:]}")
+    assert "could not build" in out and "compiler failed" in out, (
+        f"the stop does not say the build failed, or why:\n{out[-900:]}")
 
 
 @pytest.mark.parametrize("evidence", [
@@ -263,3 +263,21 @@ def test_ending_the_loop_on_the_engineers_word_is_recorded(tmp_path):
     assert "nothing left to build" in said, report.dispatches
     assert "alpha" in said and "beta" in said, report.dispatches
     assert "no node after this one checks it" in said, report.dispatches
+
+
+@pytest.mark.parametrize("module", ["", "alpha"], ids=["no module", "a named module"])
+def test_the_frontier_itself_stops_on_a_build_that_reported_a_failure(module):
+    """On the shipped graph `module_built` stops on this first (CHG-20260925-01), so a walk no
+    longer reaches this check. It stays, and is pinned here directly, so that `_frontier` does not
+    count a failed build as built if a graph ever reaches it another way."""
+    from ai_sdlc_runner import engine, graph
+
+    class _Ask:
+        def __init__(self, node_id, result):
+            self.node_id, self.result = node_id, result
+
+    report = engine.RunReport()
+    report.asks = [_Ask("pm_plan", {"modules": ["alpha", "beta"]}),
+                   _Ask("engineer_build", {"module": module, "error": "tests fail"})]
+    with pytest.raises(engine.EngineError, match="could not build"):
+        engine._frontier(graph.BY_ID["next_module"], report)
