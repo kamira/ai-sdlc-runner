@@ -22,9 +22,9 @@ two writes leaves the question on disk exactly as it was asked.
 |-------|------|------------|-------------|
 | `ask_id` | str | required, unique | `<sequence>-<node_id>[-<seat>]` — sorts into flow order |
 | `node_id` | str | required | Which node asked |
-| `status` | str (enum) | `pending` \| `answered` | `pending` is written first; `answered` replaces it |
+| `status` | str (enum) | `pending` \| `answered` \| `refused` | `pending` is written first; `answered` replaces it, or `refused` when the ask's own check would not take the answer (the answer is kept) |
 | `order` | object | required | The work order verbatim — the question itself, not a summary of it |
-| `result` | object | present when answered | Whatever the backend replied |
+| `result` | object | present when answered or refused | Whatever the backend replied |
 
 A reconstructed approximation of a question is not the question. The order is stored whole so a
 resumed run re-asks the same thing rather than something like it.
@@ -33,7 +33,7 @@ resumed run re-asks the same thing rather than something like it.
 
 ### The work order — a closed schema
 
-Seventeen fields, listed in `workorder.WORK_ORDER_FIELDS`, and a field outside the list is refused
+Eighteen fields, listed in `workorder.WORK_ORDER_FIELDS`, and a field outside the list is refused
 rather than passed through. What is **not** in it matters as much as what is: no tool list, no model
 name, no allowlist, no session context, and nothing any previous answer touched. A harness detail in
 the order is a harness the order cannot outlive.
@@ -49,6 +49,7 @@ the order is a harness the order cannot outlive.
 | `policy_verdict` | the gate's decision, already resolved — a node never re-derives it |
 | `capabilities` | `can_spawn` / `can_write` / `can_execute` for this role |
 | `permanent_halts` | all six, always, never filtered to "the ones this node might hit" |
+| `reply` | how to answer: the keys the run acts on in this answer and what each accepts, for the path the ask was dispatched on, plus two fixed sentences — the answer's form, and that no person is attached (CHG-20260925-01) |
 
 The order is what a backend receives, and it receives it through `workorder.to_json` — sorted keys,
 LF, UTF-8 — so the same order is the same bytes on every machine.
@@ -112,7 +113,7 @@ because it is the only one that is a fact rather than a claim.
 - **seat**: `conformance` (veto) `| defect | risk | idiom`
 - **gate phase**: `before | after`
 - **node kind**: `step | decision | loop | terminal`
-- **ask status**: `pending | answered`
+- **ask status**: `pending | answered | refused`
 
 ### config/settings.json
 

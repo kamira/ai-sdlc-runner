@@ -28,6 +28,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from ai_sdlc_runner import (  # noqa: E402
     attachments, conversations, engine, graph, models, policy, settings, workorder,
 )
+from test_flow import NOTHING_READ  # noqa: E402
 
 PAGE = ROOT / "docs" / "SCHEMAS.md"
 TEXT = PAGE.read_text(encoding="utf-8")
@@ -74,8 +75,10 @@ def test_the_closed_count_is_the_number_of_schemas_that_are_actually_closed():
     node = graph.BY_ID["engineer_build"]
     verdict = engine.resolve_verdict(node, "low")
     for extra in ({**good, "surprise": 1},):
-        with pytest.raises(Exception):
-            workorder.render(node, extra, verdict)
+        # Narrowed from `Exception` (CHG-20260925-01): once `render` grew a required keyword, a
+        # call missing it raised `TypeError` and satisfied this with the closed check disabled.
+        with pytest.raises(workorder.WorkOrderError, match="outside the contract"):
+            workorder.render(node, extra, verdict, answer_schema=NOTHING_READ)
     closed += 2                                   # node spec and work order share `_check`
 
     # the model registry, entry and envelope

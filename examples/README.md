@@ -4,7 +4,7 @@ Three, and they answer different questions. Each has its own README; this page i
 
 | | what it shows | read |
 |---|---|---|
-| **minimal** | the smallest plan this runner accepts, and the **answer contract** — which node must answer what | [`minimal/README.md`](minimal/README.md) |
+| **minimal** | the smallest plan this runner accepts, and an agent that answers what its orders' **answer contract** (`reply`) asks | [`minimal/README.md`](minimal/README.md) |
 | **tide-spa** | one brief run five times, each differing by a single field, to show **where a run stops and why**. A real single-page app comes out of the first one | [`tide-spa/README.md`](tide-spa/README.md) |
 | **weather-spa** | the **console** path: a brief typed by a person, a gate approved by clicking, and the refusals that only exist there | [`weather-spa/README.md`](weather-spa/README.md) |
 

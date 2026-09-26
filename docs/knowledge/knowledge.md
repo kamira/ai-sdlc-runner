@@ -14,7 +14,7 @@
 | KN-2 | pattern | contract / version lock | Per-project `.sdlc-lock.json` locks major.minor; `runner.yaml` `contract_version` is a first-run default only; version bumps never touch existing locks; `migrate` is explicit & validating (patch=auto, minor/major=migrate-required), never silent auto-migrate. | **superseded by CHG-20260823-01 — no contract, no per-project lock** |
 | KN-3 | pattern | dashboard / TUI | Terminal-only stdlib `curses` with a numbered / non-TTY fallback; panels computed on real events and cached (no per-keystroke I/O); red-line gates still require explicit human approval. | **superseded by CHG-20260823-01 — the dashboard went with the four-stage path; only `tui`'s selector and high-risk confirmation remain** |
 | KN-4 | pattern | toolchain / handshake step 0 | `requirements-dev.txt` is a DERIVED, probe-facing view of `pyproject.toml`'s extras: **bare distribution names only** — the probe returns `NOT_RUN` (not PASS) for version ranges, `-e`/`-r` lines, URLs, extras and markers, so "adding the version floors back" silently disables the gate. | active |
-| KN-5 | pattern | node-engine / work order | A work order carries **exactly** the closed D5 field set and nothing else: no tool names, no allowlist, no skill-loading line, no session or prior-turn context, no model/dispatch settings. Bodies are never inlined — paths and anchors only — and a content element id never appears without the path and anchor it resolves to. Routing (which model answers) lives in the dispatcher, never in the order. | **still holds in substance; the order's fields changed with CHG-20260823-01** |
+| KN-5 | pattern | node-engine / work order | A work order carries **exactly** the closed D5 field set and nothing else: no tool names, no allowlist, no skill-loading line, no session or prior-turn context, no model/dispatch settings. Bodies are never inlined — paths and anchors only — and a content element id never appears without the path and anchor it resolves to. Routing (which model answers) lives in the dispatcher, never in the order. | **still holds in substance; the order's fields changed with CHG-20260823-01; `reply` carries the answer's words for the dispatch path — interpreted in the entry, CHG-20260925-01** |
 | KN-6 | pattern | node-engine / idempotence | An operation may be an **effect** only if it leaves a probeable postcondition in the ledger, git or the forge; constructing one without a probe raises. Probes describe the **postcondition, not the action**, and read the world rather than any record the runner wrote. Unanswerable **raises** — never `False`. Nothing already true is re-applied, before or after the frontier. | active |
 | KN-7 | pattern | node-engine / sessions | Every **asking** node gets its own session: opened, asked once, closed in a `finally`; a factory that returns a session it already returned is refused. A multi-seat review is several asks, so each seat is its own session. The question is journalled **before** the session opens, so a dropped session costs the answer and not the question. | active |
 | KN-8 | pattern | governance / wiring | A mechanism is not built until something calls it. Three rounds here shipped a correct piece that nothing reached — an engine ignoring its own policy verdict, an `adjudicate` no caller invoked, a `PERMANENT_HALTS` list printed into every order and never checked — and each passed its own suite. The test that matters is the one that fails when the wire is cut. | active |
@@ -27,6 +27,7 @@
 | KN-11 | pattern | governance / trust boundaries | Read the **fact**, not the claim. A declaration is what somebody says an operation is; a target (`kubectl apply -f prod/`, `secrets/key.pem`) is what it will touch. Facts may overrule claims; prose may not. And where a trust boundary cannot be removed, **record it** — an operation nothing verified belongs in the report, not in silence. | active |
 | KN-10 | pattern | governance / red lines | A blacklist cannot be a safety guarantee. Two verifiers independently broke all six permanent halts with ordinary English containing no listed word, and a plan that simply **omitted** its operations was checked against nothing at all. The fix is the inversion: each operation **declares** its kind from a closed set, an undeclared one is refused, and word lists are demoted to a backstop that can only add a stop. | active |
 | KN-9 | pattern | governance / vocabularies | A vocabulary that classifies must be **closed**: an unrecognised value is a failure, never a pass. The ledger lint knew only "built", so `accepted`, `merged`, `completed` and `完成` all sailed past it with no acceptance record. And read the **field**, not the prose around it — `draft — all 9 tasks built` is a draft. | active |
+| DIR-1 | directive | governance / review | When `codex` cannot be reached, a review panel is **two `fable` seats and two `opus` seats, each in its own session** — independent, then cross-read. `codex` rejoins the panel as soon as it can be reached. | active |
 
 <!-- Append DIR-n (user directives) / KN-n (observed patterns) as anchored sections below and add
      one INDEX row each; register any new tag in vocabulary.json first. -->
@@ -157,6 +158,13 @@ Two traps this repo has already fallen into, both recorded so the next reader do
   **pr**inciples", `merge` inside "E**merge**ncy" — and it failed the guard test written for task 2
   on its first run. Two instruments work: a closed key set, and a **sentinel** injected through the
   field you fear leaking, asserted absent from the serialised order by exact value.
+
+**`reply`, interpreted (CHG-20260925-01).** The order carries the schema of the answer its reader
+will act on. That schema reflects one consequence of dispatch — a panel reads `pass`/`fail`/
+`undecided` where one voice reads the node's branch names — because the answer must use those
+words, and an order that hides them makes a backend guess. It names no model, no route, no tool and
+no deadline, and it is built from runner constants and the graph only; `tests/test_reply.py` pins
+both with a sentinel. A later reader applying this entry strictly should not remove it.
 
 **Nine of thirteen declared roles cannot be rendered at all**, and that is deliberate: the shipped
 role table has four rows, and `orchestrator`, `integrator`, `reviewer` and the six `seat-*` roles
@@ -633,3 +641,22 @@ days.
 **Left open on purpose:** whether the suite found 3 defects unprompted or 4. Settling it needs
 somebody who knows what the fifth item was; the user has decided the numbers stay as they are until
 then.
+
+## DIR-1 — The panel when `codex` cannot be reached
+
+*tags: governance · source: the user, 2026-09-25, CHG-20260925-01 · tier: directive*
+
+The user's words: *"如果沒辦法codex審議則由兩個各自獨立session fable和兩個各自獨立session的opus進行審議 /
+除非有辦法支援的codex"* — if `codex` cannot review, the review is done by two `fable` seats and two
+`opus` seats, each in its own independent session, unless there is a way to support `codex`.
+
+**The rule.** The recent panels here were two engines in separate sessions, `fable` and `codex`
+(ACC-20260907-25, ACC-20260906-03). Where `codex` cannot be reached — no binary, no credentials, or
+its API host blocked — the panel is four seats: two `fable`, two `opus`, each opened fresh and told
+it will not see the others, then each cross-reads the other three and marks every finding agree or
+disagree. A disagreement is escalated, never averaged. The record says plainly that `codex` was
+not on the panel and why, as ACC-20260907-24 did for a reduced panel.
+
+**What it does not relax.** It is a composition, not a quorum: four seats are asked, all four must
+report, and "all seats could not verify" is not a pass. It does not replace KN-14 — the tree the
+seats read is frozen until every seat has reported, cross-read included.

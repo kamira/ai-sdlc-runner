@@ -145,8 +145,9 @@ that hands back a session it already returned is refused. Continuity breeds bias
 see the previous exchange coasts on it, and a reviewer who has already seen the answer is not a
 second opinion.
 
-The question is written down as `pending` **before** its session opens and marked `answered` after,
-for every asking role. A dropped session costs the answer and not the question.
+The question is written down as `pending` **before** its session opens and marked `answered` after
+— or `refused`, keeping what was said, when the ask's own check would not take the answer — for
+every asking role. A dropped session costs the answer and not the question.
 
 `--seat-model` routes a named seat to a different command: the same question, different answerers,
 which is what makes cross-model review real. The routing lives in the CLI and never in the order.
@@ -159,7 +160,9 @@ default unusable. It compares **backends**, not models — two wrappers around t
 diverse, and the runner cannot see past the command it ran.
 
 **Resuming.** `runner run --resume --ask-journal DIR` continues an interrupted run: what the journal
-already answered is not asked again, and the pending question is re-asked verbatim. Resuming is a
+already answered, to the same question, is not asked again — unless the ask's own reader would
+refuse it now, and then neither it nor anything journaled after it is reused — and the pending
+question is re-asked verbatim. Resuming is a
 decision — without the flag, a journal that happens to exist changes nothing, because a run silently
 continuing somebody else's is worse than one starting over.
 
@@ -190,9 +193,10 @@ they made.
   `kind`), `seat_models` and an optional `ship` block. `--risk` and `--seat-model` override the
   plan's own values. The config carries `agent_command` and `agent_timeout` — dispatch settings
   only.
-- A backend reads the work order as JSON on stdin and prints its answer as JSON. At a decision node
-  the answer must name its branch (`branch`, `verdict` or `outcome`); a non-zero exit means it
-  answered nothing, and the question stays pending.
+- A backend reads the work order as JSON on stdin and prints its answer as one JSON object — the
+  one the order's `reply.schema` describes (CHG-20260925-01). At a decision node the answer names
+  its branch as `verdict` (the reader also tolerates `branch` and `outcome`); a non-zero exit
+  means it answered nothing, and the question stays pending.
 
 ## 8. Inviolable guardrails
 

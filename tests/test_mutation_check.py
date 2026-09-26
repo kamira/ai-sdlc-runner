@@ -340,3 +340,23 @@ def test_every_mutated_file_still_imports_before_it_is_mutated():
     assert not broken, (
         "the harness cannot import these files as they stand, so every mutation on them reports "
         f"BROKE about the probe rather than about the code: {broken}")
+
+
+def test_the_reply_contract_group_cannot_import_a_stale_pyc():
+    """A `.pyc` is trusted on the source's size and its mtime in whole seconds, so a mutation that
+    leaves its file the same size, written in the same second as the last, can be tested against
+    the previous mutation's bytecode — the first draft of this group reported an `enum` swap NOT
+    CAUGHT on alternate runs that way (CHG-20260925-01). The group's record states the cure as two
+    rules; this holds the group to them, so the next mutation added cannot break them silently.
+    Scoped to the group: older groups break the second rule in places, and are not this change's."""
+    group = [m for m in mutation_check.MUTATIONS if m.group == "reply-contract"]
+    assert group
+
+    def delta(m):
+        return len(m.after.encode("utf-8")) - len(m.before.encode("utf-8"))
+
+    same_size = [m.says for m in group if delta(m) == 0]
+    assert not same_size, same_size
+    in_a_row = [(a.says, b.says) for a, b in zip(group, group[1:])
+                if a.path == b.path and delta(a) == delta(b)]
+    assert not in_a_row, in_a_row

@@ -9,7 +9,15 @@
 # stdin — the session boundary made physical, so "closed after the ask" is not a promise the backend
 # has to keep.
 # agent_command: ["claude", "-p"]
-agent_timeout: 600
+
+# Seconds ONE ATTEMPT at one ask may run before its process is killed. A ceiling for a backend that
+# has hung, not an estimate: an engineer building a module is reported to run longer than ten
+# minutes. When it fires, the direct child is killed (anything it started may keep running), what
+# it wrote so far stays, a retry (agent_retries) starts on top of it, and with no retry left the run
+# stops with the question pending. The worst case for one ask is agent_timeout x (agent_retries + 1)
+# on Linux and macOS; on Windows the runner can also wait until every process holding the child's
+# output has exited.
+agent_timeout: 3600
 
 # Per-seat routing lives in the plan file, not here, because which model answers which seat is a
 # property of a change rather than of a machine. See `seat_models` in the plan.
