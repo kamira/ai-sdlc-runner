@@ -28,7 +28,7 @@
 | KN-10 | pattern | governance / red lines | A blacklist cannot be a safety guarantee. Two verifiers independently broke all six permanent halts with ordinary English containing no listed word, and a plan that simply **omitted** its operations was checked against nothing at all. The fix is the inversion: each operation **declares** its kind from a closed set, an undeclared one is refused, and word lists are demoted to a backstop that can only add a stop. | active |
 | KN-9 | pattern | governance / vocabularies | A vocabulary that classifies must be **closed**: an unrecognised value is a failure, never a pass. The ledger lint knew only "built", so `accepted`, `merged`, `completed` and `完成` all sailed past it with no acceptance record. And read the **field**, not the prose around it — `draft — all 9 tasks built` is a draft. | active |
 | DIR-1 | directive | governance / review | When `codex` cannot be reached, a review panel is **two `fable` seats and two `opus` seats, each in its own session** — independent, then cross-read. `codex` rejoins the panel as soon as it can be reached. | **superseded by DIR-2 (CHG-20260928-01)** |
-| DIR-2 | directive | governance / review | A review panel is **three seats, `fable`, `opus` and `gpt-6-astra`, each at effort `medium`**, each in its own session, then cross-read. An unreachable seat **stops the review and asks the user** — no fallback panel (interpreted; see the entry). | active |
+| DIR-2 | directive | governance / review | A review panel is **three seats, `fable`, `opus` and `gpt-6-astra`, each at effort `medium`**. Carried over from DIR-1: each in its own session, then cross-read. Interpreted: an unreachable seat **stops the review and asks the user** — no fallback panel. | active |
 
 <!-- Append DIR-n (user directives) / KN-n (observed patterns) as anchored sections below and add
      one INDEX row each; register any new tag in vocabulary.json first. -->
@@ -685,7 +685,7 @@ either family satisfies the directive.
 |------|-------------------------|
 | fable | from the repo root: `claude -p --model claude-fable-5-1 --effort medium --tools "Read,Grep,Glob"`, brief on stdin |
 | opus | from the repo root: `claude -p --model claude-opus-5-5 --effort medium --tools "Read,Grep,Glob"`, brief on stdin |
-| gpt-6-astra | `codex exec -s read-only -m gpt-6-astra -c model_reasoning_effort=medium -`, brief on stdin |
+| gpt-6-astra | `codex exec -C <repo root> -s read-only -m gpt-6-astra -c model_reasoning_effort=medium -`, brief on stdin |
 
 **Interpreted: the invocation.** The seats are read-only, because a reviewer that can edit the tree
 is editing the thing it is reviewing. For `claude` that is `--tools`, which removes every other
@@ -693,7 +693,8 @@ tool — **not** `--allowedTools`, which only pre-approves the named ones and le
 available. And `--tools` takes several values, so a prompt after it is read as a tool name: the
 brief goes on stdin. The `claude` seats run **from the repo root**: started elsewhere, every read of
 the repo is refused, and a seat that cannot read the tree has verified nothing (acceptance round 2
-in ACC-20260928-01). Measured from the repo root: a seat reads the repo and cannot write to it. `gpt-6-astra` is reached through the `codex` CLI because that is the only access to it
+in ACC-20260928-01); `codex` is pointed at the repo with `-C`. Measured for `opus` and `gpt-6-astra`
+(CHG-20260928-01): each read the repo and could not write to it. `gpt-6-astra` is reached through the `codex` CLI because that is the only access to it
 here; effort maps to `model_reasoning_effort`.
 
 **Carried over from DIR-1, not said by the user.** Each seat is opened fresh in its own session
