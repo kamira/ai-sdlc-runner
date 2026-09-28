@@ -28,7 +28,7 @@
 | KN-10 | pattern | governance / red lines | A blacklist cannot be a safety guarantee. Two verifiers independently broke all six permanent halts with ordinary English containing no listed word, and a plan that simply **omitted** its operations was checked against nothing at all. The fix is the inversion: each operation **declares** its kind from a closed set, an undeclared one is refused, and word lists are demoted to a backstop that can only add a stop. | active |
 | KN-9 | pattern | governance / vocabularies | A vocabulary that classifies must be **closed**: an unrecognised value is a failure, never a pass. The ledger lint knew only "built", so `accepted`, `merged`, `completed` and `完成` all sailed past it with no acceptance record. And read the **field**, not the prose around it — `draft — all 9 tasks built` is a draft. | active |
 | DIR-1 | directive | governance / review | When `codex` cannot be reached, a review panel is **two `fable` seats and two `opus` seats, each in its own session** — independent, then cross-read. `codex` rejoins the panel as soon as it can be reached. | **superseded by DIR-2 (CHG-20260928-01)** |
-| DIR-2 | directive | governance / review | A review panel is **three seats, each in its own session: `fable`, `opus` and `gpt-6-astra` (through `codex`), all at effort `medium`** — independent, then cross-read. | active |
+| DIR-2 | directive | governance / review | A review panel is **three seats, `fable`, `opus` and `gpt-6-astra`, each at effort `medium`**, each in its own session, then cross-read. An unreachable seat **stops the review and asks the user** — no fallback panel (interpreted; see the entry). | active |
 
 <!-- Append DIR-n (user directives) / KN-n (observed patterns) as anchored sections below and add
      one INDEX row each; register any new tag in vocabulary.json first. -->
@@ -683,18 +683,28 @@ either family satisfies the directive.
 
 | seat | invoked as (2026-09-28) |
 |------|-------------------------|
-| fable | `claude -p --model claude-fable-5-1 --effort medium --allowedTools "Read,Grep,Glob"`, brief on stdin |
-| opus | `claude -p --model claude-opus-5-5 --effort medium --allowedTools "Read,Grep,Glob"`, brief on stdin |
+| fable | `claude -p --model claude-fable-5-1 --effort medium --tools "Read,Grep,Glob"`, brief on stdin |
+| opus | `claude -p --model claude-opus-5-5 --effort medium --tools "Read,Grep,Glob"`, brief on stdin |
 | gpt-6-astra | `codex exec -s read-only -m gpt-6-astra -c model_reasoning_effort=medium -`, brief on stdin |
 
-Each seat is read-only: a reviewer that can edit the tree is editing the thing it is reviewing.
+**Interpreted: the invocation.** The seats are read-only, because a reviewer that can edit the tree
+is editing the thing it is reviewing. For `claude` that is `--tools`, which removes every other
+tool — **not** `--allowedTools`, which only pre-approves the named ones and leaves the rest
+available (measured: with `--tools "Read,Grep,Glob"` a seat asked to write a file could not). And
+`--tools` takes several values, so a prompt after it is read as a tool name: the brief goes on
+stdin. `gpt-6-astra` is reached through the `codex` CLI because that is the only access to it
+here; effort maps to `model_reasoning_effort`.
 
 **Carried over from DIR-1, not said by the user.** Each seat is opened fresh in its own session
 (KN-7) and told it will not see the others; then each cross-reads the others and marks every
 finding agree or disagree; a disagreement is escalated, never averaged. It is a composition, not a
 quorum: all three are asked, all three must report, and "all seats could not verify" is not a pass.
 KN-14 holds — the tree the seats read is committed and frozen until every seat has reported,
-cross-read included. The acceptance record names the engines and the effort.
+cross-read included.
+
+**Interpreted: the record.** The acceptance record names the three engines and the effort. DIR-1
+asked for something narrower — that the record say `codex` was absent and why; naming the whole
+panel is the same idea for a panel with no absent seat.
 
 **Interpreted: no fallback.** DIR-1's fallback — two `fable` and two `opus` when `codex` cannot be
 reached — is not carried over, because the user named no fallback for the panel that replaced it.
