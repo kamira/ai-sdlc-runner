@@ -27,7 +27,8 @@
 | KN-11 | pattern | governance / trust boundaries | Read the **fact**, not the claim. A declaration is what somebody says an operation is; a target (`kubectl apply -f prod/`, `secrets/key.pem`) is what it will touch. Facts may overrule claims; prose may not. And where a trust boundary cannot be removed, **record it** — an operation nothing verified belongs in the report, not in silence. | active |
 | KN-10 | pattern | governance / red lines | A blacklist cannot be a safety guarantee. Two verifiers independently broke all six permanent halts with ordinary English containing no listed word, and a plan that simply **omitted** its operations was checked against nothing at all. The fix is the inversion: each operation **declares** its kind from a closed set, an undeclared one is refused, and word lists are demoted to a backstop that can only add a stop. | active |
 | KN-9 | pattern | governance / vocabularies | A vocabulary that classifies must be **closed**: an unrecognised value is a failure, never a pass. The ledger lint knew only "built", so `accepted`, `merged`, `completed` and `完成` all sailed past it with no acceptance record. And read the **field**, not the prose around it — `draft — all 9 tasks built` is a draft. | active |
-| DIR-1 | directive | governance / review | When `codex` cannot be reached, a review panel is **two `fable` seats and two `opus` seats, each in its own session** — independent, then cross-read. `codex` rejoins the panel as soon as it can be reached. | active |
+| DIR-1 | directive | governance / review | When `codex` cannot be reached, a review panel is **two `fable` seats and two `opus` seats, each in its own session** — independent, then cross-read. `codex` rejoins the panel as soon as it can be reached. | **superseded by DIR-2 (CHG-20260928-01)** |
+| DIR-2 | directive | governance / review | A review panel is **three seats, each in its own session: `fable`, `opus` and `gpt-6-astra` (through `codex`), all at effort `medium`** — independent, then cross-read. | active |
 
 <!-- Append DIR-n (user directives) / KN-n (observed patterns) as anchored sections below and add
      one INDEX row each; register any new tag in vocabulary.json first. -->
@@ -644,6 +645,9 @@ then.
 
 ## DIR-1 — The panel when `codex` cannot be reached
 
+> **Superseded by DIR-2 (CHG-20260928-01).** The panel is now three named seats at a named
+> effort. Kept as the record of the panel ACC-20260925-01 was reviewed under.
+
 *tags: governance · source: the user, 2026-09-25, CHG-20260925-01 · tier: directive*
 
 The user's words: *"如果沒辦法codex審議則由兩個各自獨立session fable和兩個各自獨立session的opus進行審議 /
@@ -660,3 +664,40 @@ not on the panel and why, as ACC-20260907-24 did for a reduced panel.
 **What it does not relax.** It is a composition, not a quorum: four seats are asked, all four must
 report, and "all seats could not verify" is not a pass. It does not replace KN-14 — the tree the
 seats read is frozen until every seat has reported, cross-read included.
+
+## DIR-2 — The panel: `fable`, `opus`, `gpt-6-astra`, each at effort `medium`
+
+*tags: governance · source: the user, 2026-09-28, CHG-20260928-01 · tier: directive*
+
+The user's words: *"審議席設定為 fable (effort medium) / opus (effort medium) / gpt-6-astra (effort
+medium)"*, applied — when asked which layer — to **this repo's review panel**, not to the runner's
+own `conformance` / `defect` / `risk` seats.
+
+**The directive.** A review panel on a change to this repo is three seats — `fable`, `opus` and
+`gpt-6-astra` — each at effort `medium`. That sentence is all the user said; everything below it
+is either carried over from DIR-1 or interpreted, and says which.
+
+**How the seats were invoked when this was written** (CHG-20260928-01). The user named families,
+not versions: these ids are the current `fable` and `opus`, not a pin, and a newer release of
+either family satisfies the directive.
+
+| seat | invoked as (2026-09-28) |
+|------|-------------------------|
+| fable | `claude -p --model claude-fable-5-1 --effort medium --allowedTools "Read,Grep,Glob"`, brief on stdin |
+| opus | `claude -p --model claude-opus-5-5 --effort medium --allowedTools "Read,Grep,Glob"`, brief on stdin |
+| gpt-6-astra | `codex exec -s read-only -m gpt-6-astra -c model_reasoning_effort=medium -`, brief on stdin |
+
+Each seat is read-only: a reviewer that can edit the tree is editing the thing it is reviewing.
+
+**Carried over from DIR-1, not said by the user.** Each seat is opened fresh in its own session
+(KN-7) and told it will not see the others; then each cross-reads the others and marks every
+finding agree or disagree; a disagreement is escalated, never averaged. It is a composition, not a
+quorum: all three are asked, all three must report, and "all seats could not verify" is not a pass.
+KN-14 holds — the tree the seats read is committed and frozen until every seat has reported,
+cross-read included. The acceptance record names the engines and the effort.
+
+**Interpreted: no fallback.** DIR-1's fallback — two `fable` and two `opus` when `codex` cannot be
+reached — is not carried over, because the user named no fallback for the panel that replaced it.
+If a seat cannot be reached, the review **stops and asks the user**: it does not proceed on two
+seats and does not substitute an engine. This is an interpretation, recorded in CHG-20260928-01
+with what it was chosen over; the user can overrule it.
