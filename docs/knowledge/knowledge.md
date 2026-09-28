@@ -683,24 +683,25 @@ either family satisfies the directive.
 
 | seat | invoked as (2026-09-28) |
 |------|-------------------------|
-| fable | `claude -p --model claude-fable-5-1 --effort medium --tools "Read,Grep,Glob"`, brief on stdin |
-| opus | `claude -p --model claude-opus-5-5 --effort medium --tools "Read,Grep,Glob"`, brief on stdin |
+| fable | from the repo root: `claude -p --model claude-fable-5-1 --effort medium --tools "Read,Grep,Glob"`, brief on stdin |
+| opus | from the repo root: `claude -p --model claude-opus-5-5 --effort medium --tools "Read,Grep,Glob"`, brief on stdin |
 | gpt-6-astra | `codex exec -s read-only -m gpt-6-astra -c model_reasoning_effort=medium -`, brief on stdin |
 
 **Interpreted: the invocation.** The seats are read-only, because a reviewer that can edit the tree
 is editing the thing it is reviewing. For `claude` that is `--tools`, which removes every other
 tool — **not** `--allowedTools`, which only pre-approves the named ones and leaves the rest
-available (measured: with `--tools "Read,Grep,Glob"` a seat asked to write a file could not). And
-`--tools` takes several values, so a prompt after it is read as a tool name: the brief goes on
-stdin. `gpt-6-astra` is reached through the `codex` CLI because that is the only access to it
+available. And `--tools` takes several values, so a prompt after it is read as a tool name: the
+brief goes on stdin. The `claude` seats run **from the repo root**: started elsewhere, every read of
+the repo is refused, and a seat that cannot read the tree has verified nothing (acceptance round 2
+in ACC-20260928-01). Measured from the repo root: a seat reads the repo and cannot write to it. `gpt-6-astra` is reached through the `codex` CLI because that is the only access to it
 here; effort maps to `model_reasoning_effort`.
 
 **Carried over from DIR-1, not said by the user.** Each seat is opened fresh in its own session
 (KN-7) and told it will not see the others; then each cross-reads the others and marks every
 finding agree or disagree; a disagreement is escalated, never averaged. It is a composition, not a
 quorum: all three are asked, all three must report, and "all seats could not verify" is not a pass.
-KN-14 holds — the tree the seats read is committed and frozen until every seat has reported,
-cross-read included.
+The tree the seats read is frozen until every seat has reported, cross-read included (DIR-1); and,
+from KN-14 rather than DIR-1, it is a committed tree.
 
 **Interpreted: the record.** The acceptance record names the three engines and the effort. DIR-1
 asked for something narrower — that the record say `codex` was absent and why; naming the whole
