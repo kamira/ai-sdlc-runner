@@ -17,6 +17,12 @@ What it keeps, and why:
   "unknown" is not the safe answer — so it can never round to pass.
 * **An unreached seat stops the round and asks the user (DIR-2).** No fallback panel, no retry, no
   quorum: the round is `incomplete`, the report says which cells and why, and the exit code is 3.
+  Sessions not yet started when a seat is unreached are not started, and every seat's executable
+  must resolve before anything is dispatched.
+* **A round without cross-read never passes (DIR-3).** `--no-cross-read`, or a one-model config,
+  can report `fail` or `incomplete`, never `pass`.
+* **What is sent, and to whom, is printed before it is sent** and recorded in the report: each
+  model's executable and `reach`, the brief's size, and that a seat can read the whole repository.
 * **A disagreement is escalated, never averaged (DIR-2).** Cross-read DISAGREE lines are collected
   and reported as they were said.
 * **Seats are read-only and separate (KN-7).** Each cell is its own process, brief on stdin, run
@@ -40,10 +46,12 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -56,15 +64,19 @@ DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "config" / "panel.json"
 DEFAULT_TIMEOUT = 1800
 DEFAULT_JOBS = 6
 
+KILL_GRACE = 10                     # seconds to keep reading after a timed-out seat's tree is killed
+
 KINDS = ("claude", "codex")
+REACHES = ("local", "internal", "external")
+DEFAULT_REACH = "external"          # a model nobody classified is assumed to leave the machine
 _TOP_KEYS = {"models", "coder", "dimensions"}
-_MODEL_KEYS = {"id", "argv", "kind"}
+_MODEL_KEYS = {"id", "argv", "kind", "reach"}
 _CODER_KEYS = {"model", "effort"}
 _DIMENSION_KEYS = {"id", "label", "question", "enabled"}
 
-PASS, FAIL, UNREACHED = "pass", "fail", "unreached"
+PASS, UNREACHED = "pass", "unreached"
 _VERDICT_LINE = re.compile(r"^VERDICT: (pass|fail)$")
-_DISAGREE = re.compile(r"\bDISAGREE\b")
+_DISAGREE = re.compile(r"^\s*(?:(?:[-*+•]|\d+[.)])\s+)?[*_`]*DISAGREE\b", re.IGNORECASE)
 _AGENT_MESSAGE_TYPES = ("agent_message", "assistant_message")
 
 
@@ -113,6 +125,8 @@ def load_config(path: Path) -> dict:
             raise ConfigError(f"{where}: 'argv' must be a non-empty list of strings")
         if model.get("kind") not in KINDS:
             raise ConfigError(f"{where}: 'kind' must be one of {list(KINDS)}, not {model.get('kind')!r}")
+        if model.get("reach", DEFAULT_REACH) not in REACHES:
+            raise ConfigError(f"{where}: 'reach' must be one of {list(REACHES)}, not {model.get('reach')!r}")
     if "coder" in config:
         _closed(config["coder"], _CODER_KEYS, "coder")
     dimensions = config.get("dimensions")
@@ -197,7 +211,7 @@ def cross_header(model: dict, dim: dict, sha: str) -> str:
         "",
         "This is a new session. Other seats reviewed the same brief on this dimension; their answers "
         "follow it. Mark each finding they raise as AGREE or DISAGREE, on a line of its own that "
-        "contains that word, with your reason. This is read only — verify against the repository, "
+        "starts with that word, with your reason. This is read only — verify against the repository, "
         "do not modify it.",
         "",
         _CONTRACT,
@@ -217,14 +231,14 @@ def cross_brief(model: dict, dim: dict, sha: str, brief: str, others: List[Tuple
 # ---------------------------------------------------------------------------------- answer + usage
 
 def verdict_of(text: Optional[str]) -> Optional[str]:
-    """`pass`/`fail` from the LAST exact `VERDICT: ...` line, else None. A seat that changed its mind
-    mid-answer is held to the last thing it said; a line like `VERDICT: ok` is not a verdict."""
-    found = None
-    for line in (text or "").splitlines():
-        hit = _VERDICT_LINE.match(line.strip())
-        if hit:
-            found = hit.group(1)
-    return found
+    """`pass`/`fail` when the FINAL non-empty line is exactly `VERDICT: pass` or `VERDICT: fail`
+    (surrounding whitespace and markdown `*`/backticks aside), else None. The contract says the verdict
+    is the last line, so an earlier verdict followed by anything else — `VERDICT: ok`, "I could not
+    finish" — is an answer that did not end, not a pass."""
+    lines = [line.strip(" \t\r*`") for line in (text or "").splitlines()]
+    lines = [line for line in lines if line]
+    hit = _VERDICT_LINE.match(lines[-1]) if lines else None
+    return hit.group(1) if hit else None
 
 
 def _events(stdout: str) -> List[Any]:
@@ -270,7 +284,7 @@ def extract_answer(kind: str, stdout: str) -> Optional[str]:
 
     claude: stdout is one JSON object, the answer is `result` — no fallback, because scanning raw
     JSON for a verdict would let a malformed reply through. codex `--json`: JSONL events, the answer
-    is the last `item.completed` whose `item` is an `agent_message` (codex-cli 0.158.0); the event
+    is every `agent_message` of the last turn, joined in order (codex-cli 0.158.0); the event
     shape has moved between releases, so this also takes an `item`/`msg` of an agent-message type
     with a string `text` or `message`, and falls back to raw stdout when it finds none.
     """
@@ -278,18 +292,20 @@ def extract_answer(kind: str, stdout: str) -> Optional[str]:
         data = _claude_json(stdout)
         result = data.get("result") if data else None
         return result if isinstance(result, str) else None
-    last = None
+    turn: List[str] = []
     for event in _events(stdout):
         if not isinstance(event, dict):
             continue
+        if event.get("type") == "turn.started":
+            turn = []
         for key in ("item", "msg"):
             inner = event.get(key)
             if isinstance(inner, dict) and inner.get("type") in _AGENT_MESSAGE_TYPES:
                 for field in ("text", "message"):
                     if isinstance(inner.get(field), str):
-                        last = inner[field]
+                        turn.append(inner[field])
                         break
-    return last if last is not None else stdout
+    return "\n".join(turn) if turn else stdout
 
 
 def codex_home(override: Optional[Path] = None) -> Path:
@@ -299,21 +315,45 @@ def codex_home(override: Optional[Path] = None) -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 
 
-def _rollout_rate_limits(home: Path, thread_id: str) -> Optional[dict]:
-    """The LAST `rate_limits` object in this thread's rollout file, else None.
+def _rollout_rate_limits(home: Path, thread_id: str) -> Tuple[Optional[dict], Optional[str]]:
+    """(the LAST `rate_limits` object in this thread's rollout file, when it was observed), else
+    (None, None).
 
     codex never prints rate limits on stdout; they are only in `sessions/YYYY/MM/DD/rollout-<ts>-
     <thread_id>.jsonl`. The file is matched by the id it ends with, so another thread's rollout —
-    a concurrent seat's — is never read as this one's.
+    a concurrent seat's — is never read as this one's. The time is the top-level `timestamp` of the
+    line that carried the limits, else the file's mtime: a quota is a level, and which cell's reading
+    is the current one is decided by when it was taken, not by where the cell sits in a list.
     """
     if not re.fullmatch(r"[A-Za-z0-9_-]+", thread_id):     # it goes into a glob; no metacharacters
-        return None
-    rate = None
+        return None, None
+    rate = at = None
     for path in sorted((home / "sessions").glob(f"**/*-{thread_id}.jsonl")):
         for event in _events(path.read_text(encoding="utf-8", errors="replace")):
             found = _last_key(event, "rate_limits")
-            rate = found if isinstance(found, dict) else rate
-    return rate
+            if isinstance(found, dict):
+                stamp = event.get("timestamp") if isinstance(event, dict) else None
+                rate, at = found, stamp if isinstance(stamp, str) and stamp else _mtime_iso(path)
+    return rate, at
+
+
+def _mtime_iso(path: Path) -> Optional[str]:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _when(stamp: Any) -> datetime:
+    """An ISO timestamp as an aware datetime; anything unreadable is the oldest possible."""
+    oldest = datetime.min.replace(tzinfo=timezone.utc)
+    if not isinstance(stamp, str):
+        return oldest
+    try:
+        moment = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError:
+        return oldest
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
 
 def extract_usage(kind: str, stdout: str, home: Optional[Path] = None) -> Optional[dict]:
@@ -340,13 +380,13 @@ def extract_usage(kind: str, stdout: str, home: Optional[Path] = None) -> Option
                     thread_id = event["thread_id"]
                 elif event.get("type") == "turn.completed" and isinstance(event.get("usage"), dict):
                     tokens = event["usage"]
-            rate = None
+            rate = at = None
             if thread_id:
                 try:
-                    rate = _rollout_rate_limits(codex_home(home), thread_id)
+                    rate, at = _rollout_rate_limits(codex_home(home), thread_id)
                 except OSError:
-                    rate = None
-            usage = {"rate_limits": rate, "token_usage": tokens}
+                    rate = at = None
+            usage = {"rate_limits": rate, "rate_limits_at": at, "token_usage": tokens}
         return usage if any(v is not None for v in usage.values()) else None
     except Exception:                                # noqa: BLE001 — best effort by contract
         return None
@@ -356,6 +396,51 @@ def extract_usage(kind: str, stdout: str, home: Optional[Path] = None) -> Option
 
 def _safe(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", name)
+
+
+def _kill_tree(proc: "subprocess.Popen") -> None:
+    """Kill the seat and everything it started. Killing only the launcher leaves a grandchild (a
+    Windows `.cmd` shim's node process) holding the pipes, and the read then never ends."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def _run_process(argv: List[str], brief: str, cwd: str, timeout: float) -> Tuple[str, str, Optional[int], bool]:
+    """(stdout, stderr, exit code, timed out). On timeout the whole process tree is killed and the
+    pipes are read for at most KILL_GRACE more seconds, then given up on."""
+    extra: Dict[str, Any] = {}
+    if os.name == "nt":
+        extra["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        extra["start_new_session"] = True            # its own process group, so killpg reaches every child
+    proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, encoding="utf-8", errors="replace", cwd=cwd, **extra)
+    try:
+        stdout, stderr = proc.communicate(input=brief, timeout=timeout)
+        return stdout or "", stderr or "", proc.returncode, False
+    except subprocess.TimeoutExpired as exc:
+        stdout, stderr = _as_text(exc.stdout), _as_text(exc.stderr)
+    _kill_tree(proc)
+    try:
+        more_out, more_err = proc.communicate(timeout=KILL_GRACE)
+        stdout, stderr = more_out or stdout, more_err or stderr
+    except subprocess.TimeoutExpired as exc:         # something still holds the pipes: stop reading
+        stdout, stderr = _as_text(exc.stdout) or stdout, _as_text(exc.stderr) or stderr
+        for pipe in (proc.stdout, proc.stderr):
+            try:
+                pipe.close()
+            except (OSError, ValueError):
+                pass
+    return stdout, stderr, None, True
 
 
 def run_cell(model: dict, dim: dict, phase: str, brief: str, repo: Path, out: Path,
@@ -371,13 +456,9 @@ def run_cell(model: dict, dim: dict, phase: str, brief: str, repo: Path, out: Pa
     reason: Optional[str] = None
     started = time.monotonic()
     try:
-        done = subprocess.run(argv, input=brief, capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", cwd=repo_text, timeout=timeout)
-        stdout, stderr, exit_code = done.stdout or "", done.stderr or "", done.returncode
-    except subprocess.TimeoutExpired as exc:
-        stdout = _as_text(exc.stdout)
-        stderr = _as_text(exc.stderr)
-        reason = f"timed out after {timeout:g}s"
+        stdout, stderr, exit_code, timed_out = _run_process(argv, brief, repo_text, timeout)
+        if timed_out:
+            reason = f"timed out after {timeout:g}s"
     except OSError as exc:
         reason = f"could not start {argv[0]!r}: {exc}"
     seconds = round(time.monotonic() - started, 2)
@@ -409,12 +490,43 @@ def _as_text(value: Any) -> str:
     return value or ""
 
 
+def _not_run(model: dict, dim: dict, phase: str) -> dict:
+    return {"model": model["id"], "dimension": dim["id"], "phase": phase, "verdict": UNREACHED,
+            "reason": "not run: round stopped after an unreached seat", "exit_code": None,
+            "seconds": 0.0, "usage": None, "answer": None}
+
+
 def _run_phase(jobs: int, cells: List[Tuple[dict, dict, str, str]], repo: Path, out: Path,
                timeout: float) -> List[dict]:
+    """Run the cells, at most `jobs` at once. The first unreached cell stops the round (DIR-2): cells
+    not yet started are cancelled and reported unreached; cells already running finish."""
+    stop = threading.Event()
+
+    def job(model: dict, dim: dict, phase: str, brief: str) -> dict:
+        # the worker itself raises the flag: a worker that finished the unreached cell would
+        # otherwise take the next queued one before the main thread got round to cancelling it
+        if stop.is_set():
+            return _not_run(model, dim, phase)
+        cell = run_cell(model, dim, phase, brief, repo, out, timeout)
+        if cell["verdict"] == UNREACHED:
+            stop.set()
+        return cell
+
     with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-        futures = [pool.submit(run_cell, m, d, phase, brief, repo, out, timeout)
-                   for m, d, phase, brief in cells]
-        return [f.result() for f in futures]
+        futures = [pool.submit(job, m, d, phase, brief) for m, d, phase, brief in cells]
+        waiting = set(futures)
+        stopped = False
+        while waiting:
+            done, waiting = wait(waiting, return_when=FIRST_COMPLETED)
+            if not stopped and any(f.result()["verdict"] == UNREACHED for f in done):
+                stopped = True
+                for f in waiting:
+                    f.cancel()
+                waiting = {f for f in waiting if not f.cancelled()}
+        results = []
+        for future, (model, dim, phase, _brief) in zip(futures, cells):
+            results.append(_not_run(model, dim, phase) if future.cancelled() else future.result())
+        return results
 
 
 # ---------------------------------------------------------------------------------------- round
@@ -440,6 +552,7 @@ def run_round(config_path: Path, repo: Path, brief_path: Path, out: Path,
               only: Optional[List[str]] = None, jobs: int = DEFAULT_JOBS, cross_read: bool = True,
               cell_timeout: float = DEFAULT_TIMEOUT) -> int:
     """One round. Returns the exit code; prints what it did."""
+    repo = Path(repo).resolve()                      # once: `{repo}` in argv and the seat's cwd must agree
     sha, dirty, unanswerable = _freeze(repo)
     if unanswerable:
         print(f"cannot tell whether the tree is frozen: {unanswerable}")
@@ -464,6 +577,22 @@ def run_round(config_path: Path, repo: Path, brief_path: Path, out: Path,
     except ConfigError as exc:
         print(f"error: {exc}")
         return 2
+
+    missing = [m for m in models if not shutil.which(m["argv"][0])]
+    if missing:
+        for m in missing:
+            print(f"error: model {m['id']!r}: executable {m['argv'][0]!r} not found on PATH; nothing was run")
+        return 3
+
+    disclosure = {"models": [{"id": m["id"], "executable": m["argv"][0],
+                              "reach": m.get("reach", DEFAULT_REACH)} for m in models],
+                  "brief_bytes": len(brief.encode("utf-8")), "repo": str(repo), "repo_readable": True}
+    print("sending, before anything is dispatched:")
+    for m in disclosure["models"]:
+        print(f"  {m['id']}: {m['executable']} (reach: {m['reach']})")
+    print(f"  the brief, {disclosure['brief_bytes']} bytes, to every seat; a cross-read adds the other "
+          "seats' answers")
+    print(f"  each seat can read the whole repository at {repo}")
 
     out.mkdir(parents=True, exist_ok=True)
     (out / "cells").mkdir(exist_ok=True)
@@ -504,6 +633,11 @@ def run_round(config_path: Path, repo: Path, brief_path: Path, out: Path,
         result = "pass"
     else:
         result = "fail"
+    if not cross_n:                                   # DIR-3: a review nobody cross-read is not a pass
+        reasons.append("cross-read skipped (--no-cross-read); DIR-3 requires it" if not cross_read else
+                       "single-model config: one engine, nobody to cross-read; DIR-3 requires it")
+        if result == "pass":
+            result = "incomplete"
 
     end_sha, end_dirty, end_unanswerable = _freeze(repo)
     if end_unanswerable or end_dirty or end_sha != sha:
@@ -514,6 +648,7 @@ def run_round(config_path: Path, repo: Path, brief_path: Path, out: Path,
                        (f"; differs: {', '.join(end_dirty)}" if end_dirty else ""))
 
     report = {"result": result, "sha": sha, "config": str(config_path), "reasons": reasons,
+              "disclosure": disclosure,
               "matrix": {"dimensions": [d["id"] for d in dims], "models": [m["id"] for m in models],
                          "review_sessions": review_n, "cross_sessions": cross_n},
               "cells": cells, "disagreements": disagreements, "usage_summary": usage_summary(cells)}
@@ -528,7 +663,8 @@ def run_round(config_path: Path, repo: Path, brief_path: Path, out: Path,
         print(f"  DISAGREE {d['dimension']} / {d['model']}: {d['line']}")
     for why in reasons:
         print(f"  {why}")
-    print(f"result: {result} — report in {out / 'report.md'}")
+    decide = f" — {len(disagreements)} disagreement(s) to decide" if disagreements else ""
+    print(f"result: {result}{decide} — report in {out / 'report.md'}")
     return {"pass": 0, "fail": 1}.get(result, 3)
 
 
@@ -549,12 +685,14 @@ def _reset_text(window: dict) -> Optional[str]:
 
 
 def usage_summary(cells: List[dict]) -> dict:
-    """Claude spend summed; codex quota as the latest cell reported it (a quota is a level, not a
-    flow, so summing it would be wrong). remaining = 100 - used_percent."""
+    """Claude spend summed; codex quota as the snapshot with the latest observation time (a quota is
+    a level, not a flow, so summing it would be wrong, and cells finish in any order, so list order
+    says nothing about which is newest). remaining = 100 - used_percent."""
     claude = {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0,
               "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "cells": 0}
     codex: Dict[str, Any] = {"primary": None, "secondary": None, "cells": 0,
                              "input_tokens": 0, "output_tokens": 0}
+    latest = datetime.min.replace(tzinfo=timezone.utc)
     for cell in cells:
         usage = cell.get("usage")
         if not isinstance(usage, dict):
@@ -575,9 +713,11 @@ def usage_summary(cells: List[dict]) -> dict:
                         codex[name] += tokens[name]
             if isinstance(tokens, dict) or isinstance(limits, dict):
                 codex["cells"] += 1
-            if isinstance(limits, dict):
+            if isinstance(limits, dict) and _when(usage.get("rate_limits_at")) >= latest:
+                latest = _when(usage.get("rate_limits_at"))      # the newest observation, not the last cell
                 for which in ("primary", "secondary"):
                     window = limits.get(which)
+                    codex[which] = None
                     if isinstance(window, dict) and isinstance(window.get("used_percent"), (int, float)):
                         codex[which] = {"used_percent": window["used_percent"],
                                         "remaining_percent": round(100 - window["used_percent"], 2),
@@ -605,6 +745,12 @@ def render_markdown(report: dict, dims: List[dict], models: List[dict]) -> str:
              f"{report['matrix']['cross_sessions']} cross-read", ""]
     for why in report["reasons"]:
         lines.append(f"- **{why}**")
+    sent = report["disclosure"]
+    lines += ["", "## What was sent, and to whom", ""]
+    lines += [f"- {m['id']}: `{m['executable']}`, reach: {m['reach']}" for m in sent["models"]]
+    lines += [f"- the brief, {sent['brief_bytes']} bytes, to every seat (a cross-read adds the other "
+              "seats' answers)",
+              f"- each seat can read the whole repository at `{sent['repo']}`"]
     lines += ["", "## Review", ""] + _table(cells, dims, models, "review")
     if any(c["phase"] == "cross" for c in cells):
         lines += ["", "## Cross-read", ""] + _table(cells, dims, models, "cross")
