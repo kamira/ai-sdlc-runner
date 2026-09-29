@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from ai_sdlc_runner import cli, plan  # noqa: E402
+from test_flow import NOTHING_READ  # noqa: E402
 
 GOOD_SHIP = {"repo": ".", "chg_id": "CHG-1", "branch": "b", "message": "m"}
 
@@ -353,7 +354,7 @@ def test_render_does_refuse_a_blank_instructions_because_by_then_nothing_can_fil
     verdict = {"gate": "g", "risk": "low", "verdict": "allow", "source": "grade",
                "tightened": False}
     with pytest.raises(workorder.WorkOrderError) as caught:
-        workorder.render(graph.NODES[0], _spec(instructions=""), verdict)
+        workorder.render(graph.NODES[0], _spec(instructions=""), verdict, answer_schema=NOTHING_READ)
     assert "instructions" in str(caught.value)
 
 

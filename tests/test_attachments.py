@@ -454,7 +454,7 @@ def test_an_unchanged_brief_still_reuses_the_journal(tmp_path):
 
 def test_a_frontier_with_no_plan_is_refused_rather_than_assumed_empty():
     """An empty frontier and an unstated one are not the same thing."""
-    with pytest.raises(engine.EngineError, match="no plan has named any modules"):
+    with pytest.raises(engine.EngineError, match="the current plan names no modules"):
         _frontier_run([{}], [])
 
 

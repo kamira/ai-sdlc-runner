@@ -247,7 +247,7 @@
       <div class="stage">
         <span class="n">03 · <span class="chip c-closed">closed</span></span>
         <span class="t">Work order</span>
-        <span class="f">17 fields, exactly<br>+ policy_verdict<br>+ capabilities<br>+ permanent_halts</span>
+        <span class="f">18 fields, exactly<br>+ policy_verdict<br>+ capabilities<br>+ permanent_halts<br>+ reply</span>
       </div>
       <span class="arrow">→</span>
       <div class="stage">
@@ -385,8 +385,8 @@
             <td><span class="chip c-open">declared</span> <span class="note">undeclared → refused</span></td><td>inside the plan</td><td>no</td></tr>
         <tr><td class="num">5</td><td>Work order</td><td class="mono">workorder.py</td>
             <td><span class="chip c-closed">closed</span></td><td>in journal + log</td><td>no</td></tr>
-        <tr><td class="num">6</td><td>Answer contract</td><td class="mono">examples/agent.py</td>
-            <td><span class="chip c-open">open</span> <span class="note">3 aliases for one fact</span></td><td>in the log</td><td>no</td></tr>
+        <tr><td class="num">6</td><td>Answer contract</td><td class="mono">engine.py · reply.schema</td>
+            <td><span class="chip c-open">open</span> <span class="note">as read: 3 aliases for one fact; as asked, <code>reply.schema</code> is closed</span></td><td>in the log</td><td>no</td></tr>
         <tr><td class="num">7</td><td>Ask journal entry</td><td class="mono">engine.py</td>
             <td><span class="chip c-open">open</span></td><td>yes — <em>mutable index</em></td><td>no</td></tr>
         <tr><td class="num">8</td><td>Conversation turn</td><td class="mono">conversations.py</td>
@@ -427,7 +427,7 @@
             <td class="note">Six reviews named it. A misspelt <code>ship</code> made a run perform <strong>no side effects and report <code>finished</code></strong>.</td></tr>
         <tr><td class="mono">node spec</td><td>a missing key, and an extra one</td>
             <td class="note">Not types. <code>instructions</code> is legally a string <em>or</em> a list, and a list reaches the model as a Python repr — open, and recorded.</td></tr>
-        <tr><td class="mono">work order</td><td>any drift from its 17 fields</td>
+        <tr><td class="mono">work order</td><td>any drift from its 18 fields</td>
             <td class="note">Asserted on the only render path.</td></tr>
         <tr><td class="mono">model registry</td><td>an unknown field <strong>and</strong> an unknown top-level key</td>
             <td class="note">Misspell <code>models</code> and the whole registry used to load as empty — silently.</td></tr>

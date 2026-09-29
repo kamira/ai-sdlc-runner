@@ -23,6 +23,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from ai_sdlc_runner import graph, policy, workorder  # noqa: E402
+from test_flow import NOTHING_READ  # noqa: E402
 
 #: One node spec that says something in every field that must.
 SPEC = {
@@ -49,7 +50,7 @@ def _spec(**over):
 
 
 def test_an_order_renders_from_a_complete_spec():
-    order = workorder.render(NODE, SPEC, VERDICT)
+    order = workorder.render(NODE, SPEC, VERDICT, answer_schema=NOTHING_READ)
     assert order["node_id"] == "engineer_build"
 
 
@@ -60,20 +61,20 @@ def test_a_field_outside_the_contract_is_refused():
     harness produced it, and the order would stop being the whole of what was asked.
     """
     with pytest.raises(workorder.WorkOrderError) as caught:
-        workorder.render(NODE, _spec(harness_hint="use the fast model"), VERDICT)
+        workorder.render(NODE, _spec(harness_hint="use the fast model"), VERDICT, answer_schema=NOTHING_READ)
     assert "outside the contract" in str(caught.value)
 
 
 def test_a_partial_spec_is_refused_rather_than_filled_in():
     missing = {k: v for k, v in SPEC.items() if k != "objective"}
     with pytest.raises(workorder.WorkOrderError) as caught:
-        workorder.render(NODE, missing, VERDICT)
+        workorder.render(NODE, missing, VERDICT, answer_schema=NOTHING_READ)
     assert "missing required field" in str(caught.value)
 
 
 def test_the_verdict_is_closed_too():
     with pytest.raises(workorder.WorkOrderError):
-        workorder.render(NODE, SPEC, {**VERDICT, "relaxed": True})
+        workorder.render(NODE, SPEC, {**VERDICT, "relaxed": True}, answer_schema=NOTHING_READ)
 
 
 # ── present is not the same as says something ──────────────────────────────────────────────────
@@ -86,14 +87,14 @@ def test_a_blank_field_is_refused_even_though_the_key_exists():
     exit 0, refused by nothing. A name standing in for a constraint, in the work-order builder.
     """
     with pytest.raises(workorder.WorkOrderError) as caught:
-        workorder.render(NODE, _spec(scope=""), VERDICT)
+        workorder.render(NODE, _spec(scope=""), VERDICT, answer_schema=NOTHING_READ)
     assert "says nothing" in str(caught.value)
 
 
 def test_whitespace_is_blank():
     """The same defect one character deeper."""
     with pytest.raises(workorder.WorkOrderError):
-        workorder.render(NODE, _spec(objective="   "), VERDICT)
+        workorder.render(NODE, _spec(objective="   "), VERDICT, answer_schema=NOTHING_READ)
 
 
 def test_a_list_holding_only_blanks_is_blank():
@@ -110,7 +111,7 @@ def test_the_three_that_may_be_empty_stay_empty():
     `idempotence_probes` with a fake probe, manufacturing the defect the rule exists to stop.
     """
     order = workorder.render(NODE, _spec(input_artifacts=[], expected_outputs=[],
-                                         idempotence_probes=[]), VERDICT)
+                                         idempotence_probes=[]), VERDICT, answer_schema=NOTHING_READ)
     assert order["expected_outputs"] == []
 
 
@@ -129,7 +130,7 @@ def test_the_blank_rule_has_one_definition_shared_with_the_plan_loader():
     blank = _spec(done_criteria="")
 
     with pytest.raises(workorder.WorkOrderError) as from_render:
-        workorder.render(NODE, blank, VERDICT)
+        workorder.render(NODE, blank, VERDICT, answer_schema=NOTHING_READ)
     with pytest.raises(plan_mod.PlanError) as from_plan:
         plan_mod.check({"risk": "low", "node_specs": {NODE.id: dict(blank)}})
 
@@ -145,7 +146,7 @@ def test_the_blank_rule_has_one_definition_shared_with_the_plan_loader():
 
 def test_an_unknown_seat_is_refused_by_name():
     with pytest.raises(workorder.WorkOrderError) as caught:
-        workorder.render(NODE, SPEC, VERDICT, seat="not-a-seat")
+        workorder.render(NODE, SPEC, VERDICT, seat="not-a-seat", answer_schema=NOTHING_READ)
     assert "no seat" in str(caught.value)
     assert sorted(policy.BY_SEAT)[0] in str(caught.value), "it must say what the seats are"
 
@@ -153,15 +154,15 @@ def test_an_unknown_seat_is_refused_by_name():
 def test_two_seats_differ_in_their_instructions_and_in_nothing_else():
     """What makes several seats a cross-check rather than one opinion asked repeatedly."""
     names = sorted(policy.BY_SEAT)[:2]
-    first = workorder.render(NODE, SPEC, VERDICT, seat=names[0])
-    second = workorder.render(NODE, SPEC, VERDICT, seat=names[1])
+    first = workorder.render(NODE, SPEC, VERDICT, seat=names[0], answer_schema=NOTHING_READ)
+    second = workorder.render(NODE, SPEC, VERDICT, seat=names[1], answer_schema=NOTHING_READ)
 
     differ = {k for k in first if first[k] != second[k]}
     assert differ == {"instructions", "seat"}, f"seats differ in {differ}"
 
 
 def test_a_seat_is_told_it_will_not_see_the_others():
-    order = workorder.render(NODE, SPEC, VERDICT, seat=sorted(policy.BY_SEAT)[0])
+    order = workorder.render(NODE, SPEC, VERDICT, seat=sorted(policy.BY_SEAT)[0], answer_schema=NOTHING_READ)
     assert "will not see the other seats" in order["instructions"]
 
 
@@ -174,7 +175,7 @@ def test_the_permanent_halts_are_carried_in_full():
     Filtering needs a judgement about what the work might touch, and every omission is a gate
     quietly disarmed.
     """
-    order = workorder.render(NODE, SPEC, VERDICT)
+    order = workorder.render(NODE, SPEC, VERDICT, answer_schema=NOTHING_READ)
     assert list(order["permanent_halts"]) == list(policy.PERMANENT_HALTS)
     assert order["permanent_halts"], "an order carrying no halts arms nothing"
 
@@ -189,7 +190,7 @@ def test_the_rendered_order_matches_the_closed_schema_exactly():
     thing standing between a future edit to `render` and an order whose shape no longer matches the
     contract every consumer reads it by.
     """
-    order = workorder.render(NODE, SPEC, VERDICT)
+    order = workorder.render(NODE, SPEC, VERDICT, answer_schema=NOTHING_READ)
     assert tuple(sorted(order)) == tuple(sorted(workorder.WORK_ORDER_FIELDS))
 
 
@@ -202,7 +203,7 @@ def test_an_order_missing_a_contract_field_is_refused_rather_than_dispatched(mon
     monkeypatch.setattr(workorder, "WORK_ORDER_FIELDS",
                         workorder.WORK_ORDER_FIELDS + ("a_field_render_does_not_produce",))
     with pytest.raises(workorder.WorkOrderError) as caught:
-        workorder.render(NODE, SPEC, VERDICT)
+        workorder.render(NODE, SPEC, VERDICT, answer_schema=NOTHING_READ)
     assert "closed schema" in str(caught.value)
 
 
@@ -213,18 +214,18 @@ def test_the_json_is_serialised_with_sorted_keys():
     bytes would make the record of what was asked depend on dict insertion order — and
     CHG-20260828-16 has just made the encoding of exactly these bytes something that matters.
     """
-    order = workorder.render(NODE, SPEC, VERDICT)
+    order = workorder.render(NODE, SPEC, VERDICT, answer_schema=NOTHING_READ)
     text = workorder.to_json(order)
     keys = [line.split('"')[1] for line in text.splitlines() if line.startswith('  "')]
     assert keys == sorted(keys), "the order's keys reached the agent unsorted"
 
 
 def test_the_json_ends_with_one_newline_and_is_utf8_clean():
-    text = workorder.to_json(workorder.render(NODE, SPEC, VERDICT))
+    text = workorder.to_json(workorder.render(NODE, SPEC, VERDICT, answer_schema=NOTHING_READ))
     assert text.endswith("\n") and not text.endswith("\n\n")
     text.encode("utf-8")
 
 
 def test_the_json_round_trips():
-    order = workorder.render(NODE, SPEC, VERDICT)
+    order = workorder.render(NODE, SPEC, VERDICT, answer_schema=NOTHING_READ)
     assert json.loads(workorder.to_json(order)) == order

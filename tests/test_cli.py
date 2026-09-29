@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 from ai_sdlc_runner import cli, conversations as conv_mod, engine, graph, policy, settings as settings_mod, workorder
+from test_flow import NOTHING_READ  # noqa: E402
 
 SPEC = {
     "scope": "src/", "objective": "build the thing", "instructions": "do the work",
@@ -303,7 +304,7 @@ def test_the_order_reaches_the_backend_deterministically_serialised(tmp_path):
         encoding="utf-8")
     session = cli._Process([sys.executable, str(script)], timeout=60)
     order = workorder.render(graph.BY_ID["engineer_build"], SPEC,
-                             policy.verdict("self_verify", "low"))
+                             policy.verdict("self_verify", "low"), answer_schema=NOTHING_READ)
     assert session.ask(order)["raw_len"] == len(workorder.to_json(order))
 
 
@@ -327,7 +328,7 @@ def test_the_agent_reads_the_order_in_the_codec_it_was_written_in(tmp_path, monk
         encoding="utf-8")
     session = cli._Process([sys.executable, str(script)], timeout=60)
     order = workorder.render(graph.BY_ID["engineer_build"], SPEC,
-                             policy.verdict("self_verify", "low"))
+                             policy.verdict("self_verify", "low"), answer_schema=NOTHING_READ)
     sent = sum(1 for c in workorder.to_json(order) if ord(c) > 127)
     assert sent, "the order stopped carrying any non-ASCII, so this test proves nothing"
     assert session.ask(order)["wide"] == sent
