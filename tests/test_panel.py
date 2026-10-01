@@ -5,6 +5,7 @@ something that runs (KN-8). No real model is ever called: each seat is a small P
 reads its brief on stdin and prints what a `claude` or a `codex` would, with a verdict chosen by the
 test. Each test names the wire it watches, and fails when that wire is cut.
 """
+import hashlib
 import json
 import os
 import re
@@ -172,7 +173,7 @@ def world(tmp_path, monkeypatch):
     w.seat = seat
 
     def write_config(dims=DIMS, models=None, **extra):
-        models = models or [seat("fable", "claude"), seat("opus", "claude"), seat("astra", "codex")]
+        models = models or [seat("fable", "claude"), seat("opus", "claude"), seat("gpt-6-astra", "codex")]
         config.write_text(json.dumps({"models": models, "dimensions": dims, **extra}, ensure_ascii=False),
                           encoding="utf-8")
 
@@ -182,6 +183,12 @@ def world(tmp_path, monkeypatch):
     def run(*extra, timeout="30"):
         return panel.main(["run", "--brief", str(brief), "--out", str(w.out), "--config", str(config),
                            "--repo", str(repo), "--cell-timeout", timeout, *extra])
+
+    def resume(*extra, **kw):
+        """Resume the round in `w.out`, writing to a fresh directory (never over the one resumed)."""
+        w.prior = w.out
+        w.out = w.prior.parent / f"{w.prior.name}-resumed-{len(list(w.prior.parent.glob(w.prior.name + '-resumed-*')))}"
+        return run("--resume", str(w.prior), *extra, **kw)
 
     def report():
         return json.loads((w.out / "report.json").read_text(encoding="utf-8"))
@@ -193,8 +200,8 @@ def world(tmp_path, monkeypatch):
     def brief_of(phase, dim, mid):
         return (state / "briefs" / f"{phase}__{dim}__{mid}.txt").read_text(encoding="utf-8")
 
-    w.write_config, w.script_for, w.run, w.report, w.invoked, w.brief_of = (
-        write_config, script_for, run, report, invoked, brief_of)
+    w.write_config, w.script_for, w.run, w.report, w.invoked, w.brief_of, w.resume = (
+        write_config, script_for, run, report, invoked, brief_of, resume)
     write_config()
     return w
 
@@ -238,7 +245,7 @@ def test_matrix_is_enabled_dimensions_times_models(world):
     cells = world.report()["cells"]
     assert len(cells) == 2 * 3
     assert {c["dimension"] for c in cells} == {"defect", "risk"}, "the disabled dimension ran"
-    assert {c["model"] for c in cells} == {"fable", "opus", "astra"}
+    assert {c["model"] for c in cells} == {"fable", "opus", "gpt-6-astra"}
     assert len(world.invoked()) == 6
 
 
@@ -328,9 +335,9 @@ def test_what_is_sent_and_to_whom_is_printed_and_written_into_the_report(world, 
     assert f"{size} bytes" in said and "including files git ignores" in said and sys.executable in said
     sent = world.report()["disclosure"]
     assert [(m["id"], m["reach"]) for m in sent["models"]] == [
-        ("fable", "local"), ("opus", "external"), ("astra", "external")]
+        ("fable", "local"), ("opus", "external"), ("gpt-6-astra", "external")]
     assert sent["models"][0]["executable"] == sys.executable
-    assert sent["brief_bytes"] == size and sent["repo_readable"] is True
+    assert sent["brief_bytes"] == size
     md = (world.out / "report.md").read_text(encoding="utf-8")
     assert "What was sent, and to whom" in md and f"{size} bytes" in md
     assert "reach: local" in md and "including files git ignores" in md
@@ -463,14 +470,14 @@ def test_one_fail_is_exit_1(world):
 def test_anything_but_a_verdict_is_unreached_and_never_pass(world, capsys, how, why):
     """KN-15 and DIR-2: unknown is its own state, it stops the round, and it is not the safe one.
     One job at a time, so the order is the config's and the stop point is exact: defect x fable,
-    opus, astra run; astra is unreached; the three risk cells never start."""
-    world.script_for("astra", review={"defect": how, "*": "pass"})
+    opus, gpt-6-astra run; gpt-6-astra is unreached; the three risk cells never start."""
+    world.script_for("gpt-6-astra", review={"defect": how, "*": "pass"})
     assert world.run("--jobs", "1") == 3
     report = world.report()
     assert report["result"] == "incomplete"
     unreached = [c for c in report["cells"] if c["verdict"] == "unreached"]
     ran = [c for c in unreached if not c["reason"].startswith("not run")]
-    assert [(c["model"], c["dimension"]) for c in ran] == [("astra", "defect")]
+    assert [(c["model"], c["dimension"]) for c in ran] == [("gpt-6-astra", "defect")]
     assert why in ran[0]["reason"]
     assert all(c["phase"] == "review" for c in report["cells"]), "cross-read ran on an incomplete round"
     assert len(world.invoked()) == 3, "the queued seats ran after an unreached one"
@@ -625,8 +632,8 @@ def test_a_seat_whose_pass_is_not_its_last_line_is_unreached(world, how):
 # --------------------------------------------------------------------------- usage and answers
 
 def test_codex_verdict_is_read_from_the_last_agent_message_and_quota_is_computed(world):
-    world.write_config(models=[world.seat("astra", "codex")])
-    world.script_for("astra", review="pass")
+    world.write_config(models=[world.seat("gpt-6-astra", "codex")])
+    world.script_for("gpt-6-astra", review="pass")
     assert world.run("--no-cross-read") == INCOMPLETE
     report = world.report()
     cell = report["cells"][0]
@@ -743,8 +750,8 @@ def test_no_rollout_is_none_and_never_an_error(tmp_path):
 
 
 def test_a_cell_with_no_rollout_still_counts_in_the_summary(world):
-    world.write_config(dims=DIMS[:1], models=[world.seat("astra", "codex")])
-    world.script_for("astra", rollout="none")
+    world.write_config(dims=DIMS[:1], models=[world.seat("gpt-6-astra", "codex")])
+    world.script_for("gpt-6-astra", rollout="none")
     assert world.run("--no-cross-read") == INCOMPLETE
     report = world.report()
     assert report["cells"][0]["usage"]["rate_limits"] is None
@@ -755,8 +762,8 @@ def test_a_cell_with_no_rollout_still_counts_in_the_summary(world):
 
 
 def test_a_foreign_rollout_leaves_the_round_without_quota(world):
-    world.write_config(dims=DIMS[:1], models=[world.seat("astra", "codex")])
-    world.script_for("astra", rollout="foreign")
+    world.write_config(dims=DIMS[:1], models=[world.seat("gpt-6-astra", "codex")])
+    world.script_for("gpt-6-astra", rollout="foreign")
     assert world.run("--no-cross-read") == INCOMPLETE
     report = world.report()
     assert report["cells"][0]["usage"]["rate_limits"] is None
@@ -818,7 +825,7 @@ def test_claude_stdout_that_is_not_the_json_result_is_unreached(world):
 def test_jobs_bounds_the_concurrent_sessions(world):
     world.script_for("fable", review="count")
     world.script_for("opus", review="count")
-    world.script_for("astra", review="count")
+    world.script_for("gpt-6-astra", review="count")
     assert world.run("--jobs", "2", "--no-cross-read") == INCOMPLETE
     seen = [int(p.read_text()) for p in (world.state / "seen").iterdir()]
     assert len(seen) == 6
@@ -831,9 +838,9 @@ def test_cross_read_gives_each_model_only_the_others_answers_for_that_dimension(
     assert world.run() == 0
     for dim in ("defect", "risk"):
         other_dim = "risk" if dim == "defect" else "defect"
-        for me in ("fable", "opus", "astra"):
+        for me in ("fable", "opus", "gpt-6-astra"):
             brief = world.brief_of("cross", dim, me)
-            for other in {"fable", "opus", "astra"} - {me}:
+            for other in {"fable", "opus", "gpt-6-astra"} - {me}:
                 assert f"ANSWER-{other}-{dim}-review" in brief, (me, dim, other)
             assert f"ANSWER-{me}-{dim}-review" not in brief, "a seat was shown its own answer"
             assert f"-{other_dim}-review" not in brief, "another dimension's answers leaked in"
@@ -897,12 +904,12 @@ def test_a_disagree_written_in_title_case_with_a_colon_is_escalated(world):
 
 
 def test_an_unreached_cross_read_seat_makes_the_round_incomplete(world):
-    world.script_for("astra", cross={"risk": "none", "*": "pass"})
+    world.script_for("gpt-6-astra", cross={"risk": "none", "*": "pass"})
     assert world.run() == 3
     report = world.report()
     assert report["result"] == "incomplete"
     bad = [c for c in report["cells"] if c["verdict"] == "unreached"]
-    assert [(c["phase"], c["model"], c["dimension"]) for c in bad] == [("cross", "astra", "risk")]
+    assert [(c["phase"], c["model"], c["dimension"]) for c in bad] == [("cross", "gpt-6-astra", "risk")]
 
 
 def test_a_failing_cross_read_fails_the_round(world):
@@ -996,7 +1003,7 @@ def test_the_brief_is_the_seats_stdin_as_a_file_and_is_kept_as_evidence(world):
                                               "argv": [sys.executable, str(script)]}])
     assert world.run("--no-cross-read") == INCOMPLETE
     answer = world.report()["cells"][0]["answer"]
-    data = (world.out / "cells" / "review__defect__x.brief.txt").read_bytes()
+    data = (world.out / "cells" / "review.defect.x.brief.txt").read_bytes()
     assert "regular=True" in answer, "the brief was fed through a pipe"
     assert f"n={len(data)}\n" in answer, "the seat read something other than the saved file"
     assert b"BRIEF-BODY: review the retry change." in data and b"Seat: x" in data
@@ -1018,37 +1025,37 @@ def test_a_seat_that_never_reads_a_large_brief_is_timed_out_not_hung(world):
 # ----------------------------------------------------------------------------------------- resume
 
 def _resume_world(world):
-    """Round 1: the last review cell (astra x risk) is unreached and the only one."""
-    world.script_for("astra", review={"risk": "none", "*": "pass"})
+    """Round 1: the last review cell (gpt-6-astra x risk) is unreached and the only one."""
+    world.script_for("gpt-6-astra", review={"risk": "none", "*": "pass"})
     assert world.run("--jobs", "1") == 3
     first = world.report()
     assert [(c["model"], c["dimension"]) for c in first["cells"] if c["verdict"] == "unreached"] == [
-        ("astra", "risk")]
+        ("gpt-6-astra", "risk")]
     assert len(world.invoked()) == 6
-    world.script_for("astra", review="pass")                    # fixed
+    world.script_for("gpt-6-astra", review="pass")                    # fixed
     return first
 
 
 def test_resume_reruns_only_the_unreached_cell_then_cross_reads_with_the_kept_answers(world):
     _resume_world(world)
     before = len(world.invoked())
-    assert world.run("--resume", str(world.out)) == 0
+    assert world.resume() == 0
     ran = world.invoked()[before:]
-    assert [line.split(" cwd=")[0] for line in ran if " review " in line] == ["astra review risk"], \
+    assert [line.split(" cwd=")[0] for line in ran if " review " in line] == ["gpt-6-astra review risk"], \
         "a reached cell was run again"
     assert len([line for line in ran if " cross " in line]) == 6
     report = world.report()
     assert report["result"] == "pass" and len(report["cells"]) == 12
-    assert report["resumed_from"] == str(world.out)
-    assert "ANSWER-fable-defect-review" in world.brief_of("cross", "defect", "astra"), "kept answers feed the cross-read"
+    assert report["resumed_from"] == str(world.prior)
+    assert "ANSWER-fable-defect-review" in world.brief_of("cross", "defect", "gpt-6-astra"), "kept answers feed the cross-read"
     assert "resumed from" in (world.out / "report.md").read_text(encoding="utf-8")
 
 
 def test_resume_does_not_cross_read_while_a_review_cell_is_still_unreached(world):
     _resume_world(world)
-    world.script_for("astra", review="none")                    # still broken
+    world.script_for("gpt-6-astra", review="none")                    # still broken
     before = len(world.invoked())
-    assert world.run("--resume", str(world.out)) == 3
+    assert world.resume() == 3
     assert len(world.invoked()) == before + 1
     assert {c["phase"] for c in world.report()["cells"]} == {"review"}
 
@@ -1058,7 +1065,7 @@ def test_resume_at_a_different_commit_is_refused_and_runs_nothing(world, capsys)
     (world.repo / "kept.txt").write_text("two\n", encoding="utf-8")
     _git(world.repo, "commit", "-qam", "second")
     before = len(world.invoked())
-    assert world.run("--resume", str(world.out)) == 2
+    assert world.resume() == 2
     assert "resume needs the same commit (KN-14)" in capsys.readouterr().out
     assert len(world.invoked()) == before
 
@@ -1066,10 +1073,11 @@ def test_resume_at_a_different_commit_is_refused_and_runs_nothing(world, capsys)
 def test_resume_with_a_different_matrix_or_brief_is_refused(world, capsys):
     _resume_world(world)
     before = len(world.invoked())
-    assert world.run("--resume", str(world.out), "--only-dimensions", "defect") == 2
+    assert world.resume("--only-dimensions", "defect") == 2
     assert "same matrix" in capsys.readouterr().out
+    world.out = world.prior                                      # the refused attempt wrote nothing
     world.brief.write_text("a different brief\n", encoding="utf-8")
-    assert world.run("--resume", str(world.out)) == 2
+    assert world.resume() == 2
     assert "same brief" in capsys.readouterr().out
     assert len(world.invoked()) == before
 
@@ -1147,7 +1155,7 @@ def test_resume_refuses_a_round_whose_tree_was_dirty_at_close_even_after_it_is_r
     assert world.report()["closing_freeze"] == "dirty"
     (world.repo / "scratch.txt").unlink()                      # the tree is clean again
     before = len(world.invoked())
-    assert world.run("--resume", str(world.out)) == 2
+    assert world.resume() == 2
     said = capsys.readouterr().out
     assert "KN-14" in said and "closing_freeze" in said
     assert len(world.invoked()) == before, "a refused resume ran sessions"
@@ -1165,7 +1173,7 @@ def test_resume_refuses_a_round_whose_tree_moved_at_close(world, monkeypatch, ca
     assert world.report()["closing_freeze"] == "moved"
     monkeypatch.setattr(panel, "_freeze", real)
     before = len(world.invoked())
-    assert world.run("--resume", str(world.out)) == 2
+    assert world.resume() == 2
     assert "KN-14" in capsys.readouterr().out and len(world.invoked()) == before
 
 
@@ -1180,7 +1188,7 @@ def test_resume_refuses_an_interrupted_round_and_records_it(world, monkeypatch, 
     assert world.report()["interrupted"] is True
     monkeypatch.setattr(panel, "wait", real)
     before = len(world.invoked())
-    assert world.run("--resume", str(world.out)) == 2
+    assert world.resume() == 2
     assert "KN-14" in capsys.readouterr().out and len(world.invoked()) == before
 
 
@@ -1191,7 +1199,7 @@ def test_resume_refuses_a_report_with_no_closing_freeze_field(world, capsys):
     del data["closing_freeze"]
     (world.out / "report.json").write_text(json.dumps(data), encoding="utf-8")
     before = len(world.invoked())
-    assert world.run("--resume", str(world.out)) == 2
+    assert world.resume() == 2
     assert "KN-14" in capsys.readouterr().out and len(world.invoked()) == before
 
 
@@ -1199,7 +1207,7 @@ def test_a_clean_round_records_closing_freeze_ok_and_is_still_resumable(world):
     """A clean round donates its cells; fails on the old code only because it wrote neither field."""
     _full_round(world)
     before = len(world.invoked())
-    assert world.run("--resume", str(world.out)) == 0
+    assert world.resume() == 0
     assert _ran(world, before, "review") == [], "a reached, unchanged cell was run again"
     assert world.report()["closing_freeze"] == "ok" and world.report()["interrupted"] is False
 
@@ -1211,17 +1219,17 @@ def test_a_changed_question_reruns_that_dimensions_cells_and_only_those(world):
     dims = [dict(d, question=d["question"] + " (reworded)") if d["id"] == "risk" else d for d in DIMS]
     world.write_config(dims=dims)
     before = len(world.invoked())
-    assert world.run("--resume", str(world.out)) == 0
-    assert _ran(world, before, "review") == ["astra review risk", "fable review risk", "opus review risk"]
+    assert world.resume() == 0
+    assert _ran(world, before, "review") == ["fable review risk", "gpt-6-astra review risk", "opus review risk"]
 
 
 def test_a_changed_argv_reruns_that_models_cells_and_the_cross_reads_that_read_them(world):
     _full_round(world)
-    models = [world.seat("fable", "claude"), world.seat("opus", "claude"), world.seat("astra", "codex")]
+    models = [world.seat("fable", "claude"), world.seat("opus", "claude"), world.seat("gpt-6-astra", "codex")]
     models[0]["argv"] = models[0]["argv"] + ["--harmless-new-flag"]
     world.write_config(models=models)
     before = len(world.invoked())
-    assert world.run("--resume", str(world.out)) == 0
+    assert world.resume() == 0
     assert _ran(world, before, "review") == ["fable review defect", "fable review risk"]
     assert len(_ran(world, before, "cross")) == 6, "a cross-read kept an answer that was replaced"
 
@@ -1233,7 +1241,7 @@ def test_a_cell_with_no_fingerprint_is_run_again(world):
         del cell["fingerprint"]
     (world.out / "report.json").write_text(json.dumps(data), encoding="utf-8")
     before = len(world.invoked())
-    assert world.run("--resume", str(world.out)) == 0
+    assert world.resume() == 0
     assert len(_ran(world, before, "review")) == 6
 
 
@@ -1365,7 +1373,9 @@ def test_an_executable_on_an_absolute_path_entry_outside_the_repo_is_found(world
     tool.chmod(0o755)
     monkeypatch.setenv("PATH", os.pathsep.join(["relative-dir", str(bindir)]))
     monkeypatch.setenv("PATHEXT", ".CMD")
-    assert panel.resolve_executable("tool", world.repo) == str(tool)
+    found = panel.resolve_executable("tool", world.repo)
+    assert os.path.normcase(found) == os.path.normcase(str(tool))      # Windows: `tool.CMD` is `tool.cmd`
+    assert found == str(tool), "the file's own name, not the PATHEXT spelling that matched"
 
 
 # ---- 5. the disclosure says what a seat can read
@@ -1382,7 +1392,7 @@ def test_the_disclosure_says_a_seat_reads_ignored_files_and_lists_them(world, ca
     (world.repo / ".runner" / "operator-token").write_text("t\n", encoding="utf-8")
     assert world.run("--no-cross-read") == INCOMPLETE
     said = capsys.readouterr().out
-    assert f"each seat can read every file under {world.repo.resolve()}, including files git ignores" in said
+    assert f"{world.repo.resolve()} is each seat's working directory, including files git ignores" in said
     assert "whole repository" not in said
     assert ".env" in said and ".runner/" in said
     sent = world.report()["disclosure"]
@@ -1452,3 +1462,357 @@ def test_a_wait_that_times_out_with_nothing_done_does_not_end_the_phase_early(wo
     world.script_for("fable", review="count")                  # each such seat lives 0.4s
     assert world.run("--jobs", "2") == 0
     assert len(world.report()["cells"]) == 12
+
+
+# ============================================================================== round 4 (CHG-20260929-01)
+
+def _brief_headers(world):
+    """(seat, dimension) as each saved brief says it, one per `cells/*.brief.txt`: what the seat was
+    actually sent, independent of the name of the file it was sent in."""
+    found = []
+    for path in sorted((world.out / "cells").glob("*.brief.txt")):
+        text = path.read_text(encoding="utf-8")
+        found.append((re.search(r"^Seat: (\S+)", text, re.M).group(1),
+                      re.search(r"^Dimension: (\S+)", text, re.M).group(1)))
+    return found
+
+
+def _read(path):
+    return Path(path).read_bytes()
+
+
+# ---- 1. file stems cannot collide
+
+def test_cells_whose_ids_join_to_the_same_double_underscore_name_keep_their_own_files(world):
+    """`a__b` x `c` and `a` x `b__c` are both valid ids and both used to be `review__a__b__c`: one
+    brief file, one output file, and a verdict filed under a dimension its seat never reviewed."""
+    dims = [dict(DIMS[0], id="a__b"), dict(DIMS[0], id="a")]
+    world.write_config(dims=dims, models=[world.seat("c", "claude"), world.seat("b__c", "claude")])
+    assert world.run("--no-cross-read") == INCOMPLETE         # not DIR-2's engines: never a pass
+    assert sorted(_brief_headers(world)) == sorted([("c", "a__b"), ("c", "a"), ("b__c", "a__b"), ("b__c", "a")])
+    assert len(list((world.out / "cells").glob("*.stdout.txt"))) == 4
+    assert len(list((world.out / "cells").glob("*.stderr.txt"))) == 4
+
+
+def test_the_stem_of_every_cell_of_a_matrix_of_awkward_ids_is_its_own():
+    ids = ["a", "a_", "a__b", "a___b", "b", "b__c", "c", "a-b", "a_b"]
+    stems = [panel.cell_stem(phase, d, m) for phase in ("review", "cross") for d in ids for m in ids]
+    assert len(stems) == len(set(stems)) == 2 * len(ids) ** 2
+
+
+def test_a_stem_shared_by_two_cells_stops_the_round_before_anything_is_dispatched(world, monkeypatch, capsys):
+    monkeypatch.setattr(panel, "cell_stem", lambda phase, dim, model: "same")
+    assert world.run() == 2
+    assert "share the file stem" in capsys.readouterr().out
+    assert world.invoked() == [] and not (world.out / "cells").exists()
+
+
+# ---- 2. completeness is judged against DIR-2's engines
+
+def test_the_required_engines_are_dir_2s_three_and_the_shipped_config_has_them():
+    assert panel.REQUIRED_ENGINES == ("fable", "opus", "gpt-6-astra")
+    ids = {m["id"] for m in panel.load_config(ROOT / "config" / "panel.json")["models"]}
+    assert set(panel.REQUIRED_ENGINES) <= ids
+
+
+def test_a_two_engine_config_runs_a_whole_round_and_still_cannot_pass(world, capsys):
+    """Every dimension, every configured engine, cross-read done, every seat says pass — and still
+    incomplete, because DIR-2's third engine is not on the panel."""
+    world.write_config(models=[world.seat("fable", "claude"), world.seat("opus", "claude")])
+    assert world.run() == INCOMPLETE
+    report = world.report()
+    assert report["result"] == "incomplete"
+    assert len(report["cells"]) == 8 and all(c["verdict"] == "pass" for c in report["cells"])
+    assert "reduced panel: engine gpt-6-astra missing" in report["reasons"]
+    assert "reduced panel: engine gpt-6-astra missing" in capsys.readouterr().out
+    assert "result: pass" not in (world.out / "report.md").read_text(encoding="utf-8")
+
+
+def test_a_renamed_engine_is_not_the_required_one(world):
+    world.write_config(models=[world.seat("fable", "claude"), world.seat("opus", "claude"),
+                               world.seat("astra", "codex")])
+    assert world.run() == INCOMPLETE
+    assert "reduced panel: engine gpt-6-astra missing" in world.report()["reasons"]
+
+
+def test_a_two_engine_round_that_fails_is_still_a_fail(world):
+    """Guard (passes on the old code): a missing engine demotes a pass, never a fail."""
+    world.write_config(models=[world.seat("fable", "claude"), world.seat("opus", "claude")])
+    world.script_for("fable", review={"defect": "fail", "*": "pass"})
+    assert world.run() == 1
+    assert world.report()["result"] == "fail"
+
+
+# ---- 3. a resume never overwrites the round it resumes from
+
+def test_out_equal_to_the_resume_directory_is_refused_and_the_earlier_report_survives(world, capsys):
+    _full_round(world)
+    before = (_read(world.out / "report.json"), _read(world.out / "report.md"))
+    ran = len(world.invoked())
+    assert world.run("--resume", str(world.out)) == 2
+    assert "--resume" in capsys.readouterr().out
+    assert (_read(world.out / "report.json"), _read(world.out / "report.md")) == before
+    assert len(world.invoked()) == ran, "a refused round ran sessions"
+
+
+def test_out_inside_the_resume_directory_is_refused(world, capsys):
+    _full_round(world)
+    prior = world.out
+    world.out = prior / "next"
+    ran = len(world.invoked())
+    assert world.run("--resume", str(prior)) == 2
+    assert "inside it" in capsys.readouterr().out
+    assert len(world.invoked()) == ran and not (prior / "next").exists()
+
+
+def test_an_out_that_already_holds_a_report_is_refused(world, capsys):
+    _full_round(world)
+    before = _read(world.out / "report.json")
+    ran = len(world.invoked())
+    assert world.run("--no-cross-read") == 2
+    assert "already holds" in capsys.readouterr().out
+    assert _read(world.out / "report.json") == before and len(world.invoked()) == ran
+
+
+def test_an_interrupted_resume_leaves_the_earlier_report_intact_and_resumable(world, monkeypatch):
+    """Guard (passes on the old code): the workflow the refusals above force — a fresh --out — survives
+    Ctrl-C and can be tried again."""
+    _resume_world(world)
+    first = world.out
+    before = _read(first / "report.json")
+    real = panel.wait
+
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(panel, "wait", interrupt)
+    assert world.resume("--jobs", "1") == 130
+    assert _read(first / "report.json") == before
+    monkeypatch.setattr(panel, "wait", real)
+    world.out = first
+    assert world.resume() == 0
+
+
+# ---- 4. the reviewers' controls come from the base, not the tree under review
+
+def _base_config(world, dims=DIMS, models=None):
+    """Commit config/panel.json and call that commit origin/main (the base), then return its text."""
+    models = models or [world.seat("fable", "claude"), world.seat("opus", "claude"),
+                        world.seat("gpt-6-astra", "codex")]
+    text = json.dumps({"models": models, "dimensions": dims}, ensure_ascii=False, indent=1)
+    (world.repo / "config").mkdir(exist_ok=True)
+    (world.repo / "config" / "panel.json").write_bytes(text.encode("utf-8"))   # bytes: no newline translation
+    _commit_all(world, "config")
+    _git(world.repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    return text, _git(world.repo, "rev-parse", "HEAD").strip()
+
+
+def _run_default(world, *extra):
+    """A round with no --config: the config is whatever the tool takes by default."""
+    return panel.main(["run", "--brief", str(world.brief), "--out", str(world.out),
+                       "--repo", str(world.repo), "--cell-timeout", "30", *extra])
+
+
+def test_the_config_is_read_from_the_base_and_the_commit_under_review_cannot_change_it(world):
+    """The reviewed commit drops the `risk` dimension and rewrites its own seats' question; the round
+    still asks every seat the base's two dimensions."""
+    text, base = _base_config(world)
+    weakened = json.loads(text)
+    weakened["dimensions"] = weakened["dimensions"][:1]
+    (world.repo / "config" / "panel.json").write_text(json.dumps(weakened), encoding="utf-8")
+    _commit_all(world, "weaken its own reviewers")
+    assert _run_default(world) == 0
+    report = world.report()
+    assert {c["dimension"] for c in report["cells"]} == {"defect", "risk"}
+    source = report["config_source"]
+    assert (source["kind"], source["ref"], source["commit"]) == ("base", "origin/main", base)
+    assert source["sha256"] == hashlib.sha256(text.encode("utf-8")).hexdigest()
+    assert "not from the reviewed tree" in source["note"]
+    assert "origin/main" in (world.out / "report.md").read_text(encoding="utf-8")
+
+
+def test_config_from_names_another_ref(world):
+    _, first = _base_config(world)
+    other = json.dumps({"models": [world.seat("fable", "claude"), world.seat("opus", "claude"),
+                                   world.seat("gpt-6-astra", "codex")], "dimensions": DIMS[:1]})
+    (world.repo / "config" / "panel.json").write_text(other, encoding="utf-8")
+    _commit_all(world, "one dimension")
+    _git(world.repo, "tag", "one-dim")
+    assert _run_default(world, "--config-from", first, "--no-cross-read") == INCOMPLETE
+    assert {c["dimension"] for c in world.report()["cells"]} == {"defect", "risk"}
+    world.out = world.out.parent / "out2"
+    assert _run_default(world, "--config-from", "one-dim", "--no-cross-read") == INCOMPLETE
+    assert {c["dimension"] for c in world.report()["cells"]} == {"defect"}
+
+
+def test_without_an_origin_main_and_without_config_the_round_does_not_start(world, capsys):
+    """No base to measure against is not licence to read the reviewed tree's own config."""
+    assert panel.DEFAULT_CONFIG_FROM == "origin/main"
+    assert _run_default(world) == 2
+    said = capsys.readouterr().out
+    assert "--config-from origin/main" in said and "--config PATH" in said
+    assert world.invoked() == [] and not world.out.exists()
+
+
+def test_a_base_that_has_no_config_file_is_exit_2(world, capsys):
+    _base_config(world)
+    assert _run_default(world, "--config-from", "HEAD~1") == 2
+    assert "cannot read config/panel.json" in capsys.readouterr().out and world.invoked() == []
+
+
+@pytest.mark.parametrize("ref", ["--upload-pack=x", "-x", ""])
+def test_a_ref_that_looks_like_an_option_is_refused(world, capsys, ref):
+    _base_config(world)
+    assert _run_default(world, f"--config-from={ref}") == 2
+    assert "not a ref" in capsys.readouterr().out and world.invoked() == []
+
+
+def test_config_and_config_from_are_alternatives(world, capsys):
+    _base_config(world)
+    assert _run_default(world, "--config", str(world.config), "--config-from", "origin/main") == 2
+    assert "alternatives" in capsys.readouterr().out and world.invoked() == []
+
+
+def test_a_config_inside_the_repo_is_labelled_as_taken_from_the_reviewed_tree(world, capsys):
+    _base_config(world)
+    inside = world.repo / "config" / "panel.json"
+    assert _run_default(world, "--config", str(inside), "--no-cross-read") == INCOMPLETE
+    source = world.report()["config_source"]
+    assert source["kind"] == "reviewed-tree" and "config taken from the reviewed tree" in source["note"]
+    assert "config taken from the reviewed tree" in capsys.readouterr().out
+    assert "config taken from the reviewed tree" in (world.out / "report.md").read_text(encoding="utf-8")
+
+
+def test_a_config_outside_the_repo_is_labelled_as_explicit_and_unchecked(world):
+    assert world.run("--no-cross-read") == INCOMPLETE
+    source = world.report()["config_source"]
+    assert source["kind"] == "explicit-path" and "outside the repo" in source["note"]
+    assert source["path"] == str(world.config) and len(source["sha256"]) == 64
+
+
+# ---- 5. git and taskkill are resolved like the seats, never by bare name
+
+def _plant_tool(world, name):
+    """A tool the repo itself carries, committed (the tree stays frozen), that records it ran."""
+    marker = world.state / f"{name}-ran"
+    tool = world.repo / "bin" / name
+    tool.parent.mkdir(exist_ok=True)
+    tool.write_text(f"#!/bin/sh\ntouch '{marker}'\n", encoding="utf-8")
+    tool.chmod(0o755)
+    _commit_all(world, f"plant {name}")
+    return marker, str(tool.parent)
+
+
+@posix_only
+def test_a_git_the_tree_carries_is_never_run_even_first_on_path(world, monkeypatch):
+    marker, plant_dir = _plant_tool(world, "git")
+    sha = _git(world.repo, "rev-parse", "HEAD").strip()           # before the planted git is on PATH
+    monkeypatch.setenv("PATH", plant_dir + os.pathsep + os.environ["PATH"])
+    assert world.run("--no-cross-read") == INCOMPLETE
+    assert not marker.exists(), "the reviewed tree supplied git"
+    assert world.report()["sha"] == sha
+
+
+@posix_only
+def test_with_no_git_outside_the_repo_the_round_is_refused_not_run_with_the_trees_git(world, monkeypatch, capsys):
+    marker, plant_dir = _plant_tool(world, "git")
+    monkeypatch.setenv("PATH", plant_dir)
+    assert world.run() == 2
+    said = capsys.readouterr().out
+    assert "could not run git" in said and "not found on PATH" in said
+    assert not marker.exists() and world.invoked() == []
+
+
+def _fake_proc():
+    import types
+    return types.SimpleNamespace(pid=4242, kill=lambda: None)
+
+
+def _windows(monkeypatch, bindir, repo, names=("taskkill.EXE",)):
+    """Make `taskkill.EXE` something on PATH (only a stand-in: this is POSIX), then call the kill as
+    Windows would. Returns the argv lists `subprocess.run` was given."""
+    for n in names:
+        (bindir / n).parent.mkdir(parents=True, exist_ok=True)
+        (bindir / n).write_text("x", encoding="utf-8")
+        (bindir / n).chmod(0o755)
+    calls = []
+    monkeypatch.setenv("PATH", str(bindir))
+    monkeypatch.setenv("PATHEXT", ".EXE")
+    monkeypatch.setattr(panel.subprocess, "run", lambda argv, **kw: calls.append(argv))
+    with monkeypatch.context() as m:
+        m.setattr(panel, "_on_windows", lambda: True)
+        panel._kill_tree(_fake_proc(), repo)
+    return calls
+
+
+@posix_only
+def test_taskkill_is_the_one_found_on_a_path_entry_outside_the_repo(world, monkeypatch, tmp_path):
+    calls = _windows(monkeypatch, tmp_path / "system32", world.repo)
+    assert calls == [[str(tmp_path / "system32" / "taskkill.EXE"), "/T", "/F", "/PID", "4242"]]
+
+
+@posix_only
+def test_a_taskkill_the_tree_carries_is_never_run(world, monkeypatch):
+    calls = _windows(monkeypatch, world.repo / "bin", world.repo)
+    assert calls == [], "the reviewed tree supplied taskkill"
+
+
+# ---- 6. the resolver returns the file's own name
+
+def test_the_resolver_returns_the_name_the_file_has_on_disk_whatever_case_pathext_spelt(world, monkeypatch, tmp_path):
+    """Windows matches `tool.CMD` to `Tool.cmd` and reports whichever spelling matched. Simulated here
+    (POSIX is case-sensitive): names are matched ignoring case, as NTFS does."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    tool = bindir / "Tool.Cmd"
+    tool.write_text("x", encoding="utf-8")
+    tool.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bindir))
+    monkeypatch.setenv("PATHEXT", ".CMD")
+    monkeypatch.setattr(panel, "_runnable", lambda p: any(
+        n.lower() == os.path.basename(p).lower() for n in os.listdir(os.path.dirname(p))))
+    with monkeypatch.context() as m:
+        m.setattr(panel, "_on_windows", lambda: True)
+        found = panel.resolve_executable("tool", world.repo)
+    assert found == str(tool)
+
+
+def test_real_name_is_the_files_own_spelling_and_a_missing_file_is_left_alone(tmp_path):
+    (tmp_path / "Tool.Cmd").write_text("x", encoding="utf-8")
+    assert panel._real_name(str(tmp_path / "TOOL.CMD")) == str(tmp_path / "Tool.Cmd")
+    assert panel._real_name(str(tmp_path / "Tool.Cmd")) == str(tmp_path / "Tool.Cmd")
+    assert panel._real_name(str(tmp_path / "none.cmd")) == str(tmp_path / "none.cmd")
+    assert panel._real_name(str(tmp_path / "nodir" / "x")) == str(tmp_path / "nodir" / "x")
+
+
+# ---- 7. the disclosure is per engine and claims no confinement nobody enforces
+
+def test_the_disclosure_says_per_engine_what_it_can_read_and_claims_no_confinement(world, capsys):
+    assert world.run("--no-cross-read") == INCOMPLETE
+    said = capsys.readouterr().out
+    sent = world.report()["disclosure"]
+    reads = {m["id"]: m["reads"] for m in sent["models"]}
+    assert "whole filesystem" in reads["gpt-6-astra"] and "read-only" in reads["gpt-6-astra"]
+    assert "not confined to the repo" in reads["fable"] and reads["fable"] == reads["opus"]
+    assert reads["gpt-6-astra"] != reads["fable"], "one sentence for two different engines"
+    assert "repo_readable" not in sent
+    assert "can read: " + reads["gpt-6-astra"] in said and "can read: " + reads["fable"] in said
+    md = (world.out / "report.md").read_text(encoding="utf-8")
+    assert reads["gpt-6-astra"] in md and reads["fable"] in md
+    for text in (said, md):
+        assert "every file under" not in text and "whole repository" not in text
+
+
+def test_every_kind_of_engine_the_config_allows_has_a_read_scope():
+    assert set(panel.READ_SCOPE) == set(panel.KINDS)
+
+
+# ---- 8. the README says what the tool does
+
+def test_the_readme_does_not_claim_the_matrix_commits_its_verdicts_into_the_repo():
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    section = text[text.index("**Substantial changes go to the review matrix**"):]
+    section = section[:section.index("**This is a practice, not a mechanism")]
+    assert "committed whole" not in section
+    assert "outside the tree" in section and "ACC" in section and "refuses" in section
+    assert "other seats' answers" in section, "the cross-read phase shows each seat the others' answers"

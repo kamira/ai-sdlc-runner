@@ -583,13 +583,21 @@ one of mine.
 
 **Substantial changes go to the review matrix** (DIR-3): every DIR-2 engine on every enabled
 dimension, one session each, run by `python3 tools/panel.py run`, with
-[`config/panel.json`](config/panel.json) choosing the dimensions. Every session gets the same brief,
-none sees another, against a frozen tree — `python tools/frozen_tree.py` says whether it is one, printing the
+[`config/panel.json`](config/panel.json) choosing the dimensions. The config is read from the base
+the change is measured against (`origin/main`, or `tools/panel.py run --config-from REF`), not from
+the commit under review, so a change cannot weaken its own reviewers; `tools/panel.py run --config
+PATH` takes a file as it is and the report says so. Every seat in the review phase gets the same brief and none sees another; the
+cross-read phase then shows each seat the other seats' answers on that dimension. The round runs
+against a frozen tree — `python tools/frozen_tree.py` says whether it is one, printing the
 commit being verified or naming the files that differ from it. That check exists because the rule
 did not have one: on 2026-08-27 an acceptance round of this repository's own ledger ran eleven
-verifiers against a single shared worktree and broke it (CHG-20260827-13). Their verdicts are committed whole in
-[`docs/design/reviews/`](docs/design/reviews/) rather than summarised — a summary is where an
-objection gets softened, and this repository's recorded history is disagreement being flattened.
+verifiers against a single shared worktree and broke it (CHG-20260827-13). The tool **refuses an
+`--out` inside the repo** — raw seat output there would dirty the frozen tree — so the report and
+the per-cell answers live outside the tree during the round and are not committed by the tool.
+What reaches the repository is the acceptance record: the ACC carries the verdict table and the
+findings, and a summary is where an objection gets softened, so it should quote the findings as the
+seats said them rather than condense them. This repository's recorded history is disagreement being
+flattened.
 
 **This is a practice, not a mechanism, and it has been broken.** CHG-20260823-14 and -15 — the two
 changes that wrote this section — **landed before any seat had read them**, and their own Status
@@ -812,7 +820,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 2578 tests
+pytest -q          # 2608 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

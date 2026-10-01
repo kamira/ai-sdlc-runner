@@ -23,20 +23,29 @@ What it keeps, and why:
   can report `fail` or `incomplete`, never `pass`.
 * **A reduced panel never passes (DIR-3).** `--only-dimensions` is allowed, for a targeted re-check,
   but a round whose matrix is smaller than every enabled dimension x every configured model can
-  report `fail` or `incomplete`, never `pass`.
+  report `fail` or `incomplete`, never `pass`. Completeness is judged against DIR-2's engines
+  (REQUIRED_ENGINES), not against whatever the config lists: a config without one of them can run a
+  round that never passes ("reduced panel: engine X missing").
 * **Ctrl-C stops the round.** Queued cells are cancelled, the live seats' process trees are killed,
   and the report is still written — `incomplete`, "interrupted by the operator", exit 130.
 * **A round can be resumed.** `--resume DIR` keeps every pass/fail cell of an earlier round at the
   same commit whose fingerprint (dimension, model, argv, phase) still matches, and re-runs the rest,
   so a round too big for one quota window is paid for once. A round whose closing freeze check was
   not `ok` (`closing_freeze` in report.json), or that was interrupted, is refused (exit 2, KN-14).
+  `--out` may not be the `--resume` directory or inside it: the earlier report is never overwritten,
+  and an `--out` that already holds a report is refused.
+* **The reviewers' controls come from the base, not the tree under review.** `config/panel.json` is
+  read with `git show REF:config/panel.json` (`--config-from`, default `origin/main`), so a change
+  cannot weaken its own reviewers. `--config PATH` takes the file as it is, and the report says so
+  ("config taken from the reviewed tree" when the file is inside the repo).
 * **What is sent, and to whom, is printed before it is sent** and recorded in the report: each
-  model's executable and `reach`, the brief's size, and that a seat can read every file under the
-  repo, git-ignored ones (`.env`, `.runner/`) included — those are listed, up to 50. The disclosure is
-  flushed before the first seat starts.
-* **Executables come from PATH, never from the tree.** Only absolute PATH entries outside the repo are
-  searched (never the cwd, which Windows searches first), and one that resolves inside the repo is
-  refused before anything is sent.
+  model's executable and `reach`, the brief's size, and what each engine can read — stated per engine
+  (READ_SCOPE) and without claiming a confinement nobody enforces: the codex `-s read-only` sandbox
+  and claude's Read/Grep/Glob are not limited to the repo. Git-ignored files under the repo
+  (`.env`, `.runner/`) are listed, up to 50. The disclosure is flushed before the first seat starts.
+* **Executables come from PATH, never from the tree.** The seats, `git` and Windows' `taskkill` are
+  looked up only in absolute PATH entries outside the repo (never the cwd, which Windows searches
+  first); one that resolves inside the repo, or is not found, is refused before anything is sent.
 * **A disagreement is escalated, never averaged (DIR-2).** Cross-read DISAGREE lines are collected
   and reported as they were said.
 * **Seats are read-only and separate (KN-7).** Each cell is its own process, brief on stdin (from a
@@ -48,7 +57,8 @@ Usage::
 
     python tools/panel.py list
     python tools/panel.py run --brief BRIEF.md --out DIR [--only-dimensions defect,risk] [--jobs 6]
-    python tools/panel.py run --brief BRIEF.md --out DIR --resume EARLIER_DIR
+    python tools/panel.py run --brief BRIEF.md --out NEW_DIR --resume EARLIER_DIR
+    python tools/panel.py run --brief BRIEF.md --out DIR --config PATH      # not the base's config
 
 Exit codes: 0 pass; 1 fail, or the tree is not frozen; 2 bad configuration or arguments; 3 the round
 is incomplete (a seat unreached, a reduced panel, or the tree moved) — never a pass; 130 interrupted.
@@ -78,6 +88,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import frozen_tree  # noqa: E402
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "config" / "panel.json"
+CONFIG_IN_REPO = "config/panel.json"        # where the panel's config lives in the repo under review
+DEFAULT_CONFIG_FROM = "origin/main"         # the base a change is measured against
+REQUIRED_ENGINES = ("fable", "opus", "gpt-6-astra")   # DIR-2's three seats; DIR-3: each on every dimension
 DEFAULT_TIMEOUT = 1800
 DEFAULT_JOBS = 6
 
@@ -86,6 +99,13 @@ WAIT_POLL = 0.5                     # seconds one wait may block: Ctrl-C is only
 IGNORED_CAP = 50                    # git-ignored paths listed in the disclosure; the rest are counted
 
 KINDS = ("claude", "codex")
+READ_SCOPE = {                      # what a seat can read, per engine; nothing here confines it to the repo
+    "claude": "Read/Grep/Glob are not confined to the repo: this tool does not restrict them, so any "
+              "file the user can read may be read (a refusal outside the start directory is claude's "
+              "own permission behaviour, seen in DIR-2, and is not enforced here)",
+    "codex": "`-s read-only` blocks writes, not reads: the sandbox allows reading the whole "
+             "filesystem the user can read",
+}
 REACHES = ("local", "internal", "external")
 DEFAULT_REACH = "external"          # a model nobody classified is assumed to leave the machine
 _TOP_KEYS = {"models", "coder", "dimensions"}
@@ -130,12 +150,21 @@ def _check_id(value: str, where: str) -> None:
 
 
 def load_config(path: Path) -> dict:
+    """The panel's data from a file, checked (see `parse_config`)."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(f"cannot read {path}: {exc}") from None
+    return parse_config(text, str(path))
+
+
+def parse_config(text: str, where_from: str) -> dict:
     """The panel's data, checked. Closed key sets: a misspelt key is an error, not a silent default —
     a dimension whose `enabled` was mistyped must not quietly stop being asked."""
     try:
-        config = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise ConfigError(f"cannot read {path}: {exc}") from None
+        config = json.loads(text)
+    except ValueError as exc:
+        raise ConfigError(f"cannot read {where_from}: {exc}") from None
     _closed(config, _TOP_KEYS, "config")
     models = config.get("models")
     if not isinstance(models, list) or not models:
@@ -198,9 +227,13 @@ def select_matrix(config: dict, only: Optional[List[str]]) -> Tuple[List[dict], 
 
 
 def reduced_panel(config: dict, dims: List[dict], models: List[dict]) -> Optional[str]:
-    """What this round leaves out of enabled dimensions x all configured models, else None."""
+    """What this round leaves out of enabled dimensions x DIR-2's engines, else None. The engines are
+    REQUIRED_ENGINES whatever the config lists: a panel judged only against its own config could drop
+    an engine and still look complete."""
     ran_dims, ran_models = {d["id"] for d in dims}, {m["id"] for m in models}
     parts = []
+    configured = {m["id"] for m in config["models"]}
+    parts += [f"engine {e} missing" for e in REQUIRED_ENGINES if e not in configured]
     absent = [d["id"] for d in config["dimensions"] if d["enabled"] and d["id"] not in ran_dims]
     if absent:
         parts.append("dimensions not run: " + ", ".join(absent))
@@ -437,16 +470,48 @@ def extract_usage(kind: str, stdout: str, home: Optional[Path] = None) -> Option
 
 # ------------------------------------------------------------------------------------------ cells
 
+def _on_windows() -> bool:
+    return os.name == "nt"
+
+
 def _safe(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", name)
 
 
-def _kill_tree(proc: "subprocess.Popen") -> None:
+def cell_stem(phase: str, dimension_id: str, model_id: str) -> str:
+    """The file stem of a cell. Collision-free by construction: ids never contain `.` (`_ID`), so the
+    `.` that joins the three parts can only be a separator — `a__b` x `c` and `a` x `b__c` are
+    different stems, which a `__` join could not tell apart."""
+    return f"{phase}.{_safe(dimension_id)}.{_safe(model_id)}"
+
+
+def check_stems(dims: List[dict], models: List[dict]) -> None:
+    """Every cell of the round has a stem of its own, asserted before anything is dispatched: two
+    cells sharing one would share a brief and an output file, and a verdict could be filed under a
+    dimension its seat never reviewed."""
+    seen: Dict[str, Tuple[str, str, str]] = {}
+    for phase in ("review", "cross"):
+        for d in dims:
+            for m in models:
+                stem = cell_stem(phase, d["id"], m["id"])
+                if stem in seen:
+                    raise ConfigError(f"cells {seen[stem]} and {(phase, d['id'], m['id'])} share the file "
+                                      f"stem {stem!r}; nothing was run")
+                seen[stem] = (phase, d["id"], m["id"])
+
+
+def _kill_tree(proc: "subprocess.Popen", repo: Path) -> None:
     """Kill the seat and everything it started. Killing only the launcher leaves a grandchild (a
-    Windows `.cmd` shim's node process) holding the pipes, and the read then never ends."""
+    Windows `.cmd` shim's node process) holding the pipes, and the read then never ends. `taskkill`
+    is found like the seats are (PATH entries outside the repo): a bare name is searched in the
+    current directory first on Windows, and the operator may be standing in the reviewed tree. Not
+    found, it is not run, and only the launcher is killed."""
     try:
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+        if _on_windows():
+            exe, _why = locate_executable("taskkill", repo)
+            if exe:
+                subprocess.run([exe, "/T", "/F", "/PID", str(proc.pid)], capture_output=True,
+                               timeout=KILL_GRACE)
         else:
             os.killpg(proc.pid, signal.SIGKILL)
     except (OSError, subprocess.SubprocessError):
@@ -461,7 +526,8 @@ class _Fleet:
     """One phase's stop flag and its live seats, so an interrupt can reach them. `stop` only keeps
     queued cells from starting; `aborted` (the operator's Ctrl-C) also kills the running ones."""
 
-    def __init__(self) -> None:
+    def __init__(self, repo: Path) -> None:
+        self.repo = repo
         self.stop = threading.Event()
         self.aborted = threading.Event()
         self._lock = threading.Lock()
@@ -471,7 +537,7 @@ class _Fleet:
         with self._lock:
             self._live.add(proc)
             if self.aborted.is_set():                # started in the gap between the check and the kill
-                _kill_tree(proc)
+                _kill_tree(proc, self.repo)
 
     def discard(self, proc: "subprocess.Popen") -> None:
         with self._lock:
@@ -482,7 +548,7 @@ class _Fleet:
         with self._lock:
             self.aborted.set()
             for proc in list(self._live):
-                _kill_tree(proc)
+                _kill_tree(proc, self.repo)
 
 
 def _run_process(argv: List[str], brief_file: Path, cwd: str, timeout: float,
@@ -491,9 +557,9 @@ def _run_process(argv: List[str], brief_file: Path, cwd: str, timeout: float,
     fed through the pipe: on Windows `communicate(input=...)` writes it before the timeout is in
     force, so a seat that never reads it would hang the round. On timeout the whole process tree is
     killed and the pipes are read for at most KILL_GRACE more seconds, then given up on."""
-    fleet = fleet or _Fleet()
+    fleet = fleet or _Fleet(Path(cwd))
     extra: Dict[str, Any] = {}
-    if os.name == "nt":
+    if _on_windows():
         extra["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         extra["start_new_session"] = True            # its own process group, so killpg reaches every child
@@ -507,7 +573,7 @@ def _run_process(argv: List[str], brief_file: Path, cwd: str, timeout: float,
                 return stdout or "", stderr or "", proc.returncode, False
             except subprocess.TimeoutExpired as exc:
                 stdout, stderr = _as_text(exc.stdout), _as_text(exc.stderr)
-            _kill_tree(proc)
+            _kill_tree(proc, fleet.repo)
             try:
                 more_out, more_err = proc.communicate(timeout=KILL_GRACE)
                 stdout, stderr = more_out or stdout, more_err or stderr
@@ -538,7 +604,7 @@ def cell_fingerprint(model: dict, dim: dict, phase: str, repo: Path) -> str:
 
 def _names(name: str) -> List[str]:
     """The file names `name` can stand for: on Windows `claude` is `claude.cmd` by PATHEXT."""
-    if os.name != "nt":
+    if not _on_windows():
         return [name]
     exts = [e for e in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";") if e]
     return ([name] if name.lower().endswith(tuple(e.lower() for e in exts)) else []) + [name + e for e in exts]
@@ -548,12 +614,31 @@ def _runnable(path: str) -> bool:
     return os.path.isfile(path) and os.access(path, os.X_OK)
 
 
+def _real_name(path: str) -> str:
+    """`path` spelt as it is on disk. Windows finds `tool.CMD` when the file is `tool.cmd` (PATHEXT is
+    upper case, names are not), and what is reported — and later compared, logged, fingerprinted — is
+    the file's own name, not the spelling that happened to match."""
+    folder, name = os.path.split(path)
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return path
+    if name in names:
+        return path
+    return next((os.path.join(folder, n) for n in names if n.lower() == name.lower()), path)
+
+
+def _on_disk(path: str) -> str:
+    return _real_name(path) if _on_windows() else path
+
+
 def resolve_executable(name: str, repo: Path) -> Optional[str]:
     """Where `name` is, looking only at absolute PATH entries outside the repo — never the current
     directory, which `shutil.which` searches first on Windows, so the reviewed tree could otherwise
     supply `claude.cmd`. A name with a separator is taken as a path, and only an absolute one."""
     if os.sep in name or (os.altsep and os.altsep in name):
-        return next((n for n in _names(name) if os.path.isabs(n) and _runnable(n)), None)
+        found = next((n for n in _names(name) if os.path.isabs(n) and _runnable(n)), None)
+        return _on_disk(found) if found else None
     for entry in os.environ.get("PATH", "").split(os.pathsep):
         entry = entry.strip('"')
         if not entry or not os.path.isabs(entry) or _inside(Path(entry), repo):
@@ -561,7 +646,7 @@ def resolve_executable(name: str, repo: Path) -> Optional[str]:
         for candidate in _names(name):
             path = os.path.join(entry, candidate)
             if _runnable(path):
-                return path
+                return _on_disk(path)
     return None
 
 
@@ -584,7 +669,7 @@ def run_cell(model: dict, dim: dict, phase: str, brief: str, repo: Path, out: Pa
     resolved, refusal = locate_executable(argv[0], repo)
     if resolved:
         argv[0] = resolved
-    stem = f"{phase}__{_safe(dim['id'])}__{_safe(model['id'])}"
+    stem = cell_stem(phase, dim["id"], model["id"])
     cells = out / "cells"
     brief_file = cells / f"{stem}.brief.txt"         # the seat's stdin, and evidence of what it was sent
     brief_file.write_bytes(brief.encode("utf-8"))    # bytes: no newline translation on Windows
@@ -640,7 +725,7 @@ def _run_phase(jobs: int, cells: List[Tuple[dict, dict, str, str]], repo: Path, 
     the round (DIR-2): cells not yet started are cancelled and reported unreached; cells already
     running finish. Ctrl-C is harder: queued cells are cancelled and the running seats' process trees
     are killed too, and the cells come back unreached, "interrupted by the operator"."""
-    fleet = _Fleet()
+    fleet = _Fleet(repo)
 
     def job(model: dict, dim: dict, phase: str, brief: str) -> dict:
         # the worker itself raises the flag: a worker that finished the unreached cell would
@@ -695,13 +780,61 @@ def _run_phase(jobs: int, cells: List[Tuple[dict, dict, str, str]], repo: Path, 
 
 # ---------------------------------------------------------------------------------------- round
 
-def _freeze(repo: Path) -> Tuple[Optional[str], List[str], Optional[str]]:
-    """(sha, dirty paths, why-it-could-not-be-answered)."""
+def _run_git(repo: Path, *args: str) -> str:
+    """git's stdout. `git` is resolved like the seats are, never by bare name: on Windows a bare name
+    is searched in the current directory first, and the operator may be standing in the reviewed tree
+    (a committed `git.exe` would run before anything is checked). Refused when not found."""
+    exe, why = locate_executable("git", repo)
+    if exe is None:
+        raise frozen_tree.NotAnswerable(f"could not run git: {why}")
     try:
-        head, dirty = frozen_tree.state(repo)
+        done = subprocess.run([exe, *args], cwd=str(repo), capture_output=True)
+    except OSError as exc:
+        raise frozen_tree.NotAnswerable(f"could not run git: {exc}") from None
+    if done.returncode != 0:
+        said = (done.stderr or done.stdout).decode("utf-8", errors="replace").strip()
+        raise frozen_tree.NotAnswerable(said or "git failed")
+    return done.stdout.decode("utf-8", errors="replace")
+
+
+def _freeze(repo: Path) -> Tuple[Optional[str], List[str], Optional[str]]:
+    """(sha, dirty paths, why-it-could-not-be-answered). What `frozen_tree.state` answers, asked
+    through `_run_git`."""
+    try:
+        head = _run_git(repo, "rev-parse", "HEAD").strip()
+        dirty = sorted(frozen_tree._porcelain_paths(_run_git(repo, "status", "--porcelain", "-z")))
     except frozen_tree.NotAnswerable as exc:
         return None, [], str(exc)
     return head, dirty, None
+
+
+def load_base_config(repo: Path, ref: str) -> Tuple[dict, dict]:
+    """(config, source) read with `git show REF:config/panel.json`: the file as the base the change is
+    measured against has it, so the commit under review cannot weaken its own reviewers' controls
+    (argv, system prompt, dimensions, questions)."""
+    if not ref or ref.startswith("-"):
+        raise ConfigError(f"--config-from: {ref!r} is not a ref")
+    try:
+        commit = _run_git(repo, "rev-parse", "--verify", "--quiet", ref + "^{commit}").strip()
+        text = _run_git(repo, "show", f"{commit}:{CONFIG_IN_REPO}")
+    except frozen_tree.NotAnswerable as exc:
+        raise ConfigError(f"--config-from {ref}: cannot read {CONFIG_IN_REPO} there: {exc} "
+                          "(give --config PATH to use a file as it is)") from None
+    source = {"kind": "base", "ref": ref, "commit": commit, "path": CONFIG_IN_REPO,
+              "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+              "note": f"config read from {ref} ({commit[:12]}), not from the reviewed tree"}
+    return parse_config(text, f"{ref}:{CONFIG_IN_REPO}"), source
+
+
+def load_explicit_config(path: Path, repo: Path) -> Tuple[dict, dict]:
+    """(config, source) for `--config PATH`: the file as it is, and the report says where it was from."""
+    config = load_config(path)
+    inside = _inside(Path(path), repo)
+    note = (f"config taken from the reviewed tree: {path} (--config); the commit under review could "
+            "have changed its own reviewers' controls" if inside else
+            f"config taken from --config {path}, outside the repo; not compared with any base")
+    return config, {"kind": "reviewed-tree" if inside else "explicit-path", "path": str(path),
+                    "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest(), "note": note}
 
 
 def _inside(path: Path, parent: Path) -> bool:
@@ -760,18 +893,20 @@ def _load_resume(path: Path, sha: str, dims: List[dict], models: List[dict], bri
 
 def ignored_paths(repo: Path) -> List[str]:
     """What git ignores under the repo (directories as one entry each). A seat reads these too."""
-    done = subprocess.run(["git", "ls-files", "-z", "--others", "--ignored", "--exclude-standard",
-                           "--directory"], cwd=str(repo), capture_output=True)
-    if done.returncode != 0:
-        raise ConfigError("cannot list git-ignored files: " +
-                          done.stderr.decode("utf-8", errors="replace").strip())
-    return sorted(p for p in done.stdout.decode("utf-8", errors="replace").split("\0") if p)
+    try:
+        listed = _run_git(repo, "ls-files", "-z", "--others", "--ignored", "--exclude-standard",
+                          "--directory")
+    except frozen_tree.NotAnswerable as exc:
+        raise ConfigError(f"cannot list git-ignored files: {exc}") from None
+    return sorted(p for p in listed.split("\0") if p)
 
 
-def run_round(config_path: Path, repo: Path, brief_path: Path, out: Path,
+def run_round(config_path: Optional[Path], repo: Path, brief_path: Path, out: Path,
               only: Optional[List[str]] = None, jobs: int = DEFAULT_JOBS, cross_read: bool = True,
-              cell_timeout: float = DEFAULT_TIMEOUT, resume: Optional[Path] = None) -> int:
-    """One round. Returns the exit code; prints what it did."""
+              cell_timeout: float = DEFAULT_TIMEOUT, resume: Optional[Path] = None,
+              config_from: str = DEFAULT_CONFIG_FROM) -> int:
+    """One round. Returns the exit code; prints what it did. The config is `config_path` as it is when
+    one is given, else `config/panel.json` at `config_from` — never the reviewed tree's own copy."""
     repo = Path(repo).resolve()                      # once: `{repo}` in argv and the seat's cwd must agree
     sha, dirty, unanswerable = _freeze(repo)
     if unanswerable:
@@ -786,14 +921,24 @@ def run_round(config_path: Path, repo: Path, brief_path: Path, out: Path,
 
     kept: Dict[Tuple[str, str, str], dict] = {}
     try:
-        config = load_config(config_path)
+        if config_path is not None:
+            config, config_source = load_explicit_config(config_path, repo)
+        else:
+            config, config_source = load_base_config(repo, config_from)
         dims, models = select_matrix(config, only)
+        check_stems(dims, models)
         raw_brief = Path(brief_path).read_bytes()     # bytes: the size disclosed is the file's own
         brief = raw_brief.decode("utf-8")             # no newline translation, so what is sent is what was read
         brief_sha = hashlib.sha256(raw_brief).hexdigest()
         if _inside(out, repo):
             raise ConfigError(f"--out {out} is inside the repo; writing it would dirty the frozen "
                               "tree (KN-14) — choose a directory outside it")
+        if resume is not None and _inside(out, resume):
+            raise ConfigError(f"--out {out} is the --resume directory or inside it: the new report would "
+                              "replace the earlier round's, and an interrupted or dirty resume would leave "
+                              "nothing to resume from (KN-14) — choose a fresh directory")
+        if (out / "report.json").exists() or (out / "report.md").exists():
+            raise ConfigError(f"--out {out} already holds a round's report; choose a fresh directory")
         ignored = ignored_paths(repo)
         if resume is not None:
             kept = _load_resume(resume, sha, dims, models, brief_sha, repo)
@@ -816,15 +961,18 @@ def run_round(config_path: Path, repo: Path, brief_path: Path, out: Path,
         return 3
 
     disclosure = {"models": [{"id": m["id"], "executable": _argv(m, repo)[0],
-                              "reach": m.get("reach", DEFAULT_REACH)} for m in models],
-                  "brief_bytes": len(raw_brief), "repo": str(repo), "repo_readable": True,
+                              "reach": m.get("reach", DEFAULT_REACH), "reads": READ_SCOPE[m["kind"]]}
+                             for m in models],
+                  "brief_bytes": len(raw_brief), "repo": str(repo),
                   "ignored_paths": ignored[:IGNORED_CAP], "ignored_more": max(0, len(ignored) - IGNORED_CAP)}
+    print(config_source["note"])
     print("sending, before anything is dispatched:")
     for m in disclosure["models"]:
         print(f"  {m['id']}: {m['executable']} (reach: {m['reach']})")
+        print(f"    can read: {m['reads']}")
     print(f"  the brief, {disclosure['brief_bytes']} bytes, to every seat; a cross-read adds the other "
           "seats' answers")
-    print(f"  each seat can read every file under {repo}, including files git ignores")
+    print(f"  {repo} is each seat's working directory, including files git ignores")
     for line in _ignored_lines(disclosure):
         print(f"    {line}")
     sys.stdout.flush()                                # piped, the disclosure must be out before the data is
@@ -905,7 +1053,8 @@ def run_round(config_path: Path, repo: Path, brief_path: Path, out: Path,
                        (f"; sha {sha[:12]} -> {(end_sha or '?')[:12]}" if end_sha != sha else "") +
                        (f"; differs: {', '.join(end_dirty)}" if end_dirty else ""))
 
-    report = {"result": result, "sha": sha, "config": str(config_path), "reasons": reasons,
+    report = {"result": result, "sha": sha, "config": config_source["note"],
+              "config_source": config_source, "reasons": reasons,
               "disclosure": disclosure, "brief_sha256": brief_sha,
               "closing_freeze": closing, "interrupted": interrupted,
               "resumed_from": str(resume) if resume is not None else None,
@@ -1022,7 +1171,7 @@ def _table(cells: List[dict], dims: List[dict], models: List[dict], phase: str) 
 def render_markdown(report: dict, dims: List[dict], models: List[dict]) -> str:
     cells = report["cells"]
     lines = [f"# Panel round — {report['result']}", "",
-             f"- commit: `{report['sha']}`", f"- config: `{report['config']}`",
+             f"- commit: `{report['sha']}`", f"- config: {report['config']}",
              f"- sessions: {report['matrix']['review_sessions']} review, "
              f"{report['matrix']['cross_sessions']} cross-read",
              f"- closing freeze check: {report.get('closing_freeze', 'unknown')}", ""]
@@ -1032,10 +1181,13 @@ def render_markdown(report: dict, dims: List[dict], models: List[dict]) -> str:
     if report.get("resumed_from"):
         lines.insert(4, f"- resumed from `{report['resumed_from']}`: its pass/fail cells were kept")
     lines += ["", "## What was sent, and to whom", ""]
-    lines += [f"- {m['id']}: `{m['executable']}`, reach: {m['reach']}" for m in sent["models"]]
+    for m in sent["models"]:
+        lines += [f"- {m['id']}: `{m['executable']}`, reach: {m['reach']}"]
+        if m.get("reads"):
+            lines.append(f"  - can read: {m['reads']}")
     lines += [f"- the brief, {sent['brief_bytes']} bytes, to every seat (a cross-read adds the other "
               "seats' answers)",
-              f"- each seat can read every file under `{sent['repo']}`, including files git ignores"]
+              f"- `{sent['repo']}` is each seat's working directory, including files git ignores"]
     lines += [f"  - `{p}`" if not p.startswith("...") else f"  - {p}" for p in _ignored_lines(sent)]
     lines += ["", "## Review", ""] + _table(cells, dims, models, "review")
     if any(c["phase"] == "cross" for c in cells):
@@ -1069,7 +1221,7 @@ Ctrl-C stops the round: queued sessions are not started, running seats are kille
 report.md are still written (incomplete, "interrupted by the operator"), exit 130.
 
 A round too big for one quota window: run it again with --resume DIR, DIR being the --out of the
-earlier one. Cells that said pass or fail are kept if the config still defines them the same way;
+earlier one, with a fresh --out (never DIR or inside it: the earlier report is kept). Cells that said pass or fail are kept if the config still defines them the same way;
 the rest run again. A different commit is refused (KN-14), as is a different matrix or brief, and a
 round that was interrupted or whose tree moved at the close.
 """
@@ -1104,7 +1256,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                          formatter_class=argparse.RawDescriptionHelpFormatter)
     run.add_argument("--brief", required=True, metavar="BRIEF.md")
     run.add_argument("--out", required=True, metavar="DIR", help="outside the repo")
-    run.add_argument("--config", default=str(DEFAULT_CONFIG), metavar="PATH")
+    run.add_argument("--config", default=None, metavar="PATH",
+                     help="use this file as it is; the report says it was not taken from the base "
+                          "(default: config/panel.json at --config-from)")
+    run.add_argument("--config-from", default=None, metavar="REF",
+                     help=f"read config/panel.json from this git ref, not the checked-out tree "
+                          f"(default: {DEFAULT_CONFIG_FROM})")
     run.add_argument("--repo", default=".", metavar="PATH")
     run.add_argument("--only-dimensions", default=None, metavar="a,b",
                      help="run exactly these dimensions, disabled ones included; a reduced panel "
@@ -1121,12 +1278,16 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "list":
         return _list(Path(args.config))
+    if args.config is not None and args.config_from is not None:
+        print("error: --config and --config-from are alternatives: one file, or one ref")
+        return 2
     only = None
     if args.only_dimensions is not None:
         only = [n.strip() for n in args.only_dimensions.split(",") if n.strip()]
-    return run_round(Path(args.config), Path(args.repo), Path(args.brief), Path(args.out), only=only,
-                     jobs=args.jobs, cross_read=args.cross_read, cell_timeout=args.cell_timeout,
-                     resume=Path(args.resume) if args.resume else None)
+    return run_round(Path(args.config) if args.config is not None else None, Path(args.repo), Path(args.brief),
+                     Path(args.out), only=only, jobs=args.jobs, cross_read=args.cross_read,
+                     cell_timeout=args.cell_timeout, resume=Path(args.resume) if args.resume else None,
+                     config_from=DEFAULT_CONFIG_FROM if args.config_from is None else args.config_from)
 
 
 if __name__ == "__main__":
