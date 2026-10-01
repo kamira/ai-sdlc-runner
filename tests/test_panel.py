@@ -7,6 +7,8 @@ test. Each test names the wire it watches, and fails when that wire is cut.
 """
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -323,7 +325,7 @@ def test_what_is_sent_and_to_whom_is_printed_and_written_into_the_report(world, 
     size = len(world.brief.read_bytes())            # bytes as read in binary, the same on every platform
     assert size == 36
     assert "fable" in said and "reach: local" in said and "reach: external" in said
-    assert f"{size} bytes" in said and "whole repository" in said and sys.executable in said
+    assert f"{size} bytes" in said and "including files git ignores" in said and sys.executable in said
     sent = world.report()["disclosure"]
     assert [(m["id"], m["reach"]) for m in sent["models"]] == [
         ("fable", "local"), ("opus", "external"), ("astra", "external")]
@@ -331,7 +333,7 @@ def test_what_is_sent_and_to_whom_is_printed_and_written_into_the_report(world, 
     assert sent["brief_bytes"] == size and sent["repo_readable"] is True
     md = (world.out / "report.md").read_text(encoding="utf-8")
     assert "What was sent, and to whom" in md and f"{size} bytes" in md
-    assert "reach: local" in md and "whole repository" in md
+    assert "reach: local" in md and "including files git ignores" in md
 
 
 def test_the_shipped_config_is_valid_and_has_the_specified_dimensions(capsys):
@@ -568,8 +570,9 @@ def test_a_missing_binary_stops_the_round_before_any_seat_runs(world, capsys):
 
 
 def test_a_binary_that_vanishes_after_pre_flight_is_still_unreached_not_a_crash(world, monkeypatch):
-    real = panel.shutil.which
-    monkeypatch.setattr(panel.shutil, "which", lambda name: "vanished" if name == "no-such-binary-xyzzy" else real(name))
+    real = panel.resolve_executable
+    monkeypatch.setattr(panel, "resolve_executable",
+                        lambda name, repo: "vanished" if name == "no-such-binary-xyzzy" else real(name, repo))
     world.write_config(models=[{"id": "ghost", "kind": "claude", "argv": ["no-such-binary-xyzzy"]}])
     assert world.run() == 3
     assert "could not start" in world.report()["cells"][0]["reason"]
@@ -1113,3 +1116,339 @@ def test_help_mentions_ctrl_c_and_resume(capsys):
     assert stop.value.code == 0
     said = capsys.readouterr().out
     assert "Ctrl-C" in said and "130" in said and "--resume DIR" in said and "reduced panel" in said
+
+
+# ============================================================================== round 3 (CHG-20260929-01)
+
+def _commit_all(world, message="more"):
+    _git(world.repo, "add", "-A")
+    _git(world.repo, "commit", "-qm", message)
+
+
+def _full_round(world):
+    """Round 1: every review cell reached and passing, no cross-read, so the round is incomplete (3)
+    with a clean closing freeze and nothing interrupted."""
+    assert world.run("--no-cross-read") == INCOMPLETE
+    assert world.report()["closing_freeze"] == "ok"
+    return world.report()
+
+
+def _ran(world, since, phase):
+    return sorted(line.split(" cwd=")[0] for line in world.invoked()[since:] if f" {phase} " in line)
+
+
+# ---- 1. a round the freeze invalidated donates no cell
+
+def test_resume_refuses_a_round_whose_tree_was_dirty_at_close_even_after_it_is_restored(world, capsys):
+    """Without the field: restore the tree, resume, every retained cell is reused and the round passes
+    with zero sessions."""
+    world.script_for("fable", review={"defect": "mutate", "*": "pass"})
+    assert world.run() == INCOMPLETE
+    assert world.report()["closing_freeze"] == "dirty"
+    (world.repo / "scratch.txt").unlink()                      # the tree is clean again
+    before = len(world.invoked())
+    assert world.run("--resume", str(world.out)) == 2
+    said = capsys.readouterr().out
+    assert "KN-14" in said and "closing_freeze" in said
+    assert len(world.invoked()) == before, "a refused resume ran sessions"
+
+
+def test_resume_refuses_a_round_whose_tree_moved_at_close(world, monkeypatch, capsys):
+    real, calls = panel._freeze, []
+
+    def moved_at_close(repo):
+        calls.append(1)
+        return real(repo) if len(calls) == 1 else ("0" * 40, [], None)
+
+    monkeypatch.setattr(panel, "_freeze", moved_at_close)
+    assert world.run("--no-cross-read") == INCOMPLETE
+    assert world.report()["closing_freeze"] == "moved"
+    monkeypatch.setattr(panel, "_freeze", real)
+    before = len(world.invoked())
+    assert world.run("--resume", str(world.out)) == 2
+    assert "KN-14" in capsys.readouterr().out and len(world.invoked()) == before
+
+
+def test_resume_refuses_an_interrupted_round_and_records_it(world, monkeypatch, capsys):
+    real = panel.wait
+
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(panel, "wait", interrupt)
+    assert world.run("--jobs", "1") == 130
+    assert world.report()["interrupted"] is True
+    monkeypatch.setattr(panel, "wait", real)
+    before = len(world.invoked())
+    assert world.run("--resume", str(world.out)) == 2
+    assert "KN-14" in capsys.readouterr().out and len(world.invoked()) == before
+
+
+def test_resume_refuses_a_report_with_no_closing_freeze_field(world, capsys):
+    """An earlier format cannot vouch for its freeze, and the answer is read from the field."""
+    _full_round(world)
+    data = world.report()
+    del data["closing_freeze"]
+    (world.out / "report.json").write_text(json.dumps(data), encoding="utf-8")
+    before = len(world.invoked())
+    assert world.run("--resume", str(world.out)) == 2
+    assert "KN-14" in capsys.readouterr().out and len(world.invoked()) == before
+
+
+def test_a_clean_round_records_closing_freeze_ok_and_is_still_resumable(world):
+    """A clean round donates its cells; fails on the old code only because it wrote neither field."""
+    _full_round(world)
+    before = len(world.invoked())
+    assert world.run("--resume", str(world.out)) == 0
+    assert _ran(world, before, "review") == [], "a reached, unchanged cell was run again"
+    assert world.report()["closing_freeze"] == "ok" and world.report()["interrupted"] is False
+
+
+# ---- 2. a cell is kept only if what defined it is unchanged
+
+def test_a_changed_question_reruns_that_dimensions_cells_and_only_those(world):
+    _full_round(world)
+    dims = [dict(d, question=d["question"] + " (reworded)") if d["id"] == "risk" else d for d in DIMS]
+    world.write_config(dims=dims)
+    before = len(world.invoked())
+    assert world.run("--resume", str(world.out)) == 0
+    assert _ran(world, before, "review") == ["astra review risk", "fable review risk", "opus review risk"]
+
+
+def test_a_changed_argv_reruns_that_models_cells_and_the_cross_reads_that_read_them(world):
+    _full_round(world)
+    models = [world.seat("fable", "claude"), world.seat("opus", "claude"), world.seat("astra", "codex")]
+    models[0]["argv"] = models[0]["argv"] + ["--harmless-new-flag"]
+    world.write_config(models=models)
+    before = len(world.invoked())
+    assert world.run("--resume", str(world.out)) == 0
+    assert _ran(world, before, "review") == ["fable review defect", "fable review risk"]
+    assert len(_ran(world, before, "cross")) == 6, "a cross-read kept an answer that was replaced"
+
+
+def test_a_cell_with_no_fingerprint_is_run_again(world):
+    _full_round(world)
+    data = world.report()
+    for cell in data["cells"]:
+        del cell["fingerprint"]
+    (world.out / "report.json").write_text(json.dumps(data), encoding="utf-8")
+    before = len(world.invoked())
+    assert world.run("--resume", str(world.out)) == 0
+    assert len(_ran(world, before, "review")) == 6
+
+
+def test_every_cell_carries_a_fingerprint_over_everything_that_defines_it(world):
+    _full_round(world)
+    assert all(len(c["fingerprint"]) == 64 for c in world.report()["cells"])
+    model, dim, repo = world.seat("m", "claude"), dict(DIMS[0]), world.repo
+    base = panel.cell_fingerprint(model, dim, "review", repo)
+    assert base == panel.cell_fingerprint(dict(model), dict(dim), "review", repo)
+    for other in (panel.cell_fingerprint(model, dict(dim, id="x"), "review", repo),
+                  panel.cell_fingerprint(model, dict(dim, label="L"), "review", repo),
+                  panel.cell_fingerprint(model, dict(dim, question="Q"), "review", repo),
+                  panel.cell_fingerprint(dict(model, id="n"), dim, "review", repo),
+                  panel.cell_fingerprint(dict(model, kind="codex"), dim, "review", repo),
+                  panel.cell_fingerprint(dict(model, argv=model["argv"] + ["x"]), dim, "review", repo),
+                  panel.cell_fingerprint(model, dim, "cross", repo)):
+        assert other != base
+
+
+def test_the_repo_is_substituted_into_the_argv_before_it_is_fingerprinted(tmp_path):
+    model = {"id": "m", "kind": "claude", "argv": ["x", "-C", "{repo}"]}
+    one, two = tmp_path / "one", tmp_path / "two"
+    assert (panel.cell_fingerprint(model, DIMS[0], "review", one)
+            != panel.cell_fingerprint(model, DIMS[0], "review", two))
+
+
+# ---- 3. ids that name files
+
+@pytest.mark.parametrize("bad", ["risk/a", "risk?a", "Risk", "-x", "_x", "a b", "a.b", "é"])
+def test_an_id_outside_the_file_safe_alphabet_is_a_config_error(world, bad):
+    world.write_config(models=[dict(world.seat("fable", "claude"), id=bad)])
+    with pytest.raises(panel.ConfigError):
+        panel.load_config(world.config)
+    assert world.run() == 2 and world.invoked() == []
+    world.write_config(dims=[dict(DIMS[0], id=bad)])
+    with pytest.raises(panel.ConfigError):
+        panel.load_config(world.config)
+    assert world.run() == 2 and world.invoked() == []
+
+
+def test_two_ids_that_would_share_a_file_stem_are_refused(world):
+    world.write_config(dims=[dict(DIMS[0], id="risk/a"), dict(DIMS[1], id="risk?a")])
+    with pytest.raises(panel.ConfigError):
+        panel.load_config(world.config)
+
+
+def test_the_shipped_ids_already_conform():
+    """Guard (passes on the old code): the shipped config loads and every id is in the new alphabet,
+    `gpt-6-astra` included."""
+    config = panel.load_config(panel.DEFAULT_CONFIG)
+    ids = [m["id"] for m in config["models"]] + [d["id"] for d in config["dimensions"]]
+    assert "gpt-6-astra" in ids
+    assert all(re.fullmatch(r"[a-z0-9][a-z0-9_-]*", i) for i in ids)
+
+
+@pytest.mark.parametrize("good", ["a", "0a", "gpt-6-astra", "a_b-c9"])
+def test_the_alphabet_allows_digits_hyphens_and_underscores(world, good):
+    """Guard (passes on the old code): the restriction must not refuse what it should allow."""
+    world.write_config(dims=[dict(DIMS[0], id=good)])
+    assert panel.load_config(world.config)["dimensions"][0]["id"] == good
+
+
+# ---- 4. executables come from PATH, not from the tree
+
+def _planted(world, name="planted-tool"):
+    """A tree-supplied executable that records that it ran; committed so the tree stays frozen."""
+    marker = world.state / "planted-ran"
+    exe = world.repo / name
+    exe.write_text(f"#!/bin/sh\ntouch '{marker}'\n", encoding="utf-8")
+    exe.chmod(0o755)
+    _commit_all(world, "plant")
+    return marker
+
+
+GHOST = {"id": "ghost", "kind": "claude", "argv": ["planted-tool"]}
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="shell script stand-in")
+
+
+@posix_only
+def test_an_executable_found_only_in_a_repo_path_entry_is_not_found(world, monkeypatch, capsys):
+    marker = _planted(world)
+    monkeypatch.setenv("PATH", str(world.repo) + os.pathsep + os.environ["PATH"])
+    world.write_config(models=[GHOST])
+    assert world.run() == 3
+    assert "planted-tool" in capsys.readouterr().out
+    assert not marker.exists(), "the reviewed tree supplied the executable"
+
+
+@posix_only
+def test_the_current_directory_is_never_searched(world, monkeypatch):
+    """Relative PATH entries (`.`) and empty ones are the cwd by another name."""
+    marker = _planted(world)
+    git_dir = os.path.dirname(shutil.which("git"))             # the freeze check needs git on PATH
+    monkeypatch.chdir(world.repo)
+    for path in (".", "", "bin" + os.pathsep + "."):
+        monkeypatch.setenv("PATH", path)
+        assert panel.resolve_executable("planted-tool", world.repo) is None
+    world.write_config(models=[GHOST])
+    monkeypatch.setenv("PATH", "." + os.pathsep + git_dir)
+    assert world.run() == 3 and not marker.exists()
+
+
+@posix_only
+def test_run_cell_uses_the_same_resolution_and_never_starts_a_tree_executable(world, monkeypatch):
+    marker = _planted(world)
+    monkeypatch.setenv("PATH", str(world.repo) + os.pathsep + os.environ["PATH"])
+    (world.out / "cells").mkdir(parents=True)
+    cell = panel.run_cell(GHOST, DIMS[0], "review", "brief", world.repo, world.out, 10)
+    assert cell["verdict"] == "unreached" and "could not start" in cell["reason"]
+    assert not marker.exists()
+
+
+@posix_only
+def test_an_absolute_executable_inside_the_repo_is_refused_in_pre_flight(world, capsys):
+    marker = _planted(world)
+    world.write_config(models=[world.seat("fable", "claude"),
+                               dict(GHOST, argv=[str(world.repo / "planted-tool")])])
+    assert world.run() == 3
+    assert "inside the repo" in capsys.readouterr().out
+    assert world.invoked() == [] and not marker.exists()
+    assert not (world.out / "report.json").exists()
+
+
+def test_an_executable_on_an_absolute_path_entry_outside_the_repo_is_found(world, monkeypatch, tmp_path):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    tool = bindir / ("tool.cmd" if os.name == "nt" else "tool")
+    tool.write_text("x", encoding="utf-8")
+    tool.chmod(0o755)
+    monkeypatch.setenv("PATH", os.pathsep.join(["relative-dir", str(bindir)]))
+    monkeypatch.setenv("PATHEXT", ".CMD")
+    assert panel.resolve_executable("tool", world.repo) == str(tool)
+
+
+# ---- 5. the disclosure says what a seat can read
+
+def _ignore(world, *names):
+    (world.repo / ".gitignore").write_text("\n".join(names) + "\n", encoding="utf-8")
+    _commit_all(world, "ignore")
+
+
+def test_the_disclosure_says_a_seat_reads_ignored_files_and_lists_them(world, capsys):
+    _ignore(world, ".env", ".runner/")
+    (world.repo / ".env").write_text("TOKEN=secret\n", encoding="utf-8")
+    (world.repo / ".runner").mkdir()
+    (world.repo / ".runner" / "operator-token").write_text("t\n", encoding="utf-8")
+    assert world.run("--no-cross-read") == INCOMPLETE
+    said = capsys.readouterr().out
+    assert f"each seat can read every file under {world.repo.resolve()}, including files git ignores" in said
+    assert "whole repository" not in said
+    assert ".env" in said and ".runner/" in said
+    sent = world.report()["disclosure"]
+    assert sent["ignored_paths"] == [".env", ".runner/"] and sent["ignored_more"] == 0
+    md = (world.out / "report.md").read_text(encoding="utf-8")
+    assert "including files git ignores" in md and "`.env`" in md and "`.runner/`" in md
+
+
+def test_the_ignored_list_is_capped_at_fifty_and_says_how_many_more(world, capsys):
+    _ignore(world, "*.tmp")
+    for i in range(57):
+        (world.repo / f"f{i:02d}.tmp").write_text("x", encoding="utf-8")
+    assert world.run("--no-cross-read") == INCOMPLETE
+    said = capsys.readouterr().out
+    sent = world.report()["disclosure"]
+    assert len(sent["ignored_paths"]) == 50 and sent["ignored_more"] == 7
+    assert "... and 7 more" in said and "f56.tmp" not in said
+    assert "... and 7 more" in (world.out / "report.md").read_text(encoding="utf-8")
+
+
+def test_a_repo_with_nothing_ignored_lists_nothing(world):
+    assert world.run("--no-cross-read") == INCOMPLETE
+    assert world.report()["disclosure"]["ignored_paths"] == []
+
+
+# ---- 6. the disclosure is out before the data is
+
+def test_the_disclosure_is_flushed_before_the_first_seat_is_dispatched(world, monkeypatch, tmp_path):
+    """Stdout is a block-buffered file here, as when piped. What a reader of the file would see at the
+    moment the first seat starts is recorded."""
+    log = tmp_path / "stdout.log"
+    seen = []
+    real = panel.run_cell
+
+    def spy(*args, **kwargs):
+        if not seen:
+            seen.append(log.read_text(encoding="utf-8"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(panel, "run_cell", spy)
+    with open(log, "w", encoding="utf-8") as stream:
+        monkeypatch.setattr(sys, "stdout", stream)
+        assert world.run("--jobs", "1", "--no-cross-read") == INCOMPLETE
+    assert seen, "no seat was dispatched"
+    assert "including files git ignores" in seen[0], "the disclosure was still in the buffer when the data left"
+
+
+# ---- 7. a wait Ctrl-C can interrupt
+
+def test_the_wait_loop_uses_a_finite_timeout_so_ctrl_c_is_delivered_between_waits(world, monkeypatch):
+    real = panel.wait
+    timeouts = []
+
+    def spy(*args, **kwargs):
+        timeouts.append(kwargs.get("timeout"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(panel, "wait", spy)
+    assert world.run() == 0
+    assert timeouts and all(isinstance(t, (int, float)) and 0 < t <= 1 for t in timeouts), timeouts
+
+
+def test_a_wait_that_times_out_with_nothing_done_does_not_end_the_phase_early(world, monkeypatch):
+    """Guard (passes on the old code): an empty `done` from a timed-out wait is not a stop, so slow
+    seats are still waited for and every cell is collected."""
+    monkeypatch.setattr(panel, "WAIT_POLL", 0.01, raising=False)
+    world.script_for("fable", review="count")                  # each such seat lives 0.4s
+    assert world.run("--jobs", "2") == 0
+    assert len(world.report()["cells"]) == 12
