@@ -581,8 +581,10 @@ models that opens fewer than N sessions is refused"* rather than *"panels work"*
 in CI and refuses a record whose status says finished with no acceptance record beside it. It caught
 one of mine.
 
-**Substantial changes go to two independent seats**, each with the same brief, neither seeing the
-other, against a frozen tree — `python tools/frozen_tree.py` says whether it is one, printing the
+**Substantial changes go to the review matrix** (DIR-3): every DIR-2 engine on every enabled
+dimension, one session each, run by `python3 tools/panel.py run`, with
+[`config/panel.json`](config/panel.json) choosing the dimensions. Every session gets the same brief,
+none sees another, against a frozen tree — `python tools/frozen_tree.py` says whether it is one, printing the
 commit being verified or naming the files that differ from it. That check exists because the rule
 did not have one: on 2026-08-27 an acceptance round of this repository's own ledger ran eleven
 verifiers against a single shared worktree and broke it (CHG-20260827-13). Their verdicts are committed whole in
@@ -810,7 +812,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 2528 tests
+pytest -q          # 2543 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

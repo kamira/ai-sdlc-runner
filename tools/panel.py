@@ -21,20 +21,31 @@ What it keeps, and why:
   must resolve before anything is dispatched.
 * **A round without cross-read never passes (DIR-3).** `--no-cross-read`, or a one-model config,
   can report `fail` or `incomplete`, never `pass`.
+* **A reduced panel never passes (DIR-3).** `--only-dimensions` is allowed, for a targeted re-check,
+  but a round whose matrix is smaller than every enabled dimension x every configured model can
+  report `fail` or `incomplete`, never `pass`.
+* **Ctrl-C stops the round.** Queued cells are cancelled, the live seats' process trees are killed,
+  and the report is still written — `incomplete`, "interrupted by the operator", exit 130.
+* **A round can be resumed.** `--resume DIR` keeps every pass/fail cell of an earlier round at the
+  same commit and re-runs only the unreached ones, so a round too big for one quota window is paid
+  for once.
 * **What is sent, and to whom, is printed before it is sent** and recorded in the report: each
   model's executable and `reach`, the brief's size, and that a seat can read the whole repository.
 * **A disagreement is escalated, never averaged (DIR-2).** Cross-read DISAGREE lines are collected
   and reported as they were said.
-* **Seats are read-only and separate (KN-7).** Each cell is its own process, brief on stdin, run
-  from the repo root; the argv in `config/panel.json` is what removes the seat's write tools.
+* **Seats are read-only and separate (KN-7).** Each cell is its own process, brief on stdin (from a
+  file, `cells/<stem>.brief.txt`, so a seat that never reads it cannot hang the round), run from
+  the repo root; the argv in `config/panel.json` is what removes the seat's write tools and stops
+  the reviewed tree's own settings (hooks) from loading.
 
 Usage::
 
     python tools/panel.py list
     python tools/panel.py run --brief BRIEF.md --out DIR [--only-dimensions defect,risk] [--jobs 6]
+    python tools/panel.py run --brief BRIEF.md --out DIR --resume EARLIER_DIR
 
 Exit codes: 0 pass; 1 fail, or the tree is not frozen; 2 bad configuration or arguments; 3 the round
-is incomplete (a seat unreached, or the tree moved) — never a pass.
+is incomplete (a seat unreached, a reduced panel, or the tree moved) — never a pass; 130 interrupted.
 
 **Interpreted:** `--out` must be outside the repo. Raw seat output written inside it would itself
 dirty the tree the round is verifying, and the end-of-round freeze check would fail every round.
@@ -42,6 +53,7 @@ dirty the tree the round is verifying, and the end-of-round freeze check would f
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -74,7 +86,9 @@ _MODEL_KEYS = {"id", "argv", "kind", "reach"}
 _CODER_KEYS = {"model", "effort"}
 _DIMENSION_KEYS = {"id", "label", "question", "enabled"}
 
-PASS, UNREACHED = "pass", "unreached"
+PASS, FAIL, UNREACHED = "pass", "fail", "unreached"
+INTERRUPTED = "interrupted by the operator"
+STOPPED = "not run: round stopped after an unreached seat"
 _VERDICT_LINE = re.compile(r"^VERDICT: (pass|fail)$")
 _DISAGREE = re.compile(r"^\s*(?:(?:[-*+•]|\d+[.)])\s+)?[*_`]*DISAGREE\b", re.IGNORECASE)
 _AGENT_MESSAGE_TYPES = ("agent_message", "assistant_message")
@@ -165,6 +179,19 @@ def select_matrix(config: dict, only: Optional[List[str]]) -> Tuple[List[dict], 
     if not chosen:
         raise ConfigError("no dimensions selected — every dimension is disabled")
     return chosen, config["models"]
+
+
+def reduced_panel(config: dict, dims: List[dict], models: List[dict]) -> Optional[str]:
+    """What this round leaves out of enabled dimensions x all configured models, else None."""
+    ran_dims, ran_models = {d["id"] for d in dims}, {m["id"] for m in models}
+    parts = []
+    absent = [d["id"] for d in config["dimensions"] if d["enabled"] and d["id"] not in ran_dims]
+    if absent:
+        parts.append("dimensions not run: " + ", ".join(absent))
+    absent = [m["id"] for m in config["models"] if m["id"] not in ran_models]
+    if absent:
+        parts.append("models not run: " + ", ".join(absent))
+    return "; ".join(parts) or None
 
 
 def session_count(dims: List[dict], models: List[dict], cross_read: bool) -> Tuple[int, int]:
@@ -414,49 +441,90 @@ def _kill_tree(proc: "subprocess.Popen") -> None:
         pass
 
 
-def _run_process(argv: List[str], brief: str, cwd: str, timeout: float) -> Tuple[str, str, Optional[int], bool]:
-    """(stdout, stderr, exit code, timed out). On timeout the whole process tree is killed and the
-    pipes are read for at most KILL_GRACE more seconds, then given up on."""
+class _Fleet:
+    """One phase's stop flag and its live seats, so an interrupt can reach them. `stop` only keeps
+    queued cells from starting; `aborted` (the operator's Ctrl-C) also kills the running ones."""
+
+    def __init__(self) -> None:
+        self.stop = threading.Event()
+        self.aborted = threading.Event()
+        self._lock = threading.Lock()
+        self._live: set = set()
+
+    def add(self, proc: "subprocess.Popen") -> None:
+        with self._lock:
+            self._live.add(proc)
+            if self.aborted.is_set():                # started in the gap between the check and the kill
+                _kill_tree(proc)
+
+    def discard(self, proc: "subprocess.Popen") -> None:
+        with self._lock:
+            self._live.discard(proc)
+
+    def abort(self) -> None:
+        self.stop.set()
+        with self._lock:
+            self.aborted.set()
+            for proc in list(self._live):
+                _kill_tree(proc)
+
+
+def _run_process(argv: List[str], brief_file: Path, cwd: str, timeout: float,
+                 fleet: Optional[_Fleet] = None) -> Tuple[str, str, Optional[int], bool]:
+    """(stdout, stderr, exit code, timed out). The brief is the seat's stdin as an open file, never
+    fed through the pipe: on Windows `communicate(input=...)` writes it before the timeout is in
+    force, so a seat that never reads it would hang the round. On timeout the whole process tree is
+    killed and the pipes are read for at most KILL_GRACE more seconds, then given up on."""
+    fleet = fleet or _Fleet()
     extra: Dict[str, Any] = {}
     if os.name == "nt":
         extra["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         extra["start_new_session"] = True            # its own process group, so killpg reaches every child
-    proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, encoding="utf-8", errors="replace", cwd=cwd, **extra)
-    try:
-        stdout, stderr = proc.communicate(input=brief, timeout=timeout)
-        return stdout or "", stderr or "", proc.returncode, False
-    except subprocess.TimeoutExpired as exc:
-        stdout, stderr = _as_text(exc.stdout), _as_text(exc.stderr)
-    _kill_tree(proc)
-    try:
-        more_out, more_err = proc.communicate(timeout=KILL_GRACE)
-        stdout, stderr = more_out or stdout, more_err or stderr
-    except subprocess.TimeoutExpired as exc:         # something still holds the pipes: stop reading
-        stdout, stderr = _as_text(exc.stdout) or stdout, _as_text(exc.stderr) or stderr
-        for pipe in (proc.stdout, proc.stderr):
+    with open(brief_file, "rb") as stdin:
+        proc = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, encoding="utf-8", errors="replace", cwd=cwd, **extra)
+        fleet.add(proc)
+        try:
             try:
-                pipe.close()
-            except (OSError, ValueError):
-                pass
-    return stdout, stderr, None, True
+                stdout, stderr = proc.communicate(timeout=timeout)
+                return stdout or "", stderr or "", proc.returncode, False
+            except subprocess.TimeoutExpired as exc:
+                stdout, stderr = _as_text(exc.stdout), _as_text(exc.stderr)
+            _kill_tree(proc)
+            try:
+                more_out, more_err = proc.communicate(timeout=KILL_GRACE)
+                stdout, stderr = more_out or stdout, more_err or stderr
+            except subprocess.TimeoutExpired as exc:     # something still holds the pipes: stop reading
+                stdout, stderr = _as_text(exc.stdout) or stdout, _as_text(exc.stderr) or stderr
+                for pipe in (proc.stdout, proc.stderr):
+                    try:
+                        pipe.close()
+                    except (OSError, ValueError):
+                        pass
+            return stdout, stderr, None, True
+        finally:
+            fleet.discard(proc)
 
 
 def run_cell(model: dict, dim: dict, phase: str, brief: str, repo: Path, out: Path,
-             timeout: float) -> dict:
+             timeout: float, fleet: Optional[_Fleet] = None) -> dict:
     """One seat, one process. Whatever goes wrong is `unreached` with the reason, never a verdict."""
     repo_text = str(repo)
     argv = [a.replace("{repo}", repo_text) for a in model["argv"]]
     resolved = shutil.which(argv[0])                 # on Windows `claude` is claude.cmd
     if resolved:
         argv[0] = resolved
+    stem = f"{phase}__{_safe(dim['id'])}__{_safe(model['id'])}"
+    cells = out / "cells"
+    brief_file = cells / f"{stem}.brief.txt"         # the seat's stdin, and evidence of what it was sent
+    brief_file.write_bytes(brief.encode("utf-8"))    # bytes: no newline translation on Windows
     stdout = stderr = ""
     exit_code: Optional[int] = None
     reason: Optional[str] = None
     started = time.monotonic()
     try:
-        stdout, stderr, exit_code, timed_out = _run_process(argv, brief, repo_text, timeout)
+        stdout, stderr, exit_code, timed_out = _run_process(argv, brief_file, repo_text, timeout, fleet)
         if timed_out:
             reason = f"timed out after {timeout:g}s"
     except OSError as exc:
@@ -474,8 +542,6 @@ def run_cell(model: dict, dim: dict, phase: str, brief: str, repo: Path, out: Pa
     if reason is None and verdict is None:
         reason = "answer has no `VERDICT: pass` or `VERDICT: fail` line"
 
-    stem = f"{phase}__{_safe(dim['id'])}__{_safe(model['id'])}"
-    cells = out / "cells"
     (cells / f"{stem}.stdout.txt").write_text(stdout, encoding="utf-8")
     (cells / f"{stem}.stderr.txt").write_text(stderr, encoding="utf-8")
     return {"model": model["id"], "dimension": dim["id"], "phase": phase,
@@ -490,30 +556,34 @@ def _as_text(value: Any) -> str:
     return value or ""
 
 
-def _not_run(model: dict, dim: dict, phase: str) -> dict:
+def _not_run(model: dict, dim: dict, phase: str, reason: str = STOPPED) -> dict:
     return {"model": model["id"], "dimension": dim["id"], "phase": phase, "verdict": UNREACHED,
-            "reason": "not run: round stopped after an unreached seat", "exit_code": None,
-            "seconds": 0.0, "usage": None, "answer": None}
+            "reason": reason, "exit_code": None, "seconds": 0.0, "usage": None, "answer": None}
 
 
 def _run_phase(jobs: int, cells: List[Tuple[dict, dict, str, str]], repo: Path, out: Path,
-               timeout: float) -> List[dict]:
-    """Run the cells, at most `jobs` at once. The first unreached cell stops the round (DIR-2): cells
-    not yet started are cancelled and reported unreached; cells already running finish."""
-    stop = threading.Event()
+               timeout: float) -> Tuple[List[dict], bool]:
+    """(results, interrupted). Run the cells, at most `jobs` at once. The first unreached cell stops
+    the round (DIR-2): cells not yet started are cancelled and reported unreached; cells already
+    running finish. Ctrl-C is harder: queued cells are cancelled and the running seats' process trees
+    are killed too, and the cells come back unreached, "interrupted by the operator"."""
+    fleet = _Fleet()
 
     def job(model: dict, dim: dict, phase: str, brief: str) -> dict:
         # the worker itself raises the flag: a worker that finished the unreached cell would
         # otherwise take the next queued one before the main thread got round to cancelling it
-        if stop.is_set():
-            return _not_run(model, dim, phase)
-        cell = run_cell(model, dim, phase, brief, repo, out, timeout)
+        if fleet.stop.is_set():
+            return _not_run(model, dim, phase, INTERRUPTED if fleet.aborted.is_set() else STOPPED)
+        cell = run_cell(model, dim, phase, brief, repo, out, timeout, fleet)
         if cell["verdict"] == UNREACHED:
-            stop.set()
+            fleet.stop.set()
         return cell
 
-    with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-        futures = [pool.submit(job, m, d, phase, brief) for m, d, phase, brief in cells]
+    pool = ThreadPoolExecutor(max_workers=max(1, jobs))
+    futures = [pool.submit(job, m, d, phase, brief) for m, d, phase, brief in cells]
+    running: set = set()
+    interrupted = False
+    try:
         waiting = set(futures)
         stopped = False
         while waiting:
@@ -523,10 +593,30 @@ def _run_phase(jobs: int, cells: List[Tuple[dict, dict, str, str]], repo: Path, 
                 for f in waiting:
                     f.cancel()
                 waiting = {f for f in waiting if not f.cancelled()}
-        results = []
-        for future, (model, dim, phase, _brief) in zip(futures, cells):
-            results.append(_not_run(model, dim, phase) if future.cancelled() else future.result())
-        return results
+    except KeyboardInterrupt:
+        interrupted = True
+        running = {f for f in futures if f.running()}
+        fleet.abort()                                # first: a worker must not start a seat after the cancel
+        for f in futures:
+            f.cancel()
+    finally:
+        while True:
+            try:
+                pool.shutdown(wait=True)
+                break
+            except KeyboardInterrupt:                # a second Ctrl-C: kill again, keep waiting for the workers
+                interrupted = True
+                fleet.abort()
+    results = []
+    for future, (model, dim, phase, _brief) in zip(futures, cells):
+        if future.cancelled():
+            results.append(_not_run(model, dim, phase, INTERRUPTED if interrupted else STOPPED))
+            continue
+        cell = future.result()
+        if future in running and cell["verdict"] == UNREACHED:
+            cell["reason"] = INTERRUPTED             # killed by the operator, not a seat's own failure
+        results.append(cell)
+    return results, interrupted
 
 
 # ---------------------------------------------------------------------------------------- round
@@ -548,9 +638,34 @@ def _inside(path: Path, parent: Path) -> bool:
         return False
 
 
+def _load_resume(path: Path, sha: str, dims: List[dict], models: List[dict],
+                 brief_sha: str) -> Dict[Tuple[str, str, str], dict]:
+    """The cells of an earlier round that were reached (pass/fail), keyed (phase, dimension, model).
+    Refused unless that round saw the same commit, the same matrix and the same brief: a kept answer
+    is only an answer to the question being asked now if all three agree."""
+    where = Path(path) / "report.json"
+    try:
+        old = json.loads(where.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ConfigError(f"--resume: cannot read {where}: {exc}") from None
+    if not isinstance(old, dict):
+        raise ConfigError(f"--resume: {where} is not a panel report")
+    if old.get("sha") != sha:
+        raise ConfigError(f"resume needs the same commit (KN-14): {path} was run at "
+                          f"{str(old.get('sha'))[:12]}, the tree is at {sha[:12]}")
+    matrix = old.get("matrix") if isinstance(old.get("matrix"), dict) else {}
+    if matrix.get("dimensions") != [d["id"] for d in dims] or matrix.get("models") != [m["id"] for m in models]:
+        raise ConfigError(f"resume needs the same matrix: {path} ran dimensions "
+                          f"{matrix.get('dimensions')} x models {matrix.get('models')}")
+    if old.get("brief_sha256") != brief_sha:
+        raise ConfigError(f"resume needs the same brief: {path} was run on a different one")
+    return {(c.get("phase"), c.get("dimension"), c.get("model")): c
+            for c in old.get("cells", []) if isinstance(c, dict) and c.get("verdict") in (PASS, FAIL)}
+
+
 def run_round(config_path: Path, repo: Path, brief_path: Path, out: Path,
               only: Optional[List[str]] = None, jobs: int = DEFAULT_JOBS, cross_read: bool = True,
-              cell_timeout: float = DEFAULT_TIMEOUT) -> int:
+              cell_timeout: float = DEFAULT_TIMEOUT, resume: Optional[Path] = None) -> int:
     """One round. Returns the exit code; prints what it did."""
     repo = Path(repo).resolve()                      # once: `{repo}` in argv and the seat's cwd must agree
     sha, dirty, unanswerable = _freeze(repo)
@@ -564,14 +679,19 @@ def run_round(config_path: Path, repo: Path, brief_path: Path, out: Path,
         print("commit or stash them; nothing was run.")
         return 1
 
+    kept: Dict[Tuple[str, str, str], dict] = {}
     try:
         config = load_config(config_path)
         dims, models = select_matrix(config, only)
-        brief = Path(brief_path).read_text(encoding="utf-8")
+        raw_brief = Path(brief_path).read_bytes()     # bytes: the size disclosed is the file's own
+        brief = raw_brief.decode("utf-8")             # no newline translation, so what is sent is what was read
+        brief_sha = hashlib.sha256(raw_brief).hexdigest()
         if _inside(out, repo):
             raise ConfigError(f"--out {out} is inside the repo; writing it would dirty the frozen "
                               "tree (KN-14) — choose a directory outside it")
-    except OSError as exc:
+        if resume is not None:
+            kept = _load_resume(resume, sha, dims, models, brief_sha)
+    except (OSError, UnicodeError) as exc:
         print(f"error: {exc}")
         return 2
     except ConfigError as exc:
@@ -586,7 +706,7 @@ def run_round(config_path: Path, repo: Path, brief_path: Path, out: Path,
 
     disclosure = {"models": [{"id": m["id"], "executable": m["argv"][0],
                               "reach": m.get("reach", DEFAULT_REACH)} for m in models],
-                  "brief_bytes": len(brief.encode("utf-8")), "repo": str(repo), "repo_readable": True}
+                  "brief_bytes": len(raw_brief), "repo": str(repo), "repo_readable": True}
     print("sending, before anything is dispatched:")
     for m in disclosure["models"]:
         print(f"  {m['id']}: {m['executable']} (reach: {m['reach']})")
@@ -599,15 +719,30 @@ def run_round(config_path: Path, repo: Path, brief_path: Path, out: Path,
     review_n, cross_n = session_count(dims, models, cross_read)
     print(f"round at {sha[:12]}: {len(dims)} dimension(s) x {len(models)} model(s) = "
           f"{review_n} review session(s), then {cross_n} cross-read; up to {jobs} at once")
+    if resume is not None:
+        print(f"resuming {resume}: keeping {len(kept)} reached cell(s), re-running the rest")
+
+    def phase(plan: List[Tuple[dict, dict, str, str]]) -> Tuple[List[dict], bool]:
+        """The plan's cells in plan order: the kept ones as they were, the others run now."""
+        todo = [item for item in plan if (item[2], item[1]["id"], item[0]["id"]) not in kept]
+        fresh = {}
+        interrupted = False
+        if todo:
+            ran, interrupted = _run_phase(jobs, todo, repo, out, cell_timeout)
+            fresh = {(c["phase"], c["dimension"], c["model"]): c for c in ran}
+        return [kept.get((i[2], i[1]["id"], i[0]["id"])) or fresh[(i[2], i[1]["id"], i[0]["id"])]
+                for i in plan], interrupted
 
     reasons: List[str] = []
-    review = _run_phase(jobs, [(m, d, "review", review_header(m, d, sha) + brief)
-                               for d in dims for m in models], repo, out, cell_timeout)
+    review, interrupted = phase([(m, d, "review", review_header(m, d, sha) + brief)
+                                 for d in dims for m in models])
     cells = list(review)
     unreached = [c for c in review if c["verdict"] == UNREACHED]
     disagreements: List[dict] = []
     cross: List[dict] = []
-    if unreached:
+    if interrupted:
+        reasons.append(INTERRUPTED)
+    elif unreached:
         reasons.append(f"{len(unreached)} review cell(s) unreached — cross-read skipped")
     elif cross_n:
         by_key = {(c["dimension"], c["model"]): c["answer"] for c in review}
@@ -616,10 +751,12 @@ def run_round(config_path: Path, repo: Path, brief_path: Path, out: Path,
             for m in models:
                 others = [(o["id"], by_key[(d["id"], o["id"])]) for o in models if o["id"] != m["id"]]
                 plan.append((m, d, "cross", cross_brief(m, d, sha, brief, others)))
-        cross = _run_phase(jobs, plan, repo, out, cell_timeout)
+        cross, interrupted = phase(plan)
         cells += cross
         unreached = [c for c in cross if c["verdict"] == UNREACHED]
-        if unreached:
+        if interrupted:
+            reasons.append(INTERRUPTED)
+        elif unreached:
             reasons.append(f"{len(unreached)} cross-read cell(s) unreached")
         for c in cross:
             for line in (c["answer"] or "").splitlines():
@@ -627,7 +764,7 @@ def run_round(config_path: Path, repo: Path, brief_path: Path, out: Path,
                     disagreements.append({"dimension": c["dimension"], "model": c["model"],
                                           "line": line.strip()})
 
-    if any(c["verdict"] == UNREACHED for c in cells):
+    if interrupted or any(c["verdict"] == UNREACHED for c in cells):
         result = "incomplete"
     elif all(c["verdict"] == PASS for c in cells):
         result = "pass"
@@ -636,6 +773,11 @@ def run_round(config_path: Path, repo: Path, brief_path: Path, out: Path,
     if not cross_n:                                   # DIR-3: a review nobody cross-read is not a pass
         reasons.append("cross-read skipped (--no-cross-read); DIR-3 requires it" if not cross_read else
                        "single-model config: one engine, nobody to cross-read; DIR-3 requires it")
+        if result == "pass":
+            result = "incomplete"
+    left_out = reduced_panel(config, dims, models)
+    if left_out:                                      # DIR-3: a smaller matrix than the configured one is a re-check
+        reasons.append(f"reduced panel: {left_out}")
         if result == "pass":
             result = "incomplete"
 
@@ -648,7 +790,8 @@ def run_round(config_path: Path, repo: Path, brief_path: Path, out: Path,
                        (f"; differs: {', '.join(end_dirty)}" if end_dirty else ""))
 
     report = {"result": result, "sha": sha, "config": str(config_path), "reasons": reasons,
-              "disclosure": disclosure,
+              "disclosure": disclosure, "brief_sha256": brief_sha,
+              "resumed_from": str(resume) if resume is not None else None,
               "matrix": {"dimensions": [d["id"] for d in dims], "models": [m["id"] for m in models],
                          "review_sessions": review_n, "cross_sessions": cross_n},
               "cells": cells, "disagreements": disagreements, "usage_summary": usage_summary(cells)}
@@ -665,6 +808,8 @@ def run_round(config_path: Path, repo: Path, brief_path: Path, out: Path,
         print(f"  {why}")
     decide = f" — {len(disagreements)} disagreement(s) to decide" if disagreements else ""
     print(f"result: {result}{decide} — report in {out / 'report.md'}")
+    if interrupted:
+        return 130
     return {"pass": 0, "fail": 1}.get(result, 3)
 
 
@@ -684,15 +829,26 @@ def _reset_text(window: dict) -> Optional[str]:
     return None
 
 
+def _window_ok(window: Any) -> bool:
+    return isinstance(window, dict) and isinstance(window.get("used_percent"), (int, float))
+
+
+def _windows(limits: Any) -> bool:
+    """Whether a `rate_limits` object carries a reading at all: at least one window with a percentage."""
+    return isinstance(limits, dict) and any(_window_ok(limits.get(w)) for w in ("primary", "secondary"))
+
+
 def usage_summary(cells: List[dict]) -> dict:
     """Claude spend summed; codex quota as the snapshot with the latest observation time (a quota is
     a level, not a flow, so summing it would be wrong, and cells finish in any order, so list order
-    says nothing about which is newest). remaining = 100 - used_percent."""
+    says nothing about which is newest) AMONG the cells that have a reading: a cell whose codex turn
+    failed has a thread and a rollout but no rate limits, and must not displace one that does.
+    remaining = 100 - used_percent."""
     claude = {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0,
               "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "cells": 0}
     codex: Dict[str, Any] = {"primary": None, "secondary": None, "cells": 0,
                              "input_tokens": 0, "output_tokens": 0}
-    latest = datetime.min.replace(tzinfo=timezone.utc)
+    observed: List[Tuple[datetime, dict]] = []
     for cell in cells:
         usage = cell.get("usage")
         if not isinstance(usage, dict):
@@ -713,16 +869,17 @@ def usage_summary(cells: List[dict]) -> dict:
                         codex[name] += tokens[name]
             if isinstance(tokens, dict) or isinstance(limits, dict):
                 codex["cells"] += 1
-            if isinstance(limits, dict) and _when(usage.get("rate_limits_at")) >= latest:
-                latest = _when(usage.get("rate_limits_at"))      # the newest observation, not the last cell
-                for which in ("primary", "secondary"):
-                    window = limits.get(which)
-                    codex[which] = None
-                    if isinstance(window, dict) and isinstance(window.get("used_percent"), (int, float)):
-                        codex[which] = {"used_percent": window["used_percent"],
-                                        "remaining_percent": round(100 - window["used_percent"], 2),
-                                        "window_minutes": window.get("window_minutes"),
-                                        "resets": _reset_text(window)}
+            if _windows(limits):                     # a cell whose turn failed has a rollout, not a reading
+                observed.append((_when(usage.get("rate_limits_at")), limits))
+    if observed:                                     # the newest reading; the later cell wins a tie
+        _, limits = max(enumerate(observed), key=lambda item: (item[1][0], item[0]))[1]
+        for which in ("primary", "secondary"):
+            window = limits.get(which)
+            if _window_ok(window):
+                codex[which] = {"used_percent": window["used_percent"],
+                                "remaining_percent": round(100 - window["used_percent"], 2),
+                                "window_minutes": window.get("window_minutes"),
+                                "resets": _reset_text(window)}
     claude["cost_usd"] = round(claude["cost_usd"], 6)
     return {"claude": claude, "codex": codex}
 
@@ -746,6 +903,8 @@ def render_markdown(report: dict, dims: List[dict], models: List[dict]) -> str:
     for why in report["reasons"]:
         lines.append(f"- **{why}**")
     sent = report["disclosure"]
+    if report.get("resumed_from"):
+        lines.insert(4, f"- resumed from `{report['resumed_from']}`: its pass/fail cells were kept")
     lines += ["", "## What was sent, and to whom", ""]
     lines += [f"- {m['id']}: `{m['executable']}`, reach: {m['reach']}" for m in sent["models"]]
     lines += [f"- the brief, {sent['brief_bytes']} bytes, to every seat (a cross-read adds the other "
@@ -778,6 +937,16 @@ def render_markdown(report: dict, dims: List[dict], models: List[dict]) -> str:
 
 # -------------------------------------------------------------------------------------------- CLI
 
+RUN_EPILOG = """\
+Ctrl-C stops the round: queued sessions are not started, running seats are killed, report.json and
+report.md are still written (incomplete, "interrupted by the operator"), exit 130.
+
+A round too big for one quota window: run it again with --resume DIR, DIR being the --out of the
+earlier one. Cells that said pass or fail are kept; only unreached cells run again. A different
+commit is refused (KN-14), as is a different matrix or brief.
+"""
+
+
 def _list(config_path: Path) -> int:
     try:
         config = load_config(config_path)
@@ -803,13 +972,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    run = sub.add_parser("run", help="run the review matrix")
+    run = sub.add_parser("run", help="run the review matrix", epilog=RUN_EPILOG,
+                         formatter_class=argparse.RawDescriptionHelpFormatter)
     run.add_argument("--brief", required=True, metavar="BRIEF.md")
     run.add_argument("--out", required=True, metavar="DIR", help="outside the repo")
     run.add_argument("--config", default=str(DEFAULT_CONFIG), metavar="PATH")
     run.add_argument("--repo", default=".", metavar="PATH")
     run.add_argument("--only-dimensions", default=None, metavar="a,b",
-                     help="run exactly these dimensions, disabled ones included")
+                     help="run exactly these dimensions, disabled ones included; a reduced panel "
+                          "can never pass (exit 3)")
+    run.add_argument("--resume", default=None, metavar="DIR",
+                     help="an earlier round's --out: keep its pass/fail cells, re-run only the "
+                          "unreached ones (same commit, matrix and brief required)")
     run.add_argument("--jobs", type=int, default=DEFAULT_JOBS, metavar="N")
     run.add_argument("--cross-read", action=argparse.BooleanOptionalAction, default=True)
     run.add_argument("--cell-timeout", type=float, default=DEFAULT_TIMEOUT, metavar="SECONDS")
@@ -823,7 +997,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.only_dimensions is not None:
         only = [n.strip() for n in args.only_dimensions.split(",") if n.strip()]
     return run_round(Path(args.config), Path(args.repo), Path(args.brief), Path(args.out), only=only,
-                     jobs=args.jobs, cross_read=args.cross_read, cell_timeout=args.cell_timeout)
+                     jobs=args.jobs, cross_read=args.cross_read, cell_timeout=args.cell_timeout,
+                     resume=Path(args.resume) if args.resume else None)
 
 
 if __name__ == "__main__":
