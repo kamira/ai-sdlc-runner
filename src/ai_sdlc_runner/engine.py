@@ -465,6 +465,11 @@ class RunReport:
     #: "at random" is only acceptable if the choice is afterwards visible: an unrecorded random
     #: dispatch is indistinguishable from a preference nobody declared.
     dispatches: List[str] = field(default_factory=list)
+    #: Asks that ran with an effort in force and a backend that could not be told it
+    #: (CHG-20261005-01): `node: model`, once each. Recorded rather than refused — the model may be a
+    #: local one with no such control — because an effort nobody applied and nobody said so reads
+    #: afterwards as an effort that was (KN-11).
+    effort_not_applied: List[str] = field(default_factory=list)
     #: Which change class governed this run and on whose authority (CHG-20260827-20 task 3).
     #: Always set, including to "nothing was declared": a run that relaxed a gate and a run that
     #: never had one to relax must not read the same afterwards.
@@ -548,6 +553,7 @@ class RunReport:
             "intake_asked_somebody": self.intake_asked_somebody,
             "rulings": list(self.rulings),
             "dispatches": list(self.dispatches),
+            "effort_not_applied": list(self.effort_not_applied),
             "rejections": list(self.rejections),
             "store_errors": list(self.store_errors),
             "send_backs": [dict(b) for b in self.send_backs],
@@ -675,6 +681,10 @@ class RunConfig:
     #: not this field's: the same three ids mean three adjudicated voices on a ``model_panel`` and a
     #: pool of three on a ``pool``. A node with nothing here is asked once, however it is declared.
     node_models: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    #: ``node id -> effort``: how hard a node's backend is asked to think (CHG-20261005-01). A node
+    #: with nothing here gets no effort at all. What an effort *means* is the model's own
+    #: `effort_argv` template; the engine only says which node carries one.
+    efforts: Mapping[str, str] = field(default_factory=dict)
     #: The seed a pool dispatches with. Random on purpose — any cleverer rule is the runner deciding
     #: which model is better at a task it has not seen — but *reproducible* on purpose too, because
     #: "which model built this" has to be answerable afterwards, and a run nobody can repeat is a
@@ -1119,7 +1129,7 @@ def _workspace(node: graph.Node, cycle: int) -> str:
 
 
 def _open(factory: SessionFactory, seat: Optional[str], model: Optional[str] = None,
-          role: str = "", workspace: str = "", grade: str = ""):
+          role: str = "", workspace: str = "", grade: str = "", effort: str = ""):
     """Open a session, letting a factory route by seat or by model if it accepts one.
 
     Routing — which model answers — lives in the factory and never in the order, which is what makes
@@ -1159,6 +1169,10 @@ def _open(factory: SessionFactory, seat: Optional[str], model: Optional[str] = N
         #
         # Same ask-if-you-want-it contract as `role` and `workspace`.
         kwargs["grade"] = grade
+    if "effort" in params:
+        # CHG-20261005-01. How hard this ask's backend is told to think, `""` for no say. Same
+        # ask-if-you-want-it contract as `grade`: a factory written before this never sees it.
+        kwargs["effort"] = effort
     return factory(**kwargs) if kwargs else factory()
 
 
@@ -1244,7 +1258,8 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
          conversation=None, role: str = "", workspace: str = "",
          accept: Optional[Callable[[Mapping[str, object]], object]] = None,
          resumed: Optional[List[str]] = None,
-         heard: Optional[Callable[[Mapping[str, object]], bool]] = None):
+         heard: Optional[Callable[[Mapping[str, object]], bool]] = None,
+         effort: str = "", effort_not_applied: Optional[List[str]] = None):
     """Open a session, ask once, close it — the close guaranteed even if the ask raises.
 
     ``seen`` holds the session **objects**, not their ``id()``: an id is not an identity once the
@@ -1326,10 +1341,16 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
     verdict_here = order.get("policy_verdict") or {}
     grade = str(verdict_here.get("risk") or "") if isinstance(verdict_here, Mapping) else ""
     try:
-        session = _open(factory, seat, model, role, workspace, grade)
+        session = _open(factory, seat, model, role, workspace, grade, effort)
     except Exception as exc:
         _failed(exc)
         raise
+    if effort and effort_not_applied is not None and getattr(session, "effort_applied", None) is not True:
+        # **The session says whether it carried the effort; silence is "no".** A backend that
+        # cannot report it (the stub, a factory that predates efforts) did not apply it.
+        note = f"{node_id}: {model or '(the default backend)'}"
+        if note not in effort_not_applied:
+            effort_not_applied.append(note)
     if any(previous is session for previous in seen):
         repeated = EngineError(
             "the session factory returned a session it already returned: every ask opens its own "
@@ -3348,7 +3369,9 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                     conversation=cfg.conversation, role=node.role, resumed=report.resumed,
                                   workspace=_workspace(node, build_cycles),
                                   heard=lambda a, _n=node: _heard(_n, ONE, a),
-                                  accept=_accept_for(node, cfg, report))
+                                  accept=_accept_for(node, cfg, report),
+                                  effort=cfg.efforts.get(node.id, ""),
+                                  effort_not_applied=report.effort_not_applied)
                 report.asks.append(Ask(node.id, node.role, None, result, model=model))
                 answers.append(result)
 

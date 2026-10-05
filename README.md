@@ -648,10 +648,11 @@ src/ai_sdlc_runner/
   paths.py        every filesystem call, because Windows lies about long paths
   worktree.py     per-module isolation, and what a halted run keeps
   sandbox.py      what a run may reach, and what it records when it cannot be bounded
-  settings.py     what an operator sets on a screen: seats, high-risk mode, the vouch
+  settings.py     what an operator sets on a screen: seats, high-risk mode, the vouch, the coder
+  detect.py       which model CLIs are installed, for `runner setup`
   tui.py          the interactive selector
   console/        the operator console — one page, no build step
-  cli.py          flow · policy · settings · run · serve · conversations · export
+  cli.py          flow · policy · settings · setup · run · serve · conversations · export
 docs/
   SCHEMAS.md      all sixteen schemas, and which a machine enforces
   API.md          the nineteen HTTP routes, and the guard that runs before every one
@@ -704,6 +705,11 @@ runner --config runner.yaml serve --plan plan.json          # POST /config/nodes
 runner --config runner.yaml run   --plan plan.json          # reads the same store
 runner run --plan plan.json --assignment-store none         # the plan alone (run only; serve refuses it)
 ```
+
+`runner setup` finds `claude`, `codex` and `ollama` on `PATH` and offers each as a registry entry
+(`--yes` to accept off a terminal). A model carries an optional `tier` and an `effort_argv`
+template; with nothing assigned to `engineer_build`, the `coder_model` setting — or the registry's
+only `mid` model — builds, at `coder_effort`. See `docs/MODELS.md`.
 
 **The plan wins where it says something; the store fills where the plan is silent.** That is
 `settings.py`'s rule one layer out — a per-change declaration must not be silently overridden by
@@ -822,7 +828,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 2696 tests
+pytest -q          # 2739 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

@@ -79,10 +79,12 @@ Only **registry model ids** can be assigned through the store. A raw command lin
   "command":   ["claude", "-p"],          // cli only — argv as a LIST
   "endpoint":  "https://api…/v1/messages",// api only
   "key_env":   "ANTHROPIC_API_KEY",       // api only — the NAME of a variable. Never a key.
-  "note":      "" }
+  "note":      "",
+  "tier":      "" | "high" | "mid" | "low",      // a label a person gives it; empty = unclassified
+  "effort_argv": ["--effort", "{effort}"] }     // cli only — appended when an effort is in force
 ```
 
-Eight fields, listed in `models.Model`, persist. Three more are **computed on every read and never stored**:
+Ten fields, listed in `models.Model`, persist. Three more are **computed on every read and never stored**:
 
 ```jsonc
 { "reach": "local" | "internal" | "external",
@@ -96,6 +98,17 @@ Eight fields, listed in `models.Model`, persist. Three more are **computed on ev
 > Until CHG-20260907-14 this quoted *"both are computed; storing them would…"*, a comment
 > `models.py` stopped carrying when the exclusion moved into `models.COMPUTED`
 > (CHG-20260903-39). The count was two and the words were a sentence nothing said.
+
+### `tier` and `effort_argv` (CHG-20261005-01)
+
+`tier` is a **label**, not an inference: the runner holds no name→tier table, because one goes stale
+with every model release. `setup` or the person gives a model its tier.
+
+`effort_argv` is an argv **template** rather than a vendor table, so the runner holds no knowledge of
+any one CLI and a local model needs no code. When an effort is in force the factory appends the
+template, each element with `{effort}` substituted, after `command`. When the model has none the run
+says so — `effort_not_applied` on the report and an `effort:` line in `runner run` — rather than
+refusing, because a local model may have no such control and the effort is a request, not a gate.
 
 ### `command` is a list, not a string
 
@@ -123,6 +136,8 @@ optional."*
 | no `vendor` | which API this speaks is not derivable from the endpoint, and guessing would be inventing one |
 | no `name` | — |
 | a `transport` outside `cli` / `api` | — |
+| a `tier` outside `high` / `mid` / `low` / empty | a label nothing reads, or a typo that classifies nothing |
+| an `effort_argv` with no `{effort}` in any element | the effort asked for would never reach the process |
 
 ### A `cli` model
 
@@ -130,6 +145,8 @@ optional."*
 |---|---|
 | no `command` | there is nothing to run |
 | **any `endpoint` or `key_env`** | *"a field nothing reads is one somebody will later assume was honoured"* |
+
+(`effort_argv` is read by a `cli` model only.)
 
 ### An `api` model
 
@@ -139,6 +156,7 @@ optional."*
 | a scheme other than `http`/`https` | — |
 | **a secret in the query string** | query strings land in access logs and proxy logs — the two places nobody thinks to inspect |
 | any `command` | it cannot use one |
+| **an `effort_argv`** | nothing dispatches an `api` model, so nothing would read it |
 | a `key_env` that is not a variable name | see above — the shape catches a pasted key |
 | **`reach == external` with no `key_env`** | an unauthenticated public endpoint is more likely a half-finished entry than a real one, and half-finished is worth stopping on |
 
@@ -241,6 +259,36 @@ a seat naming a registry model id      (resolved first, so the two naming scheme
   →  agent_command from runner.yaml
   →  a stub that answers nothing
 ```
+
+### The coding role's default (CHG-20261005-01)
+
+`engineer_build` is the one coding node that picks a model; `fix_pass` and `engineer_selfverify`
+follow it. When nothing is assigned to it — by the plan or by the store — `cli.coder_defaults`
+fills it, **after** `store.resolve` so the dispatch record is unchanged:
+
+```
+an assignment from the plan or the store         (untouched)
+  →  settings.coder_model                        (must name a registry model; an unknown id is an
+                                                  error at run time, not at save time — the
+                                                  registry is not known to settings)
+  →  the registry's only tier "mid" model
+  →  several "mid" models, no coder_model: a notice naming them, and nothing assigned — no random pick
+  →  none: unchanged (agent_command, or the stub)
+```
+
+`settings.coder_effort` (`low` | `medium` | `high`, default `medium`) is the effort for
+`engineer_build` and the nodes that follow it. Other nodes get none.
+
+### `runner setup`
+
+Looks for `claude`, `codex` and `ollama` on the **absolute** entries of `PATH` (`PATHEXT` on
+Windows), never in the working directory, and runs exactly one thing: `ollama list`, with a timeout.
+It probes no port. It proposes entries — `claude-sonnet-5-5` (tier `mid`, with an `--effort
+{effort}` template), one `codex` entry with the model left for you, and one `ollama run <model>`
+wrapper per listed model — and writes only what is accepted: each one on a terminal, or all of
+them with `--yes` off one. Entries go to the registry file and the store `serve` reads (`--models`,
+`--assignment-store`, `--token-dir`), and it offers to set `coder_model` to an accepted `mid` model.
+It assigns nothing to any node. Nothing found: it says so, points here, and exits 0.
 
 Routing lives in the **factory**, never in the work order. That is what makes a panel meaningful:
 every voice receives an identical order and only the answerer differs.

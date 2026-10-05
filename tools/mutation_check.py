@@ -594,8 +594,8 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "propagation", "the payload sketch may omit a key the route ships again",
         REPO / "docs" / "API.md",
-        '''                "reach", "leaves_this_machine", "reach_guessed" } ],''',
-        '''                "reach", "leaves_this_machine" } ],''',
+        '''                "tier", "effort_argv", "reach", "leaves_this_machine", "reach_guessed" } ],''',
+        '''                "tier", "effort_argv", "reach", "leaves_this_machine" } ],''',
         "tests/test_api_schema.py"),
 
     Mutation(
@@ -651,8 +651,8 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "claim-referent", "a field count may stop saying what it counts again",
         REPO / "docs" / "structure" / "design.md",
-        '''**Three fields, listed in `settings.FIELDS`.**''',
-        '''**Three fields.**''',
+        '''**Five fields, listed in `settings.FIELDS`.**''',
+        '''**Five fields.**''',
         "tests/test_documented_numbers.py"),
 
     Mutation(

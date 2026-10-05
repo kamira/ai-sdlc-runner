@@ -48,7 +48,7 @@ def test_the_page_lists_exactly_the_fields_that_persist():
     # rather than equality, because the page names field-like identifiers for other reasons.
     absent = sorted(n for n in models.COMPUTED if n not in PAGE)
     assert not absent, f"the page must name every computed field; it omits {absent}"
-    assert len(persisted) == 8, f"the registry now persists {len(persisted)} fields, not eight"
+    assert len(persisted) == 10, f"the registry now persists {len(persisted)} fields, not ten"
     # The page's own sentence, read as a **number** rather than matched as a string. It said
     # `"Eight fields persist" in FLAT`, so correcting the page — which CHG-20260907-14 had to do,
     # to name `models.Model` — broke the guard. A guard that pins a sentence is a guard the page

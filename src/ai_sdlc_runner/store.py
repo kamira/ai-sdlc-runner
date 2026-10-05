@@ -47,7 +47,7 @@ from . import graph, models as models_mod, paths, policy
 
 #: Bumped when the tables change. Read and compared at open — a version nobody consults is a number,
 #: not a mechanism, which is what an earlier draft of the design was pulled up for.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 #: The modes that do **something** with a list of models. The other four ignore it entirely, and
 #: assigning to them is refused rather than stored: a setting that looks configured and does nothing
@@ -228,6 +228,19 @@ def _migrate(db: sqlite3.Connection) -> None:
             for statement in _SCHEMA_3:
                 db.execute(statement)
             db.execute("PRAGMA user_version = 3")
+    if found < 4:
+        # Schema 4 adds a model's tier and effort template (CHG-20261005-01). The two columns are
+        # added to a `models` table verified to be the schema-3 one first, and both default to
+        # "nothing", so a store written before this change reads back exactly as it was.
+        _verify_or_refuse(db, before=3)
+        with _locked(db), db:
+            db.execute("BEGIN")            # see schema 1: DDL does not open one by itself
+            have = {row[1] for row in db.execute("PRAGMA table_info(models)")}
+            for column, statement in _SCHEMA_4:
+                # A store half-built at version 0 from the *current* DDL already has them.
+                if column not in have:
+                    db.execute(statement)
+            db.execute("PRAGMA user_version = 4")
     db.commit()
 
 
@@ -312,9 +325,21 @@ _SCHEMA_3 = (
 )
 
 
+#: Schema 4: the two columns a model gained. `ADD COLUMN` rather than a rebuilt table, because the
+#: assignment tables point at `models(id)` and a rebuild would have to drop what they reference.
+_SCHEMA_4 = (
+    ("tier", "ALTER TABLE models ADD COLUMN tier TEXT NOT NULL DEFAULT ''"),
+    ("effort_argv", "ALTER TABLE models ADD COLUMN effort_argv TEXT NOT NULL DEFAULT '[]'"),
+)
+
+#: `models` as schema 1 created it. A store below schema 4 must hold exactly this, because the
+#: columns the schema-4 block adds are not there yet.
+_MODELS_BEFORE_4 = ("id", "vendor", "name", "transport", "command_json", "endpoint", "key_env",
+                    "note")
+
 _EXPECTED = {
     "halt_routing": ("kind", "recipient"),
-    "models": ("id", "vendor", "name", "transport", "command_json", "endpoint", "key_env", "note"),
+    "models": _MODELS_BEFORE_4 + ("tier", "effort_argv"),
     "node_assignments": ("node_id", "ordinal", "model_id"),
     "seat_assignments": ("seat", "model_id"),
     "conversations": ("conversation_id", "project_id", "project_name", "schema", "run_json"),
@@ -322,12 +347,18 @@ _EXPECTED = {
 }
 
 
-def _verify_or_refuse(db: sqlite3.Connection) -> None:
-    """A table already here at version 0 must be the one we would have made."""
+def _verify_or_refuse(db: sqlite3.Connection, before: int = 0) -> None:
+    """A table already here must be the one we would have made at the version it claims.
+
+    `before` is the schema the store is being brought up *from*: below 4, `models` is the
+    eight-column table, and demanding the schema-4 shape of it would refuse every older store.
+    """
     for table, columns in _EXPECTED.items():
         found = tuple(row[1] for row in db.execute(f"PRAGMA table_info({table})"))
         if not found:
             continue                      # not there; it is about to be created
+        if table == "models" and before < 4 and found == _MODELS_BEFORE_4:
+            continue                      # the schema-1 shape; the schema-4 block adds the rest
         if found != columns:
             raise StoreError(
                 f"{table!r} already exists with columns {list(found)}, and this runner's schema "
@@ -370,12 +401,14 @@ def save_registry(db: sqlite3.Connection, registry: models_mod.Registry) -> None
     with _locked(db), db:
         db.executemany(
             "INSERT INTO models (id, vendor, name, transport, command_json, endpoint, key_env, "
-            "note) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "note, tier, effort_argv) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET vendor=excluded.vendor, name=excluded.name, "
             "transport=excluded.transport, command_json=excluded.command_json, "
-            "endpoint=excluded.endpoint, key_env=excluded.key_env, note=excluded.note",
+            "endpoint=excluded.endpoint, key_env=excluded.key_env, note=excluded.note, "
+            "tier=excluded.tier, effort_argv=excluded.effort_argv",
             [(m.id, m.vendor, m.name, m.transport, json.dumps(list(m.command)),
-              m.endpoint, m.key_env, m.note) for m in registry])
+              m.endpoint, m.key_env, m.note, m.tier, json.dumps(list(m.effort_argv)))
+             for m in registry])
         stale = [row[0] for row in db.execute("SELECT id FROM models")
                  if row[0] not in keep]
         for model_id in stale:
@@ -408,12 +441,13 @@ def load_registry(db: sqlite3.Connection) -> models_mod.Registry:
     """
     with _locked(db):
         rows = db.execute(
-            "SELECT id, vendor, name, transport, command_json, endpoint, key_env, note "
-            "FROM models ORDER BY id").fetchall()
+            "SELECT id, vendor, name, transport, command_json, endpoint, key_env, note, tier, "
+            "effort_argv FROM models ORDER BY id").fetchall()
     return models_mod.Registry(models=tuple(
         models_mod._model_from({
             "id": r[0], "vendor": r[1], "name": r[2], "transport": r[3],
-            "command": json.loads(r[4]), "endpoint": r[5], "key_env": r[6], "note": r[7]})
+            "command": json.loads(r[4]), "endpoint": r[5], "key_env": r[6], "note": r[7],
+            "tier": r[8], "effort_argv": json.loads(r[9])})
         for r in rows))
 
 

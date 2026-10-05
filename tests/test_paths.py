@@ -741,7 +741,7 @@ def test_every_exception_a_person_reads_goes_through_plain_in():
     assert not unstripped, (
         "these let an exception reach a person with the extended-length prefix still on it: "
         + ", ".join(unstripped))
-    assert modules == 21, f"the survey read {modules} modules; the package had 21"
-    assert in_scope == 12, (
-        f"the survey looked inside {in_scope} in-scope handlers; there were 12. It cannot "
+    assert modules == 22, f"the survey read {modules} modules; the package had 22"
+    assert in_scope == 13, (
+        f"the survey looked inside {in_scope} in-scope handlers; there were 13. It cannot "
         f"report a clean tree over handlers it did not open")

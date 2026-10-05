@@ -319,7 +319,7 @@ the way in — the same reason CSV cells are defused against formulas.
 
 ## 10 · Model registry — **closed**, entry *and* envelope
 
-Eight fields, listed in `models.Model`, persist. `_model_from` refuses anything else by name — and so, now, does the envelope.
+Ten fields, listed in `models.Model`, persist. `_model_from` refuses anything else by name — and so, now, does the envelope.
 A seat found that `{"models": [], "modelz": [...]}` loaded as an **empty registry**: one typo and
 every model you configured was gone with no message, which is the same defect `_model_from` refuses
 one level down. Closed on every path in: file load, `Registry.add`, and the console's
@@ -331,7 +331,9 @@ one level down. Closed on every path in: file load, `Registry.add`, and the cons
                 "command": ["claude", "-p"],     // argv as a LIST, never re-split by a shell
                 "endpoint": "https://…",         // api only
                 "key_env": "ANTHROPIC_API_KEY",  // the NAME of an env var. Never a key.
-                "note": "" } ] }
+                "note": "",
+                "tier": "",                      // "" | "high" | "mid" | "low" — a label, not inferred
+                "effort_argv": [] } ] }          // cli only — argv template; "{effort}" is substituted
 ```
 
 **Three fields, listed in `models.COMPUTED`, are computed and never stored** — `reach` is `local` /
@@ -348,7 +350,9 @@ closed all along and revision 1 of this page did not say so.
 ```jsonc
 { "review_seats": null,          // null = the floor (3)
   "high_risk_mode": false,       // may the floor be crossed at all
-  "ordinary_commands": [] }      // tools the operator vouches for — the TOOL, never a command line
+  "ordinary_commands": [],       // tools the operator vouches for — the TOOL, never a command line
+  "coder_model": "",             // registry id for engineer_build when nothing is assigned; "" = the only mid model
+  "coder_effort": "medium" }     // low | medium | high — for engineer_build and what follows it
 ```
 
 ## 12 · Attachment manifest
@@ -377,7 +381,7 @@ under pressure here; only the filename is."*
 
 `visited · asks · state · suspended · halted_at · halt_reason · relaxations · verdicts · on_trust ·
 confirmations · adjudications · single_model_panels · effects · resumed ·
-intake_asked_somebody · dispatches · survey ·
+intake_asked_somebody · dispatches · effort_not_applied · survey ·
 options · panel_rounds · send_backs · rejections · rulings · store_errors · change_class ·
 relaxations_by_class · risk_proposed · risk_settled · risk_agreed · halts ·
 class_authorised_by ·

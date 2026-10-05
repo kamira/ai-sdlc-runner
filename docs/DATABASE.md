@@ -170,7 +170,9 @@ CREATE TABLE models (
   command_json TEXT NOT NULL DEFAULT '[]',   -- argv as a LIST
   endpoint     TEXT NOT NULL DEFAULT '',     -- api only
   key_env      TEXT NOT NULL DEFAULT '',     -- the NAME of an env var. Never a key.
-  note         TEXT NOT NULL DEFAULT ''
+  note         TEXT NOT NULL DEFAULT '',
+  tier         TEXT NOT NULL DEFAULT '',     -- '' | 'high' | 'mid' | 'low'; a label a person gives (schema 4)
+  effort_argv  TEXT NOT NULL DEFAULT '[]'    -- argv template with {effort}, as a JSON list (schema 4)
 );
 
 -- `ordinal`, because the order of a list is load-bearing: a pool's seeded choice and a model
@@ -192,6 +194,12 @@ CREATE TABLE seat_assignments (
 **The five tables in this section** are all built (CHG-20260823-41); `halt_routing` is in §0.2, and the page-wide count is the six of line 3. `models`, `node_assignments` and
 `seat_assignments` arrived at schema 1; `conversations` and `turns` at schema 2, with the
 conversation-store migration this document had been describing for four rounds.
+
+**Schema 4 (CHG-20261005-01) adds two columns to `models`**, `tier` and `effort_argv`, by
+`ALTER TABLE … ADD COLUMN` with a default of nothing — so a schema-3 store reads back exactly as it
+was. `_verify_or_refuse` still compares columns exactly: below schema 4 the `models` table must be
+the eight-column one, and the migration adds the other two inside one transaction with the version
+stamp.
 
 That sentence used to read *"`conversations` and `turns` are not created by any code yet"*, with the
 reason attached: a table nothing reads or writes is a mechanism nobody invokes, and this repository

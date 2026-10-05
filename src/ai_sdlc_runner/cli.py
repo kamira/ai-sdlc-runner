@@ -23,8 +23,9 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Mapping, Optional, Sequence
 
 from . import attachments as attach_mod
 from . import sandbox as sandbox_mod
@@ -34,7 +35,7 @@ from . import paths
 from . import plan as plan_mod
 from . import store as store_mod
 from . import intake as intake_mod
-from . import engine, models as models_mod, graph, policy, settings as settings_mod, ship, tui, workorder
+from . import detect, engine, models as models_mod, graph, policy, settings as settings_mod, ship, tui, workorder
 
 DEFAULT_CONFIG = "config/runner.yaml"
 
@@ -413,8 +414,10 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
         return where
 
     def factory(seat: Optional[str] = None, model: Optional[str] = None, role: str = "",
-                workspace: str = "", grade: str = ""):
+                workspace: str = "", grade: str = "", effort: str = ""):
         argv = None
+        #: Did `effort` reach the argv? Only a registry model with an `effort_argv` can say yes.
+        effort_applied = False
         # A seat may name a registry model, exactly as a node does. Resolved first, because a plain
         # string that happens to be a model id meaning "run this program called claude" would be a
         # nasty way to find out the two naming schemes had diverged.
@@ -435,6 +438,11 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
                     f"yet, and pretending otherwise would send the work to the default and report "
                     f"it as {model!r}.")
             argv = list(entry.command)
+            if effort:
+                words = models_mod.with_effort(entry, effort)
+                if words is not None:
+                    argv += words
+                    effort_applied = True
         # `from_config` is the whole condition for applying `agent_cwd`: this argv came out of the
         # runner.yaml, so it travels with it. A seat command was typed in the operator's shell and a
         # registry command was named somewhere else; both keep the shell's directory, which is what
@@ -460,6 +468,9 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
                            risk=grade or risk, can_write=_may_write(seat, role),
                            require_sandbox=require_sandbox)
         process.tally = bounded
+        # Said back to the engine, which records an effort that was in force and not applied
+        # (CHG-20261005-01). A session that says nothing is read as "not applied".
+        process.effort_applied = effort_applied
         return process
 
     factory.isolated = isolated      # read by `cmd_run` for the report line
@@ -510,6 +521,54 @@ def cmd_policy(args: argparse.Namespace) -> int:
     return 0
 
 
+def coder_defaults(node_models: Mapping[str, Sequence[str]],
+                   registry: Optional["models_mod.Registry"],
+                   saved: "settings_mod.Settings"):
+    """The coding role's model and effort, laid over what was resolved (CHG-20261005-01).
+
+    Returns `(node_models, efforts, notices)`. **Applied after `store.resolve`**, so the plan and
+    the store still win where they speak and the engine's dispatch record is unchanged: this only
+    fills `engineer_build` when nothing is assigned to it. In order:
+
+    1. an assignment from the plan or the store: untouched;
+    2. `coder_model` from settings, which must name a registry model (an unknown id is an error
+       here, because the registry is not known to settings and a typo must not fall through to a
+       different model);
+    3. the registry's only `mid` model;
+    4. several `mid` models and no `coder_model`: a notice naming them, and nothing assigned.
+       Picking one would be the runner deciding which is better at a task it has not seen;
+    5. none: behaviour unchanged.
+
+    `coder_effort` goes to `engineer_build` and every node that follows it, whatever model builds.
+    """
+    merged = {node: list(ids) for node, ids in node_models.items()}
+    notices: List[str] = []
+    build = "engineer_build"
+    if not merged.get(build):
+        if saved.coder_model:
+            if registry is None:
+                raise CliError(
+                    f"settings name coder_model {saved.coder_model!r} and there is no model "
+                    f"registry to find it in. Add it (docs/MODELS.md), or clear coder_model.")
+            try:
+                registry.get(saved.coder_model)
+            except models_mod.ModelError as exc:
+                raise CliError(f"settings name coder_model {saved.coder_model!r}: {exc}")
+            merged[build] = [saved.coder_model]
+        elif registry is not None:
+            mid = [m.id for m in registry if m.tier == "mid"]
+            if len(mid) == 1:
+                merged[build] = mid
+            elif len(mid) > 1:
+                notices.append(
+                    f"{len(mid)} models are tier 'mid' ({', '.join(mid)}) and settings name no "
+                    f"coder_model, so {build} is left unassigned rather than chosen at random. "
+                    f"Set coder_model to one of them.")
+    follows = [n.id for n in graph.NODES if n.follows == build]
+    efforts = {node: saved.coder_effort for node in [build] + follows}
+    return merged, efforts, notices
+
+
 def cmd_settings(args: argparse.Namespace) -> int:
     """Show the settings, or open the screen that edits them.
 
@@ -536,6 +595,104 @@ def cmd_settings(args: argparse.Namespace) -> int:
         return 0
     settings_mod.save(chosen, args.settings)
     print(f"saved {args.settings}: {chosen.describe()}")
+    return 0
+
+
+def _interactive() -> bool:
+    """Is a person at a terminal to answer? Its own function so a test can say yes."""
+    return bool(sys.stdin.isatty() and sys.stdout.isatty())
+
+
+def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
+    """Find the model CLIs this machine has and offer them as registry entries (CHG-20261005-01).
+
+    Detection is local (`detect.py`). Nothing is written without an answer: on a terminal each
+    proposal is asked about, and off one `--yes` is the answer. It assigns nothing to any node;
+    the one other thing it may do is set `coder_model`, and only to an accepted `mid` model.
+    """
+    proposals, notes = detect.propose()
+    for note in notes:
+        print(f"note:          {note}")
+    token_dir = Path(args.token_dir)
+    registry_path = Path(args.models or (token_dir / "models.json"))
+    store_path = args.assignment_store or (token_dir / "config.sqlite")
+    try:
+        known = models_mod.load(registry_path)
+    except models_mod.ModelError as exc:
+        print(f"error: {registry_path} holds a model this runner refuses: {exc}")
+        return 2
+    fresh = []
+    for model in proposals:
+        if any(m.id == model.id for m in known):
+            print(f"already there: {model.id}")
+        else:
+            fresh.append(model)
+    if not proposals:
+        print("nothing found: no claude, codex or ollama on PATH (relative entries and the working "
+              "directory are not searched).")
+        print(f"To add a model by hand, see docs/MODELS.md — `{registry_path}` holds the registry.")
+        return 0
+    if not fresh:
+        return 0
+    for model in fresh:
+        print(f"propose:       {model.id}  tier={model.tier or '(none)'}  "
+              f"command={' '.join(model.command)}"
+              + (f"  effort={' '.join(model.effort_argv)}" if model.effort_argv else "")
+              + (f"\n               {model.note}" if model.note else ""))
+    interactive = _interactive()
+    if args.yes:
+        accepted = list(fresh)
+    elif not interactive:
+        print("Nothing written. Re-run with --yes to add these, or run `runner setup` in a terminal "
+              "to choose one by one.")
+        return 0
+    else:
+        accepted = []
+        for model in fresh:
+            choice = tui.select(f"Add {model.id} to the registry?",
+                                [("Add it", f"{' '.join(model.command)}"), ("Skip", "leave it out")],
+                                input_fn=input_fn)
+            if choice == 0:
+                accepted.append(model)
+    if not accepted:
+        print("Nothing written.")
+        return 0
+    try:
+        written = known
+        for model in accepted:
+            written = written.add(model)
+        models_mod.save(written, registry_path)
+        print(f"wrote:         {registry_path}")
+        if str(store_path).lower() != "none":
+            db = store_mod.connect(store_path)
+            stored = store_mod.load_registry(db)
+            for model in accepted:
+                if not any(m.id == model.id for m in stored):
+                    stored = stored.add(model)
+            store_mod.save_registry(db, stored)
+            db.close()
+            print(f"wrote:         {store_path}")
+    except (models_mod.ModelError, store_mod.StoreError) as exc:
+        print(f"error: {exc}")
+        return 2
+    mid = [m for m in accepted if m.tier == "mid"]
+    if mid:
+        try:
+            current = settings_mod.load(args.settings)
+        except settings_mod.SettingsError as exc:
+            print(f"error: {exc}")
+            return 2
+        if not current.coder_model:
+            if args.yes:
+                make = True
+            else:
+                make = tui.select(f"Use {mid[0].id} as the coding model (coder_model)?",
+                                  [("Yes", "engineer_build uses it unless a plan or the store says "
+                                           "otherwise"), ("No", "leave coder_model empty")],
+                                  input_fn=input_fn) == 0
+            if make:
+                settings_mod.save(replace(current, coder_model=mid[0].id), args.settings)
+                print(f"wrote:         {args.settings} (coder_model = {mid[0].id})")
     return 0
 
 
@@ -984,6 +1141,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     # run; the file is the standing one. Neither is silent: whichever produces a floor crossing, the
     # run records it.
     seats = args.review_seats if args.review_seats is not None else saved.review_seats
+    # The coding role's default, after the store has spoken (CHG-20261005-01).
+    try:
+        built_models, efforts, coder_notices = coder_defaults(
+            resolved_assignments.get("node_models") or {}, config_registry, saved)
+    except CliError as exc:
+        print(f"error: {exc}")
+        return 2
+    for notice in coder_notices:
+        print(f"note:          {notice}")
     # `--no-high-risk-mode` turns a saved bypass off for this run. Without it the file and the flag
     # were OR-ed, so a bypass persisted in settings could not be declined for a single run — a
     # verifier pointed out that "a flag beats the file" held only in the relaxing direction, which
@@ -1046,7 +1212,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         # The same resolution `serve` uses. Without this `runner run` ignored the store
         # entirely — an assignment made in the console governed nothing on the command line, and
         # "the project's standing assignment" was a phrase about a table two commands disagreed on.
-        node_models=resolved_assignments.get("node_models") or {},
+        node_models=built_models,
+        efforts=efforts,
         effects=effects_provider(plan),
         ordinary_commands=saved.ordinary_commands,
         undeclared=args.undeclared,
@@ -1233,6 +1400,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"confirmed:     {line}")
     for line in report.single_model_panels:
         print(f"single model:  {line}")
+    for line in report.effort_not_applied:
+        print(f"effort:        not applied for {line} (no effort_argv), so it ran at its own default")
     for decision in report.adjudications:
         seat_line = ", ".join(f"{k}={v}" for k, v in sorted(decision["verdicts"].items()))
         # **Whichever the adjudicator actually wrote** (CHG-20260903-48, defect seat L-14). This
@@ -1568,6 +1737,12 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     def make_config(instructions, approvals, rulings, artifacts=(), rejections=(),
                     intake_history=()):
+        # Per walk, like `current_assignments`: the registry and the store are editable from the
+        # console, and so is what the coding role defaults to (CHG-20261005-01).
+        coder = coder_defaults(current_assignments().get("node_models") or {},
+                               store_mod.load_registry(db) or registry, saved)
+        for notice in coder[2]:
+            print(f"note: {notice}")
         return engine.RunConfig(
             conversation=conversation,
             node_specs=plan.get("node_specs", {}),
@@ -1610,7 +1785,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
             #
             # Resolved per walk rather than captured once, because a value captured at startup is
             # how the defect happened.
-            node_models=current_assignments().get("node_models") or {},
+            node_models=coder[0],
+            # The coding role's effort (CHG-20261005-01), resolved with its model above.
+            efforts=coder[1],
             # Who each permanent halt reaches, for this project (CHG-20260827-19). `run` has read
             # this since that change; `serve` never did, so `POST /config/halts` wrote a routing the
             # console's own runs then ignored — every permanent halt went to `policy.HALT_ROUTING`'s
@@ -1716,6 +1893,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
     assignments, assignment_source = store_mod.resolve(plan_assignments, stored_assignments)
 
     config = load_config(args.config)
+    try:
+        coder_defaults(assignments.get("node_models") or {}, registry or None, saved)
+    except CliError as exc:
+        print(f"error: {exc}")
+        return 2
 
     def current_assignments():
         """Plan over store, re-resolved now. The engine and the factory both read through this."""
@@ -1799,6 +1981,18 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--show", action="store_true",
                     help="print the current settings instead of opening the screen")
     ps.set_defaults(func=cmd_settings)
+
+    pu = sub.add_parser("setup", help="find installed model CLIs and add them to the registry")
+    pu.add_argument("--yes", action="store_true",
+                    help="accept every proposal without asking (the only way to write off a terminal)")
+    pu.add_argument("--token-dir", default=".runner",
+                    help="where `serve` keeps its files (default .runner)")
+    pu.add_argument("--models", default=None,
+                    help="path to the model registry (default <token-dir>/models.json)")
+    pu.add_argument("--assignment-store", default=None, metavar="FILE",
+                    help="the store `serve` reads (default <token-dir>/config.sqlite); `none` "
+                         "writes the registry file only")
+    pu.set_defaults(func=cmd_setup)
 
     pv = sub.add_parser("serve", help="run the console's back end, on this machine only")
     pv.add_argument("--plan", help="the plan file, same as `run` takes")

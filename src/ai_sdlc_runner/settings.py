@@ -25,7 +25,7 @@ a file rather than a habit nobody wrote down.
 adjudication rule** — `policy.GATES`, `policy.PERMANENT_HALT_KINDS` and `policy.adjudicate` own
 those and take no input from here.
 
-**Two of the three fields do change whether a stop happens**, and this paragraph used to deny it
+**Two of the five fields do change whether a stop happens**, and this paragraph used to deny it
 (CHG-20260903-47, defect seat L-13). Measured:
 
 - `review_seats=1` makes `undecided` **unreachable**: one seat cannot split, and `undecided` is the
@@ -39,7 +39,7 @@ those and take no input from here.
 `FIELDS == (...)` and an `as_dict` key set under this claim's name — green on the defect, red on a
 rename.
 
-What they *can* do is three things, not one. This paragraph once named the seat floor as the
+What the first three *can* do is three things, not one. This paragraph once named the seat floor as the
 whole of what settings reach, while `FIELDS` held three names and the third is not
 decorative (CHG-20260903-28). It is described rather than quoted here because the guard
 that forbids it reads this file as flowed text, and a guard cannot tell a claim from an
@@ -59,13 +59,21 @@ account of one (CHG-20260904-19):
   `('npm ci',)` with `on_trust=True`, which `engine.py` refuses on; vouching `npm` returns
   `()` with `on_trust=False`, and the run proceeds.
 
+The last two (CHG-20261005-01) choose a backend and say nothing about a verdict, a halt or a floor:
+
+- `coder_model` — the registry model that builds when nothing is assigned to `engineer_build`.
+  Empty means the registry's only `mid`-tier model, if there is exactly one. It is not checked
+  against a registry here, because the registry lives elsewhere; a run that cannot find it refuses.
+- `coder_effort` — `low`, `medium` or `high`, for `engineer_build` and the nodes that follow it.
+  Whether the model can be told is its own `effort_argv`; where it cannot, the run says so.
+
 This module already guarded that field — `policy.py` records that `load` refuses certain
 commands in `ordinary_commands` *"so the operator finds out while configuring"*. A guard
 existed for the field whose existence the paragraph above it denied.
 
 A file that is missing or empty yields the **defaults** — floor enforced, high-risk mode off. A file
 that **exists and is malformed is an error**, not the defaults: falling back would make a typo
-indistinguishable from a deliberate choice, and **two of the three settings here relax a
+indistinguishable from a deliberate choice, and **two of the five settings here relax a
 refusal**.
 (This paragraph has now been corrected twice for the same class of error. It once said "or
 corrupt yields the defaults" and contradicted `load()` directly below it; a verifier caught
@@ -86,7 +94,13 @@ DEFAULT_PATH = "config/settings.json"
 #: Exactly the keys a settings file may carry. Anything else is refused rather than ignored: a
 #: setting nobody reads looks identical to a setting that works, and the whole point of this file is
 #: that a relaxation is visible.
-FIELDS: Tuple[str, ...] = ("review_seats", "high_risk_mode", "ordinary_commands")
+FIELDS: Tuple[str, ...] = ("review_seats", "high_risk_mode", "ordinary_commands",
+                           "coder_model", "coder_effort")
+
+#: The efforts `coder_effort` may name. The runner passes the word through a model's own
+#: `effort_argv` template and knows nothing more about it.
+EFFORTS: Tuple[str, ...] = ("low", "medium", "high")
+DEFAULT_EFFORT = "medium"
 
 
 class SettingsError(Exception):
@@ -113,6 +127,13 @@ class Settings:
     #: `npm run release` from an operator who vouched for `npm` — otherwise this is the same
     #: prefix mistake one level out.
     ordinary_commands: Tuple[str, ...] = ()
+    #: The registry model that builds when nothing is assigned to `engineer_build`
+    #: (CHG-20261005-01). Empty means the registry's only `mid` model, if there is exactly one.
+    #: Not checked against a registry here: the registry lives elsewhere, so an unknown id is an
+    #: error when a run resolves it (`cli.coder_defaults`), not when it is saved.
+    coder_model: str = ""
+    #: The effort for `engineer_build` and the nodes that follow it. Other nodes get none.
+    coder_effort: str = DEFAULT_EFFORT
 
     def seats(self) -> int:
         """The seat count a run would actually open.
@@ -144,7 +165,8 @@ class Settings:
 
     def as_dict(self) -> dict:
         return {"review_seats": self.review_seats, "high_risk_mode": self.high_risk_mode,
-                "ordinary_commands": list(self.ordinary_commands)}
+                "ordinary_commands": list(self.ordinary_commands),
+                "coder_model": self.coder_model, "coder_effort": self.coder_effort}
 
     def describe(self) -> str:
         seats = self.seats()
@@ -164,6 +186,9 @@ class Settings:
             line += f"  |  vouched commands: {', '.join(sorted(self.ordinary_commands))}"
         else:
             line += "  |  no vouched commands (only repo paths and read-only git are recognised)"
+        line += (f"  |  coder model: {self.coder_model}" if self.coder_model
+                 else "  |  coder model: the registry's only mid-tier model, if there is one")
+        line += f"  |  coder effort: {self.coder_effort}"
         return line
 
 
@@ -172,7 +197,7 @@ def load(path: str = DEFAULT_PATH) -> Settings:
 
     A missing file is the defaults, and so is an empty one. A file that **exists and is malformed**
     is an error rather than the defaults: silently falling back would make a typo indistinguishable
-    from a deliberate choice, and two of the three settings here relax a refusal.
+    from a deliberate choice, and two of the five settings here relax a refusal.
     """
     p = Path(path)
     if not p.is_file():
@@ -207,12 +232,29 @@ def load(path: str = DEFAULT_PATH) -> Settings:
         raise SettingsError(f"{path}: ordinary_commands must be a list of command names, "
                             f"got {commands!r}")
 
+    coder_model = _check_coder_model(raw.get("coder_model", ""), where=path)
+    coder_effort = _check_effort(raw.get("coder_effort", DEFAULT_EFFORT), where=path)
+
     # **Stored as it was validated** (CHG-20260904-17). The checks below strip and `recognise`
     # casefolds without stripping, so `"  npm  "` loaded clean, appeared in `describe()`, and
     # matched nothing — which is the failure `FIELDS`' own comment names, produced by this
     # validator.
     return Settings(review_seats=seats, high_risk_mode=high_risk,
-                    ordinary_commands=_check_vouched(commands, where=path))
+                    ordinary_commands=_check_vouched(commands, where=path),
+                    coder_model=coder_model, coder_effort=coder_effort)
+
+
+def _check_coder_model(value, *, where: str = "settings") -> str:
+    """The coder model's id, stripped, or empty. Its existence is checked where a registry is."""
+    if not isinstance(value, str):
+        raise SettingsError(f"{where}: coder_model must be a model id or empty, got {value!r}")
+    return value.strip()
+
+
+def _check_effort(value, *, where: str = "settings") -> str:
+    if value not in EFFORTS:
+        raise SettingsError(f"{where}: coder_effort must be one of {list(EFFORTS)}, got {value!r}")
+    return value
 
 
 def _check_seats(seats, *, where: str = "settings"):
@@ -278,6 +320,8 @@ def save(settings: Settings, path: str = DEFAULT_PATH) -> None:
     """
     _check_seats(settings.review_seats, where=path)
     _check_vouched(settings.ordinary_commands, where=path)
+    _check_coder_model(settings.coder_model, where=path)
+    _check_effort(settings.coder_effort, where=path)
     p = Path(path)
     paths.makedirs(p.parent)
     paths.write_text(p, json.dumps(settings.as_dict(), indent=2, sort_keys=True) + "\n")
@@ -337,6 +381,12 @@ def _screen(current: Settings):
          ", ".join(current.ordinary_commands) if current.ordinary_commands
          else "none — every target is read against the halts",
          _edit_vouched),
+        ("Coder model",
+         current.coder_model if current.coder_model
+         else "the registry's only mid-tier model, if there is exactly one",
+         _edit_coder_model),
+        ("Coder effort", f"currently {current.coder_effort}; engineer_build and what follows it",
+         _edit_coder_effort),
         ("Save and close", "write the choices above to the settings file", _SAVE),
         ("Discard", "leave everything as it was", _DISCARD),
     ]
@@ -376,7 +426,7 @@ def _edit_vouched(current: Settings, *, input_fn, stream_out) -> Settings:
     **The field the screen could not reach** (CHG-20260904-17, idiom seat 2a). `engine.py` refuses
     an unrecognised target by telling the operator to *"Vouch for the command in settings
     (`ordinary_commands`)"*, and the screen this repository built for that requirement had no row
-    for it — two of three fields, in the module whose premise is 「在 GUI 上設定」.
+    for it — only two settings were reachable, in the module whose premise is 「在 GUI 上設定」.
 
     A vouch is validated here with the same function `load` uses, so the screen cannot write a file
     the screen will not open.
@@ -403,6 +453,22 @@ def _edit_vouched(current: Settings, *, input_fn, stream_out) -> Settings:
             print(f"not vouched: {refused}", file=stream_out)
         return current
     return replace(current, ordinary_commands=current.ordinary_commands + (said,))
+
+
+def _edit_coder_model(current: Settings, *, input_fn, stream_out) -> Settings:
+    """Name the model that builds, or clear it. The registry is not read here, so a typo is caught
+    when a run resolves it, which says so by name."""
+    said = str(input_fn("Model id for the coding role (blank to clear): ") or "").strip()
+    return replace(current, coder_model=said)
+
+
+def _edit_coder_effort(current: Settings, *, input_fn, stream_out) -> Settings:
+    rows = [(name, "the default" if name == DEFAULT_EFFORT else "", name) for name in EFFORTS]
+    choice = tui.select("Effort for the coding role", [row[:2] for row in rows],
+                        input_fn=input_fn, stream_out=stream_out)
+    if choice is None:
+        return current
+    return replace(current, coder_effort=rows[choice][2])
 
 
 def _toggle_high_risk(current: Settings, *, input_fn, stream_out) -> Settings:

@@ -221,6 +221,15 @@ class Model:
     #: `api` only: the **name** of an environment variable holding the key. Never the key.
     key_env: str = ""
     note: str = ""
+    #: How much a model is trusted with, as a **label** a person gives it: `high`, `mid`, `low`, or
+    #: empty for unclassified. Nothing infers it from a name — a name→tier table goes stale with
+    #: every release (CHG-20261005-01). Read by the coding role's default (`cli.coder_defaults`).
+    tier: str = ""
+    #: `cli` only: an argv template appended after `command` when an effort is in force, each
+    #: element with `{effort}` substituted. A template rather than a vendor table, so the runner
+    #: holds no knowledge of any one CLI and a local model needs no code. Empty means this model
+    #: has no effort control, which a run reports rather than refuses.
+    effort_argv: Tuple[str, ...] = ()
 
     @property
     def reach(self) -> str:
@@ -233,6 +242,7 @@ class Model:
     def as_dict(self) -> Dict[str, object]:
         payload = asdict(self)
         payload["command"] = list(self.command)
+        payload["effort_argv"] = list(self.effort_argv)
         payload["reach"] = self.reach
         payload["leaves_this_machine"] = self.leaves_this_machine
         # **The grade that is a judgement says it is one** (CHG-20260903-39, idiom seat).
@@ -251,6 +261,20 @@ class Model:
         return payload
 
 
+#: What a model's `tier` may say. Empty is "unclassified", and is a value rather than an absence.
+TIERS = ("", "high", "mid", "low")
+
+#: Where an effort lands inside `Model.effort_argv`.
+EFFORT_SLOT = "{effort}"
+
+
+def with_effort(model: Model, effort: str) -> Optional[List[str]]:
+    """The argv words that carry `effort` to this model, or `None` when it has no template."""
+    if not model.effort_argv:
+        return None
+    return [word.replace(EFFORT_SLOT, effort) for word in model.effort_argv]
+
+
 def validate(model: Model) -> Model:
     """Every refusal this registry makes, in one place so none of them is optional."""
     if not model.id or not _ENV_NAME.match(model.id.replace("-", "_")):
@@ -265,6 +289,20 @@ def validate(model: Model) -> Model:
     if model.transport not in TRANSPORTS:
         raise ModelError(f"model {model.id!r} has unknown transport {model.transport!r}; this "
                          f"runner speaks {list(TRANSPORTS)}")
+    if model.tier not in TIERS:
+        raise ModelError(f"model {model.id!r} has tier {model.tier!r}; a tier is one of "
+                         f"{[t for t in TIERS if t]}, or empty for unclassified")
+    if not all(isinstance(word, str) for word in model.effort_argv):
+        raise ModelError(f"model {model.id!r} has an effort_argv that is not a list of strings")
+    if model.effort_argv and not any(EFFORT_SLOT in word for word in model.effort_argv):
+        raise ModelError(
+            f"model {model.id!r} has an effort_argv with no {EFFORT_SLOT} in it, so the effort "
+            f"asked for would never reach the process. A template nothing fills in looks "
+            f"configured and does nothing.")
+    if model.effort_argv and model.transport != CLI:
+        raise ModelError(
+            f"api model {model.id!r} carries an effort_argv it cannot use. Nothing dispatches an "
+            f"api model, and a field nothing reads is one somebody will later assume was honoured.")
 
     if model.transport == CLI:
         if not model.command:
@@ -377,6 +415,8 @@ def _model_from(payload: Dict[str, object]) -> Model:
         endpoint=str(payload.get("endpoint") or ""),
         key_env=str(payload.get("key_env") or ""),
         note=str(payload.get("note") or ""),
+        tier=str(payload.get("tier") or ""),
+        effort_argv=tuple(payload.get("effort_argv") or ()),
     )
 
 
