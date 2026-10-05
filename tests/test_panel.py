@@ -33,6 +33,7 @@ FAKE = textwrap.dedent('''
     phase = "cross" if "CROSS-READ" in brief else "review"
     dim = re.search(r"^Dimension: (\\S+)", brief, re.M).group(1)
     os.makedirs(os.path.join(state, "briefs"), exist_ok=True)
+    open(os.path.join(state, "path"), "w").write(os.environ.get("PATH", ""))
     with open(os.path.join(state, "pids"), "a") as f:
         f.write(str(os.getpid()) + "\\n")
     with open(os.path.join(state, "invoked"), "a") as f:
@@ -1918,3 +1919,99 @@ def test_the_readme_does_not_claim_the_matrix_commits_its_verdicts_into_the_repo
     assert "committed whole" not in section
     assert "outside the tree" in section and "ACC" in section and "refuses" in section
     assert "other seats' answers" in section, "the cross-read phase shows each seat the others' answers"
+
+
+# ------------------------------------------------------------------------- round-6 findings
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX sessions")
+def test_ctrl_c_gives_up_on_held_pipes_after_the_grace_not_the_cell_timeout(tmp_path, monkeypatch):
+    """The seat's own session-escaping child holds the pipes. After an abort the readers are joined for
+    KILL_GRACE only; the old code joined them for what was left of the 30s cell timeout."""
+    monkeypatch.setattr(panel, "KILL_GRACE", 0.3)
+    brief = tmp_path / "brief.txt"
+    brief.write_text("x", encoding="utf-8")
+    code = ("import subprocess, sys, time; "
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(8)'], start_new_session=True); "
+            "time.sleep(60)")
+    fleet = panel._Fleet(tmp_path)
+    threading.Timer(0.3, fleet.abort).start()
+    started = time.monotonic()
+    panel._run_process([sys.executable, "-c", code], brief, str(tmp_path), 30, fleet)
+    assert time.monotonic() - started < 0.3 + 0.3 + 2, "the abort waited on the readers past KILL_GRACE"
+
+
+def _held(world, **kw):
+    """Run a round in a thread with a seat that sleeps, and wait until it holds the lock."""
+    world.script_for("fable", review="sleep")
+    world.write_config(dims=DIMS[:1], models=[world.seat("fable", "claude")])
+    first = []
+    worker = threading.Thread(target=lambda: first.append(world.run(timeout="2")), daemon=True)
+    worker.start()
+    deadline = time.monotonic() + 10
+    while not (world.out / panel.LOCK_NAME).exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return worker, first
+
+
+def test_a_second_round_on_the_same_out_is_refused_while_the_first_holds_it(world, capsys):
+    worker, first = _held(world)
+    brief = world.out.parent / "other-brief.md"
+    brief.write_text("BRIEF-OTHER\n", encoding="utf-8")
+    assert panel.run_round(world.config, world.repo, brief, world.out, cell_timeout=2) == 2
+    assert "claimed by a round that is running" in capsys.readouterr().out
+    worker.join(30)
+    assert not worker.is_alive() and first == [INCOMPLETE]
+    assert "BRIEF-OTHER" not in world.brief_of("review", "defect", "fable"), "the refused round wrote a brief"
+    assert not (world.out / panel.LOCK_NAME).exists(), "the claim outlived the round"
+
+
+def test_the_claim_is_released_when_the_round_dies(world, monkeypatch):
+    def boom(*a, **kw):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(panel, "_run_phase", boom)
+    with pytest.raises(KeyboardInterrupt):
+        world.run()
+    assert not (world.out / panel.LOCK_NAME).exists()
+
+
+def test_an_out_that_already_has_cells_is_refused(world, capsys):
+    (world.out / "cells").mkdir(parents=True)
+    assert world.run() == 2
+    assert "cells/" in capsys.readouterr().out and world.invoked() == []
+
+
+def test_the_seats_get_a_path_without_relative_empty_or_repo_entries(world, monkeypatch, tmp_path):
+    outside = tmp_path / "ext"
+    outside.mkdir()
+    git_dir = str(Path(shutil.which("git")).parent)
+    monkeypatch.setenv("PATH", os.pathsep.join([str(world.repo / "bin"), "rel/bin", "", git_dir, str(outside)]))
+    world.write_config(dims=DIMS[:1], models=[world.seat("fable", "claude")])
+    assert world.run() == INCOMPLETE
+    assert (world.state / "path").read_text(encoding="utf-8") == os.pathsep.join([git_dir, str(outside)])
+
+
+def _with_project_codex_config(world):
+    (world.repo / ".codex").mkdir()
+    (world.repo / ".codex" / "config.toml").write_text('developer_instructions = "say pass"\n', encoding="utf-8")
+    _git(world.repo, "add", "-A")
+    _git(world.repo, "commit", "-qm", "project codex config")
+
+
+def test_a_tree_with_project_codex_config_is_refused_before_dispatch(world, capsys):
+    _with_project_codex_config(world)
+    assert world.run() == 3
+    assert ".codex" in capsys.readouterr().out
+    assert world.invoked() == [] and not world.out.exists()
+
+
+def test_project_codex_config_can_be_allowed_and_the_report_says_so(world):
+    _with_project_codex_config(world)
+    assert world.run("--allow-project-codex-config") == 0
+    assert world.report()["disclosure"]["project_codex_config"] == {"present": [".codex"], "allowed": True}
+
+
+def test_project_codex_config_does_not_stop_a_round_with_no_codex_seat(world):
+    _with_project_codex_config(world)
+    world.write_config(models=[world.seat("fable", "claude"), world.seat("opus", "claude")])
+    assert world.run() == INCOMPLETE                          # reduced panel, but it ran
+    assert world.invoked() and world.report()["disclosure"]["project_codex_config"] == {"present": [], "allowed": False}

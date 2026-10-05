@@ -94,6 +94,8 @@ REQUIRED_ENGINES = ("fable", "opus", "gpt-6-astra")   # DIR-2's three seats; DIR
 DEFAULT_TIMEOUT = 1800
 DEFAULT_JOBS = 6
 
+LOCK_NAME = ".round.lock"            # a directory made exclusively in --out for as long as a round runs in it
+PROJECT_CODEX_CONFIG = (".codex",)   # what codex loads from the tree it is run in
 KILL_GRACE = 10                     # seconds to keep reading after a timed-out seat's tree is killed
 WAIT_POLL = 0.5                     # seconds one wait may block: Ctrl-C is only delivered between waits
 IGNORED_CAP = 50                    # git-ignored paths listed in the disclosure; the rest are counted
@@ -579,7 +581,8 @@ def _run_process(argv: List[str], brief_file: Path, cwd: str, timeout: float,
         extra["start_new_session"] = True            # its own process group, so killpg reaches every child
     with open(brief_file, "rb") as stdin:
         proc = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                cwd=cwd, **extra)
+                                cwd=cwd, env=dict(os.environ, PATH=os.pathsep.join(_safe_path(fleet.repo))),
+                                **extra)
         fleet.add(proc)
         try:
             sinks: List[List[bytes]] = [[], []]
@@ -589,9 +592,14 @@ def _run_process(argv: List[str], brief_file: Path, cwd: str, timeout: float,
                 reader.start()
 
             def join(seconds: float) -> bool:
+                """Wait for the readers; once the operator has aborted, for at most KILL_GRACE more."""
                 end = time.monotonic() + seconds
-                for reader in readers:
-                    reader.join(max(0.0, end - time.monotonic()))
+                capped = False
+                while any(reader.is_alive() for reader in readers) and time.monotonic() < end:
+                    if fleet.aborted.is_set() and not capped:
+                        end, capped = min(end, time.monotonic() + KILL_GRACE), True
+                    readers[0].join(WAIT_POLL / 10)
+                    readers[1].join(WAIT_POLL / 10)
                 return not any(reader.is_alive() for reader in readers)
 
             def text(sink: List[bytes]) -> str:
@@ -605,7 +613,8 @@ def _run_process(argv: List[str], brief_file: Path, cwd: str, timeout: float,
             except subprocess.TimeoutExpired:
                 pass
             _kill_tree(proc, fleet.repo)
-            join(KILL_GRACE)                         # still alive after this: abandoned, daemon
+            if not fleet.aborted.is_set():           # an abort already spent its grace in the join above
+                join(KILL_GRACE)                     # still alive after this: abandoned, daemon
             return text(sinks[0]), text(sinks[1]), None, True
         finally:
             fleet.discard(proc)
@@ -654,6 +663,13 @@ def _on_disk(path: str) -> str:
     return _real_name(path) if _on_windows() else path
 
 
+def _safe_path(repo: Path) -> List[str]:
+    """The PATH entries that are absolute and outside the repo — the only ones a seat or its launcher
+    (`#!/usr/bin/env node`) may resolve a program from."""
+    entries = (e.strip('"') for e in os.environ.get("PATH", "").split(os.pathsep))
+    return [e for e in entries if e and os.path.isabs(e) and not _inside(Path(e), repo)]
+
+
 def resolve_executable(name: str, repo: Path) -> Optional[str]:
     """Where `name` is, looking only at absolute PATH entries outside the repo — never the current
     directory, which `shutil.which` searches first on Windows, so the reviewed tree could otherwise
@@ -661,10 +677,7 @@ def resolve_executable(name: str, repo: Path) -> Optional[str]:
     if os.sep in name or (os.altsep and os.altsep in name):
         found = next((n for n in _names(name) if os.path.isabs(n) and _runnable(n)), None)
         return _on_disk(found) if found else None
-    for entry in os.environ.get("PATH", "").split(os.pathsep):
-        entry = entry.strip('"')
-        if not entry or not os.path.isabs(entry) or _inside(Path(entry), repo):
-            continue
+    for entry in _safe_path(repo):
         for candidate in _names(name):
             path = os.path.join(entry, candidate)
             if _runnable(path):
@@ -927,10 +940,38 @@ def ignored_paths(repo: Path) -> List[str]:
     return sorted(p for p in listed.split("\0") if p)
 
 
-def run_round(config_path: Optional[Path], repo: Path, brief_path: Path, out: Path,
-              only: Optional[List[str]] = None, jobs: int = DEFAULT_JOBS, cross_read: bool = True,
-              cell_timeout: float = DEFAULT_TIMEOUT, resume: Optional[Path] = None,
-              config_from: str = DEFAULT_CONFIG_FROM) -> int:
+def run_round(*args: Any, **kwargs: Any) -> int:
+    """`_run_round`, with the claim on --out released however it ends, an interrupt included."""
+    held: List[Path] = []
+    try:
+        return _run_round(held, *args, **kwargs)
+    finally:
+        for lock in held:
+            try:
+                lock.rmdir()
+            except OSError:
+                pass
+
+
+def _claim(out: Path, held: List[Path]) -> None:
+    """Take `out` for this round: `.round.lock` is made exclusively (a directory), so of two rounds started on
+    one directory the second is refused instead of overwriting the first's briefs."""
+    out.mkdir(parents=True, exist_ok=True)
+    lock = out / LOCK_NAME
+    try:
+        lock.mkdir()                                 # atomic: exactly one of two callers creates it
+    except FileExistsError:
+        raise ConfigError(f"--out {out} is claimed by a round that is running ({lock} exists); "
+                          "if none is, remove that directory") from None
+    held.append(lock)
+    if (out / "cells").exists():
+        raise ConfigError(f"--out {out} already holds a round's cells/; choose a fresh directory")
+
+
+def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_path: Path, out: Path,
+               only: Optional[List[str]] = None, jobs: int = DEFAULT_JOBS, cross_read: bool = True,
+               cell_timeout: float = DEFAULT_TIMEOUT, resume: Optional[Path] = None,
+               config_from: str = DEFAULT_CONFIG_FROM, allow_project_codex_config: bool = False) -> int:
     """One round. Returns the exit code; prints what it did. The config is `config_path` as it is when
     one is given, else `config/panel.json` at `config_from` — never the reviewed tree's own copy."""
     repo = Path(repo).resolve()                      # once: `{repo}` in argv and the seat's cwd must agree
@@ -986,10 +1027,19 @@ def run_round(config_path: Optional[Path], repo: Path, brief_path: Path, out: Pa
             print(f"error: model {m['id']!r}: {why}; nothing was run")
         return 3
 
+    project_codex = [n for n in PROJECT_CODEX_CONFIG if os.path.lexists(repo / n)
+                     ] if any(m["kind"] == "codex" for m in models) else []
+    if project_codex and not allow_project_codex_config:   # codex has no flag that turns project config off
+        print(f"error: the reviewed tree has {', '.join(project_codex)}, which codex loads as project "
+              "configuration and can use to instruct its reviewer; nothing was run. Remove it from the "
+              "tree, or pass --allow-project-codex-config to accept that.")
+        return 3
+
     disclosure = {"models": [{"id": m["id"], "executable": _argv(m, repo)[0],
                               "reach": m.get("reach", DEFAULT_REACH), "reads": READ_SCOPE[m["kind"]]}
                              for m in models],
                   "brief_bytes": len(raw_brief), "repo": str(repo),
+                  "project_codex_config": {"present": project_codex, "allowed": allow_project_codex_config},
                   "ignored_paths": ignored[:IGNORED_CAP], "ignored_more": max(0, len(ignored) - IGNORED_CAP)}
     print(config_source["note"])
     print("sending, before anything is dispatched:")
@@ -1003,8 +1053,12 @@ def run_round(config_path: Optional[Path], repo: Path, brief_path: Path, out: Pa
         print(f"    {line}")
     sys.stdout.flush()                                # piped, the disclosure must be out before the data is
 
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "cells").mkdir(exist_ok=True)
+    try:
+        _claim(out, held)
+        (out / "cells").mkdir()
+    except (OSError, ConfigError) as exc:
+        print(f"error: {exc}")
+        return 2
     review_n, cross_n = session_count(dims, models, cross_read)
     print(f"round at {sha[:12]}: {len(dims)} dimension(s) x {len(models)} model(s) = "
           f"{review_n} review session(s), then {cross_n} cross-read; up to {jobs} at once")
@@ -1295,6 +1349,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     run.add_argument("--resume", default=None, metavar="DIR",
                      help="an earlier round's --out: keep its pass/fail cells, re-run only the "
                           "unreached ones (same commit, matrix and brief required)")
+    run.add_argument("--allow-project-codex-config", action="store_true",
+                     help="run codex seats although the reviewed tree has a .codex/ they would load "
+                          "(the report records it)")
     run.add_argument("--jobs", type=int, default=DEFAULT_JOBS, metavar="N")
     run.add_argument("--cross-read", action=argparse.BooleanOptionalAction, default=True)
     run.add_argument("--cell-timeout", type=float, default=DEFAULT_TIMEOUT, metavar="SECONDS")
@@ -1312,7 +1369,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         only = [n.strip() for n in args.only_dimensions.split(",") if n.strip()]
     return run_round(Path(args.config) if args.config is not None else None, Path(args.repo), Path(args.brief),
                      Path(args.out), only=only, jobs=args.jobs, cross_read=args.cross_read,
-                     cell_timeout=args.cell_timeout, resume=Path(args.resume) if args.resume else None,
+                     cell_timeout=args.cell_timeout, allow_project_codex_config=args.allow_project_codex_config,
+                     resume=Path(args.resume) if args.resume else None,
                      config_from=DEFAULT_CONFIG_FROM if args.config_from is None else args.config_from)
 
 
