@@ -34,6 +34,7 @@ FAKE = textwrap.dedent('''
     dim = re.search(r"^Dimension: (\\S+)", brief, re.M).group(1)
     os.makedirs(os.path.join(state, "briefs"), exist_ok=True)
     open(os.path.join(state, "path"), "w").write(os.environ.get("PATH", ""))
+    open(os.path.join(state, "nodefault"), "w").write(os.environ.get("NoDefaultCurrentDirectoryInExePath", ""))
     with open(os.path.join(state, "pids"), "a") as f:
         f.write(str(os.getpid()) + "\\n")
     with open(os.path.join(state, "invoked"), "a") as f:
@@ -2015,3 +2016,33 @@ def test_project_codex_config_does_not_stop_a_round_with_no_codex_seat(world):
     world.write_config(models=[world.seat("fable", "claude"), world.seat("opus", "claude")])
     assert world.run() == INCOMPLETE                          # reduced panel, but it ran
     assert world.invoked() and world.report()["disclosure"]["project_codex_config"] == {"present": [], "allowed": False}
+
+
+def test_a_subdirectory_repo_is_refused_naming_the_top_level(world, capsys):
+    (world.repo / "src").mkdir()
+    (world.repo / "src" / "a.txt").write_text("x\n", encoding="utf-8")
+    _git(world.repo, "add", "-A")
+    _git(world.repo, "commit", "-qm", "src")
+    assert panel.main(["run", "--brief", str(world.brief), "--out", str(world.out), "--config", str(world.config),
+                       "--repo", str(world.repo / "src")]) == 2
+    said = capsys.readouterr().out
+    assert "top level" in said and str(world.repo) in said
+    assert world.invoked() == [] and not world.out.exists()
+
+
+def test_the_seats_environment_stops_windows_searching_the_current_directory(world, monkeypatch):
+    monkeypatch.delenv("NoDefaultCurrentDirectoryInExePath", raising=False)   # the seat must get it from us
+    world.write_config(dims=DIMS[:1], models=[world.seat("fable", "claude")])
+    assert world.run() == INCOMPLETE
+    assert (world.state / "nodefault").read_text(encoding="utf-8") == "1"
+
+
+def test_a_tree_with_a_launcher_by_bare_name_is_refused_unless_allowed(world, capsys):
+    (world.repo / "Node.CMD").write_text("@echo planted\n", encoding="utf-8")
+    _git(world.repo, "add", "-A")
+    _git(world.repo, "commit", "-qm", "planted")
+    assert world.run() == 3
+    assert "Node.CMD" in capsys.readouterr().out
+    assert world.invoked() == [] and not world.out.exists()
+    assert world.run("--allow-repo-executables") == 0
+    assert world.report()["disclosure"]["repo_executables"] == {"present": ["Node.CMD"], "allowed": True}

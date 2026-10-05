@@ -96,6 +96,9 @@ DEFAULT_JOBS = 6
 
 LOCK_NAME = ".round.lock"            # a directory made exclusively in --out for as long as a round runs in it
 PROJECT_CODEX_CONFIG = (".codex",)   # what codex loads from the tree it is run in
+# bare names a seat's launcher may fall back to, which Windows looks for in the current directory
+LAUNCHER_NAMES = frozenset(("node", "node.exe", "node.cmd", "node.bat", "cmd.exe", "powershell.exe",
+                            "pwsh.exe", "python.exe", "py.exe"))
 KILL_GRACE = 10                     # seconds to keep reading after a timed-out seat's tree is killed
 WAIT_POLL = 0.5                     # seconds one wait may block: Ctrl-C is only delivered between waits
 IGNORED_CAP = 50                    # git-ignored paths listed in the disclosure; the rest are counted
@@ -581,7 +584,8 @@ def _run_process(argv: List[str], brief_file: Path, cwd: str, timeout: float,
         extra["start_new_session"] = True            # its own process group, so killpg reaches every child
     with open(brief_file, "rb") as stdin:
         proc = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                cwd=cwd, env=dict(os.environ, PATH=os.pathsep.join(_safe_path(fleet.repo))),
+                                cwd=cwd, env=dict(os.environ, PATH=os.pathsep.join(_safe_path(fleet.repo)),
+                                                  NoDefaultCurrentDirectoryInExePath="1"),
                                 **extra)
         fleet.add(proc)
         try:
@@ -809,11 +813,11 @@ def _run_phase(jobs: int, cells: List[Tuple[dict, dict, str, str]], repo: Path, 
 
 # ---------------------------------------------------------------------------------------- round
 
-def _run_git(repo: Path, *args: str) -> str:
+def _run_git(repo: Path, *args: str, guard: Optional[Path] = None) -> str:
     """git's stdout. `git` is resolved like the seats are, never by bare name: on Windows a bare name
     is searched in the current directory first, and the operator may be standing in the reviewed tree
     (a committed `git.exe` would run before anything is checked). Refused when not found."""
-    exe, why = locate_executable("git", repo)
+    exe, why = locate_executable("git", guard or repo)
     if exe is None:
         raise frozen_tree.NotAnswerable(f"could not run git: {why}")
     try:
@@ -824,6 +828,21 @@ def _run_git(repo: Path, *args: str) -> str:
         said = (done.stderr or done.stdout).decode("utf-8", errors="replace").strip()
         raise frozen_tree.NotAnswerable(said or "git failed")
     return done.stdout.decode("utf-8", errors="replace")
+
+
+def _require_toplevel(repo: Path) -> None:
+    """Seats review a whole repository, and every guard keys on `repo`: refuse a subdirectory of one.
+    git is found without trusting any ancestor that is itself a checkout, as it is not yet known
+    which of them is the top level."""
+    guard = next((p for p in reversed([repo, *repo.parents]) if os.path.lexists(p / ".git")), repo)
+    top = Path(_run_git(repo, "rev-parse", "--show-toplevel", guard=guard).strip())
+    try:
+        same = os.path.samefile(top, repo)
+    except OSError:
+        same = False
+    if not same:
+        raise frozen_tree.NotAnswerable(f"--repo {repo} is not the repository's top level, {top}; "
+                                        "seats must review a whole repository — pass the top level")
 
 
 def _freeze(repo: Path) -> Tuple[Optional[str], List[str], Optional[str]]:
@@ -971,10 +990,16 @@ def _claim(out: Path, held: List[Path]) -> None:
 def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_path: Path, out: Path,
                only: Optional[List[str]] = None, jobs: int = DEFAULT_JOBS, cross_read: bool = True,
                cell_timeout: float = DEFAULT_TIMEOUT, resume: Optional[Path] = None,
-               config_from: str = DEFAULT_CONFIG_FROM, allow_project_codex_config: bool = False) -> int:
+               config_from: str = DEFAULT_CONFIG_FROM, allow_project_codex_config: bool = False,
+               allow_repo_executables: bool = False) -> int:
     """One round. Returns the exit code; prints what it did. The config is `config_path` as it is when
     one is given, else `config/panel.json` at `config_from` — never the reviewed tree's own copy."""
     repo = Path(repo).resolve()                      # once: `{repo}` in argv and the seat's cwd must agree
+    try:
+        _require_toplevel(repo)
+    except frozen_tree.NotAnswerable as exc:
+        print(f"error: {exc}")
+        return 2
     sha, dirty, unanswerable = _freeze(repo)
     if unanswerable:
         print(f"cannot tell whether the tree is frozen: {unanswerable}")
@@ -1035,11 +1060,19 @@ def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_
               "tree, or pass --allow-project-codex-config to accept that.")
         return 3
 
+    planted = sorted(n for n in os.listdir(repo) if n.lower() in LAUNCHER_NAMES)
+    if planted and not allow_repo_executables:       # a seat's launcher may pick these up by bare name
+        print(f"error: the reviewed tree's top level has {', '.join(planted)}, which a seat's launcher "
+              "could run by bare name; nothing was run. Remove them from the tree, or pass "
+              "--allow-repo-executables to accept that.")
+        return 3
+
     disclosure = {"models": [{"id": m["id"], "executable": _argv(m, repo)[0],
                               "reach": m.get("reach", DEFAULT_REACH), "reads": READ_SCOPE[m["kind"]]}
                              for m in models],
                   "brief_bytes": len(raw_brief), "repo": str(repo),
                   "project_codex_config": {"present": project_codex, "allowed": allow_project_codex_config},
+                  "repo_executables": {"present": planted, "allowed": allow_repo_executables},
                   "ignored_paths": ignored[:IGNORED_CAP], "ignored_more": max(0, len(ignored) - IGNORED_CAP)}
     print(config_source["note"])
     print("sending, before anything is dispatched:")
@@ -1352,6 +1385,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     run.add_argument("--allow-project-codex-config", action="store_true",
                      help="run codex seats although the reviewed tree has a .codex/ they would load "
                           "(the report records it)")
+    run.add_argument("--allow-repo-executables", action="store_true",
+                     help="run although the reviewed tree's top level has a program a seat could "
+                          "pick up by bare name, e.g. node.exe (the report records it)")
     run.add_argument("--jobs", type=int, default=DEFAULT_JOBS, metavar="N")
     run.add_argument("--cross-read", action=argparse.BooleanOptionalAction, default=True)
     run.add_argument("--cell-timeout", type=float, default=DEFAULT_TIMEOUT, metavar="SECONDS")
@@ -1370,6 +1406,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     return run_round(Path(args.config) if args.config is not None else None, Path(args.repo), Path(args.brief),
                      Path(args.out), only=only, jobs=args.jobs, cross_read=args.cross_read,
                      cell_timeout=args.cell_timeout, allow_project_codex_config=args.allow_project_codex_config,
+                     allow_repo_executables=args.allow_repo_executables,
                      resume=Path(args.resume) if args.resume else None,
                      config_from=DEFAULT_CONFIG_FROM if args.config_from is None else args.config_from)
 
