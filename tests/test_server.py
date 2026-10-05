@@ -2547,7 +2547,10 @@ NOT_ON_THE_CONSOLE = {
     "change_class": "which class governed the run, as a sentence for a person",
     "class_authorised_by": "who declared it, as a name",
     "effort_not_applied": "asks whose backend could not be told the effort — reaches the terminal only",
-    "seat_models": "which models answered which seat — printed as `seat models:`, not on the console yet",
+    # `seat_models` left this list in CHG-20261005-03: the console's node panel reads a key of that
+    # name from `GET /config/nodes`. That is **not** the report's `seat_models` (which models
+    # answered which seat in a finished run), and this guard searches for the token, so it cannot
+    # tell the two apart — the report field is still not drawn, and nothing here says so any more.
     "relaxations": "the runner's own relaxations — `--undeclared allow` and the like",
     "relaxations_by_class": "the gates a class dissolved, each named",
     "relaxation_authorisers": "who authorised each of those, per note",
@@ -2701,7 +2704,8 @@ def test_the_inventory_is_exact_and_the_two_renamed_ones_are_not_in_it():
 
     """
     page = _console()
-    assert len(NOT_ON_THE_CONSOLE) == 18, (
+    # 18 → 17 in CHG-20261005-03, which took `seat_models` off the list (see the note there).
+    assert len(NOT_ON_THE_CONSOLE) == 17, (
         f"the inventory is {len(NOT_ON_THE_CONSOLE)} entries; if the console grew a view, delete "
         f"the entry rather than leaving it — the test above already refuses a listed-and-rendered "
         f"field, and this number is what a reader checks the record against")
@@ -2737,16 +2741,10 @@ def test_the_inventory_is_exact_and_the_two_renamed_ones_are_not_in_it():
 #: **Four of six is the finding, not a lapse in the inventory.** It is this route's first
 #: accounting; two of the four are honest folds and say so.
 CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE = {
-    "node_models": "folded into `by_model` by the route itself; the page names it at `use.nodes`",
-    "seat_models": "folded into `by_model` by the route itself; the page names it at `use.seats`",
-    "source": "read by nothing. `runner run` and `runner serve` each print an aggregate count of "
-              "the same fact, but they compute it themselves from the store rather than from this "
-              "response — a draft of this line said the field 'reaches the terminal only' and a "
-              "seat refused it: a related fact computed twice is not this value being consumed. "
-              "The per-assignment view is named in CHG-20260907-28 and built by no record yet",
-    "assignable": "for an API client, which can refuse a node before it posts. No shipped console "
-                  "reads it and there is no per-node configure control for it to grey out; the "
-                  "server refuses the same node anyway, in `store._check_node`",
+    # **Empty since CHG-20261005-03.** All four entries (`node_models`, `seat_models`, `source`,
+    # `assignable`) were true of a console with no per-node configure control; the node panel now
+    # reads each of them, and the guard below says an entry must go the day the page names its key.
+    # The mechanism stays: a future key the page does not use is listed here with its reason.
 }
 
 
@@ -2893,6 +2891,10 @@ def test_no_fold_named_in_the_node_config_inventory_is_absent_from_the_route_or_
     folds = {key: re.findall(r"folded into `([^`]+)`", why)
              for key, why in CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE.items()}
     folds = {key: carriers for key, carriers in folds.items() if carriers}
+    if not CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE:
+        # Nothing is folded away any more (CHG-20261005-03): every key is named by the page, which
+        # `test_every_key_of_the_node_config_route_is_named_by_the_console_or_written_down` holds.
+        return
     assert folds, "no reason claims a fold, so this guard is checking nothing"
 
     absent = sorted(f"{carrier} (the carrier claimed for {key})"
@@ -2961,7 +2963,7 @@ def test_the_page_documents_this_route_and_promises_no_reader_it_does_not_have()
                 f"the paragraph introducing `{key}` talks about the console, and no shipped "
                 f"console names that key. Say what it does not do, or delete the entry in "
                 f"CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE because a reader arrived: {flat[:160]}")
-    assert examined, (
+    assert examined or not CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE, (
         "no paragraph on this route both introduces an unnamed key and mentions the console, so "
         "this guard examined nothing. If the page stopped explaining these keys, that is the "
         "finding")

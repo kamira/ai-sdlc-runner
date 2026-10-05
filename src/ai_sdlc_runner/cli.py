@@ -2049,8 +2049,16 @@ def cmd_serve(args: argparse.Namespace) -> int:
                     intake_history=()):
         # Per walk, like `current_assignments`: the registry and the store are editable from the
         # console, and so is what the coding role defaults to (CHG-20261005-01).
+        # And the settings file, which `POST /config/dimensions` writes (CHG-20261005-03): a
+        # review_dimensions choice saved in the console would otherwise change the screen and not
+        # the next walk, the defect `current_assignments` already had once.
+        try:
+            live = settings_mod.load(args.settings)
+        except settings_mod.SettingsError as exc:
+            print(f"note: {exc} — this walk uses the settings read at startup")
+            live = saved
         coder = coder_defaults(current_assignments().get("node_models") or {},
-                               store_mod.load_registry(db) or registry, saved,
+                               store_mod.load_registry(db) or registry, live,
                                agent_command=bool(config.get("agent_command")))
         for notice in coder[2]:
             print(f"note: {notice}")
@@ -2069,11 +2077,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
         interfaces=plan.get("interfaces") or {},
             autonomy=plan.get("autonomy"),
             # `serve` reads the file and nothing else, so the file is the source.
-            seats_from=(args.settings if (saved.review_seats is not None
-                                          or saved.review_dimensions is not None) else ""),
-            review_seats=saved.review_seats,
-            review_dimensions=saved.review_dimensions,
-            high_risk_mode=saved.high_risk_mode,
+            seats_from=(args.settings if (live.review_seats is not None
+                                          or live.review_dimensions is not None) else ""),
+            review_seats=live.review_seats,
+            review_dimensions=live.review_dimensions,
+            high_risk_mode=live.high_risk_mode,
             operations=plan.get("operations", {}),
             confirmed=approvals,
             rulings=rulings,
@@ -2120,7 +2128,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
             change_class=declared_class,
             class_by_workstream=class_by_workstream,
             effects=effects_provider(plan),
-            ordinary_commands=saved.ordinary_commands,
+            ordinary_commands=live.ordinary_commands,
             undeclared=args.undeclared,
             resume=True,
             journal=journal,
@@ -2267,7 +2275,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
                              # until now, so a freshly started console answered
                              # `"source": {}` (CHG-20260903-39).
                              assignment_source=assignment_source,
-                             coder_default=coder_default)
+                             coder_default=coder_default,
+                             settings_path=args.settings)
     except server.ServerError as exc:
         print(f"error: {exc}")
         return 2

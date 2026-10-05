@@ -41,7 +41,10 @@
   h2{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--faint);margin:0 0 8px;font-weight:600}
   /* The flowchart. Four states, and each is a different colour on purpose: where the run IS has
      to be findable at a glance, which is the whole reason this stopped being a list. */
-  .chart{min-width:100%}
+  .chart{max-width:none}
+  #flowtools{margin:-4px 0 8px}
+  main.wide{grid-template-columns:1fr;height:auto}
+  main.wide aside{border-right:0;overflow:visible}
   .chart .edge{fill:none;stroke:var(--line);stroke-width:1.5}
   .chart .edge.taken{stroke:var(--go);stroke-width:2}
   .chart .edge.back{stroke-dasharray:3 3}
@@ -62,6 +65,28 @@
 
   /* a terminal, and a gate */
   .chart .n.terminal .box{stroke-dasharray:4 3}
+  .chart .box.inner{fill:none}
+  .chart .tag{font-family:var(--mono);font-size:7.5px;font-weight:700;fill:var(--ink)}
+  .chart .n.here .tag{fill:var(--bg)}
+  .chart .n{cursor:pointer}
+  .chart .n:focus{outline:none}
+  .chart .n:focus .box,.chart .n.picked .box{stroke:var(--accent);stroke-width:3}
+  .chart .n.here:focus .box{stroke:var(--ink)}
+
+  /* the node panel */
+  #panel{border:1px solid var(--accent);border-radius:8px;padding:12px 14px;margin:0 0 16px;background:var(--card)}
+  #panel .ph{display:flex;gap:10px;align-items:baseline}
+  #panel .ph h3{margin:0;font-size:14px;flex:1}
+  #panel h3{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);margin:14px 0 6px}
+  #panel dl.facts{display:grid;grid-template-columns:130px 1fr;gap:3px 10px;margin:10px 0 6px;font-size:12.5px}
+  #panel dl.facts dt{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  #panel dl.facts dd{margin:0}
+  .picker .prow{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;padding:3px 0;border-top:1px solid var(--line);font-size:12px}
+  .picker .prow .id{font-family:var(--mono)}
+  .picker .prow.warn{color:var(--wait)}
+  button.mv{padding:0 7px;font-size:12px}
+  #panel details{margin:6px 0;border-top:1px solid var(--line);padding-top:4px}
+  #panel summary{cursor:pointer;font-family:var(--mono);font-size:12px}
   .chart .gatepin{fill:var(--wait)}
   .chart .n.done .gatepin{fill:var(--faint)}
   textarea{width:100%;font:13px/1.5 inherit;padding:9px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);resize:vertical}
@@ -135,15 +160,18 @@
   <span class="grow" id="meta"></span>
 </header>
 
-<main>
+<main id="app">
   <aside>
     <h2>the flow</h2>
+    <div id="flowtools"><button type="button" id="expand" aria-pressed="false"
+      aria-label="expand the flow to the full page width">expand</button></div>
     <div id="flow"></div>
     <p class="legend" id="legend"></p>
     <h2 style="margin-top:22px">the models, and where they are used</h2>
     <div id="models"></div>
   </aside>
   <section>
+    <div id="panel" role="region" aria-labelledby="paneltitle" hidden></div>
     <div id="ask"></div>
     <h2>your instruction</h2>
     <textarea id="instruction" rows="3" placeholder="what should this runner build?"></textarea>
@@ -189,7 +217,7 @@ function api(method, path, body) {
 
 // --- drawing ---------------------------------------------------------------------------------
 var SVGNS = "http://www.w3.org/2000/svg";
-var W = 132, H = 26, GAPX = 20, GAPY = 44, PAD = 14;
+var W = 132, H = 34, GAPX = 24, GAPY = 24, PAD = 14, BACKLANE = 9, COLW = 465;
 
 function svg(name, attrs, parent) {
   var el = document.createElementNS(SVGNS, name);
@@ -198,92 +226,153 @@ function svg(name, attrs, parent) {
   return el;
 }
 
-function layout() {
-  // Layers from a breadth-first walk of the REAL edges. Computed rather than hand-placed: a
-  // hand-drawn diagram is a second description of the graph, and a second description goes stale —
-  // this project already had a mock-up claim 23 nodes while drawing 18.
-  var by = {}, depth = {}, order = [];
-  flow.forEach(function (n) { by[n.id] = n; });
-  var queue = ["intake"];
-  depth.intake = 0;
-  while (queue.length) {
-    var id = queue.shift(), n = by[id];
-    if (!n) continue;
-    order.push(id);
+// LAYOUT-BEGIN
+// The layout is a pure function of the `/flow` nodes: no DOM, no globals but the size constants, so
+// a test can lift it out of this page and run it on the real payload. It names no node — the roots
+// are the nodes nothing points at, and the layers are the longest path from them. A hand-placed
+// diagram is a second description of the graph, and a second description goes stale: this project
+// already had a mock-up claim 23 nodes while drawing 18.
+function layout(nodes, maxw) {
+  var by = {}, index = {}, edges = [];
+  nodes.forEach(function (n, i) { by[n.id] = n; index[n.id] = i; });
+  nodes.forEach(function (n) {
     var outs = [];
-    for (var k in n.branches) outs.push(n.branches[k]);
-    if (n.next) outs.push(n.next);
-    outs.forEach(function (t) {
-      if (by[t] && !(t in depth)) { depth[t] = depth[id] + 1; queue.push(t); }
+    for (var k in n.branches) outs.push([k, n.branches[k]]);
+    if (n.next) outs.push([null, n.next]);
+    outs.forEach(function (o) {
+      if (by[o[1]]) edges.push({ from: n.id, to: o[1], label: o[0], back: false });
+    });
+  });
+  var out = {}, incoming = {};
+  edges.forEach(function (e) {
+    (out[e.from] = out[e.from] || []).push(e);
+    incoming[e.to] = true;
+  });
+
+  // Depth-first from the roots (then from anything still unvisited, so a node nothing reaches is
+  // still placed). An edge into a node still on the stack closes a cycle: that edge is the back
+  // edge — a loop or a send-back — and is left out of the layering so a cycle cannot stretch it.
+  var state = {}, post = [];
+  function visit(id) {
+    state[id] = 1;
+    (out[id] || []).forEach(function (e) {
+      if (state[e.to] === 1) e.back = true;
+      else if (!state[e.to]) visit(e.to);
+    });
+    state[id] = 2;
+    post.push(id);
+  }
+  nodes.forEach(function (n) { if (!incoming[n.id] && !state[n.id]) visit(n.id); });
+  nodes.forEach(function (n) { if (!state[n.id]) visit(n.id); });
+
+  var layer = {};
+  nodes.forEach(function (n) { layer[n.id] = 0; });
+  for (var i = post.length - 1; i >= 0; i--) {
+    (out[post[i]] || []).forEach(function (e) {
+      if (!e.back) layer[e.to] = Math.max(layer[e.to], layer[post[i]] + 1);
     });
   }
-  var rows = {};
-  order.forEach(function (id) {
-    var d = depth[id];
-    (rows[d] = rows[d] || []).push(id);
-  });
-  var pos = {}, widest = 0;
-  Object.keys(rows).forEach(function (d) {
-    widest = Math.max(widest, rows[d].length);
-    rows[d].forEach(function (id, i) {
-      pos[id] = { x: PAD + i * (W + GAPX), y: PAD + Number(d) * (H + GAPY), row: Number(d) };
+
+  // Layers are rows, top to bottom, so the chart is as wide as the column it sits in: a layer with
+  // more nodes than fit across wraps onto extra rows instead of widening the chart.
+  var backs = edges.filter(function (e) { return e.back; }).length;
+  var perRow = Math.max(1, Math.floor(((maxw || COLW) - PAD * 2 - backs * BACKLANE + GAPX) /
+                                      (W + GAPX)));
+  var layers = [], pos = {}, row = 0, widest = 0;
+  nodes.forEach(function (n) { (layers[layer[n.id]] = layers[layer[n.id]] || []).push(n.id); });
+  layers.forEach(function (ids, l) {
+    if (!ids) return;
+    ids.forEach(function (id, i) {
+      var r = row + Math.floor(i / perRow), c = i % perRow;
+      pos[id] = { x: PAD + c * (W + GAPX), y: PAD + r * (H + GAPY), layer: l, row: r, col: c };
     });
+    widest = Math.max(widest, Math.min(ids.length, perRow));
+    row += Math.ceil(ids.length / perRow);
   });
-  return { by: by, pos: pos,
-           w: PAD * 2 + widest * (W + GAPX) - GAPX,
-           h: PAD * 2 + (Math.max.apply(null, Object.keys(rows).map(Number)) + 1) * (H + GAPY) };
+  var right = PAD + widest * (W + GAPX) - GAPX;
+  var width = right + backs * BACKLANE + PAD;
+  var height = PAD * 2 + row * (H + GAPY) - GAPY;
+  var lane = 0;
+  edges.forEach(function (e) {
+    var a = pos[e.from], b = pos[e.to], d, lx, ly;
+    var x1 = a.x + W / 2, y1 = a.y + H, x2 = b.x + W / 2, y2 = b.y;
+    if (e.back) {
+      // Out of the bottom of the source, along the gap under its row to a lane right of every node,
+      // up that lane, along the gap above the target's row, down into the target's top. It runs only
+      // in gaps and lanes, so it crosses no node, and it ends on the two boxes it connects.
+      var lx0 = right + BACKLANE * (++lane);
+      var ya = y1 + 4 + (lane % 3) * 4, yb = y2 - 4 - (lane % 3) * 4;
+      d = "M " + x1 + " " + y1 + " V " + ya + " H " + lx0 + " V " + yb + " H " + x2 + " V " + y2;
+      lx = lx0 - 3; ly = (ya + yb) / 2;
+    } else {
+      var mid = (y2 - y1) / 2;
+      d = "M " + x1 + " " + y1 + " C " + x1 + " " + (y1 + mid) + ", " + x2 + " " + (y2 - mid) +
+          ", " + x2 + " " + y2;
+      lx = x1 + 3; ly = y1 + 9;
+    }
+    e.d = d; e.lx = lx; e.ly = ly;
+  });
+  return { pos: pos, edges: edges, w: width, h: height };
+}
+// LAYOUT-END
+
+function nodeById(id) {
+  return flow.filter(function (n) { return n.id === id; })[0];
+}
+
+function describeNode(n) {
+  return n.id + " — " + n.label + ". " + n.kind + ", " + n.mode +
+         (n.gate ? ", gate " + n.gate : "") + (n.permanent ? ", permanent halt" : "");
+}
+
+function shapeFor(n, p, g) {
+  // Shape says the kind, so it survives without colour: a step is a rectangle, a decision a
+  // hexagon, a loop a pill, a terminal a dashed pill (double-lined when it is a permanent halt).
+  var cls = { "class": "box" };
+  if (n.kind === "decision") {
+    var c = 12;
+    cls.points = [p.x + c, p.y, p.x + W - c, p.y, p.x + W, p.y + H / 2, p.x + W - c, p.y + H,
+                  p.x + c, p.y + H, p.x, p.y + H / 2].join(" ");
+    return svg("polygon", cls, g);
+  }
+  var round = (n.kind === "loop" || n.kind === "terminal") ? H / 2 : 5;
+  if (n.kind === "terminal" && n.permanent) {
+    svg("rect", { "class": "box inner", x: p.x - 3, y: p.y - 3, width: W + 6, height: H + 6,
+                  rx: round + 3 }, g);
+  }
+  return svg("rect", { "class": "box", x: p.x, y: p.y, width: W, height: H, rx: round }, g);
 }
 
 function drawFlow() {
   var here = state && state.at, seen = (state && state.visited) || [];
-  var L = layout(), host = $("#flow");
+  var host = $("#flow");
+  var L = layout(flow, host.clientWidth || COLW);
+  var active = document.activeElement && document.activeElement.getAttribute
+    ? document.activeElement.getAttribute("data-node") : null;
   host.innerHTML = "";
-  var root = svg("svg", { "class": "chart", width: L.w, height: L.h,
+  var root = svg("svg", { "class": "chart", width: L.w, height: L.h, role: "group",
+                          "aria-label": "the flow, " + flow.length + " nodes",
                           viewBox: "0 0 " + L.w + " " + L.h }, host);
 
   // edges first, so nodes sit on top of them
-  flow.forEach(function (n) {
-    var from = L.pos[n.id];
-    if (!from) return;
-    var outs = [];
-    for (var k in n.branches) outs.push([k, n.branches[k]]);
-    if (n.next) outs.push([null, n.next]);
-    outs.forEach(function (pair) {
-      var label = pair[0], to = L.pos[pair[1]];
-      if (!to) return;
-      var back = to.row <= from.row;
-      var x1 = from.x + W / 2, y1 = from.y + H, x2 = to.x + W / 2, y2 = to.y;
-      var d;
-      if (back) {
-        // A loop or a send-back. Drawn round the right-hand side so it reads as going *back*
-        // rather than as a stray line crossing the spine.
-        var side = L.w - 6;
-        d = "M " + (from.x + W) + " " + (from.y + H / 2) +
-            " H " + side + " V " + (to.y + H / 2) + " H " + (to.x + W);
-        y1 = from.y + H / 2;
-      } else {
-        d = "M " + x1 + " " + y1 + " C " + x1 + " " + (y1 + GAPY / 2) + ", " +
-            x2 + " " + (y2 - GAPY / 2) + ", " + x2 + " " + y2;
-      }
-      // "taken" means this edge was actually walked — both ends visited, in order.
-      var walked = seen.indexOf(n.id) >= 0 && seen.indexOf(pair[1]) >= 0;
-      svg("path", { "class": "edge" + (back ? " back" : "") + (walked ? " taken" : ""), d: d },
-          root);
-      if (label) {
-        svg("text", { "class": "elabel", x: back ? L.w - 4 : (x1 + x2) / 2 + 3,
-                      y: back ? y1 - 4 : y1 + GAPY / 2,
-                      "text-anchor": back ? "end" : "middle" }, root).textContent = label;
-      }
-    });
+  L.edges.forEach(function (e) {
+    // "taken" means this edge was actually walked — both ends visited, in order.
+    var walked = seen.indexOf(e.from) >= 0 && seen.indexOf(e.to) >= 0;
+    svg("path", { "class": "edge" + (e.back ? " back" : "") + (walked ? " taken" : ""), d: e.d,
+                  "data-from": e.from, "data-to": e.to }, root);
+    if (e.label) {
+      svg("text", { "class": "elabel", x: e.lx, y: e.ly }, root).textContent = e.label;
+    }
   });
 
   // nodes
   flow.forEach(function (n) {
     var p = L.pos[n.id];
-    if (!p) return;
     var cls = "n" + (n.id === here ? " here" : seen.indexOf(n.id) >= 0 ? " done" : "") +
-              (n.kind === "terminal" ? " terminal" : "");
-    var g = svg("g", { "class": cls }, root);
+              " " + n.kind + (n.id === picked ? " picked" : "");
+    var g = svg("g", { "class": cls, tabindex: 0, role: "button", "data-node": n.id,
+                       "aria-label": describeNode(n) + (n.id === here ? ", the run is here" : "") +
+                                     ". Press Enter to open its settings." }, root);
     var t = svg("title", {}, g);
     t.textContent = n.label + (n.gate ? "  ·  gate: " + n.gate : "") + "  ·  " + n.mode +
                     (n.rejects_to ? "  ·  refusal → " + n.rejects_to : "");
@@ -291,17 +380,34 @@ function drawFlow() {
       svg("rect", { "class": "halo", x: p.x - 4, y: p.y - 4, width: W + 8, height: H + 8,
                     rx: 8 }, g);
     }
-    svg("rect", { "class": "box", x: p.x, y: p.y, width: W, height: H, rx: 5 }, g);
-    if (n.gate) svg("circle", { "class": "gatepin", cx: p.x + W - 8, cy: p.y + 7, r: 2.6 }, g);
-    svg("text", { "class": "name", x: p.x + 8, y: p.y + 12 }, g).textContent = n.id;
-    svg("text", { "class": "who", x: p.x + 8, y: p.y + 21 }, g).textContent =
-      (n.role || "runner") + " · " + n.mode;
+    shapeFor(n, p, g);
+    if (n.gate) svg("circle", { "class": "gatepin", cx: p.x + W - 9, cy: p.y + 8, r: 2.6 }, g);
+    svg("text", { "class": "name", x: p.x + 14, y: p.y + 14 }, g).textContent = n.id;
+    // Words for what colour would say: a gate, a halt, and where the run is.
+    var marks = [(n.role || "runner") + " · " + n.mode];
+    var tags = (n.gate ? "gate " : "") + (n.permanent ? "HALT " : "") + (n.id === here ? "HERE" : "");
+    svg("text", { "class": "who", x: p.x + 14, y: p.y + 25 }, g).textContent = marks[0];
+    if (tags) svg("text", { "class": "tag", x: p.x + W - 14, y: p.y + 25,
+                            "text-anchor": "end" }, g).textContent = tags.trim();
+    function open() { openPanel(n.id); }
+    g.addEventListener("click", open);
+    g.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter" || ev.key === " " || ev.key === "Spacebar") {
+        ev.preventDefault(); open();
+      }
+    });
   });
 
   // Keep the current node on screen without yanking the view when nothing moved.
   var current = root.querySelector(".n.here");
-  if (current && current.scrollIntoView) {
+  if (current && current.scrollIntoView && !active) {
     current.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+  // The stream redraws the chart on every state change; without this a keyboard user loses their
+  // place each time the run moves.
+  if (active) {
+    var again = root.querySelector('[data-node="' + active + '"]');
+    if (again && again.focus) again.focus();
   }
   drawLegend();
 }
@@ -322,6 +428,12 @@ function drawModels() {
     var name = document.createElement("span"); name.className = "id"; name.textContent = id;
     h.appendChild(name);
     if (m) {
+      // The tier and the effort template, next to the name: what a model is for, and how an
+      // effort reaches it (CHG-20261005-01).
+      var tier = document.createElement("span");
+      tier.className = "muted";
+      tier.textContent = "tier " + tierOf(m);
+      h.appendChild(tier);
       var vendor = document.createElement("span");
       vendor.className = "muted";
       vendor.textContent = m.vendor + " · " + m.transport;
@@ -359,17 +471,21 @@ function drawModels() {
       r.appendChild(k); r.appendChild(v); el.appendChild(r);
     }
 
+    if (m) row("effort", effortOf(m));
     if (use.nodes && use.nodes.length) {
       // The mode matters as much as the node: three models on a `pool` is one of them doing the
       // work, and on a `model_panel` it is three voices being adjudicated. Same list, different run.
+      // And the role the node asks for: this list is where "which role does this model play" is
+      // answered, since the role itself is governance and is not editable.
       use.nodes.forEach(function (n) {
+        var node = nodeById(n.node_id);
         // A default is not an assignment: nothing was assigned, the coding default builds.
-        row("node", n.node_id + "  (" + n.mode + ")" +
+        row("node", n.node_id + "  (" + n.mode + (node && node.role ? ", " + node.role : "") + ")" +
             (n.default ? "  coder default (settings or the only mid model), not an assignment" : ""));
       });
     }
     if (use.seats && use.seats.length) {
-      use.seats.forEach(function (seat) { row("seat", seat); });
+      use.seats.forEach(function (seat) { row("seat", seat + "  (review seat)"); });
     }
     if (!(use.nodes || []).length && !(use.seats || []).length) {
       // Said out loud. "Configured" and "used" look identical in a list, and only one of them does
@@ -397,8 +513,307 @@ function drawLegend() {
     '<span class="sw" style="background:var(--go);border-color:var(--go)"></span>' +
     'an edge this run took<br>' +
     '<span class="sw" style="background:var(--wait);border-radius:50%;border-color:var(--wait)">' +
-    '</span>the node has a gate';
+    '</span>the node has a gate (also written <b>gate</b> on it)<br>' +
+    'shapes: rectangle = step, hexagon = decision, pill = loop, dashed pill = end ' +
+    '(double line, <b>HALT</b> = a give-up)<br>' +
+    'Tab to a node, Enter or Space opens its settings, Escape closes them.';
 }
+
+// --- the node panel ----------------------------------------------------------------------------
+// Click a node (or Enter / Space on it) and its settings open. Role, mode, gate and the role's
+// capabilities are shown and **not editable**: they are governance, and this page holds none. What
+// can be chosen is which models answer the node, and which review dimensions open on the seat
+// nodes. Every save is a route that already validates; whatever the server refuses is put on
+// screen word for word, and nothing here decides on the server's behalf.
+var picked = null, seatInfo = null, seatInfoError = "";
+
+function el(tag, cls, text) {
+  var e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function modelMeta(id) {
+  return ((assign && assign.models) || []).filter(function (m) { return m.id === id; })[0];
+}
+
+function tierOf(m) { return m && m.tier ? m.tier : "unclassified"; }
+function effortOf(m) {
+  return m && m.effort_argv && m.effort_argv.length ? m.effort_argv.join(" ")
+                                                    : "no effort control";
+}
+
+// A checkbox list over the registry. What is ticked is a list **in order** — `model_panel` voices
+// and a seat's sessions both are — so a ticked row carries up / down buttons.
+function picker(initial) {
+  var registered = ((assign && assign.models) || []).map(function (m) { return m.id; });
+  var order = initial.filter(function (id) { return registered.indexOf(id) >= 0; });
+  // A seat can hold a bare command line set from the CLI. `POST /config/seats` only takes registry
+  // ids, so saving replaces it; the page says so rather than dropping it unannounced.
+  var foreign = initial.filter(function (id) { return registered.indexOf(id) < 0; });
+  var root = el("div", "picker");
+  function draw() {
+    root.innerHTML = "";
+    foreign.forEach(function (label) {
+      root.appendChild(el("div", "prow warn",
+        "not in the registry, and saving replaces it: " + label));
+    });
+    var rows = order.concat(registered.filter(function (id) { return order.indexOf(id) < 0; }));
+    rows.forEach(function (id) {
+      var m = modelMeta(id), on = order.indexOf(id) >= 0;
+      var row = el("div", "prow");
+      var lab = el("label");
+      var box = el("input"); box.type = "checkbox"; box.checked = on;
+      box.setAttribute("aria-label", id);
+      box.onchange = function () {
+        if (box.checked) order.push(id); else order.splice(order.indexOf(id), 1);
+        draw();
+      };
+      lab.appendChild(box);
+      lab.appendChild(el("span", "id", " " + id));
+      row.appendChild(lab);
+      row.appendChild(el("span", "muted", "tier " + tierOf(m) + " · effort: " + effortOf(m)));
+      if (on) {
+        [["↑", -1, "move " + id + " earlier"], ["↓", 1, "move " + id + " later"]]
+          .forEach(function (mv) {
+            var b = el("button", "mv", mv[0]); b.type = "button";
+            b.setAttribute("aria-label", mv[2]);
+            b.onclick = function () {
+              var i = order.indexOf(id), j = i + mv[1];
+              if (j < 0 || j >= order.length) return;
+              order[i] = order[j]; order[j] = id; draw();
+            };
+            row.appendChild(b);
+          });
+      }
+      root.appendChild(row);
+    });
+    if (!registered.length) {
+      root.appendChild(el("p", "muted", "No models are registered, so there is nothing to choose."));
+    }
+  }
+  draw();
+  return { root: root, get: function () { return order.slice(); } };
+}
+
+function panelError(text) { var e = $("#panelerr"); if (e) e.textContent = text || ""; }
+
+// Every save ends here. The server's refusal is shown as it was written; the new version is taken
+// from the answer so a second save does not trip the staleness check it just advanced.
+function save(path, body, then) {
+  panelError("");
+  if (!state) { panelError("the run state has not loaded yet"); return; }
+  body.version = state.version;
+  api("POST", path, body).then(function (out) {
+    if (out && typeof out.version === "number") state.version = out.version;
+    return refreshConfig();
+  }).then(function () { if (then) then(); panelError(""); }).catch(function (e) {
+    panelError(e.message);
+  });
+}
+
+function seatDefaults() {
+  var all = seatInfo.seats.map(function (s) { return s.name; });
+  return all.slice(0, seatInfo.review_seats || seatInfo.floor);
+}
+
+function renderSeatEditor(host) {
+  host.appendChild(el("h3", null, "review dimensions"));
+  if (!seatInfo) {
+    host.appendChild(el("p", "err", seatInfoError || "the seat list is not available"));
+    return;
+  }
+  var set = seatInfo.review_dimensions;
+  host.appendChild(el("p", "muted", set
+    ? "Opening, in this order: " + set.join(", ") + "."
+    : "Not chosen: the first " + (seatInfo.review_seats || seatInfo.floor) +
+      " seats open. Choosing here replaces that, and it needs at least " + seatInfo.floor +
+      " unless high-risk mode is on (" + (seatInfo.high_risk_mode ? "it is" : "it is off") + ")."));
+  var order = (set || seatDefaults()).slice();
+  var list = el("div", "picker");
+  function draw() {
+    list.innerHTML = "";
+    var names = seatInfo.seats.map(function (s) { return s.name; });
+    var rows = order.concat(names.filter(function (n) { return order.indexOf(n) < 0; }));
+    rows.forEach(function (name) {
+      var s = seatInfo.seats.filter(function (x) { return x.name === name; })[0];
+      var on = order.indexOf(name) >= 0, row = el("div", "prow");
+      var lab = el("label"), box = el("input"); box.type = "checkbox"; box.checked = on;
+      box.setAttribute("aria-label", "open the " + name + " seat");
+      box.onchange = function () {
+        if (box.checked) order.push(name); else order.splice(order.indexOf(name), 1);
+        draw();
+      };
+      lab.appendChild(box);
+      lab.appendChild(el("span", "id", " " + name));
+      row.appendChild(lab);
+      row.appendChild(el("span", "muted", s.label + (s.veto ? " · veto" : "") +
+                         (s.enabled_by_default ? "" : " · opt-in")));
+      row.title = s.question;
+      if (on) {
+        [["↑", -1], ["↓", 1]].forEach(function (mv) {
+          var b = el("button", "mv", mv[0]); b.type = "button";
+          b.setAttribute("aria-label", "move " + name + (mv[1] < 0 ? " earlier" : " later"));
+          b.onclick = function () {
+            var i = order.indexOf(name), j = i + mv[1];
+            if (j < 0 || j >= order.length) return;
+            order[i] = order[j]; order[j] = name; draw();
+          };
+          row.appendChild(b);
+        });
+      }
+      list.appendChild(row);
+    });
+  }
+  draw();
+  host.appendChild(list);
+  var row = el("div", "row");
+  var go = el("button", "p", "save the review dimensions"); go.type = "button";
+  go.onclick = function () {
+    save("/config/dimensions", { review_dimensions: order.slice() });
+  };
+  var clear = el("button", null, "clear (back to the default prefix)"); clear.type = "button";
+  clear.onclick = function () { save("/config/dimensions", { review_dimensions: null }); };
+  row.appendChild(go); row.appendChild(clear);
+  host.appendChild(row);
+
+  host.appendChild(el("h3", null, "models on each seat"));
+  host.appendChild(el("p", "muted",
+    "A seat passes only when every model on it passes. No model means the default backend."));
+  seatInfo.seats.forEach(function (s) {
+    var d = el("details"), sum = el("summary", null, s.name);
+    d.appendChild(sum);
+    var chosen = ((assign && assign.seat_models) || {})[s.name] || [];
+    var pk = picker(chosen);
+    d.appendChild(pk.root);
+    var b = el("button", null, "save " + s.name + " models"); b.type = "button";
+    b.onclick = function () { save("/config/seats", { seat: s.name, model_id: pk.get() }); };
+    d.appendChild(b);
+    host.appendChild(d);
+  });
+}
+
+function renderPanel() {
+  var box = $("#panel");
+  box.innerHTML = "";
+  var n = picked && nodeById(picked);
+  if (!n) { box.hidden = true; return; }
+  box.hidden = false;
+
+  var head = el("div", "ph");
+  var title = el("h3", null, n.id + " — " + n.label);
+  title.id = "paneltitle";
+  head.appendChild(title);
+  var x = el("button", null, "close"); x.type = "button";
+  x.setAttribute("aria-label", "close the settings for " + n.id + " (Escape)");
+  x.onclick = closePanel;
+  head.appendChild(x);
+  box.appendChild(head);
+
+  // Read-only: what the node is. Governance lives in policy.py and graph.py, not here.
+  var dl = el("dl", "facts");
+  function fact(k, v) { dl.appendChild(el("dt", null, k)); dl.appendChild(el("dd", null, v)); }
+  fact("role", n.role || "runner (no model asks)");
+  fact("mode", n.mode);
+  fact("gate", n.gate ? n.gate + (n.gate_when ? " (" + n.gate_when + ")" : "") : "none");
+  if (n.rejects_to) fact("a refusal goes to", n.rejects_to);
+  var caps = n.capabilities;
+  fact("the role may", caps
+    ? ["can_spawn", "can_write", "can_execute"].map(function (k) {
+        return k.replace("can_", "") + ": " + (caps[k] ? "yes" : "no");
+      }).join(" · ")
+    : "no role, so nothing is carried");
+  // CHG-20261005-01: a node with no assignment may still be built by the coding role default.
+  // Shown as a default, never as an assignment: it is not in node_models, and saving does not make it one.
+  var defaults = [];
+  var byModel = (assign && assign.by_model) || {};
+  Object.keys(byModel).sort().forEach(function (mid) {
+    ((byModel[mid] || {}).nodes || []).forEach(function (u) {
+      if (u.node_id === n.id && u.default) defaults.push(mid);
+    });
+  });
+  if (defaults.length) {
+    fact("coder default", defaults.join(", ") +
+         "  (settings or the only mid model), not an assignment");
+  }
+  box.appendChild(dl);
+  box.appendChild(el("p", "muted",
+    "Role, mode, gate and capabilities are governance and are not editable here. Choosing which " +
+    "models answer a node is what decides which role each model plays."));
+
+  var editor = el("div", "editor");
+  var assignable = (assign && assign.assignable) || [];
+  if (n.mode === "seat_panel" || n.mode === "survey") {
+    renderSeatEditor(editor);
+  } else if (assignable.indexOf(n.mode) >= 0) {
+    editor.appendChild(el("h3", null, "models for " + n.id));
+    var src = ((assign && assign.source) || {})["node_models." + n.id];
+    if (src === "plan") {
+      editor.appendChild(el("p", "muted",
+        "The plan file sets this node, and the plan wins over what is saved here."));
+    }
+    var pk = picker(((assign && assign.node_models) || {})[n.id] || []);
+    editor.appendChild(pk.root);
+    var b = el("button", "p", "save the models for " + n.id); b.type = "button";
+    b.onclick = function () { save("/config/nodes", { node_id: n.id, models: pk.get() }); };
+    editor.appendChild(b);
+  } else {
+    editor.appendChild(el("p", "muted",
+      "A " + n.mode + " node takes no model list, so there is nothing to choose here."));
+  }
+  box.appendChild(editor);
+  var err = el("p", "err"); err.id = "panelerr"; err.setAttribute("role", "alert");
+  box.appendChild(err);
+  if (title.scrollIntoView) title.scrollIntoView({ block: "nearest" });
+}
+
+function refreshConfig() {
+  return api("GET", "/config/nodes").then(function (a) {
+    assign = a;
+    return api("GET", "/config/seats").then(function (s) {
+      seatInfo = s; seatInfoError = "";
+    }, function (e) { seatInfo = null; seatInfoError = e.message; });
+  }).then(function () { drawModels(); renderPanel(); });
+}
+
+// The panel opens beside the flow, not under it: with the flow expanded to the page width the panel
+// would sit below the chart and the node that opened it would scroll away, so opening one narrows it.
+function setExpanded(on) {
+  var app = $("#app"), b = $("#expand");
+  app.className = on ? "wide" : "";
+  b.setAttribute("aria-pressed", on ? "true" : "false");
+  b.textContent = on ? "collapse" : "expand";
+  b.setAttribute("aria-label", on ? "return the flow to its column" : "expand the flow to the full page width");
+  drawFlow();
+}
+
+function openPanel(id) {
+  picked = id;
+  if ($("#app").className === "wide") setExpanded(false);
+  drawFlow();
+  var again = document.querySelector('[data-node="' + id + '"]');
+  if (again && again.focus) again.focus();
+  if (again && again.scrollIntoView) again.scrollIntoView({ block: "nearest", inline: "nearest" });
+  refreshConfig().catch(function (e) { panelError(e.message); });
+}
+
+function closePanel() {
+  var was = picked;
+  picked = null;
+  renderPanel();
+  drawFlow();
+  var again = was && document.querySelector('[data-node="' + was + '"]');
+  if (again && again.focus) again.focus();
+}
+
+document.addEventListener("keydown", function (ev) {
+  if ((ev.key === "Escape" || ev.key === "Esc") && picked) closePanel();
+});
+
+$("#expand").onclick = function () {
+  setExpanded($("#app").className !== "wide");
+};
 
 function drawLog() {
   var log = (state && state.log) || [];
@@ -786,8 +1201,8 @@ $("#file").onchange = function () {
 
 // --- go --------------------------------------------------------------------------------------
 api("GET", "/flow")
-  .then(function (f) { flow = f.nodes; return api("GET", "/config/nodes"); })
-  .then(function (a) { assign = a; drawModels(); return api("GET", "/run"); })
+  .then(function (f) { flow = f.nodes; return refreshConfig(); })
+  .then(function () { return api("GET", "/run"); })
   .then(function (s) {
     apply(s);
     // The snapshot came first, so the stream can only ever move us forward from a known state.

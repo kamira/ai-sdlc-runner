@@ -44,7 +44,7 @@ import queue
 import socket
 import secrets
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 from pathlib import Path
@@ -53,6 +53,7 @@ from typing import Callable, Dict, FrozenSet, Iterable, List, Mapping, Optional
 from . import attachments as attach_mod
 from . import paths
 from . import engine, graph, intake as intake_mod, models as models_mod, policy, store as store_mod
+from . import settings as settings_mod
 
 #: The only addresses this server will bind. Not a default — a rule. A runner that can merge
 #: branches has no business listening where anything but this machine can reach it, and making that
@@ -1205,7 +1206,8 @@ def make_handler(runner: Runner, operator: Operator,
                  assignments: Optional[Mapping[str, object]] = None,
                  db=None, plan_assignments: Optional[Mapping[str, object]] = None,
                  assignment_source: Optional[Mapping[str, str]] = None,
-                 coder_default=None):
+                 coder_default=None,
+                 settings_path: Optional[str] = None):
     """The HTTP surface. Refuses before it reads, in the order the threat model requires.
 
     `coder_default` is a callable returning `{node id: [model ids]}` for the nodes the coding
@@ -1312,6 +1314,58 @@ def make_handler(runner: Runner, operator: Operator,
                 or (isinstance(model_id, list) and all(isinstance(m, str) for m in model_id))):
             raise ServerError("`model_id` is a model id or a list of them — empty clears the seat")
         return _config_edit(body, lambda: store_mod.set_seat_model(db, seat, model_id or None))
+
+    def _load_settings():
+        if settings_path is None:
+            raise ServerError("this runner was started without a settings file, so there is "
+                              "nowhere to read or save review_dimensions; start `serve` with one")
+        try:
+            return settings_mod.load(settings_path)
+        except settings_mod.SettingsError as exc:
+            raise ServerError(str(exc))
+
+    def _seat_choices():
+        """The seats a user may open, and what is chosen now (CHG-20261005-03).
+
+        Read from the settings file on every call, never cached: `POST /config/dimensions` writes
+        that file, and a console showing last minute's choice would be reporting a panel the next
+        run does not open.
+        """
+        current = _load_settings() if settings_path is not None else settings_mod.Settings()
+        return {
+            "seats": [{"name": s.name, "label": s.label, "question": s.question,
+                       "veto": s.veto, "enabled_by_default": s.enabled_by_default}
+                      for s in policy.SEATS],
+            "review_dimensions": (list(current.review_dimensions)
+                                  if current.review_dimensions is not None else None),
+            "review_seats": current.review_seats,
+            "high_risk_mode": current.high_risk_mode,
+            "floor": policy.SEAT_FLOOR,
+        }
+
+    def _set_dimensions(body):
+        """Choose which review dimensions open, in order; `null` clears the choice.
+
+        Goes through `settings.save`, so every refusal is the one `runner settings` gives — an
+        unknown seat, a repeat, a count under the floor without high-risk mode. Nothing here
+        re-implements a rule; a second copy of the floor is a floor that can drift.
+        """
+        raw = body.get("review_dimensions", False)
+        if raw is not None and not isinstance(raw, list):
+            raise ServerError("`review_dimensions` is a list of seat names, or null to clear it")
+
+        def write():
+            current = _load_settings()
+            try:
+                settings_mod.save(
+                    replace(current, review_dimensions=None if raw is None else tuple(raw)),
+                    settings_path)
+            except settings_mod.SettingsError as exc:
+                raise ServerError(str(exc))
+            return _seat_choices()
+
+        out = runner.edit(body.get("version"), write)
+        return {**out, "version": runner.state.version}
 
     def _route_halt(body):
         """Who a permanent halt of one kind reaches first, for this project (CHG-20260827-19).
@@ -1484,7 +1538,12 @@ def make_handler(runner: Runner, operator: Operator,
                      "gate": n.gate, "gate_when": n.gate_when, "mode": n.mode,
                      "main": n.main, "follows": n.follows, "rejects_to": n.rejects_to,
                      "branches": dict(n.branches), "next": n.next,
-                     "permanent": n.permanent}
+                     "permanent": n.permanent,
+                     # Read-only, from `policy.ROLES` (CHG-20261005-03): the console shows what the
+                     # role may do and has no route that changes it. `None` for a node with no
+                     # role — the runner's own steps.
+                     "capabilities": (policy.capabilities(n.role)
+                                      if n.role in policy.BY_ROLE else None)}
                     for n in graph.NODES],
                     "gates": {g: dict(v) for g, v in policy.GATES.items()},
                     "modes": list(graph.MODES)})
@@ -1567,6 +1626,8 @@ def make_handler(runner: Runner, operator: Operator,
                     # configure control to grey (CHG-20260907-28).
                     "assignable": list(store_mod.MODES_THAT_USE_MODELS),
                 })
+            elif path == "/config/seats":
+                self._json(200, _seat_choices())
             elif path == "/whoami":
                 self._json(200, {"operator": operator.name})
             else:
@@ -1631,6 +1692,8 @@ def make_handler(runner: Runner, operator: Operator,
                     out = _assign_node(body)
                 elif self.path == "/config/seats":
                     out = _assign_seat(body)
+                elif self.path == "/config/dimensions":
+                    out = _set_dimensions(body)
                 elif self.path == "/config/halts":
                     out = _route_halt(body)
                 elif self.path == "/run/decide":
@@ -1707,7 +1770,9 @@ def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
           assignments: Optional[Mapping[str, object]] = None,
           db=None, plan_assignments: Optional[Mapping[str, object]] = None,
           assignment_source: Optional[Mapping[str, str]] = None,
-          coder_default=None) -> ThreadingHTTPServer:
+          coder_default=None,
+          settings_path: Optional[str] = None
+          ) -> ThreadingHTTPServer:
     """Build the server, refusing any host that is not this machine.
 
     The refusal is here rather than in the caller because a bind address is exactly the kind of thing
@@ -1771,7 +1836,8 @@ def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
                           make_handler(runner, operator, registry, registry_path, assignments,
                                        db=db, plan_assignments=plan_assignments,
                                        assignment_source=assignment_source,
-                                       coder_default=coder_default))
+                                       coder_default=coder_default,
+                                       settings_path=settings_path))
     except OSError as exc:
         # Only what the errno establishes. This branch used to say "something is already there"
         # for every failure a socket can have, and `socket.gaierror` is an `OSError` — so the

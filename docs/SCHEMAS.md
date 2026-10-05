@@ -527,7 +527,7 @@ duplicate-`seq` policy is written down for the importer and not for the live pat
 
 ## 15 · Server HTTP API
 
-Nineteen routes, eight `GET` and eleven `POST`, every one crossing a process boundary to a browser.
+Twenty-one routes, nine `GET` and twelve `POST`, every one crossing a process boundary to a browser.
 Written down in **[`API.md`](API.md)** and pinned by `tests/test_api_schema.py`.
 
 The three-check guard that runs before every route — loopback `Host`, then `Origin`, then
@@ -553,7 +553,7 @@ found these independently.
 
 | Missing | Why it matters |
 |---|---|
-| ~~The server HTTP API~~ | **written down** — [`API.md`](API.md), nineteen routes, pinned by `tests/test_api_schema.py` |
+| ~~The server HTTP API~~ | **written down** — [`API.md`](API.md), twenty-one routes, pinned by `tests/test_api_schema.py` |
 | **`runner.yaml`** — `agent_command`, `agent_timeout` | durable config with a hand-rolled fallback parser that has already shipped one bug (the inline-list split) |
 | **`RunConfig`** | the engine's real input contract, substantially wider than the plan file the catalogue shows |
 | **`Approval` / `Rejection` / `Ruling`** | operator decisions crossing the server→engine boundary; the catalogue has their flattened conversation turns, not their input shapes |

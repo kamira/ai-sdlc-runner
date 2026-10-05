@@ -432,6 +432,21 @@ The screen is four things: an **instruction box** (with attachments), **where th
 whole flow as a diagram** with the current node highlighted, and **the log** — every ask, who was
 asked, which model answered, and what it said.
 
+**Click a node** (or Tab to it and press Enter or Space; Escape closes) and its settings open. The
+node's role, mode, gate and what the role may do (spawn, write, execute) are shown and **not
+editable** — they are governance, in `policy.py`. What you can choose is who answers: for a node
+whose mode carries models (`single`, `model_panel`, `pool`) the registry's models, each with its tier
+and effort template, in order; for the review-seat nodes (`lead_review`, `intake_review`) which
+review dimensions open, in what order, and which models sit on each seat. Saving goes through
+`POST /config/nodes`, `/config/seats` and `/config/dimensions`, and whatever the server refuses —
+a seat that does not exist, a panel below the floor of three without high-risk mode — is printed in
+the panel, in the server's words. A dimension choice is written to the settings file and the next
+walk reads it. The **models list** shows each model's tier, its effort template, and every node
+(with its role) and seat it answers, or says it is used nowhere. The diagram is drawn in the browser
+from `GET /flow`, with no library and nothing fetched from outside this machine; shapes (rectangle
+step, hexagon decision, pill loop, dashed pill end) and the words *gate*, *HALT* and *HERE* carry
+what colour would otherwise carry.
+
 A run in progress can be added to: type more and press *add to the brief*, or attach a spec. Every
 work order from then on carries all of it, numbered, so a reviewer can see that something **arrived
 late** rather than being handed a brief that looks as though it was always complete.
@@ -663,7 +678,7 @@ src/ai_sdlc_runner/
   cli.py          flow · policy · settings · setup · run · serve · conversations · export
 docs/
   SCHEMAS.md      all sixteen schemas, and which a machine enforces
-  API.md          the nineteen HTTP routes, and the guard that runs before every one
+  API.md          the twenty-one HTTP routes, and the guard that runs before every one
   DATABASE.md     the SQLite schema, and every column that is deliberately not in it
   MODELS.md       the rules that govern a model: refusals, reach, assignment
   changes/        one record per change, with done-whens and what is not claimed
@@ -684,7 +699,7 @@ SQLite DDL, and the server's HTTP API. **Five** are closed schemas — the plan 
 the work order, the model registry and the settings: a field outside them is refused rather than
 ignored.
 
-Three have pages of their own — [`docs/API.md`](docs/API.md) for the **nineteen** HTTP routes,
+Three have pages of their own — [`docs/API.md`](docs/API.md) for the **twenty-one** HTTP routes,
 [`docs/DATABASE.md`](docs/DATABASE.md) for the SQLite schema (**six of its six tables are
 built**), and [`docs/MODELS.md`](docs/MODELS.md) for the rules that govern models: every refusal,
 how reach is computed, and how a model reaches an ask.
@@ -842,7 +857,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 2910 tests
+pytest -q          # 2937 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

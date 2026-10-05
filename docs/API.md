@@ -1,6 +1,6 @@
 # The server's HTTP API
 
-The console's back end. **Nineteen routes** — eight `GET`, eleven `POST` — every one crossing a process
+The console's back end. **Twenty-one routes** — nine `GET`, twelve `POST` — every one crossing a process
 boundary to a browser, and until now none of them written down. An independent seat called this the
 largest omission in [`SCHEMAS.md`](SCHEMAS.md); this is that entry.
 
@@ -50,12 +50,15 @@ The whole graph, so the console can draw it without embedding a copy.
 { "nodes": [ { "id": …, "kind": …, "label": …, "role": …, "gate": …, "gate_when": …,
                "mode": …, "main": …, "follows": …, "rejects_to": …,
                "branches": { "<label>": "<node id>" }, "next": …,
-               "permanent": … } ],                                      // all 31
+               "permanent": …,
+               "capabilities": { "can_spawn": …, "can_write": …, "can_execute": … } | null } ],  // all 31
   "gates": { "<gate>": { "<risk>": "<verdict>" } },                     // all 10
   "modes": [ "runner", "single", "seat_panel", … ] }                    // all 7
 ```
 
 Thirteen of `Node`'s eighteen fields. `answer_decides`, `note`, `grades_risk`, `settles_risk` and `panel_branches` are **not** sent.
+
+`capabilities` (CHG-20261005-03) is not a `Node` field: it is `policy.capabilities(node.role)`, the three flags a work order may carry for the node's role, or `null` for a node with no role. **Read-only** — the console's node panel shows it, and no route changes it, because a role's capabilities are governance (`policy.py`) and a click must not rewrite what a node is allowed to do.
 
 `permanent` (CHG-20260827-22) **is** sent, and the distinction is the one this section keeps making. It says a terminal node is a *give-up* rather than an ending — `halt_second_fail` and `halt_unreconciled` against `done`. Drawing those three the same way is the confusion the field was added to end, and drawing is exactly what the console is for. A field it cannot act on is withheld; this is one it must act on.
 
@@ -106,6 +109,18 @@ raised to the stored `declared_reach` when that is higher (CHG-20261005-01). `le
 
 `id` is the **full 64-character digest**. The stored filename is `id[:32]` and is never sent.
 
+### `GET /config/seats`
+The review seats a user may open, and what the settings file chooses now (CHG-20261005-03). Read
+from the settings file on every call. A server started without one answers `409`.
+
+```jsonc
+{ "seats": [ { "name", "label", "question", "veto", "enabled_by_default" } ],   // policy.SEATS, in order
+  "review_dimensions": [ "<seat>", … ] | null,    // null: the first `review_seats` (or the floor) open
+  "review_seats": 4 | null,
+  "high_risk_mode": false,
+  "floor": 3 }
+```
+
 ### `GET /config/nodes`
 Where each model is actually **used** — a model listed and used nowhere looks configured, and a model
 on eight nodes looks the same in a list as one on a single node.
@@ -133,16 +148,16 @@ instead of "used nowhere". `node_models` and `source` stay exactly what the plan
 plan file (this change's declaration) or from the store (the project's standing one), and **the plan
 wins**. A console showing the merged result with no provenance could not say that it had — and an
 override nobody can see is worse than no override. **The console this repository ships is that
-console**: it draws the merged assignments through `by_model` and renders no provenance at all.
-`runner run` and `runner serve` each print a count to the terminal; per-assignment provenance is
-sent on this route and read by nothing, and the view that would read it is named in
-CHG-20260907-28 and built by no record yet.
+console** until CHG-20261005-03: the models list draws the merged assignments through `by_model`,
+and the node panel reads `source` for one sentence only — that the plan sets a node and wins over
+what is saved. `runner run` and `runner serve` each print a count to the terminal; no view lists
+every assignment's provenance.
 
 **`assignable` is the three modes that do anything with a list.** It is for a client that wants to
 refuse a node before it posts — `POST /config/nodes` refuses the same node anyway, with a `409`
-naming what each of the other four does instead. **No shipped console reads it.** From `22f6ace`
-until CHG-20260907-28 this page said the console greys the other four out; the console has no
-per-node configure control at all, so there has never been anything to grey.
+naming what each of the other four does instead. **The node panel reads it** (CHG-20261005-03): a
+node whose mode is not listed gets no model editor. Before that change no shipped console read it,
+and this page's claim that the console greys the other four out had nothing to grey.
 
 `known: false` marks a model a plan names and the registry does not have. Every registry model
 appears in `by_model` even with empty `nodes` and `seats` — that is how "configured but unused"
@@ -226,6 +241,7 @@ snapshot"* the whole time the sentence above said it was one.
 | `POST /run/proceed` | `{version, node_id?}` | the run is not suspended on findings a seat called **unsafe**, or `node_id` names a different stop. There is no gate to confirm here: the answer is a decision about what was shown, so it is refused at every other shape rather than treated as one |
 | `POST /config/nodes` | `{version, node_id, models: [...]}` | no such node; a node whose **mode ignores** a model list; a model the registry does not have; `models` not a list |
 | `POST /config/seats` | `{version, seat, model_id}` — `model_id` a model id **or a list of them**, in order; empty clears | no such seat; a model the registry does not have; `model_id` neither a string nor a list of strings |
+| `POST /config/dimensions` | `{version, review_dimensions}` — a list of seat names, **in the order they open**, or `null` to clear | the refusals `runner settings` gives, because it saves through `settings.save`: an unknown seat, a seat named twice, an empty list, fewer than the floor (3) without high-risk mode; not a list or `null`; a server started without a settings file. Answers the `GET /config/seats` shape plus `version`, and the **next walk** reads the file, so the choice reaches the next run |
 | `POST /config/halts` | `{version, kind, recipient?}` | a `kind` that is not one of the six permanent halts. A `recipient` is **never** refused — an organisation names its own functions, and an unrecognised one still reaches somebody because the operator is on every halt. A blank or missing `recipient` clears the route |
 | `POST /run/instruct` | `{version, instruction}` | the instruction is empty — *"an empty instruction says nothing"* |
 | `POST /attachments` | `{version, filename, data}` — `data` is **base64** | the base64 is invalid, or `attachments.py` refuses the type or size |
