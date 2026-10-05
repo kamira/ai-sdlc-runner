@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import sys
 import textwrap
 import time
@@ -563,6 +564,58 @@ def test_a_process_that_escapes_the_kill_cannot_hold_the_read_open_forever(world
     assert world.run(timeout="1") == INCOMPLETE
     assert time.monotonic() - started < 5.5, "the read outlived the grace period"
     assert "timed out" in world.report()["cells"][0]["reason"]
+
+
+def test_a_timed_out_seat_is_read_by_our_threads_and_its_pipes_are_not_closed_from_here(world, monkeypatch):
+    """Guard that fails on the communicate()/pipe.close() code: closing a pipe a reader is blocked on
+    can block forever on Windows, so the main thread must neither close nor communicate()."""
+    closed = []
+
+    class Spy:
+        def __init__(self, pipe):
+            self.pipe = pipe
+
+        def read1(self, n):
+            return self.pipe.read1(n)
+
+        def close(self):
+            closed.append(threading.current_thread().name)
+            self.pipe.close()
+
+    class Proc(subprocess.Popen):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.seat = "start_new_session" in kw or "creationflags" in kw    # git calls are not seats
+            if self.seat:
+                self.stdout, self.stderr = Spy(self.stdout), Spy(self.stderr)
+
+        def communicate(self, *a, **kw):
+            assert not self.seat, "communicate() can block behind Windows reader threads"
+            return super().communicate(*a, **kw)
+
+    monkeypatch.setattr(panel.subprocess, "Popen", Proc)
+    monkeypatch.setattr(panel, "KILL_GRACE", 1)
+    world.script_for("fable", review="escape")
+    world.write_config(dims=DIMS[:1], models=[world.seat("fable", "claude")])
+    assert world.run(timeout="1") == INCOMPLETE
+    assert "timed out" in world.report()["cells"][0]["reason"]
+    assert closed == [], "a pipe was closed while a reader may still be blocked on it"
+
+
+def test_a_grandchild_that_never_lets_go_of_the_pipes_cannot_hang_the_cell(world, monkeypatch):
+    """Passes on the old code on POSIX too; it is the end-to-end bound. The cell runs in a thread so a
+    hang fails the test instead of the suite."""
+    monkeypatch.setattr(panel, "KILL_GRACE", 1)
+    world.script_for("fable", review="escape")
+    world.write_config(dims=DIMS[:1], models=[world.seat("fable", "claude")])
+    result = []
+    worker = threading.Thread(target=lambda: result.append(world.run(timeout="1")), daemon=True)
+    started = time.monotonic()
+    worker.start()
+    worker.join(1 + 1 + 6)                                    # timeout + grace + margin
+    assert not worker.is_alive(), "the cell did not return while a grandchild held the pipes"
+    assert result == [INCOMPLETE] and time.monotonic() - started < 8
+    assert world.report()["cells"][0]["verdict"] == "unreached"
 
 
 def test_a_missing_binary_stops_the_round_before_any_seat_runs(world, capsys):
@@ -1234,6 +1287,37 @@ def test_a_changed_argv_reruns_that_models_cells_and_the_cross_reads_that_read_t
     assert len(_ran(world, before, "cross")) == 6, "a cross-read kept an answer that was replaced"
 
 
+def _round_with_cross_cells(world):
+    assert world.run() == 0
+    return [c for c in world.report()["cells"] if c["phase"] == "cross"]
+
+
+def test_a_changed_argv_reruns_every_cross_read_of_the_dimensions_it_reviewed_after_a_cross_round(world):
+    """Peers' cross cells are fingerprint-identical and would be kept; only the stale filter reruns them."""
+    cross = _round_with_cross_cells(world)
+    models = [world.seat("fable", "claude"), world.seat("opus", "claude"), world.seat("gpt-6-astra", "codex")]
+    models[0]["argv"] = models[0]["argv"] + ["--harmless-new-flag"]
+    world.write_config(models=models)
+    before = len(world.invoked())
+    assert world.resume() == 0
+    assert _ran(world, before, "review") == ["fable review defect", "fable review risk"]
+    assert len(_ran(world, before, "cross")) == len(cross) == 6
+
+
+def test_a_rerun_review_cell_reruns_only_its_own_dimensions_cross_reads(world):
+    cross = _round_with_cross_cells(world)
+    data = world.report()
+    next(c for c in data["cells"]
+         if (c["phase"], c["model"], c["dimension"]) == ("review", "fable", "defect")).pop("fingerprint")
+    (world.out / "report.json").write_text(json.dumps(data), encoding="utf-8")
+    before = len(world.invoked())
+    assert world.resume() == 0
+    assert _ran(world, before, "review") == ["fable review defect"]
+    reran = _ran(world, before, "cross")
+    assert len(reran) == len([c for c in cross if c["dimension"] == "defect"]) == 3
+    assert all(line.endswith(" defect") for line in reran), "a cross-read of another dimension was rerun"
+
+
 def test_a_cell_with_no_fingerprint_is_run_again(world):
     _full_round(world)
     data = world.report()
@@ -1643,6 +1727,24 @@ def test_config_from_names_another_ref(world):
     world.out = world.out.parent / "out2"
     assert _run_default(world, "--config-from", "one-dim", "--no-cross-read") == INCOMPLETE
     assert {c["dimension"] for c in world.report()["cells"]} == {"defect"}
+
+
+def test_config_from_the_commit_under_review_is_labelled_as_the_reviewed_tree(world):
+    _base_config(world)
+    assert _run_default(world, "--config-from", "HEAD", "--no-cross-read") == INCOMPLETE
+    source = world.report()["config_source"]
+    assert source["kind"] == "reviewed-tree" and "config taken from the reviewed tree" in source["note"]
+    assert "not from the reviewed tree" not in world.report()["config"]
+
+
+def test_config_from_another_commit_with_the_same_file_says_identical(world):
+    _base_config(world)
+    (world.repo / "other.txt").write_text("x\n", encoding="utf-8")
+    _commit_all(world, "unrelated change")                    # HEAD != origin/main, same config blob
+    assert _run_default(world, "--no-cross-read") == INCOMPLETE
+    source = world.report()["config_source"]
+    assert source["kind"] == "reviewed-tree" and "config identical to the reviewed tree's" in source["note"]
+    assert "not from the reviewed tree" not in world.report()["config"]
 
 
 def test_without_an_origin_main_and_without_config_the_round_does_not_start(world, capsys):

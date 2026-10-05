@@ -551,12 +551,26 @@ class _Fleet:
                 _kill_tree(proc, self.repo)
 
 
+def _drain(pipe: Any, sink: List[bytes]) -> None:
+    """Append what `pipe` yields to `sink` until EOF. Run as a daemon thread, started at spawn."""
+    try:
+        while True:
+            chunk = pipe.read1(65536)
+            if not chunk:
+                return
+            sink.append(chunk)
+    except (OSError, ValueError):
+        pass
+
+
 def _run_process(argv: List[str], brief_file: Path, cwd: str, timeout: float,
                  fleet: Optional[_Fleet] = None) -> Tuple[str, str, Optional[int], bool]:
     """(stdout, stderr, exit code, timed out). The brief is the seat's stdin as an open file, never
     fed through the pipe: on Windows `communicate(input=...)` writes it before the timeout is in
-    force, so a seat that never reads it would hang the round. On timeout the whole process tree is
-    killed and the pipes are read for at most KILL_GRACE more seconds, then given up on."""
+    force, so a seat that never reads it would hang the round. Output is read by our own daemon
+    threads, not `communicate()`: on timeout the whole process tree is killed and the threads are
+    joined for at most KILL_GRACE more seconds, then abandoned. The pipes are never closed from
+    here, because closing one a reader is blocked on can itself block (CPython on Windows)."""
     fleet = fleet or _Fleet(Path(cwd))
     extra: Dict[str, Any] = {}
     if _on_windows():
@@ -565,26 +579,34 @@ def _run_process(argv: List[str], brief_file: Path, cwd: str, timeout: float,
         extra["start_new_session"] = True            # its own process group, so killpg reaches every child
     with open(brief_file, "rb") as stdin:
         proc = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, encoding="utf-8", errors="replace", cwd=cwd, **extra)
+                                cwd=cwd, **extra)
         fleet.add(proc)
         try:
+            sinks: List[List[bytes]] = [[], []]
+            readers = [threading.Thread(target=_drain, args=(pipe, sink), daemon=True)
+                       for pipe, sink in zip((proc.stdout, proc.stderr), sinks)]
+            for reader in readers:
+                reader.start()
+
+            def join(seconds: float) -> bool:
+                end = time.monotonic() + seconds
+                for reader in readers:
+                    reader.join(max(0.0, end - time.monotonic()))
+                return not any(reader.is_alive() for reader in readers)
+
+            def text(sink: List[bytes]) -> str:
+                return b"".join(sink).decode("utf-8", errors="replace")
+
+            start = time.monotonic()
             try:
-                stdout, stderr = proc.communicate(timeout=timeout)
-                return stdout or "", stderr or "", proc.returncode, False
-            except subprocess.TimeoutExpired as exc:
-                stdout, stderr = _as_text(exc.stdout), _as_text(exc.stderr)
+                proc.wait(timeout=timeout)
+                if join(max(0.0, timeout - (time.monotonic() - start))):
+                    return text(sinks[0]), text(sinks[1]), proc.returncode, False
+            except subprocess.TimeoutExpired:
+                pass
             _kill_tree(proc, fleet.repo)
-            try:
-                more_out, more_err = proc.communicate(timeout=KILL_GRACE)
-                stdout, stderr = more_out or stdout, more_err or stderr
-            except subprocess.TimeoutExpired as exc:     # something still holds the pipes: stop reading
-                stdout, stderr = _as_text(exc.stdout) or stdout, _as_text(exc.stderr) or stderr
-                for pipe in (proc.stdout, proc.stderr):
-                    try:
-                        pipe.close()
-                    except (OSError, ValueError):
-                        pass
-            return stdout, stderr, None, True
+            join(KILL_GRACE)                         # still alive after this: abandoned, daemon
+            return text(sinks[0]), text(sinks[1]), None, True
         finally:
             fleet.discard(proc)
 
@@ -707,12 +729,6 @@ def run_cell(model: dict, dim: dict, phase: str, brief: str, repo: Path, out: Pa
             "answer": answer, "fingerprint": cell_fingerprint(model, dim, phase, repo)}
 
 
-def _as_text(value: Any) -> str:
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
-    return value or ""
-
-
 def _not_run(model: dict, dim: dict, phase: str, repo: Path, reason: str = STOPPED) -> dict:
     return {"model": model["id"], "dimension": dim["id"], "phase": phase, "verdict": UNREACHED,
             "reason": reason, "exit_code": None, "seconds": 0.0, "usage": None, "answer": None,
@@ -808,10 +824,11 @@ def _freeze(repo: Path) -> Tuple[Optional[str], List[str], Optional[str]]:
     return head, dirty, None
 
 
-def load_base_config(repo: Path, ref: str) -> Tuple[dict, dict]:
+def load_base_config(repo: Path, ref: str, sha: str) -> Tuple[dict, dict]:
     """(config, source) read with `git show REF:config/panel.json`: the file as the base the change is
     measured against has it, so the commit under review cannot weaken its own reviewers' controls
-    (argv, system prompt, dimensions, questions)."""
+    (argv, system prompt, dimensions, questions). When REF is the reviewed commit, or has the same
+    file as it, the source says so instead of claiming a base."""
     if not ref or ref.startswith("-"):
         raise ConfigError(f"--config-from: {ref!r} is not a ref")
     try:
@@ -820,9 +837,18 @@ def load_base_config(repo: Path, ref: str) -> Tuple[dict, dict]:
     except frozen_tree.NotAnswerable as exc:
         raise ConfigError(f"--config-from {ref}: cannot read {CONFIG_IN_REPO} there: {exc} "
                           "(give --config PATH to use a file as it is)") from None
-    source = {"kind": "base", "ref": ref, "commit": commit, "path": CONFIG_IN_REPO,
-              "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-              "note": f"config read from {ref} ({commit[:12]}), not from the reviewed tree"}
+    try:
+        same = _run_git(repo, "rev-parse", f"{commit}:{CONFIG_IN_REPO}") == _run_git(
+            repo, "rev-parse", f"{sha}:{CONFIG_IN_REPO}")
+    except frozen_tree.NotAnswerable:
+        same = False
+    kind, note = "base", f"config read from {ref} ({commit[:12]}), not from the reviewed tree"
+    if commit == sha:
+        kind, note = "reviewed-tree", f"config taken from the reviewed tree ({ref} is the commit under review)"
+    elif same:
+        kind, note = "reviewed-tree", f"config identical to the reviewed tree's (read from {ref}, {commit[:12]})"
+    source = {"kind": kind, "ref": ref, "commit": commit, "path": CONFIG_IN_REPO,
+              "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(), "note": note}
     return parse_config(text, f"{ref}:{CONFIG_IN_REPO}"), source
 
 
@@ -924,7 +950,7 @@ def run_round(config_path: Optional[Path], repo: Path, brief_path: Path, out: Pa
         if config_path is not None:
             config, config_source = load_explicit_config(config_path, repo)
         else:
-            config, config_source = load_base_config(repo, config_from)
+            config, config_source = load_base_config(repo, config_from, sha)
         dims, models = select_matrix(config, only)
         check_stems(dims, models)
         raw_brief = Path(brief_path).read_bytes()     # bytes: the size disclosed is the file's own
