@@ -95,7 +95,12 @@ DEFAULT_TIMEOUT = 1800
 DEFAULT_JOBS = 6
 
 LOCK_NAME = ".round.lock"            # a directory made exclusively in --out for as long as a round runs in it
-PROJECT_CODEX_CONFIG = (".codex",)   # what codex loads from the tree it is run in
+# (engine, path): what a seat's CLI loads as instructions from the tree it is run in. Only codex's
+# project `.rules` and a claude skill have a flag (--ignore-rules, --disable-slash-commands, in
+# config/panel.json); nothing turns off the rest, so the tree is refused instead
+PROJECT_AGENT_CONFIG = (("codex", ".codex"), ("codex", ".agents"),
+                        ("claude", ".claude/skills"), ("claude", ".claude/agents"),
+                        ("claude", ".claude/commands"), ("claude", ".claude/rules"))
 # bare names a seat's launcher may fall back to, which Windows looks for in the current directory
 LAUNCHER_NAMES = frozenset(("node", "node.exe", "node.cmd", "node.bat", "cmd.exe", "powershell.exe",
                             "pwsh.exe", "python.exe", "py.exe"))
@@ -850,7 +855,10 @@ def _freeze(repo: Path) -> Tuple[Optional[str], List[str], Optional[str]]:
     through `_run_git`."""
     try:
         head = _run_git(repo, "rev-parse", "HEAD").strip()
-        dirty = sorted(frozen_tree._porcelain_paths(_run_git(repo, "status", "--porcelain", "-z")))
+        # explicit, so a user's or the repo's status.showUntrackedFiles=no cannot hide a file from it
+        dirty = sorted(frozen_tree._porcelain_paths(_run_git(
+            repo, "-c", "status.showUntrackedFiles=all", "status", "--porcelain", "-z",
+            "--untracked-files=all", "--ignore-submodules=none")))
     except frozen_tree.NotAnswerable as exc:
         return None, [], str(exc)
     return head, dirty, None
@@ -990,7 +998,7 @@ def _claim(out: Path, held: List[Path]) -> None:
 def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_path: Path, out: Path,
                only: Optional[List[str]] = None, jobs: int = DEFAULT_JOBS, cross_read: bool = True,
                cell_timeout: float = DEFAULT_TIMEOUT, resume: Optional[Path] = None,
-               config_from: str = DEFAULT_CONFIG_FROM, allow_project_codex_config: bool = False,
+               config_from: str = DEFAULT_CONFIG_FROM, allow_project_agent_config: bool = False,
                allow_repo_executables: bool = False) -> int:
     """One round. Returns the exit code; prints what it did. The config is `config_path` as it is when
     one is given, else `config/panel.json` at `config_from` — never the reviewed tree's own copy."""
@@ -1052,12 +1060,13 @@ def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_
             print(f"error: model {m['id']!r}: {why}; nothing was run")
         return 3
 
-    project_codex = [n for n in PROJECT_CODEX_CONFIG if os.path.lexists(repo / n)
-                     ] if any(m["kind"] == "codex" for m in models) else []
-    if project_codex and not allow_project_codex_config:   # codex has no flag that turns project config off
-        print(f"error: the reviewed tree has {', '.join(project_codex)}, which codex loads as project "
-              "configuration and can use to instruct its reviewer; nothing was run. Remove it from the "
-              "tree, or pass --allow-project-codex-config to accept that.")
+    kinds = {m["kind"] for m in models}
+    project_agent = [n for k, n in PROJECT_AGENT_CONFIG if k in kinds and os.path.lexists(repo / n)]
+    if project_agent and not allow_project_agent_config:
+        print(f"error: the reviewed tree has {', '.join(project_agent)}, which a seat's CLI loads as "
+              "project instructions (skills, agents, commands, rules) and can use to instruct its "
+              "reviewer; nothing was run. Remove it from the tree, or pass --allow-project-agent-config "
+              "to accept that.")
         return 3
 
     planted = sorted(n for n in os.listdir(repo) if n.lower() in LAUNCHER_NAMES)
@@ -1071,7 +1080,7 @@ def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_
                               "reach": m.get("reach", DEFAULT_REACH), "reads": READ_SCOPE[m["kind"]]}
                              for m in models],
                   "brief_bytes": len(raw_brief), "repo": str(repo),
-                  "project_codex_config": {"present": project_codex, "allowed": allow_project_codex_config},
+                  "project_agent_config": {"present": project_agent, "allowed": allow_project_agent_config},
                   "repo_executables": {"present": planted, "allowed": allow_repo_executables},
                   "ignored_paths": ignored[:IGNORED_CAP], "ignored_more": max(0, len(ignored) - IGNORED_CAP)}
     print(config_source["note"])
@@ -1382,9 +1391,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     run.add_argument("--resume", default=None, metavar="DIR",
                      help="an earlier round's --out: keep its pass/fail cells, re-run only the "
                           "unreached ones (same commit, matrix and brief required)")
-    run.add_argument("--allow-project-codex-config", action="store_true",
-                     help="run codex seats although the reviewed tree has a .codex/ they would load "
-                          "(the report records it)")
+    run.add_argument("--allow-project-agent-config", "--allow-project-codex-config", action="store_true",
+                     dest="allow_project_agent_config",
+                     help="run seats although the reviewed tree has skills, agents, commands or rules "
+                          "their CLI would load (.codex, .agents, .claude/{skills,agents,commands,rules}); "
+                          "the report records it")
     run.add_argument("--allow-repo-executables", action="store_true",
                      help="run although the reviewed tree's top level has a program a seat could "
                           "pick up by bare name, e.g. node.exe (the report records it)")
@@ -1405,7 +1416,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         only = [n.strip() for n in args.only_dimensions.split(",") if n.strip()]
     return run_round(Path(args.config) if args.config is not None else None, Path(args.repo), Path(args.brief),
                      Path(args.out), only=only, jobs=args.jobs, cross_read=args.cross_read,
-                     cell_timeout=args.cell_timeout, allow_project_codex_config=args.allow_project_codex_config,
+                     cell_timeout=args.cell_timeout, allow_project_agent_config=args.allow_project_agent_config,
                      allow_repo_executables=args.allow_repo_executables,
                      resume=Path(args.resume) if args.resume else None,
                      config_from=DEFAULT_CONFIG_FROM if args.config_from is None else args.config_from)
