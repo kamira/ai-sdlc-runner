@@ -13,7 +13,7 @@ It exists so that running this flow needs no other company's agent, and it holds
 pack, or vendored contract. The flow and the governance are its own, in two files:
 
 - **`policy.py`** — six roles with capability flags, 10 gates × three risk grades, six
-  never-automated actions, four review seats and the rule that adjudicates them.
+  never-automated actions, fifteen review seats (four open by default) and the rule that adjudicates them.
 - **`graph.py`** — 31 nodes, one kind of work each.
 
 Nothing points outside this repository. The dependency graph closes inside `src/`.

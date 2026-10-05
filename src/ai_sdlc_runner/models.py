@@ -476,6 +476,43 @@ def _model_from(payload: Dict[str, object]) -> Model:
     )
 
 
+def seat_entries(value, registry: Optional["Registry"] = None) -> List[object]:
+    """One seat's models as a list: each entry a model id (`str`) or an argv (`list` of `str`).
+
+    `seat_models` used to give a seat **one** model — a string, or one argv from `--seat-model` —
+    and now gives it a list (CHG-20261005-02). Every reader goes through here, so the old shape is
+    one place's job. `None`, `""` and `[]` are no model: the seat asks the default backend, as ever.
+
+    **A flat list of strings is ambiguous** — three ids, or one argv — and the registry settles it:
+    it is a list of ids only when every word is a model id the registry has. Anything else is the
+    old one-argv shape, which is how a command typed in the operator's shell reaches a seat. An
+    argv inside a list is unambiguous, and `cmd_run` builds one that way.
+    """
+    if value is None or value == "" or value == []:
+        return []
+    if isinstance(value, str):
+        return [value]
+    items = list(value)
+    if all(isinstance(i, str) for i in items):
+        if len(items) == 1 or (registry is not None and all(_has(registry, i) for i in items)):
+            return items
+        return [items]                    # the old shape: one argv
+    return [list(i) if isinstance(i, (list, tuple)) else str(i) for i in items]
+
+
+def _has(registry: "Registry", model_id: str) -> bool:
+    try:
+        registry.get(model_id)
+        return True
+    except ModelError:
+        return False
+
+
+def entry_label(entry) -> str:
+    """What the report calls one seat model: the id, or the argv joined."""
+    return " ".join(entry) if isinstance(entry, (list, tuple)) else str(entry)
+
+
 def load(path: str | Path) -> Registry:
     """Read the registry. A missing file is an empty one; a malformed file is an error.
 

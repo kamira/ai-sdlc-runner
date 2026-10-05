@@ -185,10 +185,13 @@ CREATE TABLE node_assignments (
   PRIMARY KEY (node_id, ordinal)
 );
 
--- One model per seat. A seat is one voice; a list would be a panel inside a panel.
+-- A seat's models, in order (schema 5). Several models on a seat are several sessions, and the
+-- seat passes only when every one passes.
 CREATE TABLE seat_assignments (
-  seat     TEXT PRIMARY KEY,
-  model_id TEXT NOT NULL REFERENCES models(id)
+  seat     TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  model_id TEXT NOT NULL REFERENCES models(id),
+  PRIMARY KEY (seat, position)
 );
 ```
 
@@ -203,6 +206,13 @@ was. `_verify_or_refuse` still compares columns exactly: below schema 4 the `mod
 the eight-column one (or already the eleven-column one, when a store was half-built from the current DDL;
 the migration skips columns that are present), and the migration adds the other three inside one transaction with the version
 stamp.
+
+**Schema 5 (CHG-20261005-02) gives a seat a list of models.** `seat_assignments` was `(seat PRIMARY
+KEY, model_id)`; SQLite cannot change a primary key, so the migration renames the table, creates the
+three-column one, copies every row in as `position` 0 and drops the old one — inside one transaction
+with the version stamp, so a schema-4 store's single assignments come out as one-model lists and
+nothing else moves. `_verify_or_refuse` accepts the two-column table below schema 5 and the
+three-column one from then on. `store.seat_models` returns `{seat: [model_id, …]}`.
 
 That sentence used to read *"`conversations` and `turns` are not created by any code yet"*, with the
 reason attached: a table nothing reads or writes is a mechanism nobody invokes, and this repository

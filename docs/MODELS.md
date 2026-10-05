@@ -259,7 +259,7 @@ declared `mode` — never its name:
 | `model_panel` | **N voices on one question**, adjudicated |
 | `pool` | N candidates; **one** does the work, chosen at random |
 | `follows` | the list is ignored — it reuses whichever model answered the node named in `follows` |
-| `seat_panel` / `survey` | the list is ignored — seats route by seat, see below |
+| `seat_panel` / `survey` | the list is ignored — seats route by seat, and by `seat_models`, see below |
 | `runner` | nobody is asked |
 
 A node with nothing here is asked **once**, however it is declared.
@@ -267,10 +267,23 @@ A node with nothing here is asked **once**, however it is declared.
 ### `seat_models` — by review seat
 
 ```jsonc
-"seat_models": { "conformance": "opus", "defect": ["python3", "agent.py"] }
+"seat_models": { "conformance": "opus", "defect": ["opus", "codex"], "risk": [["python3", "agent.py"]] }
 ```
 
-Or on the command line: `--seat-model SEAT=COMMAND`, repeatable.
+Or on the command line: `--seat-model SEAT=COMMAND`, repeatable (one command, and it replaces the
+seat's list for that run).
+
+**A seat has a list of models (CHG-20261005-02).** Each is its own session and its own journalled ask,
+and the seat passes only when **every** one passes: any `fail` is the seat's `fail`; otherwise any
+`undecided` makes it `undecided`, which `adjudicate` counts as not passing. The seats' words are then
+adjudicated as before — veto, then majority. A seat with no models is one ask on the default backend.
+A model that returns no verdict at all stops the run, as one seat's silence always did.
+
+**The old shape still reads.** A string is a one-element list. A *flat* list of strings is ambiguous —
+several model ids, or one argv — and is read as ids only when the registry has every one; otherwise it
+is one argv, which is what it always was. An argv inside a list (`[["python3", "agent.py"]]`) is never
+ambiguous. The plan accepts a string or a non-empty list of strings; the store holds ids only; `POST
+/config/seats` takes `model_id` as a string or a list of ids.
 
 A seat may name a **registry model id** or a raw command. The id is resolved **first**, deliberately:
 *"a plain string that happens to be a model id meaning 'run this program called claude' would be a
@@ -281,6 +294,8 @@ would mean a panel of three quietly answered three times by one backend — the 
 mechanism exists to prevent.
 
 ### Resolution order, most specific first
+
+Per session — a seat with several models runs this once for each, by position:
 
 ```
 a seat naming a registry model id      (resolved first, so the two naming schemes cannot diverge)
@@ -432,7 +447,9 @@ Not a refusal — a statement. When every seat on a panel was answered by the sa
 > *"every seat was answered by the same backend. The sessions were independent; the model was not,
 > so the seats share whatever it cannot see."*
 
-Recorded in `RunReport.single_model_panels` and printed. **Independence of sessions is not
+Counted over every (seat, model) session, so one seat with two models is two voices. Which models
+answered which seat is `RunReport.seat_models`, printed as `seat models:`. Recorded in
+`RunReport.single_model_panels` and printed. **Independence of sessions is not
 independence of blind spots**, and a panel that cannot tell you which is which has kept the votes and
 thrown away the thing being voted on.
 

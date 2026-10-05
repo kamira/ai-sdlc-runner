@@ -25,7 +25,7 @@ a file rather than a habit nobody wrote down.
 adjudication rule** — `policy.GATES`, `policy.PERMANENT_HALT_KINDS` and `policy.adjudicate` own
 those and take no input from here.
 
-**Two of the five fields do change whether a stop happens**, and this paragraph used to deny it
+**Two of the six fields do change whether a stop happens**, and this paragraph used to deny it
 (CHG-20260903-47, defect seat L-13). Measured:
 
 - `review_seats=1` makes `undecided` **unreachable**: one seat cannot split, and `undecided` is the
@@ -75,7 +75,7 @@ existed for the field whose existence the paragraph above it denied.
 
 A file that is missing or empty yields the **defaults** — floor enforced, high-risk mode off. A file
 that **exists and is malformed is an error**, not the defaults: falling back would make a typo
-indistinguishable from a deliberate choice, and **two of the five settings here relax a
+indistinguishable from a deliberate choice, and **two of the six settings here relax a
 refusal**.
 (This paragraph has now been corrected twice for the same class of error. It once said "or
 corrupt yields the defaults" and contradicted `load()` directly below it; a verifier caught
@@ -97,7 +97,7 @@ DEFAULT_PATH = "config/settings.json"
 #: setting nobody reads looks identical to a setting that works, and the whole point of this file is
 #: that a relaxation is visible.
 FIELDS: Tuple[str, ...] = ("review_seats", "high_risk_mode", "ordinary_commands",
-                           "coder_model", "coder_effort")
+                           "coder_model", "coder_effort", "review_dimensions")
 
 #: The efforts `coder_effort` may name. The runner passes the word through a model's own
 #: `effort_argv` template and knows nothing more about it.
@@ -145,6 +145,11 @@ class Settings:
     coder_model: str = ""
     #: The effort for `engineer_build` and the nodes that follow it. Other nodes get none.
     coder_effort: str = DEFAULT_EFFORT
+    #: The seats the user chose, in the order they open (CHG-20261005-02). ``None`` is today's
+    #: behaviour: a prefix of `policy.SEATS` sized by `review_seats`. When it is set it **replaces**
+    #: that prefix and `review_seats` is ignored — `describe()` says so. The floor applies to its
+    #: length, and only high-risk mode lowers it.
+    review_dimensions: Optional[Tuple[str, ...]] = None
 
     def seats(self) -> int:
         """The seat count a run would actually open.
@@ -155,6 +160,8 @@ class Settings:
         count is the safe direction and is the only clamping done here; `describe()` says out loud
         when a request was raised, so it is reported rather than quietly overridden.
         """
+        if self.review_dimensions is not None:
+            return len(self.review_dimensions)
         if self.review_seats is None:
             return policy.SEAT_FLOOR
         if self.review_seats < policy.SEAT_FLOOR and not self.high_risk_mode:
@@ -163,12 +170,15 @@ class Settings:
 
     def raised_to_the_floor(self) -> bool:
         """Is a request below the floor currently being ignored because the bypass is off?"""
-        return (self.review_seats is not None
+        return (self.review_dimensions is None
+                and self.review_seats is not None
                 and self.review_seats < policy.SEAT_FLOOR
                 and not self.high_risk_mode)
 
     def seats_requested(self) -> int:
         """What this file asks for, before the floor is applied. `seats()` is what it gets."""
+        if self.review_dimensions is not None:
+            return len(self.review_dimensions)
         return self.review_seats if self.review_seats is not None else policy.SEAT_FLOOR
 
     def below_floor(self) -> bool:
@@ -177,12 +187,17 @@ class Settings:
     def as_dict(self) -> dict:
         return {"review_seats": self.review_seats, "high_risk_mode": self.high_risk_mode,
                 "ordinary_commands": list(self.ordinary_commands),
-                "coder_model": self.coder_model, "coder_effort": self.coder_effort}
+                "coder_model": self.coder_model, "coder_effort": self.coder_effort,
+                "review_dimensions": (list(self.review_dimensions)
+                                      if self.review_dimensions is not None else None)}
 
     def describe(self) -> str:
         seats = self.seats()
         line = f"review seats: {seats}"
-        if self.review_seats is None:
+        if self.review_dimensions is not None:
+            line += (f" ({', '.join(self.review_dimensions)} — review_dimensions is set, so "
+                     f"review_seats is ignored)")
+        elif self.review_seats is None:
             line += " (the floor; nothing set)"
         elif self.raised_to_the_floor():
             line += (f" ({self.review_seats} requested, raised to the floor — turn on high-risk "
@@ -210,7 +225,7 @@ def load(path: str = DEFAULT_PATH) -> Settings:
 
     A missing file is the defaults, and so is an empty one. A file that **exists and is malformed**
     is an error rather than the defaults: silently falling back would make a typo indistinguishable
-    from a deliberate choice, and two of the five settings here relax a refusal.
+    from a deliberate choice, and two of the six settings here relax a refusal.
     """
     p = Path(path)
     if not p.is_file():
@@ -247,6 +262,7 @@ def load(path: str = DEFAULT_PATH) -> Settings:
 
     coder_model = _check_coder_model(raw.get("coder_model", ""), where=path)
     coder_effort = _check_effort(raw.get("coder_effort", DEFAULT_EFFORT), where=path)
+    dimensions = _check_dimensions(raw.get("review_dimensions"), high_risk, where=path)
 
     # **Stored as it was validated** (CHG-20260904-17). The checks below strip and `recognise`
     # casefolds without stripping, so `"  npm  "` loaded clean, appeared in `describe()`, and
@@ -254,7 +270,22 @@ def load(path: str = DEFAULT_PATH) -> Settings:
     # validator.
     return Settings(review_seats=seats, high_risk_mode=high_risk,
                     ordinary_commands=_check_vouched(commands, where=path),
-                    coder_model=coder_model, coder_effort=coder_effort)
+                    coder_model=coder_model, coder_effort=coder_effort,
+                    review_dimensions=dimensions)
+
+
+def _check_dimensions(value, high_risk_mode: bool, *, where: str = "settings"):
+    """The chosen seats as a tuple, or `None`. Unknown names, repeats and a count below the floor
+    are refused by `policy.resolve_dimensions` — the same floor, the same message, as a count."""
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)) or not all(isinstance(n, str) for n in value):
+        raise SettingsError(f"{where}: review_dimensions must be a list of seat names or null, "
+                            f"got {value!r}")
+    try:
+        return tuple(policy.resolve_dimensions(value, high_risk_mode))
+    except policy.PolicyError as exc:
+        raise SettingsError(f"{where}: review_dimensions: {exc}") from exc
 
 
 def _check_coder_model(value, *, where: str = "settings") -> str:
@@ -336,6 +367,7 @@ def save(settings: Settings, path: str = DEFAULT_PATH) -> None:
     _check_vouched(settings.ordinary_commands, where=path)
     _check_coder_model(settings.coder_model, where=path)
     _check_effort(settings.coder_effort, where=path)
+    _check_dimensions(settings.review_dimensions, settings.high_risk_mode, where=path)
     p = Path(path)
     paths.makedirs(p.parent)
     paths.write_text(p, json.dumps(settings.as_dict(), indent=2, sort_keys=True) + "\n")
@@ -387,6 +419,10 @@ def _screen(current: Settings):
     return [
         ("Review seats", f"currently {current.seats()}; the floor is {policy.SEAT_FLOOR}",
          _edit_seats),
+        ("Review dimensions",
+         ", ".join(current.review_dimensions) if current.review_dimensions is not None
+         else "not set — the first review_seats seats open, in the shipped order",
+         _edit_dimensions),
         ("High-risk mode",
          "ON — the seat floor may be crossed" if current.high_risk_mode
          else "off — the seat floor is enforced",
@@ -433,6 +469,44 @@ def _edit_seats(current: Settings, *, input_fn, stream_out) -> Settings:
         return current
     return _crossing(current, replace(current, review_seats=rows[choice][2]),
                      input_fn=input_fn, stream_out=stream_out)
+
+
+def _edit_dimensions(current: Settings, *, input_fn, stream_out) -> Settings:
+    """Pick the seats that open. A multi-select built on `tui.select`: each pick toggles a seat, and
+    the order they were switched on is the order they open. Done keeps the choice; Clear unsets it.
+
+    A choice below the floor goes through `tui.confirm_high_risk` like a seat count does, and
+    declining leaves the settings as they were — the screen cannot write what `load` refuses.
+    """
+    chosen = list(current.review_dimensions or ())
+    while True:
+        rows = [(f"[{'x' if seat.name in chosen else ' '}] {seat.name}",
+                 f"{seat.label}{'' if seat.enabled_by_default else ' — off unless chosen'}",
+                 seat.name) for seat in policy.SEATS]
+        rows.append(("Done", f"open {len(chosen)} seat(s), in the order ticked", None))
+        rows.append(("Clear", "unset review_dimensions; review_seats decides again", ""))
+        choice = tui.select(f"Review dimensions (floor {policy.SEAT_FLOOR})",
+                            [row[:2] for row in rows], input_fn=input_fn, stream_out=stream_out)
+        if choice is None:
+            return current
+        name = rows[choice][2]
+        if name == "":
+            return replace(current, review_dimensions=None)
+        if name is None:
+            break
+        if name in chosen:
+            chosen.remove(name)
+        else:
+            chosen.append(name)
+    if not chosen:
+        return replace(current, review_dimensions=None)
+    after = replace(current, review_dimensions=tuple(chosen))
+    if len(chosen) < policy.SEAT_FLOOR and not current.high_risk_mode:
+        if not tui.confirm_high_risk(len(chosen), policy.SEAT_FLOOR,
+                                     input_fn=input_fn, stream_out=stream_out):
+            return current
+        after = replace(after, high_risk_mode=True)
+    return after
 
 
 def _edit_vouched(current: Settings, *, input_fn, stream_out) -> Settings:
@@ -495,6 +569,15 @@ def _toggle_high_risk(current: Settings, *, input_fn, stream_out) -> Settings:
     reused here rather than reworded, so the operator sees the same sentence wherever they meet it.
     """
     if current.high_risk_mode:
+        if (current.review_dimensions is not None
+                and len(current.review_dimensions) < policy.SEAT_FLOOR):
+            # Not clamped, as a seat count is: a named list cannot be raised to the floor without
+            # choosing seats for the user, and `load` refuses it. Say so rather than write it.
+            if stream_out is not None:
+                print(f"kept on: review_dimensions names {len(current.review_dimensions)} seat(s), "
+                      f"below the floor of {policy.SEAT_FLOOR}. Choose more first.",
+                      file=stream_out)
+            return current
         return replace(current, high_risk_mode=False)
     return _crossing(current, replace(current, high_risk_mode=True),
                      input_fn=input_fn, stream_out=stream_out)

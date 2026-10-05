@@ -1305,9 +1305,13 @@ def make_handler(runner: Runner, operator: Operator,
 
     def _assign_seat(body):
         seat = str(body.get("seat") or "")
+        # A string (the old shape) or a list of ids, one session each (CHG-20261005-02). Anything
+        # else is refused, not stringified: `str(["a", "b"])` is a model id nobody has.
         model_id = body.get("model_id")
-        return _config_edit(
-            body, lambda: store_mod.set_seat_model(db, seat, str(model_id) if model_id else None))
+        if not (model_id is None or isinstance(model_id, str)
+                or (isinstance(model_id, list) and all(isinstance(m, str) for m in model_id))):
+            raise ServerError("`model_id` is a model id or a list of them — empty clears the seat")
+        return _config_edit(body, lambda: store_mod.set_seat_model(db, seat, model_id or None))
 
     def _route_halt(body):
         """Who a permanent halt of one kind reaches first, for this project (CHG-20260827-19).
@@ -1522,23 +1526,25 @@ def make_handler(runner: Runner, operator: Operator,
                         entry = by_model.setdefault(
                             model_id, {"nodes": [], "seats": [], "known": model_id in known})
                         entry["nodes"].append({"node_id": node_id, "mode": mode, "default": True})
+                shown_seats = {}
                 for seat, command in seat_models.items():
                     # A seat naming a registry model lands in that model's bucket rather than
-                    # inventing a second entry for the same backend under its command line.
-                    label = (command if isinstance(command, str) and command in known
-                             else " ".join(command) if isinstance(command, (list, tuple))
-                             else str(command))
-                    entry = by_model.setdefault(
-                        label, {"nodes": [], "seats": [], "known": label in known})
-                    entry["seats"].append(seat)
+                    # inventing a second entry for the same backend under its command line. One
+                    # bucket per model of the seat (CHG-20261005-02).
+                    labels = [models_mod.entry_label(e)
+                              for e in models_mod.seat_entries(command, reg)]
+                    shown_seats[seat] = labels
+                    for label in labels:
+                        entry = by_model.setdefault(
+                            label, {"nodes": [], "seats": [], "known": label in known})
+                        entry["seats"].append(seat)
                 # Models the project has and nothing uses. Said out loud, because "configured" and
                 # "used" look identical in a list and only one of them does anything.
                 for model_id in known:
                     by_model.setdefault(model_id, {"nodes": [], "seats": [], "known": True})
                 self._json(200, {
                     "node_models": node_models,
-                    "seat_models": {k: (" ".join(v) if isinstance(v, (list, tuple)) else str(v))
-                                    for k, v in seat_models.items()},
+                    "seat_models": shown_seats,
                     "by_model": by_model,
                     "models": [m.as_dict() for m in reg],
                     # Which source put each assignment there. An override nobody can see is worse

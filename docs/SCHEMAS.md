@@ -354,8 +354,15 @@ closed all along and revision 1 of this page did not say so.
   "high_risk_mode": false,       // may the floor be crossed at all
   "ordinary_commands": [],       // tools the operator vouches for — the TOOL, never a command line
   "coder_model": "",             // registry id for engineer_build when nothing is assigned; "" = the only mid model (unless agent_command is set); "none" = no default
-  "coder_effort": "medium" }     // low | medium | high — for engineer_build and what follows it
+  "coder_effort": "medium",      // low | medium | high — for engineer_build and what follows it
+  "review_dimensions": null }    // null = the first review_seats seats; or seat names, in opening order
 ```
+
+`review_dimensions` (CHG-20261005-02) is a list of names from `policy.SEATS` — fifteen, of which the
+first four open by default and `observability`, `supply_chain` and `i18n` are off unless named. When
+it is set it **replaces** the `review_seats` prefix and `review_seats` is ignored (`runner settings
+--show` says so). An unknown name, a repeat, or fewer names than the floor (3) is refused at load and
+at save; high-risk mode lowers the floor, as it does for a count. `intake_review` asks the same seats.
 
 ## 12 · Attachment manifest
 
@@ -382,12 +389,18 @@ under pressure here; only the filename is."*
 ## 13 · Run report
 
 `visited · asks · state · suspended · halted_at · halt_reason · relaxations · verdicts · on_trust ·
-confirmations · adjudications · single_model_panels · effects · resumed ·
+confirmations · adjudications · single_model_panels · seat_models · effects · resumed ·
 intake_asked_somebody · dispatches · effort_not_applied · survey ·
 options · panel_rounds · send_backs · rejections · rulings · store_errors · change_class ·
 relaxations_by_class · risk_proposed · risk_settled · risk_agreed · halts ·
 class_authorised_by ·
 relaxation_authorisers`
+
+`seat_models` (CHG-20261005-02) is `{node_id: {seat: [model, …]}}` — which models answered which seat,
+for `intake_review` and `lead_review`, one entry per session in the order they were asked. A model
+is its registry id, or its argv joined by spaces for a command; a seat nobody routed reads
+`"(default backend)"`. A seat with several models also adds `by_model` to its adjudication
+(`{seat: [word, …]}`), because the seat's own word is their conjunction.
 
 `intake_asked_somebody` answers one question — *did the intake survey open a session this lap?*
 — measured over that node's seat asks alone and **before** the escalation dispatches its own option
@@ -470,7 +483,8 @@ CREATE TABLE models (
 
 All six are live in [`store.py`](../src/ai_sdlc_runner/store.py): `models`,
 `node_assignments` and `seat_assignments` at schema 1, `conversations` and `turns` at schema
-2 with the conversation-store migration, and `halt_routing` after it.
+2 with the conversation-store migration, and `halt_routing` after it. `seat_assignments` was rebuilt
+at schema 5 as `(seat, position, model_id)` — see [`DATABASE.md`](DATABASE.md).
 
 > This paragraph said `conversations` and `turns` were *"not created by any code yet"* until
 > CHG-20260907-13. `DATABASE.md` was corrected for the same sentence by CHG-20260903-37 and

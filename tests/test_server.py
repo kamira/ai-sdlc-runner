@@ -2547,6 +2547,7 @@ NOT_ON_THE_CONSOLE = {
     "change_class": "which class governed the run, as a sentence for a person",
     "class_authorised_by": "who declared it, as a name",
     "effort_not_applied": "asks whose backend could not be told the effort — reaches the terminal only",
+    "seat_models": "which models answered which seat — printed as `seat models:`, not on the console yet",
     "relaxations": "the runner's own relaxations — `--undeclared allow` and the like",
     "relaxations_by_class": "the gates a class dissolved, each named",
     "relaxation_authorisers": "who authorised each of those, per note",
@@ -2700,7 +2701,7 @@ def test_the_inventory_is_exact_and_the_two_renamed_ones_are_not_in_it():
 
     """
     page = _console()
-    assert len(NOT_ON_THE_CONSOLE) == 17, (
+    assert len(NOT_ON_THE_CONSOLE) == 18, (
         f"the inventory is {len(NOT_ON_THE_CONSOLE)} entries; if the console grew a view, delete "
         f"the entry rather than leaving it — the test above already refuses a listed-and-rendered "
         f"field, and this number is what a reader checks the record against")

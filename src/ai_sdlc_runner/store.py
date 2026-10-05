@@ -42,13 +42,13 @@ import threading
 import urllib.parse
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from . import graph, models as models_mod, paths, policy
 
 #: Bumped when the tables change. Read and compared at open — a version nobody consults is a number,
 #: not a mechanism, which is what an earlier draft of the design was pulled up for.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 #: The modes that do **something** with a list of models. The other four ignore it entirely, and
 #: assigning to them is refused rather than stored: a setting that looks configured and does nothing
@@ -251,6 +251,22 @@ def _migrate(db: sqlite3.Connection) -> None:
             have = {row[1] for row in db.execute("PRAGMA table_info(models)")}
             if have and "declared_reach" not in have:
                 db.execute(dict(_SCHEMA_4)["declared_reach"])
+    if found < 5:
+        # Schema 5 gives a seat a list of models (CHG-20261005-02): `seat_assignments` gains a
+        # `position`, and its primary key becomes (seat, position). Rebuilt rather than altered —
+        # SQLite cannot change a primary key — and copied inside the one transaction, so every
+        # single assignment a v4 store holds comes out as position 0 of its seat.
+        _verify_or_refuse(db, before=4)
+        with _locked(db), db:
+            db.execute("BEGIN")            # see schema 1: DDL does not open one by itself
+            have = tuple(row[1] for row in db.execute("PRAGMA table_info(seat_assignments)"))
+            if have != _EXPECTED["seat_assignments"]:
+                db.execute("ALTER TABLE seat_assignments RENAME TO seat_assignments_v4")
+                db.execute(_SEAT_ASSIGNMENTS_5)
+                db.execute("INSERT INTO seat_assignments (seat, position, model_id) "
+                           "SELECT seat, 0, model_id FROM seat_assignments_v4")
+                db.execute("DROP TABLE seat_assignments_v4")
+            db.execute("PRAGMA user_version = 5")
     db.commit()
 
 
@@ -275,7 +291,7 @@ _SCHEMA_1 = (
          model_id TEXT NOT NULL REFERENCES models(id),
          PRIMARY KEY (node_id, ordinal)
        )""",
-    # One model per seat. A seat is one voice; a list would be a panel inside a panel.
+    # One model per seat, as schema 1 made it; schema 5 rebuilds it as a list (`_SEAT_ASSIGNMENTS_5`).
     """CREATE TABLE IF NOT EXISTS seat_assignments (
          seat     TEXT PRIMARY KEY,
          model_id TEXT NOT NULL REFERENCES models(id)
@@ -343,6 +359,15 @@ _SCHEMA_4 = (
     ("declared_reach", "ALTER TABLE models ADD COLUMN declared_reach TEXT NOT NULL DEFAULT ''"),
 )
 
+#: Schema 5: a seat's models, in order. `position` is what a seat's list is read by, exactly as
+#: `ordinal` is for a node's.
+_SEAT_ASSIGNMENTS_5 = """CREATE TABLE seat_assignments (
+         seat     TEXT NOT NULL,
+         position INTEGER NOT NULL,
+         model_id TEXT NOT NULL REFERENCES models(id),
+         PRIMARY KEY (seat, position)
+       )"""
+
 #: `models` as schema 1 created it. A store below schema 4 must hold exactly this, because the
 #: columns the schema-4 block adds are not there yet.
 _MODELS_BEFORE_4 = ("id", "vendor", "name", "transport", "command_json", "endpoint", "key_env",
@@ -352,7 +377,7 @@ _EXPECTED = {
     "halt_routing": ("kind", "recipient"),
     "models": _MODELS_BEFORE_4 + ("tier", "effort_argv", "declared_reach"),
     "node_assignments": ("node_id", "ordinal", "model_id"),
-    "seat_assignments": ("seat", "model_id"),
+    "seat_assignments": ("seat", "position", "model_id"),
     "conversations": ("conversation_id", "project_id", "project_name", "schema", "run_json"),
     "turns": ("conversation_id", "seq", "kind", "at", "body_json"),
 }
@@ -363,6 +388,7 @@ def _verify_or_refuse(db: sqlite3.Connection, before: int = 0) -> None:
 
     `before` is the schema the store is being brought up *from*: below 4, `models` is the
     eight-column table, and demanding the schema-4 shape of it would refuse every older store.
+    Below 5 `seat_assignments` is the two-column table, for the same reason.
     """
     for table, columns in _EXPECTED.items():
         found = tuple(row[1] for row in db.execute(f"PRAGMA table_info({table})"))
@@ -370,6 +396,8 @@ def _verify_or_refuse(db: sqlite3.Connection, before: int = 0) -> None:
             continue                      # not there; it is about to be created
         if table == "models" and before < 4 and found == _MODELS_BEFORE_4:
             continue                      # the schema-1 shape; the schema-4 block adds the rest
+        if table == "seat_assignments" and before < 5 and found == ("seat", "model_id"):
+            continue                      # the schema-1 shape; the schema-5 block rebuilds it
         if found != columns:
             raise StoreError(
                 f"{table!r} already exists with columns {list(found)}, and this runner's schema "
@@ -441,7 +469,8 @@ def _assigned_to(db: sqlite3.Connection, model_id: str) -> List[str]:
         "SELECT DISTINCT node_id FROM node_assignments WHERE model_id = ? ORDER BY node_id",
         (model_id,))]
     seats = [f"seat {row[0]!r}" for row in db.execute(
-        "SELECT seat FROM seat_assignments WHERE model_id = ? ORDER BY seat", (model_id,))]
+        "SELECT DISTINCT seat FROM seat_assignments WHERE model_id = ? ORDER BY seat",
+        (model_id,))]
     return nodes + seats
 
 
@@ -554,14 +583,19 @@ def set_node_models(db: sqlite3.Connection, node_id: str, model_ids: Sequence[st
                     f"no model {model_id!r} in this store; assign one the registry has") from None
 
 
-def set_seat_model(db: sqlite3.Connection, seat: str, model_id: Optional[str]) -> None:
+def set_seat_model(db: sqlite3.Connection, seat: str,
+                   model_ids: Union[None, str, Sequence[str]]) -> None:
+    """Assign a seat its models, or clear them. One id (the old shape) is a one-element list."""
     _check_seat(seat)
+    listed = [model_ids] if isinstance(model_ids, str) else list(model_ids or ())
+    listed = [m for m in listed if m]
     with _locked(db), db:
         db.execute("DELETE FROM seat_assignments WHERE seat = ?", (seat,))
-        if model_id:
+        for position, model_id in enumerate(listed):
             try:
-                db.execute("INSERT INTO seat_assignments (seat, model_id) VALUES (?, ?)",
-                           (seat, model_id))
+                db.execute(
+                    "INSERT INTO seat_assignments (seat, position, model_id) VALUES (?, ?, ?)",
+                    (seat, position, model_id))
             except sqlite3.IntegrityError:
                 raise StoreError(
                     f"no model {model_id!r} in this store; assign one the registry has") from None
@@ -600,10 +634,14 @@ def node_models(db: sqlite3.Connection) -> Dict[str, List[str]]:
     return out
 
 
-def seat_models(db: sqlite3.Connection) -> Dict[str, str]:
+def seat_models(db: sqlite3.Connection) -> Dict[str, List[str]]:
+    out: Dict[str, List[str]] = {}
     with _locked(db):
-        rows = db.execute("SELECT seat, model_id FROM seat_assignments ORDER BY seat").fetchall()
-    return {seat: model_id for seat, model_id in rows}
+        rows = db.execute(
+            "SELECT seat, model_id FROM seat_assignments ORDER BY seat, position").fetchall()
+    for seat, model_id in rows:
+        out.setdefault(seat, []).append(model_id)
+    return out
 
 
 # ── resolution ────────────────────────────────────────────────────────────────────────────────

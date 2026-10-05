@@ -225,7 +225,7 @@ snapshot"* the whole time the sentence above said it was one.
 | `POST /run/decide` | `{version, node_id, branch}` | the run is not suspended, or is suspended on a **gate** rather than a tie |
 | `POST /run/proceed` | `{version, node_id?}` | the run is not suspended on findings a seat called **unsafe**, or `node_id` names a different stop. There is no gate to confirm here: the answer is a decision about what was shown, so it is refused at every other shape rather than treated as one |
 | `POST /config/nodes` | `{version, node_id, models: [...]}` | no such node; a node whose **mode ignores** a model list; a model the registry does not have; `models` not a list |
-| `POST /config/seats` | `{version, seat, model_id}` | no such seat; a model the registry does not have |
+| `POST /config/seats` | `{version, seat, model_id}` — `model_id` a model id **or a list of them**, in order; empty clears | no such seat; a model the registry does not have; `model_id` neither a string nor a list of strings |
 | `POST /config/halts` | `{version, kind, recipient?}` | a `kind` that is not one of the six permanent halts. A `recipient` is **never** refused — an organisation names its own functions, and an unrecognised one still reaches somebody because the operator is on every halt. A blank or missing `recipient` clears the route |
 | `POST /run/instruct` | `{version, instruction}` | the instruction is empty — *"an empty instruction says nothing"* |
 | `POST /attachments` | `{version, filename, data}` — `data` is **base64** | the base64 is invalid, or `attachments.py` refuses the type or size |

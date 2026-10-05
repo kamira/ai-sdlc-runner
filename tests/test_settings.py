@@ -786,12 +786,12 @@ def test_vouching_a_command_decides_whether_a_permanent_halt_trips():
     assert policy.recognise("rm -rf /srv", ("rm",)) == "red"
 
 
-def test_the_surface_is_five_fields():
+def test_the_surface_is_six_fields():
     """Kept from the old body, as what it actually was: an enumeration of the surface. It is a
-    useful check and it was never the claim its name made. CHG-20261005-01 added the last two:
-    the coding role's model and effort."""
+    useful check and it was never the claim its name made. CHG-20261005-01 added the coding role's
+    model and effort; CHG-20261005-02 added `review_dimensions`."""
     assert settings_mod.FIELDS == ("review_seats", "high_risk_mode", "ordinary_commands",
-                                   "coder_model", "coder_effort")
+                                   "coder_model", "coder_effort", "review_dimensions")
     assert set(settings_mod.Settings().as_dict()) == set(settings_mod.FIELDS)
 
 
@@ -954,10 +954,11 @@ BANNED_CLAIM = re.compile(r"lower\s+the\s+seat\s+floor\s+and\s+(?:can\s+do\s+)?n
 #: the two documents that name it, and that sentence would have kept saying three
 #: (CHG-20260907-12).
 COUNTS_SETTINGS = re.compile(
-    r"(?:one|two|three|four|five)\s+of\s+(?:the\s+)?(one|two|three|four|five)\s+(?:settings|fields)",
+    r"(?:one|two|three|four|five|six)\s+of\s+(?:the\s+)?(one|two|three|four|five|six)"
+    r"\s+(?:settings|fields)",
     re.I)
 
-_NUMBERS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+_NUMBERS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
 
 
 def counts_that_disagree(prose, how_many):

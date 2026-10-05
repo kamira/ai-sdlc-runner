@@ -46,7 +46,7 @@ ai-sdlc-runner/
 ├── docs/ARCHITECTURE.md       # the overview; the structure docs below carry the detail
 ├── config/
 │   ├── runner.yaml            # dispatch settings only — no skill path, because there is no skill
-│   └── settings.json          # written by `runner settings`; five keys, and NOT in the
+│   └── settings.json          # written by `runner settings`; six keys, and NOT in the
 │                              #   repository — per-operator state, `.gitignore`d, because
 │                              #   committing it makes one person's bypass everyone's default
 └── docs/

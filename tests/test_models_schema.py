@@ -243,7 +243,7 @@ def test_the_page_states_the_resolution_order_the_factory_uses():
     # CHG-20260823-51 split this into a lookup and a fallback so  could tell a
     # seat-typed command from the config'"'"'s own. The ORDER this test is about did not move; the
     # line it anchored on did, and the anchor going stale is the test working.
-    raw_seat = body.index("seat_argv = seat_models.get(seat)")
+    raw_seat = body.index("seat_argv = entry")
     assert seat_named < by_model < raw_seat, "the factory's resolution order moved"
     assert "most specific first" in FLAT.lower()
 

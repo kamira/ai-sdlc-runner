@@ -651,8 +651,8 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "claim-referent", "a field count may stop saying what it counts again",
         REPO / "docs" / "structure" / "design.md",
-        '''**Five fields, listed in `settings.FIELDS`.**''',
-        '''**Five fields.**''',
+        '''**Six fields, listed in `settings.FIELDS`.**''',
+        '''**Six fields.**''',
         "tests/test_documented_numbers.py"),
 
     Mutation(

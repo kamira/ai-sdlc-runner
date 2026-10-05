@@ -195,7 +195,8 @@ def test_an_assignment_survives_being_written_and_read(db):
     store.set_node_models(db, "pm_plan", ["opus"])
     store.set_seat_model(db, "defect", "opus")
     assert store.node_models(db) == {"pm_plan": ["opus"]}
-    assert store.seat_models(db) == {"defect": "opus"}
+    # A string is the old shape, and reads back as the one-element list it now is (CHG-20261005-02).
+    assert store.seat_models(db) == {"defect": ["opus"]}
 
 
 def test_the_order_of_a_node_list_is_kept(db):
@@ -425,7 +426,7 @@ def test_a_model_added_and_assigned_through_the_console_survives_a_restart(tmp_p
     try:
         _, out = again.call("/config/nodes")
         assert out["node_models"] == {"pm_plan": ["opus"]}
-        assert out["seat_models"] == {"defect": "opus"}
+        assert out["seat_models"] == {"defect": ["opus"]}
         # The registry too. Driving this found it empty: the store had the model and the console
         # showed none, so an assignment referenced a model the console said did not exist.
         assert [m["id"] for m in out["models"]] == ["opus"]

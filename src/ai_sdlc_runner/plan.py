@@ -62,7 +62,7 @@ FIELDS: Tuple[str, ...] = (
     "operations",    # {node id: [{description, kind, targets}]}
     "decisions",     # {node id: branch}
     "node_models",   # {node id: [model id]}
-    "seat_models",   # {seat: model id or argv}
+    "seat_models",   # {seat: model id, or a list of them}
     "ship",          # the side effects — see SHIP_FIELDS
     "workstreams",   # {name: grade} — CHG-20260827-18; the run's own `risk` still applies to
                      # anything outside them, at the strictest of them
@@ -166,11 +166,17 @@ def check(payload: Mapping[str, object], where: str = "the plan") -> Dict[str, o
             # the defect seat and mistyped the value gets the **default backend** with nothing
             # said — which is the class `cli.py`'s own comment names: *"configuration that
             # looks connected and does not govern execution"*.
-            if key == "seat_models" and not (isinstance(value, str) and value.strip()):
+            #
+            # **A list now, and a string still** (CHG-20261005-02): a seat may have several models,
+            # each one session. The old single string reads as a one-element list.
+            if key == "seat_models" and not (
+                    (isinstance(value, str) and value.strip())
+                    or (isinstance(value, (list, tuple)) and value
+                        and all(isinstance(m, str) and m.strip() for m in value))):
                 raise PlanError(
-                    f"{where} assigns seat {owner!r} {value!r}; `seat_models` holds one model "
-                    f"id per seat, as a non-empty string. An empty one reads as configured and "
-                    f"dispatches that seat to the default backend.")
+                    f"{where} assigns seat {owner!r} {value!r}; `seat_models` holds a model id "
+                    f"per seat — a non-empty string, or a non-empty list of them. An empty one "
+                    f"reads as configured and dispatches that seat to the default backend.")
 
     # A node spec whose fields are present but blank (CHG-20260823-34). Checked here as well as at
     # render time so it costs no asks: a blank `engineer_build` refused only at dispatch surfaces

@@ -119,7 +119,7 @@ def test_a_schema_3_store_migrates_and_keeps_what_it_held(tmp_path):
     before.close()
 
     db = store.connect(path)
-    assert db.execute("PRAGMA user_version").fetchone()[0] == 4 == store.SCHEMA_VERSION
+    assert db.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
     assert [r[1] for r in db.execute("PRAGMA table_info(models)")][-3:] == [
         "tier", "effort_argv", "declared_reach"]
     old = store.load_registry(db).get("old")
@@ -138,7 +138,7 @@ def test_migrating_twice_is_a_no_op(tmp_path):
     _v3_store(path)
     store.connect(path).close()
     db = store.connect(path)
-    assert db.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert db.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
 
 
 def test_a_schema_3_store_with_a_mangled_models_table_is_still_refused(tmp_path):

@@ -117,12 +117,14 @@ because it is the only one that is a fact rather than a claim.
 
 ### config/settings.json
 
-What the user set, and the only file this runner writes on their behalf. **Five fields, listed in `settings.FIELDS`.** They
+What the user set, and the only file this runner writes on their behalf. **Six fields, listed in `settings.FIELDS`.** They
 cannot change what a gate verdict is, which kinds are permanent halts, or the adjudication rule —
 `policy` owns those and takes nothing from here. Two of them do change **whether a stop happens**:
 `review_seats=1` makes the `undecided` outcome unreachable, and `ordinary_commands` decides whether
-the `unrecognised-target` halt trips (CHG-20260903-47). The last two, `coder_model` and
-`coder_effort`, choose a backend and touch no verdict (CHG-20261005-01).
+the `unrecognised-target` halt trips (CHG-20260903-47). `coder_model` and
+`coder_effort` choose a backend and touch no verdict (CHG-20261005-01). `review_dimensions`
+names the review seats that open, in order, and replaces the `review_seats` count while it is set;
+the floor applies to its length (CHG-20261005-02).
 
 | Field | Type | Constraint | Description |
 |-------|------|------------|-------------|

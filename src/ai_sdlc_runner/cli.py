@@ -301,7 +301,11 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
     loudly, at the first ask. The two meanings cannot both be honoured, and the one that lost is the
     one nothing documented.
     """
-    seat_models = seat_models or {}
+    # Each seat's models as a list of entries — a model id or an argv — whatever shape came in
+    # (CHG-20261005-02). The engine reads this back as `factory.seat_models` to know how many
+    # sessions a seat opens, so what it counts and what is routed here are one thing.
+    seat_models = {seat: models_mod.seat_entries(value, registry)
+                   for seat, value in (seat_models or {}).items()}
     default = config.get("agent_command")
     timeout = int(config.get("agent_timeout", DEFAULT_AGENT_TIMEOUT))
     retries = int(config.get("agent_retries", 0))
@@ -414,7 +418,12 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
         return where
 
     def factory(seat: Optional[str] = None, model: Optional[str] = None, role: str = "",
-                workspace: str = "", grade: str = "", effort: str = ""):
+                workspace: str = "", grade: str = "", effort: str = "",
+                position: Optional[int] = None):
+        # Which of the seat's models this session is. `None` is the first, which is every caller
+        # that predates a seat having several.
+        entries = seat_models.get(seat) or []
+        entry = entries[position or 0] if (position or 0) < len(entries) else None
         argv = None
         #: Did `effort` reach the argv? Only a registry model with an `effort_argv` can say yes.
         effort_applied = False
@@ -422,11 +431,10 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
         # string that happens to be a model id meaning "run this program called claude" would be a
         # nasty way to find out the two naming schemes had diverged.
         if model is None and seat is not None and registry is not None:
-            named = seat_models.get(seat)
-            if isinstance(named, str):
+            if isinstance(entry, str):
                 try:
-                    registry.get(named)
-                    model = named
+                    registry.get(entry)
+                    model = entry
                 except models_mod.ModelError:
                     pass            # not a model id; treated as argv below, as it always was
         if model and registry is not None:
@@ -449,7 +457,7 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
         # they meant before CHG-20260823-48 and what they mean again.
         from_config = False
         if argv is None:
-            seat_argv = seat_models.get(seat)
+            seat_argv = entry
             argv = seat_argv or default
             from_config = not seat_argv and argv is default
         if not argv:
@@ -473,6 +481,7 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
         process.effort_applied = effort_applied
         return process
 
+    factory.seat_models = seat_models    # read by the engine: how many sessions each seat opens
     factory.isolated = isolated      # read by `cmd_run` for the report line
     factory.bounded = bounded        # and the same for the sandbox
     return factory
@@ -517,7 +526,8 @@ def cmd_policy(args: argparse.Namespace) -> int:
         print(f"  {gate:22s} " + "  ".join(f"{r}:{grades[r]}" for r in policy.RISKS))
     print(f"\nseats (floor {policy.SEAT_FLOOR})")
     for seat in policy.SEATS:
-        print(f"  {seat.name:12s} {'veto' if seat.veto else '    '}  {seat.label}")
+        print(f"  {seat.name:12s} {'veto' if seat.veto else '    '}  {seat.label}"
+              f"{'' if seat.enabled_by_default else '  (off unless chosen)'}")
     return 0
 
 
@@ -1378,6 +1388,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     # run; the file is the standing one. Neither is silent: whichever produces a floor crossing, the
     # run records it.
     seats = args.review_seats if args.review_seats is not None else saved.review_seats
+    # The seats the file named, unless a seat count was typed for this run: a flag beats the file,
+    # and a count is a different way of choosing than a list, so it replaces the list for this run
+    # (CHG-20261005-02).
+    dimensions = saved.review_dimensions if args.review_seats is None else None
     # The coding role's default, after the store has spoken (CHG-20261005-01).
     try:
         built_models, efforts, coder_notices = coder_defaults(
@@ -1401,6 +1415,10 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"note:          --no-high-risk-mode: {seats} seat(s) is below the floor, "
                   f"opening {policy.SEAT_FLOOR}")
             seats = None
+        if dimensions is not None and len(dimensions) < policy.SEAT_FLOOR:
+            print(f"note:          --no-high-risk-mode: review_dimensions names {len(dimensions)} "
+                  f"seat(s), below the floor, opening {policy.SEAT_FLOOR}")
+            dimensions = None
     else:
         high_risk = bool(args.high_risk_mode) or saved.high_risk_mode
     if seats is not None and seats < policy.SEAT_FLOOR and not high_risk:
@@ -1438,10 +1456,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         class_by_workstream=class_by_workstream,
         autonomy=plan.get("autonomy"),
         review_seats=seats,
+        review_dimensions=dimensions,
         # Where it came from, so a standing configuration and a one-run flag do not write
         # the same record (CHG-20260904-18).
         seats_from=("--review-seats" if args.review_seats is not None
-                    else (args.settings if saved.review_seats is not None else "")),
+                    else (args.settings if (saved.review_seats is not None
+                                            or dimensions is not None) else "")),
         halt_routing=halt_routes,
         high_risk_mode=high_risk,
         operations=plan.get("operations", {}),
@@ -1478,7 +1498,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         if seat not in policy.BY_SEAT:
             print(f"error: no seat {seat!r}; this runner defines {sorted(policy.BY_SEAT)}")
             return 2
-        seat_models[seat] = command.split()
+        seat_models[seat] = [command.split()]       # one argv, as a one-element list of models
     trees = None            # bound before the try: the except path closes it
     try:
         # **With the registry.** Without it `session_factory` cannot turn a stored model id into
@@ -1638,6 +1658,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"confirmed:     {line}")
     for line in report.single_model_panels:
         print(f"single model:  {line}")
+    for node_id, by_seat in sorted(report.seat_models.items()):
+        print(f"seat models:   {node_id}: " + "; ".join(
+            f"{seat}={', '.join(labels)}" for seat, labels in by_seat.items()))
     for line in report.effort_not_applied:
         print(f"effort:        not applied for {line} (no effort_argv), so it ran at its own default")
     for decision in report.adjudications:
@@ -1997,8 +2020,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
         interfaces=plan.get("interfaces") or {},
             autonomy=plan.get("autonomy"),
             # `serve` reads the file and nothing else, so the file is the source.
-            seats_from=(args.settings if saved.review_seats is not None else ""),
+            seats_from=(args.settings if (saved.review_seats is not None
+                                          or saved.review_dimensions is not None) else ""),
             review_seats=saved.review_seats,
+            review_dimensions=saved.review_dimensions,
             high_risk_mode=saved.high_risk_mode,
             operations=plan.get("operations", {}),
             confirmed=approvals,
