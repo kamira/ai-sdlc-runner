@@ -38,6 +38,7 @@ ai-sdlc-runner/
 │   ├── cli.py                 # flow / policy / run
 │   ├── settings.py            # what the user sets on a screen: seats, high-risk mode, the coder
 │   ├── detect.py              # which model CLIs are installed, for `runner setup`
+│   ├── usage.py               # what each ask used, and the quota a backend says remains
 │   └── tui.py                 # the interactive selector, and the high-risk-mode toggle
 │                              #   All twenty-one are listed. This tree held ten, and the README's
 │                              #   own list held twelve — two documents disagreeing about what

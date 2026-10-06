@@ -160,6 +160,24 @@ async function boot() {
     out.afterOpen = { cls: app.className, pressed: btn.attrs["aria-pressed"] };
     fire(); fire();
     out.afterTwo = { cls: app.className, pressed: btn.attrs["aria-pressed"] };
+  } else if (scenario === "usage") {               // the panel drawn from a body of our choosing
+    run("drawUsage(" + JSON.stringify(args.data) + ")");
+    const u = byId["#usage"];
+    out.text = text("#usage");
+    out.bars = u.all((c) => c.attrs.role === "progressbar").map((b) => ({
+      label: b.attrs["aria-label"], min: b.attrs["aria-valuemin"], max: b.attrs["aria-valuemax"],
+      now: b.attrs["aria-valuenow"], valuetext: b.attrs["aria-valuetext"],
+      width: b.children[0].style.width }));
+  } else if (scenario === "usage_wire") {          // the page's own fetch, to the real /usage
+    run('refreshUsage(true)'); await settle();
+    out.text = text("#usage");
+    out.bars = byId["#usage"].all((c) => c.attrs.role === "progressbar").length;
+    out.fetched = sent.filter((s) => s.path === "/usage").length;
+  } else if (scenario === "usage_on_apply") {      // refreshed when the run changes, not on a timer
+    run("apply(state)"); await settle(); run("apply(state)"); await settle();
+    out.afterSame = sent.filter((s) => s.path === "/usage").length;
+    run("apply(Object.assign({}, state, { state: 'running' }))"); await settle();
+    out.afterChange = sent.filter((s) => s.path === "/usage").length;
   } else if (scenario === "models") {
     run("drawModels()");
     out.models = text("#models");

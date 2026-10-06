@@ -154,13 +154,14 @@ def propose(environ=None, path: Optional[str] = None, cwd: Optional[str] = None
         proposals.append(models_mod.Model(
             id="claude-sonnet-5-5", vendor="anthropic", name="claude-sonnet-5-5",
             transport=models_mod.CLI, tier="mid",
-            command=(found["claude"], "-p", "--model", "claude-sonnet-5-5"),
+            command=(found["claude"], "-p", "--model", "claude-sonnet-5-5",
+                     "--output-format", "json"),
             effort_argv=("--effort", "{effort}"), declared_reach=models_mod.EXTERNAL,
             note="the claude CLI sends the work order and the repository's content to Anthropic"))
     if found["codex"]:
         proposals.append(models_mod.Model(
             id="codex", vendor="openai", name="codex-default", transport=models_mod.CLI,
-            command=(found["codex"], "exec", "-"),
+            command=(found["codex"], "exec", "--json", "-"),
             effort_argv=("-c", "model_reasoning_effort={effort}"),
             declared_reach=models_mod.EXTERNAL,
             note="the codex CLI sends the work order and the repository's content to OpenAI. No "

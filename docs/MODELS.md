@@ -111,6 +111,15 @@ template, each element with `{effort}` substituted, after `command`. When the mo
 says so — `effort_not_applied` on the report and an `effort:` line in `runner run` — rather than
 refusing, because a local model may have no such control and the effort is a request, not a gate.
 
+Usage is read the same way — from what the backend prints, never from a table of ours: `claude -p
+--output-format json` gives cost and tokens but no remaining quota, `codex exec --json` gives tokens
+and its remaining quota only in its local session log, and any other backend is recorded as *not
+reported* (`usage` on the report, `GET /usage`; CHG-20261006-01). Those two flags are why `setup`
+proposes them: without them neither CLI prints usage. With them the answer is no longer stdout but the
+string inside claude's `{"type":"result","result":"…"}` or codex's last `agent_message`, and the
+runner unwraps those envelopes to read it; an agent's own JSON that is not exactly that shape is left
+alone, and a claude envelope with `is_error: true` is a failed answer.
+
 ### `command` is a list, not a string
 
 Deliberate: a string would be re-split by a shell that was never run. `["claude", "-p"]` is two
@@ -363,8 +372,9 @@ The console shows the model that will build under `engineer_build`, `fix_pass` a
 
 Looks for `claude`, `codex` and `ollama` on the **absolute** entries of `PATH` (`PATHEXT` on
 Windows), never in the working directory, and runs exactly one thing: `ollama list`, with a timeout.
-It probes no port. It proposes entries — `claude-sonnet-5-5` (tier `mid`, with an `--effort
-{effort}` template), one `codex` entry with the model left for you, and one `ollama run <model>`
+It probes no port. It proposes entries — `claude-sonnet-5-5` (`claude -p --model claude-sonnet-5-5 --output-format json`,
+tier `mid`, with an `--effort {effort}` template), one `codex` entry (`codex exec --json -`) with the
+model left for you, and one `ollama run <model>`
 wrapper per listed model. The `claude` and `codex` entries are `declared_reach: external` and the
 `propose:` line says their prompts, repository content included, go to Anthropic and OpenAI;
 offering one as `coder_model` repeats that in the prompt (`--yes` prints it as a note). The Yes

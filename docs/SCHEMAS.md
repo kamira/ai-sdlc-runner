@@ -403,11 +403,17 @@ under pressure here; only the filename is."*
 
 `visited · asks · state · suspended · halted_at · halt_reason · relaxations · verdicts · on_trust ·
 confirmations · adjudications · single_model_panels · seat_models · effects · resumed ·
-intake_asked_somebody · dispatches · effort_not_applied · survey ·
+intake_asked_somebody · dispatches · effort_not_applied · usage · usage_summary · survey ·
 options · panel_rounds · send_backs · rejections · rulings · store_errors · change_class ·
 relaxations_by_class · risk_proposed · risk_settled · risk_agreed · halts ·
 class_authorised_by ·
 relaxation_authorisers`
+
+`usage` (CHG-20261006-01) is one entry per ask whose session reported usage — `{ask_id, node_id, seat,
+model, kind, cost_usd, tokens, remaining, note}`, `kind` being `claude`, `codex` or `unreported`;
+an unknown figure is `null`, never `0`. Sessions with no usage attribute (the stub) add nothing.
+`usage_summary` is `usage.summarize` over it: `{models: {id: {asks, cost_usd, tokens,
+asks_unreported}}, remaining: [latest reading of each window]}`. Both are served by `GET /usage`.
 
 `seat_models` (CHG-20261005-02) is `{node_id: {seat: [model, …]}}` — which models answered which seat,
 for `intake_review` and `lead_review`, one entry per session in the order they were asked. A model
@@ -527,7 +533,7 @@ duplicate-`seq` policy is written down for the importer and not for the live pat
 
 ## 15 · Server HTTP API
 
-Twenty-one routes, nine `GET` and twelve `POST`, every one crossing a process boundary to a browser.
+Twenty-two routes, ten `GET` and twelve `POST`, every one crossing a process boundary to a browser.
 Written down in **[`API.md`](API.md)** and pinned by `tests/test_api_schema.py`.
 
 The three-check guard that runs before every route — loopback `Host`, then `Origin`, then
@@ -553,7 +559,7 @@ found these independently.
 
 | Missing | Why it matters |
 |---|---|
-| ~~The server HTTP API~~ | **written down** — [`API.md`](API.md), twenty-one routes, pinned by `tests/test_api_schema.py` |
+| ~~The server HTTP API~~ | **written down** — [`API.md`](API.md), twenty-two routes, pinned by `tests/test_api_schema.py` |
 | **`runner.yaml`** — `agent_command`, `agent_timeout` | durable config with a hand-rolled fallback parser that has already shipped one bug (the inline-list split) |
 | **`RunConfig`** | the engine's real input contract, substantially wider than the plan file the catalogue shows |
 | **`Approval` / `Rejection` / `Ruling`** | operator decisions crossing the server→engine boundary; the catalogue has their flattened conversation turns, not their input shapes |

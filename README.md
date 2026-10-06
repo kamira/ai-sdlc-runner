@@ -459,6 +459,14 @@ browser from `GET /flow`, with no library and nothing fetched from outside this 
 "visited" in its accessible name; an edge with both ends visited (not necessarily the edge the run
 walked) is drawn thicker and named for a screen reader.
 
+The **用量 / usage** panel shows, per model, how many asks ran, their cost (claude's API-equivalent
+USD, not a bill on a subscription) and tokens, and — only where a backend states it — the quota
+remaining: codex's rate-limit windows as a percentage with the window length, reset time and when it
+was read. A window past its reset says the reading is stale instead of showing the old figure, and a
+backend that reports nothing says *not reported* rather than showing zero. Codex's remaining quota is
+read from its local session log for the thread the runner itself just opened (`$CODEX_HOME`, default
+`~/.codex`), read-only. The same data is `GET /usage`.
+
 A run in progress can be added to: type more and press *add to the brief*, or attach a spec. Every
 work order from then on carries all of it, numbered, so a reviewer can see that something **arrived
 late** rather than being handed a brief that looks as though it was always complete.
@@ -685,12 +693,13 @@ src/ai_sdlc_runner/
   sandbox.py      what a run may reach, and what it records when it cannot be bounded
   settings.py     what an operator sets on a screen: seats, high-risk mode, the vouch, the coder
   detect.py       which model CLIs are installed, for `runner setup`
+  usage.py        what each ask used, and the quota a backend says remains
   tui.py          the interactive selector
   console/        the operator console — one page, no build step
   cli.py          flow · policy · settings · setup · run · serve · conversations · export
 docs/
   SCHEMAS.md      all sixteen schemas, and which a machine enforces
-  API.md          the twenty-one HTTP routes, and the guard that runs before every one
+  API.md          the twenty-two HTTP routes, and the guard that runs before every one
   DATABASE.md     the SQLite schema, and every column that is deliberately not in it
   MODELS.md       the rules that govern a model: refusals, reach, assignment
   changes/        one record per change, with done-whens and what is not claimed
@@ -711,7 +720,7 @@ SQLite DDL, and the server's HTTP API. **Five** are closed schemas — the plan 
 the work order, the model registry and the settings: a field outside them is refused rather than
 ignored.
 
-Three have pages of their own — [`docs/API.md`](docs/API.md) for the **twenty-one** HTTP routes,
+Three have pages of their own — [`docs/API.md`](docs/API.md) for the **twenty-two** HTTP routes,
 [`docs/DATABASE.md`](docs/DATABASE.md) for the SQLite schema (**six of its six tables are
 built**), and [`docs/MODELS.md`](docs/MODELS.md) for the rules that govern models: every refusal,
 how reach is computed, and how a model reaches an ask.
@@ -869,7 +878,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 2970 tests
+pytest -q          # 3019 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

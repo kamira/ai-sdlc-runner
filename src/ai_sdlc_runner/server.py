@@ -55,6 +55,7 @@ from . import attachments as attach_mod
 from . import paths
 from . import engine, graph, intake as intake_mod, models as models_mod, policy, store as store_mod
 from . import settings as settings_mod
+from . import usage as usage_mod
 
 #: The only addresses this server will bind. Not a default — a rule. A runner that can merge
 #: branches has no business listening where anything but this machine can reach it, and making that
@@ -307,6 +308,8 @@ class RunState:
     #: say *when* something was asked for is most of what makes a late change reviewable.
     instructions: List[str] = field(default_factory=list)
     report: Optional[engine.RunReport] = None
+    #: Usage of every ask this run made, appended by the engine as it goes (CHG-20261006-01).
+    usage: List[dict] = field(default_factory=list)
     #: Answers accumulated across suspensions. A resumed walk replays from `intake` carrying these,
     #: which is why they are kept rather than applied and forgotten.
     approvals: List[engine.Approval] = field(default_factory=list)
@@ -994,8 +997,11 @@ class Runner:
             # `attach` is the one method that can arrive mid-walk and it does not touch
             # `instructions`. `instructions_at_last_incomplete_stop` is written in one place, one
             # walk at a time. Both operands are therefore fixed for the whole walk.
+            # The usage list is the run state's, not the report's: a walk that raises returns no
+            # report, and the asks it had already made were billed all the same. A new run gets a
+            # new `RunState` and so a new list (CHG-20261006-01).
             cfg = dataclasses.replace(
-                cfg,
+                cfg, usage=self.state.usage,
                 intake_ask_in_flight=(len(self.state.instructions)
                                       > self.state.instructions_at_last_incomplete_stop))
             report = self._walk(cfg)
@@ -1584,6 +1590,15 @@ def make_handler(runner: Runner, operator: Operator,
                 self._json(200, runner.state.snapshot())
             elif path == "/run/events":
                 self._stream()
+            elif path == "/usage":
+                # What the current or last run's asks used, as each backend reported it
+                # (CHG-20261006-01). `run` is null before any run, so the console says "no run yet"
+                # instead of drawing zeros. A copy of the list: the engine appends to it from the
+                # run's thread while this one serializes.
+                report = runner.state.report
+                asks = list(runner.state.usage)
+                self._json(200, {"run": usage_mod.summarize(asks) if report or asks else None,
+                                 "asks": asks})
             elif path == "/models":
                 # The console is local only; the models need not be, and the operator should never
                 # have to read a hostname to find that out. `leaving` is the answer to "what goes

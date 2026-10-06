@@ -620,10 +620,11 @@ def test_the_proposals_are_what_the_record_says(machine):
     where = lambda tool: detect.find_tool(tool, path=str(machine))
     claude = by_id["claude-sonnet-5-5"]
     assert (claude.tier, claude.command, claude.effort_argv) == (
-        "mid", (where("claude"), "-p", "--model", "claude-sonnet-5-5"), ("--effort", "{effort}"))
+        "mid", (where("claude"), "-p", "--model", "claude-sonnet-5-5", "--output-format", "json"),
+        ("--effort", "{effort}"))
     codex = by_id["codex"]
     assert (codex.tier, codex.command, codex.effort_argv) == (
-        "", (where("codex"), "exec", "-"), ("-c", "model_reasoning_effort={effort}"))
+        "", (where("codex"), "exec", "--json", "-"), ("-c", "model_reasoning_effort={effort}"))
     llama = by_id["ollama-llama3-8b"]
     assert (llama.name, llama.tier, llama.command, llama.effort_argv) == (
         "llama3:8b", "", (where("ollama"), "run", "llama3:8b"), ())
@@ -724,7 +725,8 @@ def test_setup_lets_the_user_edit_a_proposal_before_it_is_written(machine, tmp_p
     assert [m.id for m in saved] == ["my-claude"]
     edited = saved.get("my-claude")
     assert (edited.tier, edited.effort_argv) == ("high", ("--reasoning", "{effort}"))
-    assert edited.command == (detect.find_tool("claude", path=str(machine)), "-p", "--model", "claude-sonnet-5-5"), \
+    assert edited.command == (detect.find_tool("claude", path=str(machine)), "-p", "--model", "claude-sonnet-5-5",
+                              "--output-format", "json"), \
         "the command stays as detected"
 
 
@@ -1087,13 +1089,14 @@ def test_edit_sets_codexs_model_and_the_entry_still_leaves_the_machine(machine, 
     answers = ["3", "2", "", "", "", "", "gpt-5", "3", "3", "2"]
     assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
     codex = models.load(tmp_path / "tok" / "models.json").get("codex")
-    assert codex.command[-2:] == ("-m", "gpt-5")
-    assert codex.command[0] == detect.find_tool("codex", path=str(machine))
+    # The exact argv: `-m <name>` goes before the trailing `-` (the stdin marker), after `--json`.
+    assert codex.command == (detect.find_tool("codex", path=str(machine)), "exec", "--json",
+                             "-m", "gpt-5", "-")
     assert codex.declared_reach == models.EXTERNAL and codex.leaves_this_machine
     db = store.connect(tmp_path / "tok" / "config.sqlite")
     from_store = store.load_registry(db).get("codex")
     db.close()
-    assert from_store.command[-2:] == ("-m", "gpt-5") and from_store.leaves_this_machine
+    assert from_store.command == codex.command and from_store.leaves_this_machine
 
 
 def test_edit_replaces_claudes_model_value(machine, tmp_path, monkeypatch):
@@ -1101,7 +1104,7 @@ def test_edit_replaces_claudes_model_value(machine, tmp_path, monkeypatch):
     assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
     claude = models.load(tmp_path / "tok" / "models.json").get("claude-sonnet-5-5")
     assert claude.command == (detect.find_tool("claude", path=str(machine)), "-p", "--model",
-                              "claude-opus-x")
+                              "claude-opus-x", "--output-format", "json")
     assert claude.leaves_this_machine
 
 

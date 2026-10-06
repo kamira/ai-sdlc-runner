@@ -40,6 +40,7 @@ from . import conversations as conversations_mod
 from . import paths
 from . import effects as effects_mod
 from . import graph, intake as intake_mod, models as models_mod, policy, workorder
+from . import usage as usage_mod
 from . import worktree
 
 SessionFactory = Callable[[], "Session"]
@@ -494,6 +495,11 @@ class RunReport:
     #: local one with no such control — because an effort nobody applied and nobody said so reads
     #: afterwards as an effort that was (KN-11).
     effort_not_applied: List[str] = field(default_factory=list)
+    #: One entry per ask whose session reported usage (CHG-20261006-01): `ask_id`, `node_id`, `seat`,
+    #: `model` and the `usage.from_reply` record. Sessions with no `usage` attribute (the stub,
+    #: scripted ones) add nothing; a process whose backend printed nothing recognisable adds
+    #: `kind: "unreported"`, so the console can say "not reported" rather than show a blank.
+    usage: List[dict] = field(default_factory=list)
     #: Which change class governed this run and on whose authority (CHG-20260827-20 task 3).
     #: Always set, including to "nothing was declared": a run that relaxed a gate and a run that
     #: never had one to relax must not read the same afterwards.
@@ -580,6 +586,8 @@ class RunReport:
             "rulings": list(self.rulings),
             "dispatches": list(self.dispatches),
             "effort_not_applied": list(self.effort_not_applied),
+            "usage": [dict(u) for u in self.usage],
+            "usage_summary": usage_mod.summarize(self.usage),
             "rejections": list(self.rejections),
             "store_errors": list(self.store_errors),
             "send_backs": [dict(b) for b in self.send_backs],
@@ -621,6 +629,10 @@ class RunConfig:
     #: The seats the user named, in opening order (CHG-20261005-02). When set it replaces the
     #: `review_seats` prefix, which is then ignored; `None` is today's behaviour exactly.
     review_dimensions: Optional[Tuple[str, ...]] = None
+    #: A list the walk appends each ask's usage record to, instead of one of its own. The server's
+    #: run state owns it, so the usage of asks already made survives a walk that raises before it
+    #: can return a report (CHG-20261006-01). `None` is the ordinary case: the report's own list.
+    usage: Optional[List[dict]] = None
     high_risk_mode: bool = False
     #: Where the seat count came from — `config/settings.json`, `--review-seats`, or empty
     #: when nothing set one. **A standing configuration and a one-run flag are different
@@ -1294,6 +1306,7 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
          resumed: Optional[List[str]] = None,
          heard: Optional[Callable[[Mapping[str, object]], bool]] = None,
          effort: str = "", effort_not_applied: Optional[List[str]] = None,
+         usage: Optional[List[dict]] = None,
          position: Optional[int] = None, voice: Optional[str] = None,
          identity: Optional[Mapping[str, object]] = None):
     """Open a session, ask once, close it — the close guaranteed even if the ask raises.
@@ -1408,6 +1421,12 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
         # record that cannot name the answerer has kept the votes and thrown away the thing being
         # voted on, which is the finding this whole field exists for, one level down.
         backend = _describe(session)
+        # **Beside the answer, never in it.** Read after the ask returned, from a session that says
+        # it has usage; nothing below reads it back, so it cannot touch the answer or the route.
+        record = getattr(session, "usage", None)
+        if usage is not None and isinstance(record, dict):
+            usage.append({"ask_id": ask_id or "", "node_id": node_id, "seat": seat,
+                          "model": model or voice or "(default backend)", **record})
     except Exception as exc:
         _failed(exc)
         raise
@@ -2795,7 +2814,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
     factory = _as_factory(dispatch)
     opened: List[object] = []
     taken: Dict[str, int] = {}
-    report = RunReport()
+    report = RunReport() if cfg.usage is None else RunReport(usage=cfg.usage)
     # The class in force, settled once and recorded (CHG-20260827-20 tasks 3 and 4). Once per run
     # rather than per gate: a class that expired halfway through a walk would relax the first half
     # and stop the second, which is a run nobody could explain afterwards.
@@ -3240,6 +3259,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                                   opened, journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                                   answered=already, model=model, asked_before=asked_before,
                                   conversation=cfg.conversation, role=node.role, resumed=report.resumed,
+                                  usage=report.usage,
                                   workspace=_workspace(node, build_cycles),
                                   heard=lambda a, _n=node: _heard(_n, MODELS, a))
                     report.asks.append(Ask(node.id, node.role, None, result, model=model))
@@ -3321,6 +3341,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                                       node_id=node.id, answered=already, model=model,
                                       asked_before=asked_before,
                                       conversation=cfg.conversation, role=node.role, resumed=report.resumed,
+                                  usage=report.usage,
                                   workspace=_workspace(node, build_cycles),
                                   heard=lambda a, _n=node: _heard(_n, MODELS, a))
                         report.asks.append(Ask(node.id, node.role, None, result, model=model))
@@ -3394,6 +3415,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                             journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                             answered=already, asked_before=asked_before,
                             conversation=cfg.conversation, role=node.role, resumed=report.resumed,
+                                  usage=report.usage,
                                       workspace=_workspace(node, build_cycles),
                                       heard=lambda a, _n=node: _heard(_n, SURVEY, a),
                                       position=position, voice=label,
@@ -3458,6 +3480,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                             opened, journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                             answered=already, asked_before=asked_before,
                             conversation=cfg.conversation, role=node.role, resumed=report.resumed,
+                                  usage=report.usage,
                                   workspace=_workspace(node, build_cycles),
                             accept=lambda a, _for=aspect: intake_mod.read_options(a, _for))
                         report.asks.append(Ask(node.id, node.role, None, answer))
@@ -3510,6 +3533,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                             ask_id=_seat_ask_id(report, node, seat, position, len(voices)),
                             asked_before=asked_before,
                             conversation=cfg.conversation, role=node.role, resumed=report.resumed,
+                                  usage=report.usage,
                                       workspace=_workspace(node, build_cycles),
                                       heard=lambda a, _n=node: _heard(_n, SEATS, a),
                                       position=position, voice=label,
@@ -3546,6 +3570,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                     ask_id=ask_id, node_id=node.id, answered=already, model=model,
                     asked_before=asked_before,
                     conversation=cfg.conversation, role=node.role, resumed=report.resumed,
+                                  usage=report.usage,
                                   workspace=_workspace(node, build_cycles),
                                   heard=lambda a, _n=node: _heard(_n, ONE, a),
                                   accept=_accept_for(node, cfg, report),

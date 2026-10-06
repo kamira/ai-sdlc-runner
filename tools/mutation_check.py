@@ -624,8 +624,8 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "contradiction", "a route count may disagree with the server again",
         REPO / "docs" / "SCHEMAS.md",
-        '''Twenty-one routes, nine `GET` and twelve `POST`, every one crossing''',
-        '''Twenty-one routes, nine `GET` and nine `POST`, every one crossing''',
+        '''Twenty-two routes, ten `GET` and twelve `POST`, every one crossing''',
+        '''Twenty-two routes, ten `GET` and nine `POST`, every one crossing''',
         "tests/test_documented_numbers.py"),
 
     Mutation(

@@ -1085,3 +1085,103 @@ def test_an_existing_empty_settings_file_stops_the_walk_and_does_not_run_on_defa
 def test_a_missing_settings_file_still_means_the_defaults(tmp_path):
     """*cut*: make `load` raise for a missing file and this fails."""
     assert settings.load(str(tmp_path / "nope.json")) == settings.Settings()
+
+
+# ── the usage panel (CHG-20261006-01) ───────────────────────────────────────────────────────────
+
+TOKENS = {"input": 10, "output": 20, "cache_read": 300, "cache_write": 40}
+
+
+def _window(name, used, minutes, **over):
+    return {"model": "gpt-6", "window": name, "window_minutes": minutes, "used_percent": used,
+            "remaining_percent": 100 - used, "resets_at": "2099-01-01T00:00:00+00:00",
+            "as_of": "2026-10-06T13:50:01+00:00", "stale": False, **over}
+
+
+def _summary(models, remaining=()):
+    return {"run": {"models": models, "remaining": list(remaining)}, "asks": []}
+
+
+@needs_node
+def test_the_usage_panel_says_no_run_yet_before_one(console):
+    """*cut*: drop the `!run` branch in `drawUsage`."""
+    assert console.harness("usage", data={"run": None, "asks": []})["text"] == "no run yet"
+
+
+@needs_node
+def test_the_usage_panel_shows_cost_tokens_and_a_remaining_bar_with_text(console):
+    """*cut*: drop the cost row, the tokens row or the bar's text from `drawUsage` / `drawWindow`."""
+    out = console.harness("usage", data=_summary(
+        {"opus": {"asks": 2, "asks_unreported": 0, "cost_usd": 0.75, "tokens": TOKENS},
+         "gpt-6": {"asks": 1, "asks_unreported": 0, "cost_usd": None, "tokens": TOKENS}},
+        [_window("primary", 42.0, 300), _window("secondary", 95.0, 10080)]))
+    text = out["text"]
+    assert "opus 2 asks" in text and "$0.7500 API-equivalent USD, not a bill on a subscription" in text
+    assert "in 10 · out 20 · cache read 300 · cache write 40" in text
+    assert "58% remaining (42% used)" in text and "5% remaining (95% used)" in text, \
+        "the percentage is text, not only a bar"
+    assert "primary 5h" in text and "secondary 7d" in text
+    assert "resets " in text and "as of " in text
+    # A model whose cost no ask reported says so rather than showing zero.
+    gpt, opus = text[text.index("gpt-6 1 ask"):text.index("opus 2 asks")], text[text.index("opus 2 asks"):]
+    assert "cost not reported by this backend" in gpt
+    # Opus has no reading of its own, so it says remaining is not reported rather than omitting it;
+    # gpt-6 has one and does not say that.
+    assert "remaining quota not reported by this backend" in opus
+    assert "remaining quota not reported by this backend" not in gpt
+    primary, secondary = out["bars"]
+    assert (primary["min"], primary["max"], primary["now"]) == ("0", "100", "58")
+    assert primary["valuetext"] == "58% remaining" and primary["label"] == "primary window 5h remaining"
+    assert primary["width"] == "58%" and secondary["width"] == "5%"
+
+
+@needs_node
+def test_a_stale_window_says_the_reading_predates_its_reset_and_draws_no_bar(console):
+    """*cut*: drop the `w.stale` branch in `drawWindow`."""
+    out = console.harness("usage", data=_summary(
+        {"gpt-6": {"asks": 1, "asks_unreported": 0, "cost_usd": None, "tokens": TOKENS}},
+        [_window("primary", 90.0, 300, stale=True)]))
+    assert "reading is from before the window reset; remaining unknown" in out["text"]
+    assert "90%" not in out["text"] and "10% remaining" not in out["text"]
+    assert out["bars"] == []
+
+
+@needs_node
+def test_a_model_with_only_unreported_asks_says_so_and_shows_no_zero(console):
+    """*cut*: drop the `asks_unreported >= asks` branch in `drawUsage`."""
+    out = console.harness("usage", data=_summary(
+        {"local": {"asks": 3, "asks_unreported": 3, "cost_usd": None, "tokens": None}}))
+    assert "local 3 asks" in out["text"] and "not reported by this backend" in out["text"]
+    assert "$0" not in out["text"] and "in 0" not in out["text"]
+    assert out["bars"] == []
+
+
+@needs_node
+def test_the_page_fetches_usage_from_the_real_server_and_draws_it(console):
+    """*cut*: drop `api("GET", "/usage")` from `refreshUsage`, or the `/usage` branch in the server."""
+    assert console.harness("usage_wire")["text"] == "no run yet"
+    console.runner.state.report = engine.RunReport()
+    console.runner.state.usage.extend([
+        {"ask_id": "000-x", "node_id": "x", "seat": None, "model": "opus", "kind": "claude",
+         "cost_usd": 0.5, "tokens": TOKENS, "remaining": [], "note": ""},
+        {"ask_id": "001-x", "node_id": "x", "seat": None, "model": "gpt-6", "kind": "codex",
+         "cost_usd": None, "tokens": TOKENS, "note": "",
+         "remaining": [{k: v for k, v in _window("primary", 25.0, 300).items() if k != "model"}]}])
+    out = console.harness("usage_wire")
+    assert out["fetched"] == 1 and out["bars"] == 1
+    assert "opus 1 ask" in out["text"] and "$0.5000" in out["text"] and "75% remaining" in out["text"]
+
+
+@needs_node
+def test_usage_is_refreshed_when_the_run_changes_and_not_otherwise(console):
+    """*cut*: drop `refreshUsage()` from `apply`, or the key comparison in `refreshUsage`."""
+    out = console.harness("usage_on_apply")
+    assert out["afterSame"] == 1, "the same state twice is one fetch, not a poll"
+    assert out["afterChange"] == 2
+
+
+def test_the_usage_panel_is_in_the_page_and_reads_only_the_servers_route():
+    code = _code()
+    assert 'id="usage"' in code and "用量" in code
+    assert 'api("GET", "/usage")' in code
+    assert "setInterval" not in code, "a tight poll; the panel refreshes when the run changes"

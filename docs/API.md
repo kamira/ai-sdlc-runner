@@ -1,6 +1,6 @@
 # The server's HTTP API
 
-The console's back end. **Twenty-one routes** — nine `GET`, twelve `POST` — every one crossing a process
+The console's back end. **Twenty-two routes** — ten `GET`, twelve `POST` — every one crossing a process
 boundary to a browser, and until now none of them written down. An independent seat called this the
 largest omission in [`SCHEMAS.md`](SCHEMAS.md); this is that entry.
 
@@ -100,6 +100,32 @@ The registry, plus the one question a registry cannot answer for itself.
 `leaves_this_machine` and `reach_guessed`, computed on every read from `(transport, endpoint)`, with `reach`
 raised to the stored `declared_reach` when that is higher (CHG-20261005-01). `leaving` is the same fact stated at the top level, because
 *"what goes out from here"* should not require a reader to scan a list and notice a hostname.
+
+### `GET /usage`
+What the current or last run's asks used, as each backend reported it (CHG-20261006-01). Same guard
+as every other `GET`. Never an estimate: a backend that printed nothing usable is `unreported`, and an
+unknown figure is `null`, not `0`. The list belongs to the run, not to its report, so asks already
+made are listed even when the run stopped on an error and no report came back.
+
+```jsonc
+{ "run": null                                   // no run yet
+       | { "models": { "<model id or (default backend)>": {
+                 "asks": 3, "asks_unreported": 0,
+                 "cost_usd": 0.42 | null,        // null: no ask of this model reported a cost
+                 "tokens": { "input", "output", "cache_read", "cache_write" } | null } },
+           "remaining": [ { "model", "window": "primary" | "secondary", "window_minutes": 300 | null,
+                            "used_percent", "remaining_percent",
+                            "resets_at": "<iso8601>" | null, "as_of": "<iso8601>" | null,
+                            "stale": false } ] },   // the latest reading of each window name
+  "asks": [ { "ask_id", "node_id", "seat", "model",
+              "kind": "claude" | "codex" | "unreported",
+              "cost_usd", "tokens", "remaining": [ …as above, without `model`… ], "note" } ] }
+```
+
+`cost_usd` is the API-equivalent figure `claude` prints, not a bill on a subscription. Remaining quota
+is stated only by codex, from its local session log (`$CODEX_HOME/sessions/…/rollout-*-<thread id>.jsonl`)
+for the thread the runner itself just opened — read-only, and only `rate_limits` is kept. A window
+whose `resets_at` has passed is `stale: true`: the reading is from before the reset.
 
 ### `GET /attachments`
 ```jsonc

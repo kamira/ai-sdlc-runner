@@ -34,6 +34,7 @@ from . import conversations as conv_mod
 from . import paths
 from . import plan as plan_mod
 from . import store as store_mod
+from . import usage as usage_mod
 from . import intake as intake_mod
 from . import detect, engine, models as models_mod, graph, policy, settings as settings_mod, ship, tui, workorder
 
@@ -203,6 +204,9 @@ class _Process(engine.Session):
         #: Every attempt that failed, so a run that took four tries does not read like one that
         #: took one. An unrecorded retry turns a flaky backend into a mystery.
         self.attempts: List[str] = []
+        #: The usage record of the most recent ask (CHG-20261006-01): what the backend printed, or
+        #: `unreported`. `None` until the first ask. The engine reads it after the ask returns.
+        self.usage: Optional[dict] = None
 
     def describe(self) -> str:
         """Which backend this is, for the panel-diversity note. The command, not the process."""
@@ -257,9 +261,21 @@ class _Process(engine.Session):
                     f"{order['node_id']}: attempt {attempt} failed ({type(exc).__name__}), "
                     f"retrying")
         del last
+        # Read beside the answer and never into it: a usage figure that could change what the node
+        # said would make a reporting field a routing input. `from_reply` does not raise.
+        home = os.environ.get("CODEX_HOME")
+        self.usage = usage_mod.from_reply(proc.stdout, Path(home) if home else None)
         answer = {"exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
+        said = proc.stdout
+        wrapped = usage_mod.unwrap(proc.stdout)
+        if wrapped is not None:
+            # The json output flags wrap the agent's answer in the CLI's own envelope. The answer is
+            # the text inside; an error envelope is a failed answer, like a reply that is not JSON.
+            said = answer["stdout"] = wrapped[0]
+            if wrapped[1]:
+                return answer
         try:
-            parsed = json.loads(proc.stdout)
+            parsed = json.loads(said)
         except json.JSONDecodeError:
             return answer
         if isinstance(parsed, dict):
@@ -731,7 +747,8 @@ def _model_name_of(model) -> str:
 
 
 def _with_model_name(model, name: str):
-    """The command with the model name set: claude's `--model` value replaced, codex's `-m` appended.
+    """The command with the model name set: claude's `--model` value replaced, codex's `-m` inserted before the
+    trailing `-` (the stdin marker), which must stay last.
 
     Only the flag's value changes, so the absolute path in `command[0]` is kept. The edited entry
     keeps `declared_reach`, so a codex entry given a name still says it leaves the machine.
@@ -742,7 +759,8 @@ def _with_model_name(model, name: str):
     elif "-m" in cmd and cmd.index("-m") + 1 < len(cmd):
         cmd[cmd.index("-m") + 1] = name
     else:
-        cmd += ["-m", name]
+        at = len(cmd) - 1 if cmd and cmd[-1] == "-" else len(cmd)
+        cmd[at:at] = ["-m", name]
     return tuple(cmd)
 
 

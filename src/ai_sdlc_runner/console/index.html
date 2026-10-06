@@ -146,6 +146,11 @@
   .mdl .u .v{font-family:var(--mono);font-size:10.5px}
   .mdl .u.none .v{color:var(--faint);font-family:inherit;font-style:italic}
   .mdl .u.unknown .k{color:var(--stop)}
+  /* The bar is a second channel: the percentage is always in the text beside it, so nothing here
+     depends on seeing the fill (CHG-20261006-01). */
+  .bar{height:8px;border:1px solid var(--line);border-radius:4px;background:var(--soft);overflow:hidden;margin:3px 0}
+  .bar .fill{height:100%;background:var(--accent)}
+  .bar.low .fill{background:var(--stop)}
   .legend .sw{display:inline-block;width:9px;height:9px;border-radius:2px;vertical-align:middle;margin-right:5px;border:1px solid var(--line)}
   .filebtn{font:inherit;padding:6px 13px;border:1px solid var(--line);border-radius:6px;background:var(--card);cursor:pointer}
   button.no{border-color:var(--stop);color:var(--stop)}
@@ -173,6 +178,8 @@
     <p class="legend" id="legend"></p>
     <h2 style="margin-top:22px">the models, and where they are used</h2>
     <div id="models"></div>
+    <h2 style="margin-top:22px">用量 / usage</h2>
+    <div id="usage"><p class="muted">no run yet</p></div>
   </aside>
   <section>
     <div id="panel" role="region" aria-labelledby="paneltitle" hidden></div>
@@ -1312,6 +1319,107 @@ function act(path, body) {
   api("POST", path, body).then(apply).catch(fail);
 }
 
+// --- usage: what a run used, and the quota a backend says remains (CHG-20261006-01) ---
+// Drawn from GET /usage, which is built from what each backend printed. Where one printed nothing
+// the panel says so in words: an unreported figure shown as 0 would read as "free".
+function windowName(minutes) {
+  if (minutes === null || minutes === undefined) return "";
+  if (minutes % 1440 === 0) return (minutes / 1440) + "d";
+  if (minutes % 60 === 0) return (minutes / 60) + "h";
+  return minutes + "min";
+}
+
+function pct(n) { return (Math.round(n * 10) / 10) + "%"; }
+
+function drawWindow(w) {
+  var box = el("div", "u"); box.setAttribute("data-window", w.window);
+  var len = windowName(w.window_minutes);
+  box.appendChild(el("span", "k", w.window + (len ? " " + len : "")));
+  var v = el("span", "v");
+  if (w.stale) {
+    // Past its reset, the old percentage describes a window that no longer exists.
+    v.textContent = "reading is from before the window reset; remaining unknown";
+  } else {
+    var bar = el("div", "bar" + (w.remaining_percent < 10 ? " low" : ""));
+    bar.setAttribute("role", "progressbar");
+    bar.setAttribute("aria-label", w.window + " window " + (len ? len + " " : "") + "remaining");
+    bar.setAttribute("aria-valuemin", "0");
+    bar.setAttribute("aria-valuemax", "100");
+    bar.setAttribute("aria-valuenow", String(Math.round(w.remaining_percent)));
+    bar.setAttribute("aria-valuetext", pct(w.remaining_percent) + " remaining");
+    var fill = el("div", "fill");
+    fill.style.width = Math.max(0, Math.min(100, w.remaining_percent)) + "%";
+    bar.appendChild(fill);
+    v.appendChild(bar);
+    v.appendChild(el("div", "", pct(w.remaining_percent) + " remaining (" + pct(w.used_percent) + " used)"));
+  }
+  var when = [];
+  if (w.resets_at) when.push("resets " + new Date(w.resets_at).toLocaleString());
+  if (w.as_of) when.push("as of " + new Date(w.as_of).toLocaleString());
+  if (w.model) when.push(w.model);
+  if (when.length) v.appendChild(el("div", "muted", when.join(" · ")));
+  box.appendChild(v);
+  return box;
+}
+
+function drawUsage(data) {
+  var box = $("#usage");
+  if (!box) return;
+  box.innerHTML = "";
+  var run = data && data.run;
+  if (!run) { box.appendChild(el("p", "muted", "no run yet")); return; }
+  var ids = Object.keys(run.models || {}).sort();
+  if (!ids.length) { box.appendChild(el("p", "muted", "no ask has run yet")); return; }
+  var reading = {};
+  (run.remaining || []).forEach(function (w) { reading[w.model] = true; });
+  ids.forEach(function (id) {
+    var m = run.models[id];
+    var card = el("div", "mdl"); card.setAttribute("data-usage-model", id);
+    var h = el("div", "h"); h.appendChild(el("span", "id", id));
+    h.appendChild(el("span", "muted", m.asks + (m.asks === 1 ? " ask" : " asks")));
+    card.appendChild(h);
+    var row = function (k, v, cls) {
+      var r = el("div", "u" + (cls ? " " + cls : ""));
+      r.appendChild(el("span", "k", k)); r.appendChild(el("span", "v", v));
+      card.appendChild(r);
+    };
+    if (m.asks_unreported >= m.asks) {
+      row("used", "not reported by this backend", "none");
+    } else {
+      row("cost", m.cost_usd === null
+        ? "not reported by this backend"
+        : "$" + m.cost_usd.toFixed(4) + " API-equivalent USD, not a bill on a subscription",
+        m.cost_usd === null ? "none" : "");
+      var t = m.tokens;
+      row("tokens", t === null
+        ? "not reported by this backend"
+        : "in " + t.input + " · out " + t.output + " · cache read " + t.cache_read +
+          " · cache write " + t.cache_write, t === null ? "none" : "");
+      if (m.asks_unreported) row("note", m.asks_unreported + " of " + m.asks + " asks reported nothing", "none");
+      if (!reading[id]) row("left", "remaining quota not reported by this backend", "none");
+    }
+    box.appendChild(card);
+  });
+  (run.remaining || []).forEach(function (w) {
+    var card = el("div", "mdl");
+    card.appendChild(drawWindow(w));
+    box.appendChild(card);
+  });
+}
+
+// Refreshed when the run changes, not on a timer: the state, the log length and the visited count
+// move exactly when an ask can have finished.
+var usageKey = null;
+function refreshUsage(force) {
+  var key = state ? [state.state, (state.log || []).length, (state.visited || []).length].join("|") : "";
+  if (!force && key === usageKey) return Promise.resolve();
+  usageKey = key;
+  return api("GET", "/usage").then(drawUsage, function (e) {
+    var box = $("#usage");
+    if (box) { box.innerHTML = ""; box.appendChild(el("p", "err", "usage unavailable: " + e.message)); }
+  });
+}
+
 function apply(s) {
   state = s;
   $("#state").textContent = s.state;
@@ -1323,6 +1431,7 @@ function apply(s) {
   drawBrief();
   $("#err").textContent = s.error || "";
   drawFlow(); drawLog(); drawDecisions(); drawAsk();
+  refreshUsage();
 }
 
 function fail(e) { $("#err").textContent = e.message; }
