@@ -104,7 +104,8 @@ PROJECT_AGENT_CONFIG = (("codex", ".codex"), ("codex", ".agents"),
 # bare names a seat's launcher may fall back to, which Windows looks for in the current directory
 LAUNCHER_NAMES = frozenset(("node", "node.exe", "node.cmd", "node.bat", "cmd.exe", "powershell.exe",
                             "pwsh.exe", "python.exe", "py.exe"))
-KILL_GRACE = 10                     # seconds to keep reading after a timed-out seat's tree is killed
+CMD_METACHARACTERS = frozenset('&|<>^%!"')   # what cmd.exe acts on in an argument of a batch launcher
+KILL_GRACE = 10                    # seconds to keep reading after a timed-out seat's tree is killed
 WAIT_POLL = 0.5                     # seconds one wait may block: Ctrl-C is only delivered between waits
 IGNORED_CAP = 50                    # git-ignored paths listed in the disclosure; the rest are counted
 
@@ -705,6 +706,22 @@ def locate_executable(name: str, repo: Path) -> Tuple[Optional[str], Optional[st
     return found, None
 
 
+def _unlaunchable(argv: List[str], repo: Path) -> Optional[str]:
+    """Why this argv cannot be dispatched, or None. A `.cmd`/`.bat` launcher runs through cmd.exe, which
+    parses the arguments again, so an element carrying a cmd metacharacter (the repo path included) could
+    run something else: refused, not escaped."""
+    found, why = locate_executable(argv[0], repo)
+    if found is None:
+        return why
+    if found.lower().endswith((".cmd", ".bat")):
+        for element in [found, *argv[1:]]:
+            bad = sorted({ch for ch in element if ch in CMD_METACHARACTERS})
+            if bad:
+                return (f"{found} is a batch launcher, which cmd.exe re-parses, and the argument "
+                        f"{element!r} contains {' '.join(bad)}; refused, not escaped")
+    return None
+
+
 def run_cell(model: dict, dim: dict, phase: str, brief: str, repo: Path, out: Path,
              timeout: float, fleet: Optional[_Fleet] = None) -> dict:
     """One seat, one process. Whatever goes wrong is `unreached` with the reason, never a verdict."""
@@ -716,12 +733,17 @@ def run_cell(model: dict, dim: dict, phase: str, brief: str, repo: Path, out: Pa
     stem = cell_stem(phase, dim["id"], model["id"])
     cells = out / "cells"
     brief_file = cells / f"{stem}.brief.txt"         # the seat's stdin, and evidence of what it was sent
-    brief_file.write_bytes(brief.encode("utf-8"))    # bytes: no newline translation on Windows
     stdout = stderr = ""
     exit_code: Optional[int] = None
     reason: Optional[str] = None
+    try:
+        brief_file.write_bytes(brief.encode("utf-8"))    # bytes: no newline translation on Windows
+    except OSError as exc:                           # a full disk is this seat unreached, not a lost round
+        reason = f"could not write {brief_file.name}: {exc}"
     started = time.monotonic()
-    if refusal:                                      # never hand the bare name to Popen: it may search the cwd
+    if reason:
+        pass
+    elif refusal:                                    # never hand the bare name to Popen: it may search the cwd
         reason = f"could not start {argv[0]!r}: {refusal}"
     else:
         try:
@@ -743,8 +765,11 @@ def run_cell(model: dict, dim: dict, phase: str, brief: str, repo: Path, out: Pa
     if reason is None and verdict is None:
         reason = "answer has no `VERDICT: pass` or `VERDICT: fail` line"
 
-    (cells / f"{stem}.stdout.txt").write_text(stdout, encoding="utf-8")
-    (cells / f"{stem}.stderr.txt").write_text(stderr, encoding="utf-8")
+    try:
+        (cells / f"{stem}.stdout.txt").write_text(stdout, encoding="utf-8")
+        (cells / f"{stem}.stderr.txt").write_text(stderr, encoding="utf-8")
+    except OSError as exc:                           # the answer was not kept as evidence: not reached
+        verdict, reason = None, f"could not write the cell's output files: {exc}"
     return {"model": model["id"], "dimension": dim["id"], "phase": phase,
             "verdict": verdict or UNREACHED, "reason": reason, "exit_code": exit_code,
             "seconds": seconds, "usage": extract_usage(model["kind"], stdout),
@@ -859,6 +884,11 @@ def _freeze(repo: Path) -> Tuple[Optional[str], List[str], Optional[str]]:
         dirty = sorted(frozen_tree._porcelain_paths(_run_git(
             repo, "-c", "status.showUntrackedFiles=all", "status", "--porcelain", "-z",
             "--untracked-files=all", "--ignore-submodules=none")))
+        # `git status` trusts assume-unchanged / skip-worktree entries and never looks at those files, so
+        # they are refused by name (lowercase tag: assume-unchanged, `S`: skip-worktree)
+        dirty += sorted(f"{entry[2:]} [{'assume-unchanged' if entry[0].islower() else 'skip-worktree'} flag]"
+                        for entry in _run_git(repo, "ls-files", "-v", "-z").split("\0")
+                        if entry[:1].islower() or entry[:1] == "S")
     except frozen_tree.NotAnswerable as exc:
         return None, [], str(exc)
     return head, dirty, None
@@ -919,14 +949,16 @@ def _closing_freeze(sha: str, end_sha: Optional[str], end_dirty: List[str],
     return "dirty" if end_dirty else "ok"
 
 
-def _load_resume(path: Path, sha: str, dims: List[dict], models: List[dict], brief_sha: str,
+def _load_resume(path: Path, sha: str, dims: List[dict], models: List[dict], brief_shas: Dict[str, str],
                  repo: Path) -> Dict[Tuple[str, str, str], dict]:
     """The cells of an earlier round that may be kept, keyed (phase, dimension, model).
     Refused unless that round saw the same commit, the same matrix and the same brief, and unless its
     closing freeze check was `ok` and it was not interrupted: a round the freeze invalidated donates no
     cell, because restoring the tree afterwards does not make what the seats read the tree they were
     told about (KN-14). A cell is kept only if it was reached (pass/fail) and its fingerprint is the
-    one the current config gives it; a cell defined otherwise is run again."""
+    one the current config gives it; a cell defined otherwise is run again. Each model's own brief is
+    compared (`--brief-for` gives some a brief of their own): a model whose brief changed donates no
+    cell, the rest keep theirs; if every model's brief changed, it is the refusal it always was."""
     where = Path(path) / "report.json"
     try:
         old = json.loads(where.read_text(encoding="utf-8"))
@@ -947,14 +979,17 @@ def _load_resume(path: Path, sha: str, dims: List[dict], models: List[dict], bri
     if matrix.get("dimensions") != [d["id"] for d in dims] or matrix.get("models") != [m["id"] for m in models]:
         raise ConfigError(f"resume needs the same matrix: {path} ran dimensions "
                           f"{matrix.get('dimensions')} x models {matrix.get('models')}")
-    if old.get("brief_sha256") != brief_sha:
+    old_briefs = old.get("briefs") if isinstance(old.get("briefs"), dict) else {}
+    changed = {mid for mid, sha_now in brief_shas.items()
+               if (old_briefs.get(mid) or {}).get("sha256", old.get("brief_sha256")) != sha_now}
+    if len(changed) == len(brief_shas):
         raise ConfigError(f"resume needs the same brief: {path} was run on a different one")
     current = {(ph, d["id"], m["id"]): cell_fingerprint(m, d, ph, repo)
                for ph in ("review", "cross") for d in dims for m in models}
     return {key: c for c in old.get("cells", [])
             if isinstance(c, dict) and c.get("verdict") in (PASS, FAIL)
             for key in [(c.get("phase"), c.get("dimension"), c.get("model"))]
-            if key in current and c.get("fingerprint") == current[key]}
+            if key in current and c.get("fingerprint") == current[key] and key[2] not in changed}
 
 
 def ignored_paths(repo: Path) -> List[str]:
@@ -996,7 +1031,7 @@ def _claim(out: Path, held: List[Path]) -> None:
 
 
 def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_path: Path, out: Path,
-               only: Optional[List[str]] = None, jobs: int = DEFAULT_JOBS, cross_read: bool = True,
+               only: Optional[List[str]] = None, brief_for: Optional[Dict[str, Path]] = None, jobs: int = DEFAULT_JOBS, cross_read: bool = True,
                cell_timeout: float = DEFAULT_TIMEOUT, resume: Optional[Path] = None,
                config_from: str = DEFAULT_CONFIG_FROM, allow_project_agent_config: bool = False,
                allow_repo_executables: bool = False) -> int:
@@ -1013,7 +1048,8 @@ def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_
         print(f"cannot tell whether the tree is frozen: {unanswerable}")
         return 2
     if dirty:
-        print(f"the tree is NOT frozen at {sha[:12]} — {len(dirty)} path(s) differ from it (KN-14):")
+        print(f"the tree is NOT frozen at {sha[:12]} — {len(dirty)} path(s) differ from it "
+              "or are hidden from git by an index flag (KN-14):")
         for path in dirty:
             print(f"  {path}")
         print("commit or stash them; nothing was run.")
@@ -1027,9 +1063,19 @@ def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_
             config, config_source = load_base_config(repo, config_from, sha)
         dims, models = select_matrix(config, only)
         check_stems(dims, models)
-        raw_brief = Path(brief_path).read_bytes()     # bytes: the size disclosed is the file's own
-        brief = raw_brief.decode("utf-8")             # no newline translation, so what is sent is what was read
-        brief_sha = hashlib.sha256(raw_brief).hexdigest()
+        brief_for = brief_for or {}
+        unknown = sorted(set(brief_for) - {m["id"] for m in config["models"]})
+        if unknown:
+            raise ConfigError(f"--brief-for names {', '.join(unknown)}, not a model in the config "
+                              f"({', '.join(m['id'] for m in config['models'])})")
+        # bytes: the size disclosed is the file's own; no newline translation, so what is sent is what was read
+        raw_default = Path(brief_path).read_bytes()
+        sources = {m["id"]: (str(brief_for.get(m["id"], brief_path)),
+                             Path(brief_for[m["id"]]).read_bytes() if m["id"] in brief_for else raw_default)
+                   for m in models}
+        briefs = {mid: raw.decode("utf-8") for mid, (_p, raw) in sources.items()}
+        brief_shas = {mid: hashlib.sha256(raw).hexdigest() for mid, (_p, raw) in sources.items()}
+        brief_sha = hashlib.sha256(raw_default).hexdigest()
         if _inside(out, repo):
             raise ConfigError(f"--out {out} is inside the repo; writing it would dirty the frozen "
                               "tree (KN-14) — choose a directory outside it")
@@ -1041,7 +1087,7 @@ def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_
             raise ConfigError(f"--out {out} already holds a round's report; choose a fresh directory")
         ignored = ignored_paths(repo)
         if resume is not None:
-            kept = _load_resume(resume, sha, dims, models, brief_sha, repo)
+            kept = _load_resume(resume, sha, dims, models, brief_shas, repo)
     except (OSError, UnicodeError) as exc:
         print(f"error: {exc}")
         return 2
@@ -1054,7 +1100,7 @@ def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_
     stale = {d["id"] for d in dims for m in models if ("review", d["id"], m["id"]) not in kept}
     kept = {k: v for k, v in kept.items() if not (k[0] == "cross" and k[1] in stale)}
 
-    unusable = [(m, why) for m in models for why in [locate_executable(_argv(m, repo)[0], repo)[1]] if why]
+    unusable = [(m, why) for m in models for why in [_unlaunchable(_argv(m, repo), repo)] if why]
     if unusable:
         for m, why in unusable:
             print(f"error: model {m['id']!r}: {why}; nothing was run")
@@ -1079,7 +1125,10 @@ def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_
     disclosure = {"models": [{"id": m["id"], "executable": _argv(m, repo)[0],
                               "reach": m.get("reach", DEFAULT_REACH), "reads": READ_SCOPE[m["kind"]]}
                              for m in models],
-                  "brief_bytes": len(raw_brief), "repo": str(repo),
+                  "brief_bytes": len(raw_default), "repo": str(repo),
+                  "briefs": {mid: {"path": p, "sha256": brief_shas[mid], "bytes": len(raw),
+                                   "incremental": mid in brief_for}
+                             for mid, (p, raw) in sources.items()},
                   "project_agent_config": {"present": project_agent, "allowed": allow_project_agent_config},
                   "repo_executables": {"present": planted, "allowed": allow_repo_executables},
                   "ignored_paths": ignored[:IGNORED_CAP], "ignored_more": max(0, len(ignored) - IGNORED_CAP)}
@@ -1088,8 +1137,13 @@ def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_
     for m in disclosure["models"]:
         print(f"  {m['id']}: {m['executable']} (reach: {m['reach']})")
         print(f"    can read: {m['reads']}")
-    print(f"  the brief, {disclosure['brief_bytes']} bytes, to every seat; a cross-read adds the other "
-          "seats' answers")
+    if brief_for:
+        for mid, b in disclosure["briefs"].items():
+            print(f"  {mid}: brief {b['path']}, {b['bytes']} bytes" + (" (incremental)" if b["incremental"] else ""))
+        print("  a cross-read adds the other seats' answers to the seat's own brief")
+    else:
+        print(f"  the brief, {disclosure['brief_bytes']} bytes, to every seat; a cross-read adds the other "
+              "seats' answers")
     print(f"  {repo} is each seat's working directory, including files git ignores")
     for line in _ignored_lines(disclosure):
         print(f"    {line}")
@@ -1119,7 +1173,7 @@ def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_
                 for i in plan], interrupted
 
     reasons: List[str] = []
-    review, interrupted = phase([(m, d, "review", review_header(m, d, sha) + brief)
+    review, interrupted = phase([(m, d, "review", review_header(m, d, sha) + briefs[m["id"]])
                                  for d in dims for m in models])
     cells = list(review)
     unreached = [c for c in review if c["verdict"] == UNREACHED]
@@ -1135,7 +1189,7 @@ def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_
         for d in dims:
             for m in models:
                 others = [(o["id"], by_key[(d["id"], o["id"])]) for o in models if o["id"] != m["id"]]
-                plan.append((m, d, "cross", cross_brief(m, d, sha, brief, others)))
+                plan.append((m, d, "cross", cross_brief(m, d, sha, briefs[m["id"]], others)))
         cross, interrupted = phase(plan)
         cells += cross
         unreached = [c for c in cross if c["verdict"] == UNREACHED]
@@ -1177,7 +1231,7 @@ def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_
 
     report = {"result": result, "sha": sha, "config": config_source["note"],
               "config_source": config_source, "reasons": reasons,
-              "disclosure": disclosure, "brief_sha256": brief_sha,
+              "disclosure": disclosure, "brief_sha256": brief_sha, "briefs": disclosure["briefs"],
               "closing_freeze": closing, "interrupted": interrupted,
               "resumed_from": str(resume) if resume is not None else None,
               "matrix": {"dimensions": [d["id"] for d in dims], "models": [m["id"] for m in models],
@@ -1307,9 +1361,14 @@ def render_markdown(report: dict, dims: List[dict], models: List[dict]) -> str:
         lines += [f"- {m['id']}: `{m['executable']}`, reach: {m['reach']}"]
         if m.get("reads"):
             lines.append(f"  - can read: {m['reads']}")
-    lines += [f"- the brief, {sent['brief_bytes']} bytes, to every seat (a cross-read adds the other "
-              "seats' answers)",
-              f"- `{sent['repo']}` is each seat's working directory, including files git ignores"]
+    if any(b.get("incremental") for b in (sent.get("briefs") or {}).values()):
+        lines += [f"- {mid}: brief `{b['path']}`" + (" (incremental)" if b.get("incremental") else "")
+                  + f", {b['bytes']} bytes, sha256 `{b['sha256']}`" for mid, b in sent["briefs"].items()]
+        lines.append("- a cross-read adds the other seats' answers to the seat's own brief")
+    else:
+        lines.append(f"- the brief, {sent['brief_bytes']} bytes, to every seat (a cross-read adds the other "
+                     "seats' answers)")
+    lines += [f"- `{sent['repo']}` is each seat's working directory, including files git ignores"]
     lines += [f"  - `{p}`" if not p.startswith("...") else f"  - {p}" for p in _ignored_lines(sent)]
     lines += ["", "## Review", ""] + _table(cells, dims, models, "review")
     if any(c["phase"] == "cross" for c in cells):
@@ -1344,7 +1403,8 @@ report.md are still written (incomplete, "interrupted by the operator"), exit 13
 
 A round too big for one quota window: run it again with --resume DIR, DIR being the --out of the
 earlier one, with a fresh --out (never DIR or inside it: the earlier report is kept). Cells that said pass or fail are kept if the config still defines them the same way;
-the rest run again. A different commit is refused (KN-14), as is a different matrix or brief, and a
+the rest run again. A different commit is refused (KN-14), as is a different matrix or a brief that
+changed for every model (one that changed for some re-runs those models' cells), and a
 round that was interrupted or whose tree moved at the close.
 """
 
@@ -1377,6 +1437,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     run = sub.add_parser("run", help="run the review matrix", epilog=RUN_EPILOG,
                          formatter_class=argparse.RawDescriptionHelpFormatter)
     run.add_argument("--brief", required=True, metavar="BRIEF.md")
+    run.add_argument("--brief-for", action="append", default=[], metavar="MODEL=FILE",
+                     help="give this model (review and cross-read) FILE as its brief instead of --brief, "
+                          "e.g. the increment only; repeatable; the matrix is unchanged")
     run.add_argument("--out", required=True, metavar="DIR", help="outside the repo")
     run.add_argument("--config", default=None, metavar="PATH",
                      help="use this file as it is; the report says it was not taken from the base "
@@ -1414,8 +1477,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     only = None
     if args.only_dimensions is not None:
         only = [n.strip() for n in args.only_dimensions.split(",") if n.strip()]
+    brief_for: Dict[str, Path] = {}
+    for item in args.brief_for:
+        model_id, eq, file = item.partition("=")
+        if not eq or not model_id or not file or model_id in brief_for:
+            print(f"error: --brief-for wants MODEL=FILE, once per model: {item!r}")
+            return 2
+        brief_for[model_id] = Path(file)
     return run_round(Path(args.config) if args.config is not None else None, Path(args.repo), Path(args.brief),
-                     Path(args.out), only=only, jobs=args.jobs, cross_read=args.cross_read,
+                     Path(args.out), only=only, brief_for=brief_for, jobs=args.jobs, cross_read=args.cross_read,
                      cell_timeout=args.cell_timeout, allow_project_agent_config=args.allow_project_agent_config,
                      allow_repo_executables=args.allow_repo_executables,
                      resume=Path(args.resume) if args.resume else None,

@@ -391,6 +391,55 @@ def test_the_brief_reaches_the_seat_on_stdin_with_question_and_sha(world):
                for line in world.invoked()), "seats must run from the repo root"
 
 
+def _incremental(world, text="INCREMENT-ONLY: the diff since the last round.\n"):
+    inc = world.brief.parent / "increment.md"
+    inc.write_text(text, encoding="utf-8")
+    return inc
+
+
+def test_a_per_model_brief_reaches_only_that_models_cells(world):
+    inc = _incremental(world)
+    assert world.run("--brief-for", f"gpt-6-astra={inc}") == 0
+    for phase in ("review", "cross"):
+        for dim in ("defect", "risk"):
+            assert "INCREMENT-ONLY" in world.brief_of(phase, dim, "gpt-6-astra")
+            assert "BRIEF-BODY" not in world.brief_of(phase, dim, "gpt-6-astra")
+            for other in ("fable", "opus"):
+                assert "BRIEF-BODY" in world.brief_of(phase, dim, other)
+                assert "INCREMENT-ONLY" not in world.brief_of(phase, dim, other)
+    assert len(world.report()["cells"]) == 12, "the matrix is not reduced"
+
+
+def test_a_per_model_brief_for_an_unknown_model_is_exit_2_and_runs_nothing(world, capsys):
+    inc = _incremental(world)
+    assert world.run("--brief-for", f"nobody={inc}") == 2
+    assert "nobody" in capsys.readouterr().out and world.invoked() == []
+    assert world.run("--brief-for", "no-equals-sign") == 2
+
+
+def test_the_report_records_which_brief_each_model_got(world):
+    inc = _incremental(world)
+    assert world.run("--brief-for", f"gpt-6-astra={inc}") == 0
+    briefs = world.report()["briefs"]
+    assert briefs["gpt-6-astra"]["path"] == str(inc)
+    assert briefs["gpt-6-astra"]["sha256"] == hashlib.sha256(inc.read_bytes()).hexdigest()
+    assert briefs["fable"]["path"] == str(world.brief) and briefs["opus"]["path"] == str(world.brief)
+    assert briefs["fable"]["sha256"] == hashlib.sha256(world.brief.read_bytes()).hexdigest()
+    assert f"gpt-6-astra: brief `{inc}` (incremental)" in (world.out / "report.md").read_text(encoding="utf-8")
+
+
+def test_resume_reruns_only_the_model_whose_own_brief_changed(world):
+    inc = _incremental(world)
+    assert world.run("--brief-for", f"gpt-6-astra={inc}") == 0
+    before = len(world.invoked())
+    inc.write_text("INCREMENT-TWO\n", encoding="utf-8")
+    assert world.resume("--brief-for", f"gpt-6-astra={inc}") == 0
+    ran = [line.split(" cwd=")[0] for line in world.invoked()[before:] if " review " in line]
+    assert sorted(ran) == ["gpt-6-astra review defect", "gpt-6-astra review risk"], "only astra's reviews re-run"
+    assert "INCREMENT-TWO" in world.brief_of("review", "risk", "gpt-6-astra")
+    assert len(world.report()["cells"]) == 12
+
+
 def test_repo_is_substituted_into_argv(world):
     """The `{repo}` in codex's `-C {repo}` is what points it at the tree; unsubstituted it reads
     nothing."""
@@ -2097,3 +2146,80 @@ def test_a_tree_with_a_launcher_by_bare_name_is_refused_unless_allowed(world, ca
     assert world.invoked() == [] and not world.out.exists()
     assert world.run("--allow-repo-executables") == 0
     assert world.report()["disclosure"]["repo_executables"] == {"present": ["Node.CMD"], "allowed": True}
+
+
+# ------------------------------------------------------------------- round 9: flags, storage, cmd.exe
+
+@pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
+def test_a_tracked_file_hidden_by_an_index_flag_is_refused_by_name(world, capsys, flag):
+    """`git status` never looks at an assume-unchanged / skip-worktree file, so a seat could read
+    content the commit does not hold."""
+    _git(world.repo, "update-index", flag, "kept.txt")
+    (world.repo / "kept.txt").write_text("changed under the flag\n", encoding="utf-8")
+    assert _git(world.repo, "status", "--porcelain").strip() == "", "the setup must hide it from status"
+    assert world.run() == 1
+    said = capsys.readouterr().out
+    assert "KN-14" in said and "kept.txt" in said and "flag" in said
+    assert world.invoked() == [] and not (world.out / "report.json").exists()
+
+
+def test_a_flag_set_during_the_round_makes_the_closing_freeze_dirty(world, monkeypatch):
+    real = panel._freeze
+    calls = []
+
+    def freeze(repo):
+        calls.append(1)
+        if len(calls) == 2:                          # the closing check
+            _git(repo, "update-index", "--assume-unchanged", "kept.txt")
+        return real(repo)
+
+    monkeypatch.setattr(panel, "_freeze", freeze)
+    assert world.run("--no-cross-read") == INCOMPLETE
+    assert world.report()["closing_freeze"] == "dirty"
+
+
+@pytest.mark.parametrize("target", [".brief.txt", ".stdout.txt"])
+def test_a_storage_failure_on_a_cell_is_that_cell_unreached_and_the_report_is_still_written(
+        world, monkeypatch, target):
+    """A full disk while saving a cell stops the round like any unreached seat: no queued seat is
+    dispatched, the report is written and the --out claim is released."""
+    real_bytes, real_text = Path.write_bytes, Path.write_text
+
+    def failing(real):
+        def write(self, *a, **k):
+            if self.name.endswith(target):
+                raise OSError(28, "No space left on device")
+            return real(self, *a, **k)
+        return write
+
+    monkeypatch.setattr(Path, "write_bytes", failing(real_bytes))
+    monkeypatch.setattr(Path, "write_text", failing(real_text))
+    assert world.run("--jobs", "1") == INCOMPLETE
+    report = world.report()
+    assert report["result"] == "incomplete"
+    assert report["cells"][0]["verdict"] == "unreached" and "No space left" in report["cells"][0]["reason"]
+    assert len(world.invoked()) <= 1, "queued seats were dispatched after the storage failure"
+    assert (world.out / "report.md").exists() and not (world.out / panel.LOCK_NAME).exists()
+
+
+def test_a_batch_launcher_with_a_cmd_metacharacter_in_the_repo_path_is_refused(world, monkeypatch, capsys):
+    """cmd.exe re-parses a .cmd's arguments: `&` in the checkout path would start another command."""
+    repo = world.repo.parent / "a&b"
+    shutil.copytree(world.repo, repo)
+    world.repo = repo
+    world.write_config(models=[{"id": "x", "kind": "claude", "argv": ["x.cmd", "-C", "{repo}"]}])
+    real = panel.resolve_executable
+    monkeypatch.setattr(panel, "resolve_executable",
+                        lambda name, r: "/opt/fake/x.cmd" if name == "x.cmd" else real(name, r))
+    assert world.run("--repo", str(repo)) == 3
+    said = capsys.readouterr().out
+    assert "&" in said and "x.cmd" in said and "nothing was run" in said
+    assert not (world.out / "report.json").exists()
+
+
+def test_only_a_batch_launcher_is_checked_for_cmd_metacharacters(world, monkeypatch):
+    monkeypatch.setattr(panel, "resolve_executable", lambda name, r: "/opt/fake/x.cmd")
+    assert panel._unlaunchable(["x.cmd", "-C", "/plain/repo"], world.repo) is None
+    assert "|" in panel._unlaunchable(["x.cmd", "a|b"], world.repo)
+    monkeypatch.setattr(panel, "resolve_executable", lambda name, r: "/opt/fake/x.exe")
+    assert panel._unlaunchable(["x.exe", "a&b"], world.repo) is None

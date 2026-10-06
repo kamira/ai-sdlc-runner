@@ -29,7 +29,7 @@
 | KN-9 | pattern | governance / vocabularies | A vocabulary that classifies must be **closed**: an unrecognised value is a failure, never a pass. The ledger lint knew only "built", so `accepted`, `merged`, `completed` and `完成` all sailed past it with no acceptance record. And read the **field**, not the prose around it — `draft — all 9 tasks built` is a draft. | active |
 | DIR-1 | directive | governance / review | When `codex` cannot be reached, a review panel is **two `fable` seats and two `opus` seats, each in its own session** — independent, then cross-read. `codex` rejoins the panel as soon as it can be reached. | **superseded by DIR-2 (CHG-20260928-01)** |
 | DIR-2 | directive | governance / review | A review panel is **three seats, `fable`, `opus` and `gpt-6-astra`, each at effort `medium`**. Carried over from DIR-1: each in its own session, then cross-read. Interpreted: an unreachable seat **stops the review and asks the user** — no fallback panel. | active — **extended by DIR-3** (dimensions, one session per engine × dimension, the coder) |
-| DIR-3 | directive | governance / review | Every review or decision: **each DIR-2 engine on each enabled dimension, one session per (engine × dimension)**, run by `tools/panel.py`; which dimensions are on is the user's (`config/panel.json`). Code is written by a **mid-tier model at effort `medium`** (`claude-sonnet-5-5`), not by the reviewers. | active |
+| DIR-3 | directive | governance / review | Every review or decision: **each DIR-2 engine on each enabled dimension, one session per (engine × dimension)**, run by `tools/panel.py`; which dimensions are on is the user's (`config/panel.json`). Code is written by a **mid-tier model at effort `medium`** (`claude-sonnet-5-5`), not by the reviewers. | active — **amended 2026-10-06**: the codex engine reviews the increment (), / the whole change |
 
 <!-- Append DIR-n (user directives) / KN-n (observed patterns) as anchored sections below and add
      one INDEX row each; register any new tag in vocabulary.json first. -->
@@ -770,3 +770,13 @@ committed and frozen for the whole round (KN-14).
 cross-read sessions, 24 of them on `codex`'s quota. `report.md` shows the codex windows' remaining
 percentage after each round; when a window is too low to finish a round, that is a stop-and-ask,
 not a reason to drop a seat.
+
+**Amended by the user, 2026-10-06 (CHG-20260929-01, round 9).** For ten rounds, `fable` and `opus`
+passed every cell they reached from round 5 on, while `gpt-6-astra` found two or three new hardening
+defects a round and exhausted the codex quota. Asked how to continue, the user chose: **the codex
+engine reviews the increment** — whether the previous rounds' fixes hold, and whether the diff since
+the last reviewed commit adds a blocking defect — **while `fable` and `opus` keep reviewing the whole
+change.** The matrix itself is unchanged: every engine still sits on every enabled dimension, in its
+own session, and a round still passes only when every cell and every cross-read passes. Only the
+codex seats' brief is narrower, passed with `tools/panel.py run --brief-for gpt-6-astra=FILE`, and
+the report records which brief each engine got.
