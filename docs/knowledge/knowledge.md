@@ -28,8 +28,8 @@
 | KN-10 | pattern | governance / red lines | A blacklist cannot be a safety guarantee. Two verifiers independently broke all six permanent halts with ordinary English containing no listed word, and a plan that simply **omitted** its operations was checked against nothing at all. The fix is the inversion: each operation **declares** its kind from a closed set, an undeclared one is refused, and word lists are demoted to a backstop that can only add a stop. | active |
 | KN-9 | pattern | governance / vocabularies | A vocabulary that classifies must be **closed**: an unrecognised value is a failure, never a pass. The ledger lint knew only "built", so `accepted`, `merged`, `completed` and `完成` all sailed past it with no acceptance record. And read the **field**, not the prose around it — `draft — all 9 tasks built` is a draft. | active |
 | DIR-1 | directive | governance / review | When `codex` cannot be reached, a review panel is **two `fable` seats and two `opus` seats, each in its own session** — independent, then cross-read. `codex` rejoins the panel as soon as it can be reached. | **superseded by DIR-2 (CHG-20260928-01)** |
-| DIR-2 | directive | governance / review | A review panel is **three seats, `fable`, `opus` and `gpt-6-astra`, each at effort `medium`**. Carried over from DIR-1: each in its own session, then cross-read. Interpreted: an unreachable seat **stops the review and asks the user** — no fallback panel. | active — **extended by DIR-3** (dimensions, one session per engine × dimension, the coder) |
-| DIR-3 | directive | governance / review | Every review or decision: **each DIR-2 engine on each enabled dimension, one session per (engine × dimension)**, run by `tools/panel.py`; which dimensions are on is the user's (`config/panel.json`). Code is written by a **mid-tier model at effort `medium`** (`claude-sonnet-5-5`), not by the reviewers. | active — **amended 2026-10-06**: the codex engine reviews the increment (`--brief-for`), `fable`/`opus` the whole change |
+| DIR-2 | directive | governance / review | A review panel is **three seats, `fable`, `opus` and `gpt-6-astra`, each at effort `medium`**. Carried over from DIR-1: each in its own session, then cross-read. Interpreted: an unreachable seat **stops the review and asks the user** — no fallback panel. | active — **extended by DIR-3** (dimensions, one session per engine × dimension, the coder); its *no fallback panel* is **superseded 2026-10-08** by DIR-3's amendment (`sonnet` for an unusable codex, decided before the round) |
+| DIR-3 | directive | governance / review | Every review or decision: **each DIR-2 engine on each enabled dimension, one session per (engine × dimension)**, run by `tools/panel.py`; which dimensions are on is the user's (`config/panel.json`). Code is written by a **mid-tier model at effort `medium`** (`claude-sonnet-5-5`), not by the reviewers. | active — **amended 2026-10-06**: the codex engine reviews the increment (`--brief-for`), `fable`/`opus` the whole change; **amended 2026-10-08**: when codex cannot be used (checked before each round), `sonnet` takes its seat |
 
 <!-- Append DIR-n (user directives) / KN-n (observed patterns) as anchored sections below and add
      one INDEX row each; register any new tag in vocabulary.json first. -->
@@ -780,3 +780,15 @@ change.** The matrix itself is unchanged: every engine still sits on every enabl
 own session, and a round still passes only when every cell and every cross-read passes. Only the
 codex seats' brief is narrower, passed with `tools/panel.py run --brief-for gpt-6-astra=FILE`, and
 the report records which brief each engine got.
+
+**Amended by the user, 2026-10-08 (CHG-20261008-01).** *"codex 不可用時採取 fable + sonnet + opus /
+可用時優先採用codex 取代sonnet"*. So when codex cannot be used, **`sonnet` (`claude-sonnet-5-5`, effort
+`medium`) takes the codex engine's seat**, and codex keeps the seat whenever it can be used. Asked when
+that is decided, the user chose **before each round**. `tools/panel.py run` checks `codex login status`
+and the latest quota windows codex wrote on this machine. A window below `min_remaining_percent`
+(`config/panel.json`, 10) that has not reset since the reading means unusable, and so does a failed
+login; a missing reading counts as usable. If unusable, the substitute sits on every dimension for the
+whole round. The report names the substitution and its reason, and says when the coder's model is
+also a reviewer. *Unchanged:* a codex cell that becomes unreachable **during** a round is unreached,
+and the round is incomplete and asks — the user did not choose a mid-round swap. `--no-substitute`
+keeps the primary engines.

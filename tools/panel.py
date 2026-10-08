@@ -15,8 +15,8 @@ What it keeps, and why:
 * **Unreached is a third state (KN-15).** A seat that crashed, timed out, exited non-zero or did not
   end on a `VERDICT:` line has not said pass, and it has not said fail. It is `unreached`, and
   "unknown" is not the safe answer — so it can never round to pass.
-* **An unreached seat stops the round and asks the user (DIR-2).** No fallback panel, no retry, no
-  quorum: the round is `incomplete`, the report says which cells and why, and the exit code is 3.
+* **An unreached seat stops the round and asks the user (DIR-2).** No retry, no quorum, and no
+  fallback *during* a round (CHG-20261008-01 decides a substitute only *before* it, below): the round is `incomplete`, the report says which cells and why, and the exit code is 3.
   Sessions not yet started when a seat is unreached are not started, and every seat's executable
   must resolve before anything is dispatched.
 * **A round without cross-read never passes (DIR-3).** `--no-cross-read`, or a one-model config,
@@ -26,6 +26,12 @@ What it keeps, and why:
   report `fail` or `incomplete`, never `pass`. Completeness is judged against DIR-2's engines
   (REQUIRED_ENGINES), not against whatever the config lists: a config without one of them can run a
   round that never passes ("reduced panel: engine X missing").
+* **A substitute takes a seat codex cannot fill, decided once before the round (CHG-20261008-01).**
+  A model with a `substitute` in the config is checked from local facts only — `codex login status`
+  and the newest quota reading in `$CODEX_HOME/sessions` (a window at or above
+  `min_remaining_percent`, or one whose reset time has passed, is usable; no reading counts as usable
+  and the round finds out). If it is not usable the substitute holds its seat for the whole round;
+  the report says which engine was replaced and why. `--no-substitute` keeps the primary engines.
 * **Ctrl-C stops the round.** Queued cells are cancelled, the live seats' process trees are killed,
   and the report is still written — `incomplete`, "interrupted by the operator", exit 130.
 * **A round can be resumed.** `--resume DIR` keeps every pass/fail cell of an earlier round at the
@@ -59,6 +65,7 @@ Usage::
     python tools/panel.py run --brief BRIEF.md --out DIR [--only-dimensions defect,risk] [--jobs 6]
     python tools/panel.py run --brief BRIEF.md --out NEW_DIR --resume EARLIER_DIR
     python tools/panel.py run --brief BRIEF.md --out DIR --config PATH      # not the base's config
+    python tools/panel.py run --brief BRIEF.md --out DIR --no-substitute    # stop and ask, as DIR-2 did
 
 Exit codes: 0 pass; 1 fail, or the tree is not frozen; 2 bad configuration or arguments; 3 the round
 is incomplete (a seat unreached, a reduced panel, or the tree moved) — never a pass; 130 interrupted.
@@ -121,6 +128,8 @@ REACHES = ("local", "internal", "external")
 DEFAULT_REACH = "external"          # a model nobody classified is assumed to leave the machine
 _TOP_KEYS = {"models", "coder", "dimensions"}
 _MODEL_KEYS = {"id", "argv", "kind", "reach"}
+_PRIMARY_KEYS = _MODEL_KEYS | {"substitute", "min_remaining_percent"}   # a substitute has neither
+LOGIN_TIMEOUT = 30                  # seconds `codex login status` may take before the engine counts as unusable
 _CODER_KEYS = {"model", "effort"}
 _DIMENSION_KEYS = {"id", "label", "question", "enabled"}
 
@@ -160,6 +169,25 @@ def _check_id(value: str, where: str) -> None:
         raise ConfigError(f"{where}: id {value!r} must match [a-z0-9][a-z0-9_-]* — it names a file")
 
 
+def _check_model(model: Any, where: str, substitute: bool = False) -> str:
+    """Check one model entry (a substitute is a full one) and return its id. A substitute may not have
+    a substitute of its own: the chain would have to be walked, and nobody asked for one."""
+    if substitute:
+        if isinstance(model, dict) and "substitute" in model:
+            raise ConfigError(f"{where}: a substitute may not itself have a 'substitute'")
+        _closed(model, _MODEL_KEYS, where)
+    mid = _text(model, "id", where)
+    _check_id(mid, where)
+    argv = model.get("argv")
+    if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
+        raise ConfigError(f"{where}: 'argv' must be a non-empty list of strings")
+    if model.get("kind") not in KINDS:
+        raise ConfigError(f"{where}: 'kind' must be one of {list(KINDS)}, not {model.get('kind')!r}")
+    if model.get("reach", DEFAULT_REACH) not in REACHES:
+        raise ConfigError(f"{where}: 'reach' must be one of {list(REACHES)}, not {model.get('reach')!r}")
+    return mid
+
+
 def load_config(path: Path) -> dict:
     """The panel's data from a file, checked (see `parse_config`)."""
     try:
@@ -181,21 +209,28 @@ def parse_config(text: str, where_from: str) -> dict:
     if not isinstance(models, list) or not models:
         raise ConfigError("config: 'models' must be a list with at least one model")
     seen = set()
+    substitutes = []
     for index, model in enumerate(models):
         where = f"models[{index}]"
-        _closed(model, _MODEL_KEYS, where)
-        mid = _text(model, "id", where)
-        _check_id(mid, where)
+        _closed(model, _PRIMARY_KEYS, where)
+        mid = _check_model(model, where)
         if mid in seen:
             raise ConfigError(f"{where}: duplicate model id {mid!r}")
         seen.add(mid)
-        argv = model.get("argv")
-        if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
-            raise ConfigError(f"{where}: 'argv' must be a non-empty list of strings")
-        if model.get("kind") not in KINDS:
-            raise ConfigError(f"{where}: 'kind' must be one of {list(KINDS)}, not {model.get('kind')!r}")
-        if model.get("reach", DEFAULT_REACH) not in REACHES:
-            raise ConfigError(f"{where}: 'reach' must be one of {list(REACHES)}, not {model.get('reach')!r}")
+        if "substitute" in model:
+            substitutes.append((f"{where}.substitute", _check_model(model["substitute"], f"{where}.substitute",
+                                                                   substitute=True)))
+        if "min_remaining_percent" in model:
+            floor = model["min_remaining_percent"]
+            if "substitute" not in model:
+                raise ConfigError(f"{where}: 'min_remaining_percent' only means something with a 'substitute'")
+            if isinstance(floor, bool) or not isinstance(floor, (int, float)) or not 0 <= floor <= 100:
+                raise ConfigError(f"{where}: 'min_remaining_percent' must be a number from 0 to 100, not {floor!r}")
+    taken = set(seen)
+    for where, sid in substitutes:                   # a substitute's id names cell files too: no two may share one
+        if sid in taken:
+            raise ConfigError(f"{where}: id {sid!r} collides with another model's id")
+        taken.add(sid)
     if "coder" in config:
         _closed(config["coder"], _CODER_KEYS, "coder")
     dimensions = config.get("dimensions")
@@ -237,10 +272,12 @@ def select_matrix(config: dict, only: Optional[List[str]]) -> Tuple[List[dict], 
     return chosen, config["models"]
 
 
-def reduced_panel(config: dict, dims: List[dict], models: List[dict]) -> Optional[str]:
+def reduced_panel(config: dict, dims: List[dict], models: List[dict],
+                  replaced: Tuple[str, ...] = ()) -> Optional[str]:
     """What this round leaves out of enabled dimensions x DIR-2's engines, else None. The engines are
     REQUIRED_ENGINES whatever the config lists: a panel judged only against its own config could drop
-    an engine and still look complete."""
+    an engine and still look complete. An engine whose substitute sat in its seat (`replaced`) was not
+    left out: its seat was filled, and the report names the swap."""
     ran_dims, ran_models = {d["id"] for d in dims}, {m["id"] for m in models}
     parts = []
     configured = {m["id"] for m in config["models"]}
@@ -248,7 +285,7 @@ def reduced_panel(config: dict, dims: List[dict], models: List[dict]) -> Optiona
     absent = [d["id"] for d in config["dimensions"] if d["enabled"] and d["id"] not in ran_dims]
     if absent:
         parts.append("dimensions not run: " + ", ".join(absent))
-    absent = [m["id"] for m in config["models"] if m["id"] not in ran_models]
+    absent = [m["id"] for m in config["models"] if m["id"] not in ran_models and m["id"] not in replaced]
     if absent:
         parts.append("models not run: " + ", ".join(absent))
     return "; ".join(parts) or None
@@ -574,6 +611,12 @@ def _drain(pipe: Any, sink: List[bytes]) -> None:
         pass
 
 
+def _seat_env(repo: Path) -> Dict[str, str]:
+    """The environment every program this tool starts gets: PATH cut to absolute entries outside the
+    repo, and Windows told not to search the current directory."""
+    return dict(os.environ, PATH=os.pathsep.join(_safe_path(repo)), NoDefaultCurrentDirectoryInExePath="1")
+
+
 def _run_process(argv: List[str], brief_file: Path, cwd: str, timeout: float,
                  fleet: Optional[_Fleet] = None) -> Tuple[str, str, Optional[int], bool]:
     """(stdout, stderr, exit code, timed out). The brief is the seat's stdin as an open file, never
@@ -590,9 +633,7 @@ def _run_process(argv: List[str], brief_file: Path, cwd: str, timeout: float,
         extra["start_new_session"] = True            # its own process group, so killpg reaches every child
     with open(brief_file, "rb") as stdin:
         proc = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                cwd=cwd, env=dict(os.environ, PATH=os.pathsep.join(_safe_path(fleet.repo)),
-                                                  NoDefaultCurrentDirectoryInExePath="1"),
-                                **extra)
+                                cwd=cwd, env=_seat_env(fleet.repo), **extra)
         fleet.add(proc)
         try:
             sinks: List[List[bytes]] = [[], []]
@@ -1002,6 +1043,104 @@ def ignored_paths(repo: Path) -> List[str]:
     return sorted(p for p in listed.split("\0") if p)
 
 
+# ------------------------------------------------------------------------------------ substitutes
+
+def _latest_rate_limits(home: Path) -> Optional[dict]:
+    """The last non-null `rate_limits` of the newest (by mtime) rollout under `home` that has one,
+    else None. This reads the quota codex last wrote on this machine, possibly from another session:
+    a quota is account-wide, so whose session wrote it does not matter. Nothing else is kept."""
+    try:
+        files = sorted((home / "sessions").glob("*/*/*/rollout-*.jsonl"),
+                       key=lambda path: path.stat().st_mtime, reverse=True)
+    except OSError:
+        return None
+    for path in files:
+        try:
+            events = _events(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        for event in reversed(events):
+            found = _last_key(event, "rate_limits")
+            if _windows(found):
+                return found
+    return None
+
+
+def _has_reset(window: dict, now: datetime) -> bool:
+    """Whether the window's `resets_at` (epoch seconds, or an ISO time) is already past."""
+    at = window.get("resets_at")
+    if isinstance(at, bool):
+        return False
+    if isinstance(at, (int, float)):
+        try:
+            return datetime.fromtimestamp(at, timezone.utc) <= now
+        except (OverflowError, OSError, ValueError):
+            return False
+    oldest = datetime.min.replace(tzinfo=timezone.utc)
+    return isinstance(at, str) and _when(at) != oldest and _when(at) <= now
+
+
+def engine_available(model: dict, repo: Path, home: Optional[Path] = None,
+                     now: Optional[datetime] = None) -> Tuple[bool, str]:
+    """(usable, reason) for a model that has a substitute (CHG-20261008-01), from local facts only.
+
+    Why local: a live probe call would spend quota to learn about quota, and swapping engines mid-round
+    is what DIR-2 forbids. Only `codex` is checked: `codex login status` must say "Logged in", and the
+    latest quota reading must show every window at or above `min_remaining_percent` or already reset.
+    A missing or unreadable reading is usable: the round finds out, and an unreached cell still stops
+    and asks. Any other kind is always usable. `home` and `now` are overridable for tests."""
+    if model["kind"] != "codex":
+        return True, f"{model['kind']} engines are not checked"
+    exe, why = locate_executable(model["argv"][0], repo)
+    if exe is None:
+        return False, f"codex login status: {why}"
+    try:
+        done = subprocess.run([exe, "login", "status"], cwd=str(repo), env=_seat_env(repo),
+                              capture_output=True, stdin=subprocess.DEVNULL, timeout=LOGIN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return False, f"codex login status: timed out after {LOGIN_TIMEOUT}s"
+    except OSError as exc:
+        return False, f"codex login status: could not run {exe!r}: {exc}"
+    said = (done.stdout + done.stderr).decode("utf-8", errors="replace").strip()
+    if done.returncode != 0 or "Logged in" not in said:
+        return False, f"codex login status: exit {done.returncode}, {said[:200] or 'no output'}"
+    floor = model.get("min_remaining_percent", 0)
+    now = now or datetime.now(timezone.utc)
+    try:
+        limits = _latest_rate_limits(codex_home(home))
+    except Exception:                                # noqa: BLE001 - an unreadable reading is no reading
+        limits = None
+    if limits is None:
+        return True, "no quota reading; the round will find out"
+    for name in ("primary", "secondary"):
+        window = limits.get(name)
+        if not _window_ok(window) or _has_reset(window, now):
+            continue
+        remaining = round(100 - window["used_percent"], 2)
+        if remaining < floor:
+            return False, (f"codex {name} window: {remaining:g}% remaining, below {floor:g}%; "
+                           f"resets {_reset_text(window) or 'at an unknown time'}")
+    return True, "logged in; quota at or above the floor, or reset"
+
+
+def apply_substitutes(models: List[dict], repo: Path, check: Any, home: Optional[Path] = None,
+                      now: Optional[datetime] = None) -> Tuple[List[dict], List[dict]]:
+    """(the round's models, substitutions). Each model with a `substitute` is checked once; if it is not
+    usable, its substitute takes the same position in the list for the whole round."""
+    chosen, swaps = [], []
+    for m in models:
+        if "substitute" not in m:
+            chosen.append(m)
+            continue
+        usable, reason = check(m, repo, home=home, now=now)
+        if usable:
+            chosen.append(m)
+        else:
+            chosen.append(m["substitute"])
+            swaps.append({"replaced": m["id"], "by": m["substitute"]["id"], "reason": reason})
+    return chosen, swaps
+
+
 def run_round(*args: Any, **kwargs: Any) -> int:
     """`_run_round`, with the claim on --out released however it ends, an interrupt included."""
     held: List[Path] = []
@@ -1034,9 +1173,13 @@ def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_
                only: Optional[List[str]] = None, brief_for: Optional[Dict[str, Path]] = None, jobs: int = DEFAULT_JOBS, cross_read: bool = True,
                cell_timeout: float = DEFAULT_TIMEOUT, resume: Optional[Path] = None,
                config_from: str = DEFAULT_CONFIG_FROM, allow_project_agent_config: bool = False,
-               allow_repo_executables: bool = False) -> int:
+               allow_repo_executables: bool = False, substitute: bool = True,
+               availability: Optional[Any] = None, home: Optional[Path] = None,
+               now: Optional[datetime] = None) -> int:
     """One round. Returns the exit code; prints what it did. The config is `config_path` as it is when
-    one is given, else `config/panel.json` at `config_from` — never the reviewed tree's own copy."""
+    one is given, else `config/panel.json` at `config_from` — never the reviewed tree's own copy.
+    A model with a `substitute` is checked first (`availability`, default `engine_available`; `substitute`
+    False skips it); a substitute that took a seat is in `models` from here on."""
     repo = Path(repo).resolve()                      # once: `{repo}` in argv and the seat's cwd must agree
     try:
         _require_toplevel(repo)
@@ -1062,12 +1205,28 @@ def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_
         else:
             config, config_source = load_base_config(repo, config_from, sha)
         dims, models = select_matrix(config, only)
+        substitutions: List[dict] = []
+        if substitute:
+            models, substitutions = apply_substitutes(models, repo, availability or engine_available, home, now)
         check_stems(dims, models)
-        brief_for = brief_for or {}
-        unknown = sorted(set(brief_for) - {m["id"] for m in config["models"]})
+        brief_for = dict(brief_for or {})
+        known = [i for m in config["models"] for i in (m["id"], *([m["substitute"]["id"]] if "substitute" in m else []))]
+        unknown = sorted(set(brief_for) - set(known))
         if unknown:
             raise ConfigError(f"--brief-for names {', '.join(unknown)}, not a model in the config "
-                              f"({', '.join(m['id'] for m in config['models'])})")
+                              f"({', '.join(known)})")
+        for swap in substitutions:
+            print(f"substitute: {swap['by']} takes {swap['replaced']}'s seat this round: {swap['reason']}")
+            if brief_for.pop(swap["replaced"], None) is not None:
+                print(f"  note: --brief-for {swap['replaced']} does not apply; {swap['by']} gets the main brief")
+        ran = {m["id"] for m in models}
+        for mid in sorted(set(brief_for) - ran):
+            print(f"  note: --brief-for {mid} ignored: {mid} is not on the panel this round")
+            del brief_for[mid]
+        coder = (config.get("coder") or {}).get("model")
+        coder_seats = [m["id"] for m in models if coder and coder in m["argv"]]
+        if coder_seats:
+            print(f"note: the coder's model ({coder}) is also a reviewer this round: {', '.join(coder_seats)}")
         # bytes: the size disclosed is the file's own; no newline translation, so what is sent is what was read
         raw_default = Path(brief_path).read_bytes()
         sources = {m["id"]: (str(brief_for.get(m["id"], brief_path)),
@@ -1214,7 +1373,7 @@ def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_
                        "single-model config: one engine, nobody to cross-read; DIR-3 requires it")
         if result == "pass":
             result = "incomplete"
-    left_out = reduced_panel(config, dims, models)
+    left_out = reduced_panel(config, dims, models, tuple(x['replaced'] for x in substitutions))
     if left_out:                                      # DIR-3: a smaller matrix than the configured one is a re-check
         reasons.append(f"reduced panel: {left_out}")
         if result == "pass":
@@ -1236,6 +1395,8 @@ def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_
               "resumed_from": str(resume) if resume is not None else None,
               "matrix": {"dimensions": [d["id"] for d in dims], "models": [m["id"] for m in models],
                          "review_sessions": review_n, "cross_sessions": cross_n},
+              "substitutions": substitutions, "no_substitute": not substitute,
+              "coder_is_reviewer": {"model": coder, "seats": coder_seats} if coder_seats else None,
               "cells": cells, "disagreements": disagreements, "usage_summary": usage_summary(cells)}
     (out / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
                                      encoding="utf-8")
@@ -1354,6 +1515,14 @@ def render_markdown(report: dict, dims: List[dict], models: List[dict]) -> str:
     for why in report["reasons"]:
         lines.append(f"- **{why}**")
     sent = report["disclosure"]
+    for swap in report.get("substitutions", []):
+        lines.append(f"- substitution: **{swap['by']}** took {swap['replaced']}'s seat: {swap['reason']}")
+    if report.get("no_substitute"):
+        lines.append("- `--no-substitute`: substitutes were not considered; the primary engines were kept")
+    if report.get("coder_is_reviewer"):
+        mine = report["coder_is_reviewer"]
+        lines.append(f"- the coder's model ({mine['model']}) is also a reviewer this round: "
+                     f"{', '.join(mine['seats'])}")
     if report.get("resumed_from"):
         lines.insert(4, f"- resumed from `{report['resumed_from']}`: its pass/fail cells were kept")
     lines += ["", "## What was sent, and to whom", ""]
@@ -1417,6 +1586,10 @@ def _list(config_path: Path) -> int:
         print(f"error: {exc}")
         return 2
     print(f"models: {', '.join(m['id'] for m in models)}")
+    for m in models:                                  # not checked here: `list` starts no process
+        if "substitute" in m:
+            print(f"  {m['id']} -> substitute {m['substitute']['id']} ({m['substitute']['kind']}) when "
+                  f"{m['kind']} cannot be used; threshold: {m.get('min_remaining_percent', 0):g}% remaining")
     print("dimensions (enabled):")
     for d in dims:
         print(f"  {d['id']:<14} {d['label']}  — {d['question']}")
@@ -1462,6 +1635,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     run.add_argument("--allow-repo-executables", action="store_true",
                      help="run although the reviewed tree's top level has a program a seat could "
                           "pick up by bare name, e.g. node.exe (the report records it)")
+    run.add_argument("--no-substitute", action="store_true",
+                     help="keep the primary engines: skip the availability check, and stop and ask if one "
+                          "is unreachable (the report records it)")
     run.add_argument("--jobs", type=int, default=DEFAULT_JOBS, metavar="N")
     run.add_argument("--cross-read", action=argparse.BooleanOptionalAction, default=True)
     run.add_argument("--cell-timeout", type=float, default=DEFAULT_TIMEOUT, metavar="SECONDS")
@@ -1487,7 +1663,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     return run_round(Path(args.config) if args.config is not None else None, Path(args.repo), Path(args.brief),
                      Path(args.out), only=only, brief_for=brief_for, jobs=args.jobs, cross_read=args.cross_read,
                      cell_timeout=args.cell_timeout, allow_project_agent_config=args.allow_project_agent_config,
-                     allow_repo_executables=args.allow_repo_executables,
+                     allow_repo_executables=args.allow_repo_executables, substitute=not args.no_substitute,
                      resume=Path(args.resume) if args.resume else None,
                      config_from=DEFAULT_CONFIG_FROM if args.config_from is None else args.config_from)
 

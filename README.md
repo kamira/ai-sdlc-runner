@@ -586,7 +586,7 @@ dimension, one session each, run by `python3 tools/panel.py run`, with
 [`config/panel.json`](config/panel.json) choosing the dimensions. The config is read from the base
 the change is measured against (`origin/main`, or `tools/panel.py run --config-from REF`), not from
 the commit under review, so a change cannot weaken its own reviewers; `tools/panel.py run --config
-PATH` takes a file as it is and the report says so. Every seat in the review phase gets the same brief unless `tools/panel.py run --brief-for MODEL=FILE` gives one model
+PATH` takes a file as it is and the report says so. If codex cannot be used (`codex login status` fails, or a quota window on this machine is below `min_remaining_percent`), `sonnet` takes its seat for the whole round, decided once before it starts; the report names the swap and its reason, and `tools/panel.py run --no-substitute` keeps codex and stops-and-asks as before. Every seat in the review phase gets the same brief unless `tools/panel.py run --brief-for MODEL=FILE` gives one model
 its own (say, the increment only; the matrix is unchanged and the report records each model's brief),
 and none sees another; the
 cross-read phase then shows each seat the other seats' answers on that dimension. The round runs
@@ -822,7 +822,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 2646 tests
+pytest -q          # 2688 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

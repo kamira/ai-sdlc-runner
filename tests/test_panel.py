@@ -2223,3 +2223,335 @@ def test_only_a_batch_launcher_is_checked_for_cmd_metacharacters(world, monkeypa
     assert "|" in panel._unlaunchable(["x.cmd", "a|b"], world.repo)
     monkeypatch.setattr(panel, "resolve_executable", lambda name, r: "/opt/fake/x.exe")
     assert panel._unlaunchable(["x.exe", "a&b"], world.repo) is None
+
+
+# ---- 4. a substitute engine when codex cannot be used (CHG-20261008-01)
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+NOW = datetime(2026, 10, 8, 12, 0, tzinfo=timezone.utc)
+FUTURE = int((NOW + timedelta(hours=3)).timestamp())
+PAST = int((NOW - timedelta(hours=3)).timestamp())
+
+
+def _fake_codex(tmp_path, code=0, text="Logged in using ChatGPT"):
+    """A `codex` that only knows `login status`: exits `code` after printing `text`. No real codex runs."""
+    bin_dir = tmp_path / "fakebin"
+    bin_dir.mkdir(exist_ok=True)
+    exe = bin_dir / "codex"
+    exe.write_text(f"#!{sys.executable}\nimport sys\nprint({text!r})\nsys.exit({code})\n", encoding="utf-8")
+    exe.chmod(0o755)
+    return {"id": "gpt-6-astra", "kind": "codex", "argv": [str(exe), "exec"], "min_remaining_percent": 10}
+
+
+def _quota_file(home, name, lines, mtime):
+    day = Path(home) / "sessions" / "2026" / "10" / "08"
+    day.mkdir(parents=True, exist_ok=True)
+    path = day / f"rollout-2026-10-08T00-00-00-{name}.jsonl"
+    path.write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+    os.utime(path, (mtime, mtime))
+    return path
+
+
+def _reading(primary=None, secondary=None):
+    """A token_count line carrying rate_limits; each window is (used_percent, resets_at)."""
+    limits = {}
+    for name, w in (("primary", primary), ("secondary", secondary)):
+        if w:
+            limits[name] = {"used_percent": w[0], "window_minutes": 300, "resets_at": w[1]}
+    return {"type": "event_msg", "payload": {"type": "token_count", "rate_limits": limits}}
+
+
+def _avail(model, repo, home, now=NOW):
+    return panel.engine_available(model, repo, home=home, now=now)
+
+
+def test_a_logged_out_codex_is_unusable(world, tmp_path):
+    ok, why = _avail(_fake_codex(tmp_path, code=1, text="Not logged in"), world.repo, tmp_path / "ch")
+    assert not ok and why.startswith("codex login status:") and "Not logged in" in why
+
+
+def test_a_zero_exit_without_logged_in_is_unusable(world, tmp_path):
+    ok, why = _avail(_fake_codex(tmp_path, code=0, text="who are you"), world.repo, tmp_path / "ch")
+    assert not ok and why.startswith("codex login status:")
+
+
+def test_a_codex_that_cannot_be_found_is_unusable_not_a_crash(world, tmp_path):
+    model = {"id": "gpt-6-astra", "kind": "codex", "argv": [str(tmp_path / "nowhere" / "codex")]}
+    ok, why = _avail(model, world.repo, tmp_path / "ch")
+    assert not ok and why.startswith("codex login status:")
+
+
+@pytest.mark.parametrize("window, left", [("primary", "8"), ("secondary", "4")])
+def test_a_window_below_the_threshold_is_unusable_and_the_reason_names_it(world, tmp_path, window, left):
+    home = tmp_path / "ch"
+    _quota_file(home, "a", [_reading(**{window: (100 - float(left), FUTURE)})], 1000)
+    ok, why = _avail(_fake_codex(tmp_path), world.repo, home)
+    assert not ok
+    assert window in why and f"{left}% remaining" in why and "below 10%" in why
+    assert "2026-10-08 15:00 UTC" in why, "the reset time is named"
+
+
+def test_a_window_at_the_threshold_is_usable(world, tmp_path):
+    home = tmp_path / "ch"
+    _quota_file(home, "a", [_reading(primary=(90.0, FUTURE))], 1000)
+    assert _avail(_fake_codex(tmp_path), world.repo, home)[0]
+
+
+def test_a_low_window_whose_reset_has_passed_counts_as_reset(world, tmp_path):
+    home = tmp_path / "ch"
+    _quota_file(home, "a", [_reading(primary=(99.0, PAST), secondary=(20.0, FUTURE))], 1000)
+    ok, why = _avail(_fake_codex(tmp_path), world.repo, home)
+    assert ok, why
+    _quota_file(home, "b", [_reading(primary=(99.0, PAST), secondary=(97.0, FUTURE))], 2000)
+    assert not _avail(_fake_codex(tmp_path), world.repo, home)[0], "a reset window must not hide a low one"
+
+
+def test_no_reading_is_usable_and_says_so(world, tmp_path):
+    ok, why = _avail(_fake_codex(tmp_path), world.repo, tmp_path / "empty-home")
+    assert ok and why == "no quota reading; the round will find out"
+
+
+def test_an_unreadable_or_null_reading_is_usable(world, tmp_path):
+    home = tmp_path / "ch"
+    day = home / "sessions" / "2026" / "10" / "08"
+    day.mkdir(parents=True)
+    (day / "rollout-x-junk.jsonl").write_bytes(b"\xff\xfe not json\n{\n")
+    _quota_file(home, "n", [{"type": "session_meta", "rate_limits": None}], 3000)
+    ok, why = _avail(_fake_codex(tmp_path), world.repo, home)
+    assert ok and "no quota reading" in why
+
+
+def test_the_newest_file_with_a_reading_and_its_last_line_decide(world, tmp_path):
+    home = tmp_path / "ch"
+    _quota_file(home, "old", [_reading(primary=(99.0, FUTURE))], 1000)             # low, but older
+    _quota_file(home, "new", [_reading(primary=(99.0, FUTURE)), _reading(primary=(10.0, FUTURE))], 2000)
+    _quota_file(home, "newest-no-reading", [{"type": "session_meta", "rate_limits": None}], 3000)
+    assert _avail(_fake_codex(tmp_path), world.repo, home)[0], "the last reading of the newest file wins"
+    _quota_file(home, "new", [_reading(primary=(10.0, FUTURE)), _reading(primary=(99.0, FUTURE))], 4000)
+    assert not _avail(_fake_codex(tmp_path), world.repo, home)[0]
+
+
+def test_codex_home_defaults_to_the_environment(world, tmp_path):
+    _quota_file(tmp_path / "codex_home", "a", [_reading(primary=(99.0, FUTURE))], 1000)   # the world's CODEX_HOME
+    ok, why = panel.engine_available(_fake_codex(tmp_path), world.repo, now=NOW)
+    assert not ok and "primary" in why
+
+
+def test_a_claude_engine_is_never_checked(world, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("a subprocess was started")
+    monkeypatch.setattr(panel.subprocess, "run", boom)
+    assert panel.engine_available({"id": "x", "kind": "claude", "argv": ["claude"]}, world.repo)[0]
+
+
+def test_the_login_check_resolves_codex_like_a_seat_and_never_from_the_repo(world, tmp_path, monkeypatch):
+    exe = world.repo / "codex"
+    exe.write_text("#!/bin/sh\necho Logged in\n", encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", str(world.repo) + os.pathsep + os.environ["PATH"])
+    ok, why = _avail({"id": "g", "kind": "codex", "argv": ["codex"]}, world.repo, tmp_path / "ch")
+    assert not ok and "codex login status" in why
+
+
+def _subst_world(world, monkeypatch, usable=True, reason="why", **extra):
+    """gpt-6-astra with sonnet behind it; `engine_available` is replaced by a fake that records its calls."""
+    primary = dict(world.seat("gpt-6-astra", "codex"), min_remaining_percent=10,
+                   substitute=world.seat("sonnet", "claude"))
+    world.write_config(models=[world.seat("fable", "claude"), world.seat("opus", "claude"), primary], **extra)
+    calls = []
+
+    def fake(model, repo, home=None, now=None):
+        calls.append(model["id"])
+        return usable, reason
+
+    monkeypatch.setattr(panel, "engine_available", fake)
+    return calls
+
+
+def test_an_unusable_engine_is_replaced_in_the_same_seat_and_its_cells_use_the_substitutes_argv(
+        world, monkeypatch, capsys):
+    calls = _subst_world(world, monkeypatch, usable=False, reason="codex login status: not logged in")
+    assert world.run() == 0
+    assert calls == ["gpt-6-astra"]
+    report = world.report()
+    assert report["matrix"]["models"] == ["fable", "opus", "sonnet"], "same position in the matrix"
+    assert report["substitutions"] == [{"replaced": "gpt-6-astra", "by": "sonnet",
+                                        "reason": "codex login status: not logged in"}]
+    assert {c["model"] for c in report["cells"]} == {"fable", "opus", "sonnet"}
+    assert all(c["verdict"] == "pass" for c in report["cells"]) and report["result"] == "pass"
+    ran = world.invoked()
+    assert any(line.startswith("sonnet ") for line in ran)
+    assert not any(line.startswith("gpt-6-astra ") for line in ran), "the replaced engine was run"
+    assert "ANSWER-sonnet-defect-review" in json.dumps(report["cells"])
+    md = (world.out / "report.md").read_text(encoding="utf-8")
+    assert "sonnet** took gpt-6-astra's seat" in md and "not logged in" in md
+    assert "sonnet takes gpt-6-astra's seat" in capsys.readouterr().out
+
+
+def test_a_usable_engine_keeps_its_seat_and_the_report_has_an_empty_substitutions_list(world, monkeypatch):
+    calls = _subst_world(world, monkeypatch, usable=True)
+    assert world.run() == 0
+    assert calls == ["gpt-6-astra"], "the check ran"
+    report = world.report()
+    assert report["substitutions"] == [] and report["no_substitute"] is False
+    assert report["matrix"]["models"] == ["fable", "opus", "gpt-6-astra"]
+    assert not any(line.startswith("sonnet ") for line in world.invoked())
+
+
+def test_a_config_without_substitutes_runs_no_check(world, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("checked an engine that has no substitute")
+    monkeypatch.setattr(panel, "engine_available", boom)
+    assert world.run() == 0 and world.report()["substitutions"] == []
+
+
+def test_brief_for_the_replaced_engine_does_not_apply_to_its_substitute(world, monkeypatch, capsys):
+    _subst_world(world, monkeypatch, usable=False)
+    inc = _incremental(world)
+    assert world.run("--brief-for", f"gpt-6-astra={inc}") == 0
+    assert "does not apply" in capsys.readouterr().out
+    for dim in ("defect", "risk"):
+        assert "BRIEF-BODY" in world.brief_of("review", dim, "sonnet")
+        assert "INCREMENT-ONLY" not in world.brief_of("review", dim, "sonnet")
+    assert not any(b["incremental"] for b in world.report()["briefs"].values())
+
+
+def test_brief_for_the_engine_is_honoured_when_it_is_not_replaced(world, monkeypatch):
+    _subst_world(world, monkeypatch, usable=True)
+    inc = _incremental(world)
+    assert world.run("--brief-for", f"gpt-6-astra={inc}") == 0
+    assert "INCREMENT-ONLY" in world.brief_of("review", "defect", "gpt-6-astra")
+    assert world.report()["briefs"]["gpt-6-astra"]["incremental"] is True
+
+
+def test_brief_for_the_substitute_is_allowed(world, monkeypatch):
+    _subst_world(world, monkeypatch, usable=False)
+    inc = _incremental(world)
+    assert world.run("--brief-for", f"sonnet={inc}") == 0
+    assert "INCREMENT-ONLY" in world.brief_of("review", "defect", "sonnet")
+    assert "BRIEF-BODY" in world.brief_of("review", "defect", "opus")
+
+
+def test_the_report_notes_when_the_coders_model_is_also_a_reviewer(world, monkeypatch, capsys):
+    """The coder writes with claude-sonnet-5-5; on fallback the same model reviews. Never silent."""
+    sonnet = world.seat("sonnet", "claude")
+    sonnet["argv"] = [*sonnet["argv"], "--model", "claude-sonnet-5-5"]
+    primary = dict(world.seat("gpt-6-astra", "codex"), substitute=sonnet)
+    world.write_config(models=[world.seat("fable", "claude"), world.seat("opus", "claude"), primary],
+                       coder={"model": "claude-sonnet-5-5", "effort": "medium"})
+    monkeypatch.setattr(panel, "engine_available", lambda m, r, home=None, now=None: (False, "down"))
+    assert world.run() == 0
+    assert world.report()["coder_is_reviewer"] == {"model": "claude-sonnet-5-5", "seats": ["sonnet"]}
+    assert "also a reviewer this round" in capsys.readouterr().out
+    md = (world.out / "report.md").read_text(encoding="utf-8")
+    assert "coder's model (claude-sonnet-5-5) is also a reviewer" in md
+
+
+def test_no_coder_note_when_the_coders_model_is_not_on_the_panel(world, monkeypatch):
+    _subst_world(world, monkeypatch, usable=True, coder={"model": "claude-sonnet-5-5", "effort": "medium"})
+    assert world.run() == 0
+    assert world.report()["coder_is_reviewer"] is None
+
+
+def test_no_substitute_skips_the_check_keeps_the_engines_and_the_report_records_it(world, monkeypatch):
+    calls = _subst_world(world, monkeypatch, usable=False)
+    assert world.run("--no-substitute") == 0
+    assert calls == [], "the check ran under --no-substitute"
+    report = world.report()
+    assert report["no_substitute"] is True and report["substitutions"] == []
+    assert report["matrix"]["models"] == ["fable", "opus", "gpt-6-astra"]
+    assert "--no-substitute" in (world.out / "report.md").read_text(encoding="utf-8")
+
+
+def test_no_substitute_keeps_the_old_stop_and_ask_when_the_engine_is_unreachable(world, monkeypatch):
+    _subst_world(world, monkeypatch, usable=False)
+    world.script_for("gpt-6-astra", review="exit1")
+    assert world.run("--no-substitute") == INCOMPLETE
+    assert world.report()["result"] == "incomplete"
+
+
+def test_a_substituted_round_is_not_a_reduced_panel(world, monkeypatch):
+    _subst_world(world, monkeypatch, usable=False)
+    assert world.run() == 0
+    assert not any("reduced panel" in r for r in world.report()["reasons"])
+
+
+def test_resume_across_panels_is_refused_by_the_matrix_check(world, monkeypatch, capsys):
+    """A different panel is a different matrix: nothing from a codex round is reused by a sonnet one."""
+    _subst_world(world, monkeypatch, usable=True)
+    assert world.run() == 0
+    monkeypatch.setattr(panel, "engine_available", lambda m, r, home=None, now=None: (False, "down"))
+    assert world.resume() == 2
+    assert "resume needs the same matrix" in capsys.readouterr().out
+    assert not (world.out / "report.json").exists()
+
+
+def test_list_shows_the_substitute_and_threshold_and_starts_no_process(world, monkeypatch, capsys):
+    _subst_world(world, monkeypatch, usable=False)
+
+    def boom(*a, **k):
+        raise AssertionError("list started a process")
+    for name in ("run", "Popen", "check_output", "call"):
+        monkeypatch.setattr(panel.subprocess, name, boom)
+    monkeypatch.setattr(panel, "engine_available", boom)
+    assert panel.main(["list", "--config", str(world.config)]) == 0
+    said = capsys.readouterr().out
+    assert "gpt-6-astra -> substitute sonnet (claude)" in said and "10% remaining" in said
+
+
+def test_the_shipped_config_gives_gpt_6_astra_a_sonnet_substitute_with_opus_argv_apart_from_the_model():
+    config = panel.load_config(ROOT / "config" / "panel.json")
+    by_id = {m["id"]: m for m in config["models"]}
+    astra, opus = by_id["gpt-6-astra"], by_id["opus"]
+    assert astra["min_remaining_percent"] == 10
+    sub = astra["substitute"]
+    assert (sub["id"], sub["kind"], sub["reach"]) == ("sonnet", "claude", "external")
+    assert sub["argv"] == [a.replace("claude-opus-5-5", "claude-sonnet-5-5") for a in opus["argv"]]
+    assert "claude-sonnet-5-5" in sub["argv"] and "claude-opus-5-5" not in sub["argv"]
+
+
+def _cfg(**primary):
+    model = {"id": "gpt", "kind": "codex", "argv": ["codex"]}
+    model.update(primary)
+    return json.dumps({"models": [model], "dimensions": [
+        {"id": "d", "label": "d", "question": "q", "enabled": True}]})
+
+
+SUB = {"id": "sonnet", "kind": "claude", "argv": ["claude"]}
+
+
+def test_a_valid_substitute_and_threshold_parse():
+    config = panel.parse_config(_cfg(substitute=SUB, min_remaining_percent=0), "t")
+    assert config["models"][0]["substitute"]["id"] == "sonnet"
+    panel.parse_config(_cfg(substitute=SUB, min_remaining_percent=100.0), "t")
+
+
+@pytest.mark.parametrize("primary, message", [
+    ({"substitute": {**SUB, "color": "red"}}, "substitute: unknown key 'color'"),
+    ({"substitute": {**SUB, "min_remaining_percent": 5}}, "unknown key 'min_remaining_percent'"),
+    ({"substitute": {**SUB, "id": "gpt"}}, "collides"),
+    ({"substitute": {**SUB, "substitute": SUB}}, "may not itself have a 'substitute'"),
+    ({"substitute": {**SUB, "kind": "bard"}}, "'kind' must be one of"),
+    ({"substitute": {"id": "Bad Id", "kind": "claude", "argv": ["c"]}}, "must match"),
+    ({"substitute": {**SUB, "argv": []}}, "'argv' must be a non-empty list"),
+    ({"substitute": "sonnet"}, "must be an object"),
+    ({"substitute": SUB, "min_remaining_percent": 101}, "from 0 to 100"),
+    ({"substitute": SUB, "min_remaining_percent": -1}, "from 0 to 100"),
+    ({"substitute": SUB, "min_remaining_percent": "10"}, "from 0 to 100"),
+    ({"substitute": SUB, "min_remaining_percent": True}, "from 0 to 100"),
+    ({"min_remaining_percent": 10}, "only means something with a 'substitute'"),
+])
+def test_config_validation_of_substitute_and_threshold(primary, message):
+    with pytest.raises(panel.ConfigError) as err:
+        panel.parse_config(_cfg(**primary), "t")
+    assert message in str(err.value)
+
+
+def test_a_substitute_id_may_not_collide_with_a_later_model_either():
+    text = json.dumps({"models": [
+        {"id": "gpt", "kind": "codex", "argv": ["codex"], "substitute": SUB},
+        {"id": "sonnet", "kind": "claude", "argv": ["claude"]}],
+        "dimensions": [{"id": "d", "label": "d", "question": "q", "enabled": True}]})
+    with pytest.raises(panel.ConfigError, match="collides"):
+        panel.parse_config(text, "t")
