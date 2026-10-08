@@ -2238,10 +2238,24 @@ def _fake_codex(tmp_path, code=0, text="Logged in using ChatGPT"):
     """A `codex` that only knows `login status`: exits `code` after printing `text`. No real codex runs."""
     bin_dir = tmp_path / "fakebin"
     bin_dir.mkdir(exist_ok=True)
-    exe = bin_dir / "codex"
-    exe.write_text(f"#!{sys.executable}\nimport sys\nprint({text!r})\nsys.exit({code})\n", encoding="utf-8")
-    exe.chmod(0o755)
+    exe = _codex_program(bin_dir, f"import sys\nprint({text!r})\nsys.exit({code})\n")
     return {"id": "gpt-6-astra", "kind": "codex", "argv": [str(exe), "exec"], "min_remaining_percent": 10}
+
+
+def _codex_program(where, body):
+    """A program named `codex` that runs `body` with this Python. A `#!` file with no extension does not
+    run on Windows (CI found it: every "usable" case read as unusable), so there it is `codex.cmd`
+    calling a script — what an npm-installed codex is on Windows anyway."""
+    script = Path(where) / "codex_fake.py"
+    script.write_text(body, encoding="utf-8")
+    if os.name == "nt":
+        exe = Path(where) / "codex.cmd"
+        exe.write_text(f'@"{sys.executable}" "{script}" %*\r\n', encoding="utf-8")
+    else:
+        exe = Path(where) / "codex"
+        exe.write_text(f"#!{sys.executable}\n" + body, encoding="utf-8")
+        exe.chmod(0o755)
+    return exe
 
 
 def _quota_file(home, name, lines, mtime):
@@ -2346,9 +2360,7 @@ def test_a_claude_engine_is_never_checked(world, monkeypatch):
 
 
 def test_the_login_check_resolves_codex_like_a_seat_and_never_from_the_repo(world, tmp_path, monkeypatch):
-    exe = world.repo / "codex"
-    exe.write_text("#!/bin/sh\necho Logged in\n", encoding="utf-8")
-    exe.chmod(0o755)
+    _codex_program(world.repo, "print('Logged in')\n")
     monkeypatch.setenv("PATH", str(world.repo) + os.pathsep + os.environ["PATH"])
     ok, why = _avail({"id": "g", "kind": "codex", "argv": ["codex"]}, world.repo, tmp_path / "ch")
     assert not ok and "codex login status" in why
