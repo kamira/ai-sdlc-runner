@@ -990,6 +990,17 @@ def _closing_freeze(sha: str, end_sha: Optional[str], end_dirty: List[str],
     return "dirty" if end_dirty else "ok"
 
 
+def _read_resume_report(path: Path) -> dict:
+    where = Path(path) / "report.json"
+    try:
+        old = json.loads(where.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ConfigError(f"--resume: cannot read {where}: {exc}") from None
+    if not isinstance(old, dict):
+        raise ConfigError(f"--resume: {where} is not a panel report")
+    return old
+
+
 def _load_resume(path: Path, sha: str, dims: List[dict], models: List[dict], brief_shas: Dict[str, str],
                  repo: Path) -> Dict[Tuple[str, str, str], dict]:
     """The cells of an earlier round that may be kept, keyed (phase, dimension, model).
@@ -1000,13 +1011,7 @@ def _load_resume(path: Path, sha: str, dims: List[dict], models: List[dict], bri
     one the current config gives it; a cell defined otherwise is run again. Each model's own brief is
     compared (`--brief-for` gives some a brief of their own): a model whose brief changed donates no
     cell, the rest keep theirs; if every model's brief changed, it is the refusal it always was."""
-    where = Path(path) / "report.json"
-    try:
-        old = json.loads(where.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise ConfigError(f"--resume: cannot read {where}: {exc}") from None
-    if not isinstance(old, dict):
-        raise ConfigError(f"--resume: {where} is not a panel report")
+    old = _read_resume_report(path)
     closing = old.get("closing_freeze")
     if closing != "ok" or old.get("interrupted") is not False:
         raise ConfigError(
@@ -1141,6 +1146,33 @@ def apply_substitutes(models: List[dict], repo: Path, check: Any, home: Optional
     return chosen, swaps
 
 
+def resumed_substitutes(models: List[dict], config: dict, resume: Path,
+                        substitute: bool) -> Tuple[List[dict], List[dict], bool]:
+    """(the round's models, substitutions, the earlier round's no_substitute). A resume continues the same
+    round, so it keeps that round's panel decision and does not check again (CHG-20261008-01): the earlier
+    report's swaps are applied as they were. A swap the current config cannot reproduce is refused, and so
+    is `--no-substitute` over a round that had swaps, which would be a different matrix."""
+    old = _read_resume_report(resume)
+    swaps = old.get("substitutions", [])
+    if not isinstance(swaps, list) or not all(
+            isinstance(x, dict) and isinstance(x.get("replaced"), str) and isinstance(x.get("by"), str)
+            for x in swaps):
+        raise ConfigError(f"--resume: {resume} has a malformed 'substitutions' in its report")
+    if swaps and not substitute:
+        raise ConfigError(f"--no-substitute with --resume {resume}: that round had "
+                          f"{', '.join(x['by'] + ' for ' + x['replaced'] for x in swaps)}; "
+                          "resuming without them would be a different matrix")
+    configured = {m["id"]: m for m in config["models"]}
+    by_replaced = {}
+    for swap in swaps:
+        primary = configured.get(swap["replaced"])
+        if primary is None or (primary.get("substitute") or {}).get("id") != swap["by"]:
+            raise ConfigError(f"--resume: {resume} ran {swap['by']} in place of {swap['replaced']}, which the "
+                              "current config cannot reproduce (the engine or its substitute is gone)")
+        by_replaced[swap["replaced"]] = primary["substitute"]
+    return [by_replaced.get(m["id"], m) for m in models], swaps, bool(old.get("no_substitute"))
+
+
 def run_round(*args: Any, **kwargs: Any) -> int:
     """`_run_round`, with the claim on --out released however it ends, an interrupt included."""
     held: List[Path] = []
@@ -1206,7 +1238,12 @@ def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_
             config, config_source = load_base_config(repo, config_from, sha)
         dims, models = select_matrix(config, only)
         substitutions: List[dict] = []
-        if substitute:
+        no_substitute = not substitute
+        if resume is not None:                       # same round, same panel: no availability check
+            models, substitutions, earlier_none = resumed_substitutes(models, config, resume, substitute)
+            no_substitute = no_substitute or earlier_none
+            print(f"panel taken from the resumed round {resume}, not re-checked")
+        elif substitute:
             models, substitutions = apply_substitutes(models, repo, availability or engine_available, home, now)
         check_stems(dims, models)
         brief_for = dict(brief_for or {})
@@ -1395,7 +1432,8 @@ def _run_round(held: List[Path], config_path: Optional[Path], repo: Path, brief_
               "resumed_from": str(resume) if resume is not None else None,
               "matrix": {"dimensions": [d["id"] for d in dims], "models": [m["id"] for m in models],
                          "review_sessions": review_n, "cross_sessions": cross_n},
-              "substitutions": substitutions, "no_substitute": not substitute,
+              "substitutions": substitutions, "no_substitute": no_substitute,
+              "panel_from_resume": resume is not None,
               "coder_is_reviewer": {"model": coder, "seats": coder_seats} if coder_seats else None,
               "cells": cells, "disagreements": disagreements, "usage_summary": usage_summary(cells)}
     (out / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
@@ -1517,6 +1555,8 @@ def render_markdown(report: dict, dims: List[dict], models: List[dict]) -> str:
     sent = report["disclosure"]
     for swap in report.get("substitutions", []):
         lines.append(f"- substitution: **{swap['by']}** took {swap['replaced']}'s seat: {swap['reason']}")
+    if report.get("panel_from_resume"):
+        lines.append("- panel taken from the resumed round, not re-checked")
     if report.get("no_substitute"):
         lines.append("- `--no-substitute`: substitutes were not considered; the primary engines were kept")
     if report.get("coder_is_reviewer"):

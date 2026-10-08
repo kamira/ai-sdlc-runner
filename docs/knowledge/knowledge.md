@@ -668,8 +668,13 @@ seats read is frozen until every seat has reported, cross-read included.
 
 ## DIR-2 — The panel: `fable`, `opus`, `gpt-6-astra`, each at effort `medium`
 
-> **Extended by DIR-3 (CHG-20260929-01).** The engines, their invocation and the stop-and-ask rule
-> stand; DIR-3 multiplies the panel by dimensions and gives it a tool.
+> **Extended by DIR-3 (CHG-20260929-01).** The engines and their invocation stand; DIR-3 multiplies
+> the panel by dimensions and gives it a tool.
+>
+> **Partly superseded, 2026-10-08 (CHG-20261008-01).** "No fallback panel" no longer holds. When
+> codex cannot be used — checked once, before each round — `sonnet` takes its seat (DIR-3's
+> amendment of that date). An engine that becomes unreachable *during* a round still stops it and
+> asks the user.
 
 *tags: governance · source: the user, 2026-09-28, CHG-20260928-01 · tier: directive*
 

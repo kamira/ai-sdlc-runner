@@ -35,10 +35,13 @@ FAKE = textwrap.dedent('''
     os.makedirs(os.path.join(state, "briefs"), exist_ok=True)
     open(os.path.join(state, "path"), "w").write(os.environ.get("PATH", ""))
     open(os.path.join(state, "nodefault"), "w").write(os.environ.get("NoDefaultCurrentDirectoryInExePath", ""))
-    with open(os.path.join(state, "pids"), "a") as f:
-        f.write(str(os.getpid()) + "\\n")
-    with open(os.path.join(state, "invoked"), "a") as f:
-        f.write(mid + " " + phase + " " + dim + " cwd=" + os.getcwd() + "\\n")
+    # One file per invocation, never a shared append: on Windows two seats appending to one file at
+    # once can lose a line (CI, windows py3.9, CHG-20261008-01). Named by start time, then pid.
+    stamp = "%020d-%d" % (time.time_ns(), os.getpid())
+    for log, text in (("pids", str(os.getpid())), ("invoked", mid + " " + phase + " " + dim + " cwd=" + os.getcwd())):
+        os.makedirs(os.path.join(state, log + ".d"), exist_ok=True)
+        with open(os.path.join(state, log + ".d", stamp), "w") as f:
+            f.write(text + "\\n")
     with open(os.path.join(state, "briefs", phase + "__" + dim + "__" + mid + ".txt"), "w", encoding="utf-8") as f:
         f.write(brief)
     script = {}
@@ -197,8 +200,8 @@ def world(tmp_path, monkeypatch):
         return json.loads((w.out / "report.json").read_text(encoding="utf-8"))
 
     def invoked():
-        f = state / "invoked"
-        return f.read_text(encoding="utf-8").splitlines() if f.exists() else []
+        d = state / "invoked.d"
+        return [f.read_text(encoding="utf-8").rstrip("\n") for f in sorted(d.iterdir())] if d.exists() else []
 
     def brief_of(phase, dim, mid):
         return (state / "briefs" / f"{phase}__{dim}__{mid}.txt").read_text(encoding="utf-8")
@@ -1083,7 +1086,7 @@ def test_ctrl_c_stops_the_round_kills_live_seats_and_still_writes_the_report(wor
     assert {c["reason"] for c in report["cells"]} == {"interrupted by the operator"}
     assert "# Panel round — incomplete" in (world.out / "report.md").read_text(encoding="utf-8")
     assert "result: incomplete" in capsys.readouterr().out
-    for pid in (world.state / "pids").read_text().split():
+    for pid in [f.read_text().strip() for f in (world.state / "pids.d").iterdir()]:
         assert not _alive(int(pid)), "a live seat survived the interrupt"
 
 
@@ -2489,14 +2492,71 @@ def test_a_substituted_round_is_not_a_reduced_panel(world, monkeypatch):
     assert not any("reduced panel" in r for r in world.report()["reasons"])
 
 
-def test_resume_across_panels_is_refused_by_the_matrix_check(world, monkeypatch, capsys):
-    """A different panel is a different matrix: nothing from a codex round is reused by a sonnet one."""
+def _resume_check(monkeypatch, usable):
+    calls = []
+
+    def fake(model, repo, home=None, now=None):
+        calls.append(model["id"])
+        return usable, "down"
+    monkeypatch.setattr(panel, "engine_available", fake)
+    return calls
+
+
+def test_resume_keeps_codex_when_the_round_used_it_even_if_the_check_now_says_unusable(
+        world, monkeypatch, capsys):
+    """The round ran codex and ended incomplete (codex out mid-round); the resume is the same round."""
     _subst_world(world, monkeypatch, usable=True)
+    _resume_world(world)
+    before = len(world.invoked())
+    calls = _resume_check(monkeypatch, usable=False)
+    assert world.resume() == 0
+    assert calls == [], "a resume checked the engine again"
+    report = world.report()
+    assert report["matrix"]["models"] == ["fable", "opus", "gpt-6-astra"] and report["substitutions"] == []
+    assert report["panel_from_resume"] is True
+    new = world.invoked()[before:]
+    assert any(line.startswith("gpt-6-astra review risk ") for line in new), "codex seat not re-run as codex"
+    assert not any(line.startswith("sonnet ") for line in world.invoked())
+    assert "not re-checked" in capsys.readouterr().out
+    assert "panel taken from the resumed round, not re-checked" in (
+        world.out / "report.md").read_text(encoding="utf-8")
+
+
+def test_resume_keeps_sonnet_when_the_round_substituted_it_even_if_the_check_now_says_usable(
+        world, monkeypatch):
+    _subst_world(world, monkeypatch, usable=False, reason="codex login status: not logged in")
+    world.script_for("sonnet", review={"risk": "none", "*": "pass"})
+    assert world.run("--jobs", "1") == 3
+    world.script_for("sonnet", review="pass")
+    calls = _resume_check(monkeypatch, usable=True)
+    assert world.resume() == 0
+    assert calls == []
+    report = world.report()
+    assert report["matrix"]["models"] == ["fable", "opus", "sonnet"]
+    assert report["substitutions"] == [{"replaced": "gpt-6-astra", "by": "sonnet",
+                                        "reason": "codex login status: not logged in"}]
+    assert not any(line.startswith("gpt-6-astra ") for line in world.invoked())
+
+
+def test_resume_refuses_a_swap_the_current_config_cannot_reproduce(world, monkeypatch, capsys):
+    _subst_world(world, monkeypatch, usable=False)
     assert world.run() == 0
-    monkeypatch.setattr(panel, "engine_available", lambda m, r, home=None, now=None: (False, "down"))
+    before = len(world.invoked())
+    world.write_config()                              # no substitute any more
+    calls = _resume_check(monkeypatch, usable=True)
     assert world.resume() == 2
-    assert "resume needs the same matrix" in capsys.readouterr().out
-    assert not (world.out / "report.json").exists()
+    assert "cannot reproduce" in capsys.readouterr().out
+    assert calls == [] and len(world.invoked()) == before and not (world.out / "report.json").exists()
+
+
+def test_no_substitute_with_resume_of_a_swapped_round_is_refused(world, monkeypatch, capsys):
+    _subst_world(world, monkeypatch, usable=False)
+    assert world.run() == 0
+    before = len(world.invoked())
+    assert world.resume("--no-substitute") == 2
+    said = capsys.readouterr().out
+    assert "--no-substitute" in said and "--resume" in said
+    assert len(world.invoked()) == before and not (world.out / "report.json").exists()
 
 
 def test_list_shows_the_substitute_and_threshold_and_starts_no_process(world, monkeypatch, capsys):
