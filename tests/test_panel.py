@@ -2382,6 +2382,54 @@ def test_the_login_check_never_runs_inside_the_reviewed_tree(world, tmp_path):
     assert ran_in.resolve() != world.repo.resolve() and world.repo.resolve() not in ran_in.resolve().parents
 
 
+def test_the_login_check_times_out_even_when_a_grandchild_holds_the_pipes(world, tmp_path, monkeypatch):
+    """On Windows codex is a `.cmd` shim, and a timeout kills cmd.exe but not what it started, which
+    keeps stdout open: `communicate()` would block past the bound (CHG-20261008-01, round 3)."""
+    monkeypatch.setattr(panel, "LOGIN_TIMEOUT", 1)
+    monkeypatch.setattr(panel, "KILL_GRACE", 1)
+    bin_dir = tmp_path / "fakebin-slow"
+    bin_dir.mkdir()
+    exe = _codex_program(bin_dir, "import subprocess, sys, time\n"
+                                  "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+                                  "time.sleep(60)\n")
+    model = {"id": "gpt-6-astra", "kind": "codex", "argv": [str(exe), "exec"], "min_remaining_percent": 10}
+    started = time.monotonic()
+    ok, why = _avail(model, world.repo, tmp_path / "empty-home")
+    assert not ok and "timed out" in why
+    assert time.monotonic() - started < 10
+
+
+def test_a_cleanup_failure_does_not_change_the_login_answer(world, tmp_path, monkeypatch):
+    """Removing the empty cwd can fail on Windows while codex still holds it; that must neither turn
+    "Logged in" into "could not run" nor hide a timeout, so the removal is asked to ignore errors."""
+    real = panel.shutil.rmtree
+    calls = []
+
+    def rmtree(path, ignore_errors=False, *a, **k):
+        calls.append((path, ignore_errors))
+        if not ignore_errors:
+            raise PermissionError("in use")
+        real(path, ignore_errors=True)
+
+    monkeypatch.setattr(panel.shutil, "rmtree", rmtree)
+    ok, why = _avail(_fake_codex(tmp_path), world.repo, tmp_path / "empty-home")
+    assert ok, why
+    assert calls and all(flag is True for _, flag in calls)
+    assert not Path(calls[0][0]).exists()
+
+
+def test_the_login_check_strips_the_reviewed_repo_from_path_not_the_temp_dir(world, tmp_path, monkeypatch):
+    seen = tmp_path / "login-path.txt"
+    bin_dir = tmp_path / "fakebin-path"
+    bin_dir.mkdir()
+    exe = _codex_program(bin_dir, "import os\nopen(%r, 'w').write(os.environ['PATH'])\nprint('Logged in')\n" % str(seen))
+    monkeypatch.setenv("PATH", str(world.repo) + os.pathsep + os.environ["PATH"])
+    model = {"id": "gpt-6-astra", "kind": "codex", "argv": [str(exe), "exec"], "min_remaining_percent": 10}
+    assert _avail(model, world.repo, tmp_path / "empty-home")[0]
+    entries = [os.path.normcase(os.path.realpath(e)) for e in seen.read_text().split(os.pathsep) if e]
+    assert os.path.normcase(os.path.realpath(world.repo)) not in entries
+
+
 def _subst_world(world, monkeypatch, usable=True, reason="why", **extra):
     """gpt-6-astra with sonnet behind it; `engine_available` is replaced by a fake that records its calls."""
     primary = dict(world.seat("gpt-6-astra", "codex"), min_remaining_percent=10,

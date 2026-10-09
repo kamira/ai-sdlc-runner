@@ -80,6 +80,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -1102,19 +1103,31 @@ def engine_available(model: dict, repo: Path, home: Optional[Path] = None,
         return False, f"codex login status: {why}"
     # Run from an empty directory of its own, never the reviewed tree: this check comes before the
     # guards that refuse a hostile tree (`.codex`, `.agents`, a planted `node.exe`), so with the repo
-    # as its cwd a tree about to be refused could still get codex started inside it (round 2,
-    # security). An empty cwd has nothing to load and nothing to find by bare name.
+    # as its cwd a tree about to be refused could still get codex started inside it
+    # (CHG-20261008-01, round 2, security). An empty cwd has nothing to load and nothing to find by
+    # bare name. It goes through `_run_process` because on Windows codex is a `.cmd` shim: a timeout
+    # kills cmd.exe but not the codex under it, which holds the pipes, so `communicate()` would block
+    # past LOGIN_TIMEOUT (round 3, portability). The fleet carries the reviewed repo, so `_seat_env`
+    # still cuts it from PATH.
+    # The directory is removed by hand with errors ignored: on Windows a timed-out codex (or its
+    # grandchild) may still hold it, and a failed delete would read as "could not run" instead of
+    # "timed out". Cleanup must never change the answer. (`TemporaryDirectory(ignore_cleanup_errors=)`
+    # is 3.10+; the floor is 3.9.)
+    empty = tempfile.mkdtemp(prefix="panel-login-")
     try:
-        with tempfile.TemporaryDirectory(prefix="panel-login-") as empty:
-            done = subprocess.run([exe, "login", "status"], cwd=empty, env=_seat_env(repo),
-                                  capture_output=True, stdin=subprocess.DEVNULL, timeout=LOGIN_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        return False, f"codex login status: timed out after {LOGIN_TIMEOUT}s"
+        nothing = Path(empty) / "stdin"
+        nothing.write_bytes(b"")
+        out, err, code, timed_out = _run_process([exe, "login", "status"], nothing, empty,
+                                                 LOGIN_TIMEOUT, _Fleet(repo))
     except OSError as exc:
         return False, f"codex login status: could not run {exe!r}: {exc}"
-    said = (done.stdout + done.stderr).decode("utf-8", errors="replace").strip()
-    if done.returncode != 0 or "Logged in" not in said:
-        return False, f"codex login status: exit {done.returncode}, {said[:200] or 'no output'}"
+    finally:
+        shutil.rmtree(empty, ignore_errors=True)
+    if timed_out:
+        return False, f"codex login status: timed out after {LOGIN_TIMEOUT}s"
+    said = (out + err).strip()
+    if code != 0 or "Logged in" not in said:
+        return False, f"codex login status: exit {code}, {said[:200] or 'no output'}"
     floor = model.get("min_remaining_percent", 0)
     now = now or datetime.now(timezone.utc)
     try:
