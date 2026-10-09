@@ -2359,14 +2359,21 @@ def test_a_claude_engine_is_never_checked(world, monkeypatch):
     def boom(*a, **k):
         raise AssertionError("a subprocess was started")
     monkeypatch.setattr(panel.subprocess, "run", boom)
+    monkeypatch.setattr(panel.subprocess, "Popen", boom)      # the wire the check uses since round 3
     assert panel.engine_available({"id": "x", "kind": "claude", "argv": ["claude"]}, world.repo)[0]
 
 
 def test_the_login_check_resolves_codex_like_a_seat_and_never_from_the_repo(world, tmp_path, monkeypatch):
-    _codex_program(world.repo, "print('Logged in')\n")
-    monkeypatch.setenv("PATH", str(world.repo) + os.pathsep + os.environ["PATH"])
+    """PATH is exactly the repo plus an empty directory, so no real codex can be found or run, and
+    "not from the repo" is told apart from "found somewhere else" (round 4)."""
+    marker = tmp_path / "planted-ran.txt"
+    _codex_program(world.repo, "open(%r, 'w').write('ran')\nprint('Logged in')\n" % str(marker))
+    empty = tmp_path / "empty-path"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(world.repo) + os.pathsep + str(empty))
     ok, why = _avail({"id": "g", "kind": "codex", "argv": ["codex"]}, world.repo, tmp_path / "ch")
-    assert not ok and "codex login status" in why
+    assert not ok and "not found" in why
+    assert not marker.exists(), "the codex planted in the repo was run"
 
 
 def test_the_login_check_never_runs_inside_the_reviewed_tree(world, tmp_path):
@@ -2608,6 +2615,15 @@ def test_resume_refuses_a_swap_the_current_config_cannot_reproduce(world, monkey
     assert world.resume() == 2
     assert "cannot reproduce" in capsys.readouterr().out
     assert calls == [] and len(world.invoked()) == before and not (world.out / "report.json").exists()
+
+
+def test_a_resume_inherits_no_substitute_from_the_round_it_resumes(world):
+    world.script_for("gpt-6-astra", review={"risk": "none", "*": "pass"})
+    assert world.run("--jobs", "1", "--no-substitute") == 3
+    assert world.report()["no_substitute"] is True
+    world.script_for("gpt-6-astra", review="pass")
+    assert world.resume() == 0                          # no flag this time
+    assert world.report()["no_substitute"] is True
 
 
 def test_no_substitute_with_resume_of_a_swapped_round_is_refused(world, monkeypatch, capsys):
