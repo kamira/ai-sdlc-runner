@@ -268,10 +268,11 @@ fills it, **after** `store.resolve` so the dispatch record is unchanged:
 
 ```
 an assignment from the plan or the store         (untouched)
-  →  settings.coder_model                        (must name a registry model; an unknown id is an
-                                                  error at run time, not at save time — the
-                                                  registry is not known to settings)
-  →  the registry's only tier "mid" model
+  →  settings.coder_model                        (must name a registry cli model; an unknown id or an
+                                                  api model is an error at run time, not at save
+                                                  time — the registry is not known to settings)
+  →  the registry's only tier "mid" model          (a "mid" api model is skipped, with a notice:
+                                                  nothing dispatches an api model)
   →  several "mid" models, no coder_model: a notice naming them, and nothing assigned — no random pick
   →  none: unchanged (agent_command, or the stub)
 ```
@@ -285,9 +286,13 @@ Looks for `claude`, `codex` and `ollama` on the **absolute** entries of `PATH` (
 Windows), never in the working directory, and runs exactly one thing: `ollama list`, with a timeout.
 It probes no port. It proposes entries — `claude-sonnet-5-5` (tier `mid`, with an `--effort
 {effort}` template), one `codex` entry with the model left for you, and one `ollama run <model>`
-wrapper per listed model — and writes only what is accepted: each one on a terminal, or all of
-them with `--yes` off one. Entries go to the registry file and the store `serve` reads (`--models`,
-`--assignment-store`, `--token-dir`), and it offers to set `coder_model` to an accepted `mid` model.
+wrapper per listed model. `command[0]` is the absolute path that was found, so dispatch runs the
+program `setup` showed. Writes only what is accepted: on a terminal each proposal is **Add**ed,
+**Edit**ed (id, tier, effort template; the command stays as detected; bad input is refused and
+re-asked) or **Skip**ped; `--yes` accepts all unchanged; off a terminal without `--yes` nothing is
+written. Entries go to the registry file and the store `serve` reads (`--models`,
+`--assignment-store`, `--token-dir`); when the store is empty, everything already in `models.json`
+is saved with them so `serve` does not lose it. It offers to set `coder_model` to an accepted `mid` model.
 It assigns nothing to any node. Nothing found: it says so, points here, and exits 0.
 
 Routing lives in the **factory**, never in the work order. That is what makes a panel meaningful:

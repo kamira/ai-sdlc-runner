@@ -554,9 +554,22 @@ def coder_defaults(node_models: Mapping[str, Sequence[str]],
                 registry.get(saved.coder_model)
             except models_mod.ModelError as exc:
                 raise CliError(f"settings name coder_model {saved.coder_model!r}: {exc}")
+            if registry.get(saved.coder_model).transport != models_mod.CLI:
+                raise CliError(
+                    f"settings name coder_model {saved.coder_model!r}, an api model, and nothing "
+                    f"dispatches an api model. Name a cli model, or clear coder_model.")
             merged[build] = [saved.coder_model]
         elif registry is not None:
-            mid = [m.id for m in registry if m.tier == "mid"]
+            mid = []
+            for m in registry:
+                if m.tier != "mid":
+                    continue
+                if m.transport != models_mod.CLI:
+                    # Picking it would fail partway through a walk, after earlier nodes had run.
+                    notices.append(f"{m.id} is tier 'mid' but is an api model, which cannot be "
+                                   f"dispatched, so it is not chosen as the coder.")
+                    continue
+                mid.append(m.id)
             if len(mid) == 1:
                 merged[build] = mid
             elif len(mid) > 1:
@@ -601,6 +614,37 @@ def cmd_settings(args: argparse.Namespace) -> int:
 def _interactive() -> bool:
     """Is a person at a terminal to answer? Its own function so a test can say yes."""
     return bool(sys.stdin.isatty() and sys.stdout.isatty())
+
+
+def _edit_proposal(model, known, accepted, input_fn):
+    """Let the user change a proposal's id, tier and effort template; `None` if they give up.
+
+    The command stays as detected: it carries the absolute path that was found, and typing a
+    different one here would defeat that. Bad input is refused with a reason and asked again, never
+    written; a blank answer keeps the current value, and `-` clears the tier or the template.
+    """
+    taken = {m.id for m in known} | {m.id for m in accepted}
+    while True:
+        new_id = str(input_fn(f"id [{model.id}]: ") or "").strip() or model.id
+        tier = str(input_fn(f"tier (high/mid/low, - for none) [{model.tier or 'none'}]: ")
+                   or "").strip()
+        tier = model.tier if not tier else ("" if tier == "-" else tier)
+        effort = str(input_fn("effort template containing {effort}, e.g. --effort {effort} "
+                              f"(- for none) [{' '.join(model.effort_argv) or 'none'}]: ")
+                     or "").strip()
+        argv = model.effort_argv if not effort else (() if effort == "-" else tuple(effort.split()))
+        try:
+            if new_id in taken:
+                raise models_mod.ModelError(f"{new_id!r} is already in the registry")
+            edited = replace(model, id=new_id, tier=tier, effort_argv=argv)
+            models_mod.validate(edited)
+            return edited
+        except models_mod.ModelError as exc:
+            print(f"not accepted:  {exc}")
+            again = tui.select("Try again?", [("Yes", "edit once more"), ("No", "skip this one")],
+                               input_fn=input_fn)
+            if again != 0:
+                return None
 
 
 def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
@@ -650,9 +694,15 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
         accepted = []
         for model in fresh:
             choice = tui.select(f"Add {model.id} to the registry?",
-                                [("Add it", f"{' '.join(model.command)}"), ("Skip", "leave it out")],
+                                [("Add it", f"{' '.join(model.command)}"),
+                                 ("Edit", "change the id, tier or effort template first"),
+                                 ("Skip", "leave it out")],
                                 input_fn=input_fn)
-            if choice == 0:
+            if choice == 1:
+                model = _edit_proposal(model, known, accepted, input_fn)
+                if model is not None:
+                    accepted.append(model)
+            elif choice == 0:
                 accepted.append(model)
     if not accepted:
         print("Nothing written.")
@@ -666,9 +716,14 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
         if str(store_path).lower() != "none":
             db = store_mod.connect(store_path)
             stored = store_mod.load_registry(db)
-            for model in accepted:
-                if not any(m.id == model.id for m in stored):
-                    stored = stored.add(model)
+            if not len(stored):
+                # `serve` copies models.json into the store only while the store is empty; saving
+                # just the accepted ones here would leave hand-written entries behind for good.
+                stored = written
+            else:
+                for model in accepted:
+                    if not any(m.id == model.id for m in stored):
+                        stored = stored.add(model)
             store_mod.save_registry(db, stored)
             db.close()
             print(f"wrote:         {store_path}")

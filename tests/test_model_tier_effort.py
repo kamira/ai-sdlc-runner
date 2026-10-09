@@ -556,16 +556,17 @@ def test_only_ollama_list_is_ever_run(machine):
 
 def test_the_proposals_are_what_the_record_says(machine):
     by_id = {m.id: m for m in detect.propose()[0]}
+    where = lambda tool: detect.find_tool(tool, path=str(machine))
     claude = by_id["claude-sonnet-5-5"]
     assert (claude.tier, claude.command, claude.effort_argv) == (
-        "mid", ("claude", "-p", "--model", "claude-sonnet-5-5"), ("--effort", "{effort}"))
+        "mid", (where("claude"), "-p", "--model", "claude-sonnet-5-5"), ("--effort", "{effort}"))
     codex = by_id["codex"]
     assert (codex.tier, codex.command, codex.effort_argv) == (
-        "", ("codex", "exec", "-"), ("-c", "model_reasoning_effort={effort}"))
+        "", (where("codex"), "exec", "-"), ("-c", "model_reasoning_effort={effort}"))
     llama = by_id["ollama-llama3-8b"]
     assert (llama.name, llama.tier, llama.command, llama.effort_argv) == (
-        "llama3:8b", "", ("ollama", "run", "llama3:8b"), ())
-    assert by_id["ollama-qwen2-5-coder-7b"].command == ("ollama", "run", "qwen2.5-coder:7b")
+        "llama3:8b", "", (where("ollama"), "run", "llama3:8b"), ())
+    assert by_id["ollama-qwen2-5-coder-7b"].command == (where("ollama"), "run", "qwen2.5-coder:7b")
 
 
 def test_a_hung_ollama_is_a_note_not_a_hang(tmp_path):
@@ -610,8 +611,8 @@ def test_setup_yes_writes_the_registry_the_store_and_the_coder_model(machine, tm
 def test_setup_on_a_terminal_asks_about_each_and_writes_only_the_accepted(
         machine, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_interactive", lambda: True)
-    # claude: add (1); codex: skip (2); llama: skip; qwen: add; then "use claude as the coder?" no.
-    answers = iter(["1", "2", "2", "1", "2"])
+    # claude: add (1); codex: skip (3); llama: skip; qwen: add; then "use claude as the coder?" no.
+    answers = iter(["1", "3", "3", "1", "2"])
     args = cli.build_parser().parse_args(
         ["--settings", str(tmp_path / "settings.json"), "setup", "--token-dir", str(tmp_path / "tok")])
     assert cli.cmd_setup(args, input_fn=lambda prompt="": next(answers)) == 0
@@ -642,3 +643,81 @@ def test_setup_without_a_store_writes_the_registry_file_only(machine, tmp_path):
     assert _setup(tmp_path, "--yes", "--assignment-store", "none") == 0
     assert (tmp_path / "tok" / "models.json").exists()
     assert not (tmp_path / "tok" / "config.sqlite").exists()
+
+
+# ── review round 1 ─────────────────────────────────────────────────────────────────────────────
+
+def _interactive_setup(tmp_path, monkeypatch, answers):
+    monkeypatch.setattr(cli, "_interactive", lambda: True)
+    feed = iter(answers)
+    args = cli.build_parser().parse_args(
+        ["--settings", str(tmp_path / "settings.json"), "setup", "--token-dir", str(tmp_path / "tok")])
+    return cli.cmd_setup(args, input_fn=lambda prompt="": next(feed))
+
+
+def test_setup_lets_the_user_edit_a_proposal_before_it_is_written(machine, tmp_path, monkeypatch):
+    # claude: Edit (2) -> id, tier, effort template; codex/llama/qwen: skip; coder_model: no.
+    answers = ["2", "my-claude", "high", "--reasoning {effort}", "3", "3", "3", "2"]
+    assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
+    saved = models.load(tmp_path / "tok" / "models.json")
+    assert [m.id for m in saved] == ["my-claude"]
+    edited = saved.get("my-claude")
+    assert (edited.tier, edited.effort_argv) == ("high", ("--reasoning", "{effort}"))
+    assert edited.command == (str(machine / "claude"), "-p", "--model", "claude-sonnet-5-5"), \
+        "the command stays as detected"
+
+
+def test_an_invalid_edit_is_refused_and_asked_again_never_written(
+        machine, tmp_path, monkeypatch, capsys):
+    # First try: tier "ultra" -> refused, "Yes" try again (1); second try: blank = keep everything.
+    answers = ["2", "", "ultra", "", "1", "", "", "", "3", "3", "3", "2"]
+    assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
+    assert "not accepted" in capsys.readouterr().out
+    assert models.load(tmp_path / "tok" / "models.json").get("claude-sonnet-5-5").tier == "mid"
+
+
+def test_giving_up_on_a_bad_edit_skips_the_proposal(machine, tmp_path, monkeypatch):
+    answers = ["2", "", "ultra", "", "2", "3", "3", "3"]
+    assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
+    assert not (tmp_path / "tok").exists()
+
+
+def test_an_edit_cannot_take_an_id_already_in_the_registry(machine, tmp_path, monkeypatch, capsys):
+    # claude: add; codex: edit to the id "claude-sonnet-5-5" -> refused, give up; the rest skipped.
+    answers = ["1", "2", "claude-sonnet-5-5", "", "", "2", "3", "3", "2"]
+    assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
+    assert "already in the registry" in capsys.readouterr().out
+    assert [m.id for m in models.load(tmp_path / "tok" / "models.json")] == ["claude-sonnet-5-5"]
+
+
+def test_a_proposals_command_starts_with_the_absolute_path_that_was_found(machine):
+    by_id = {m.id: m for m in detect.propose()[0]}
+    for model_id, tool in (("claude-sonnet-5-5", "claude"), ("codex", "codex"),
+                           ("ollama-llama3-8b", "ollama")):
+        first = by_id[model_id].command[0]
+        assert first == detect.find_tool(tool, path=str(machine)) and os.path.isabs(first)
+
+
+def test_setup_keeps_hand_written_models_when_the_store_is_empty(machine, tmp_path):
+    tok = tmp_path / "tok"
+    tok.mkdir()
+    models.save(models.Registry(models=(_cli(id="local-llama", name="llama"),)), tok / "models.json")
+    assert _setup(tmp_path, "--yes") == 0
+    db = store.connect(tok / "config.sqlite")
+    ids = {m.id for m in store.load_registry(db)}
+    assert "local-llama" in ids and "claude-sonnet-5-5" in ids
+
+
+def test_the_lone_mid_fallback_skips_a_model_that_cannot_be_dispatched():
+    registry = _registry(_api(id="remote", tier="mid"), _cli(id="b", tier="low"))
+    merged, _, notices = cli.coder_defaults({}, registry, settings_mod.Settings())
+    assert "engineer_build" not in merged
+    assert any("remote" in n and "api" in n for n in notices)
+    # With a cli mid beside it, the cli one is the lone mid.
+    registry = _registry(_api(id="remote", tier="mid"), _cli(id="a", tier="mid"))
+    assert cli.coder_defaults({}, registry, settings_mod.Settings())[0]["engineer_build"] == ["a"]
+
+
+def test_an_api_coder_model_is_refused_with_a_clear_error():
+    with pytest.raises(cli.CliError, match="api model"):
+        cli.coder_defaults({}, _registry(_api(id="remote")), settings_mod.Settings(coder_model="remote"))

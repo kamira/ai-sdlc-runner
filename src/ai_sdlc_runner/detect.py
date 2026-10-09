@@ -10,8 +10,13 @@ empty or relative `PATH` entry means the current directory everywhere. A reposit
 just cloned must not be able to plant a `claude` that `setup` then offers to dispatch work to, so
 those entries are skipped rather than resolved.
 
-**A proposal is not a decision.** `propose` returns registry entries with a suggested tier and an
-effort template; the runner holds no table of which model is "mid" beyond the one it suggests for a
+**The path found is the path dispatched.** `command[0]` is the absolute path `find_tool` returned,
+not the bare name: dispatch would otherwise look the name up again with the operating system's own
+search, which may include the working directory, and run a different program than the one `setup`
+showed.
+
+**A proposal is not a decision.** `propose` returns registry entries (claude with a tier and an effort
+template, codex with an effort template only, ollama with neither); the runner holds no table of which model is "mid" beyond the one it suggests for a
 CLI that ships exactly one default. The user accepts, edits or declines each one.
 """
 from __future__ import annotations
@@ -95,13 +100,13 @@ def propose(environ=None, path: Optional[str] = None, cwd: Optional[str] = None
         proposals.append(models_mod.Model(
             id="claude-sonnet-5-5", vendor="anthropic", name="claude-sonnet-5-5",
             transport=models_mod.CLI, tier="mid",
-            command=("claude", "-p", "--model", "claude-sonnet-5-5"),
+            command=(found["claude"], "-p", "--model", "claude-sonnet-5-5"),
             effort_argv=("--effort", "{effort}"),
             note=f"found at {found['claude']}"))
     if found["codex"]:
         proposals.append(models_mod.Model(
             id="codex", vendor="openai", name="codex-default", transport=models_mod.CLI,
-            command=("codex", "exec", "-"),
+            command=(found["codex"], "exec", "-"),
             effort_argv=("-c", "model_reasoning_effort={effort}"),
             note=f"found at {found['codex']}. No model is named: add `--model <name>` to the "
                  f"command and set a tier"))
@@ -112,7 +117,7 @@ def propose(environ=None, path: Optional[str] = None, cwd: Optional[str] = None
         for name in names:
             proposals.append(models_mod.Model(
                 id=plain_id("ollama", name), vendor="ollama", name=name,
-                transport=models_mod.CLI, command=("ollama", "run", name),
+                transport=models_mod.CLI, command=(found["ollama"], "run", name),
                 note=f"local, from `ollama list` ({found['ollama']})"))
     for model in proposals:
         models_mod.validate(model)
