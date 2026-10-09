@@ -83,6 +83,7 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -1099,9 +1100,14 @@ def engine_available(model: dict, repo: Path, home: Optional[Path] = None,
     exe, why = locate_executable(model["argv"][0], repo)
     if exe is None:
         return False, f"codex login status: {why}"
+    # Run from an empty directory of its own, never the reviewed tree: this check comes before the
+    # guards that refuse a hostile tree (`.codex`, `.agents`, a planted `node.exe`), so with the repo
+    # as its cwd a tree about to be refused could still get codex started inside it (round 2,
+    # security). An empty cwd has nothing to load and nothing to find by bare name.
     try:
-        done = subprocess.run([exe, "login", "status"], cwd=str(repo), env=_seat_env(repo),
-                              capture_output=True, stdin=subprocess.DEVNULL, timeout=LOGIN_TIMEOUT)
+        with tempfile.TemporaryDirectory(prefix="panel-login-") as empty:
+            done = subprocess.run([exe, "login", "status"], cwd=empty, env=_seat_env(repo),
+                                  capture_output=True, stdin=subprocess.DEVNULL, timeout=LOGIN_TIMEOUT)
     except subprocess.TimeoutExpired:
         return False, f"codex login status: timed out after {LOGIN_TIMEOUT}s"
     except OSError as exc:

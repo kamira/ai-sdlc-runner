@@ -2369,6 +2369,19 @@ def test_the_login_check_resolves_codex_like_a_seat_and_never_from_the_repo(worl
     assert not ok and "codex login status" in why
 
 
+def test_the_login_check_never_runs_inside_the_reviewed_tree(world, tmp_path):
+    """The check comes before the guards that refuse a hostile tree, so it must not start codex with
+    that tree as its working directory (round 2, security): a `.codex/` there would be loaded first."""
+    seen = tmp_path / "login-cwd.txt"
+    bin_dir = tmp_path / "fakebin-cwd"
+    bin_dir.mkdir()
+    exe = _codex_program(bin_dir, "import os\nopen(%r, 'w').write(os.getcwd())\nprint('Logged in')\n" % str(seen))
+    model = {"id": "gpt-6-astra", "kind": "codex", "argv": [str(exe), "exec"], "min_remaining_percent": 10}
+    assert _avail(model, world.repo, tmp_path / "empty-home")[0]
+    ran_in = Path(seen.read_text())
+    assert ran_in.resolve() != world.repo.resolve() and world.repo.resolve() not in ran_in.resolve().parents
+
+
 def _subst_world(world, monkeypatch, usable=True, reason="why", **extra):
     """gpt-6-astra with sonnet behind it; `engine_available` is replaced by a fake that records its calls."""
     primary = dict(world.seat("gpt-6-astra", "codex"), min_remaining_percent=10,
