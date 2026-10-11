@@ -122,7 +122,8 @@ on eight nodes looks the same in a list as one on a single node.
 
 **A `by_model` node entry with `"default": true` is the coding role's default, not an assignment.**
 With nothing assigned to `engineer_build`, the run builds with `coder_model` or the registry's only
-`mid` model (`cli.coder_defaults`), and `fix_pass` and `engineer_selfverify` follow it. `serve` passes
+`mid` model, unless `coder_model` is `none` or a runner.yaml `agent_command` is configured
+(`cli.coder_defaults`), and `fix_pass` and `engineer_selfverify` follow it. `serve` passes
 the server that same resolution, so the model that will build is listed under those three nodes
 instead of "used nowhere". `node_models` and `source` stay exactly what the plan and the store said.
 

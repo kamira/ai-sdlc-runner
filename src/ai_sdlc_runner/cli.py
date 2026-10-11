@@ -535,7 +535,7 @@ def _egress(model) -> str:
 
 def coder_defaults(node_models: Mapping[str, Sequence[str]],
                    registry: Optional["models_mod.Registry"],
-                   saved: "settings_mod.Settings"):
+                   saved: "settings_mod.Settings", *, agent_command: bool = False):
     """The coding role's model and effort, laid over what was resolved (CHG-20261005-01).
 
     Returns `(node_models, efforts, notices)`. **Applied after `store.resolve`**, so the plan and
@@ -545,11 +545,14 @@ def coder_defaults(node_models: Mapping[str, Sequence[str]],
     1. an assignment from the plan or the store: untouched;
     2. `coder_model` from settings, which must name a registry model (an unknown id is an error
        here, because the registry is not known to settings and a typo must not fall through to a
-       different model);
-    3. the registry's only `mid` model;
+       different model). The value `settings.NO_CODER` is a user's *No*: nothing is assigned and
+       steps 3 and 4 do not run, because a declined model must not be picked by a rule;
+    3. the registry's only `mid` model, **unless `agent_command` is configured** — that command was
+       written by the operator for this runner, and a rule must not displace it (it only fills the
+       place where there would otherwise be the stub);
     4. several `mid` models and no `coder_model`: a notice naming them, and nothing assigned.
        Picking one would be the runner deciding which is better at a task it has not seen;
-    5. none: behaviour unchanged.
+    5. none: behaviour unchanged (`agent_command`, then the stub).
 
     `coder_effort` goes to `engineer_build` and every node that follows it, whatever model builds.
     """
@@ -557,7 +560,9 @@ def coder_defaults(node_models: Mapping[str, Sequence[str]],
     notices: List[str] = []
     build = "engineer_build"
     if not merged.get(build):
-        if saved.coder_model:
+        if saved.coder_model == settings_mod.NO_CODER:
+            pass                    # declined in `setup`: no default coder model, and no rule picks one
+        elif saved.coder_model:
             if registry is None:
                 raise CliError(
                     f"settings name coder_model {saved.coder_model!r} and there is no model "
@@ -571,6 +576,12 @@ def coder_defaults(node_models: Mapping[str, Sequence[str]],
                     f"settings name coder_model {saved.coder_model!r}, an api model, and nothing "
                     f"dispatches an api model. Name a cli model, or clear coder_model.")
             merged[build] = [saved.coder_model]
+        elif registry is not None and agent_command:
+            only = [m.id for m in registry if m.tier == "mid" and m.transport == models_mod.CLI]
+            if only:
+                notices.append(
+                    f"agent_command is configured, so {build} keeps using it; tier 'mid' "
+                    f"({', '.join(only)}) is not chosen over it. Set coder_model to use a model.")
         elif registry is not None:
             mid = []
             for m in registry:
@@ -671,7 +682,9 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
 
     Detection is local (`detect.py`). Nothing is written without an answer: on a terminal each
     proposal is asked about, and off one `--yes` is the answer. It assigns nothing to any node;
-    the one other thing it may do is set `coder_model`, and only to an accepted `mid` model.
+    the one other thing it may do is set `coder_model`: to an accepted `mid` model, or, when the
+    user says No, to `settings.NO_CODER` — a recorded decision, because an empty value would let
+    the lone-`mid` rule pick the very model that was just declined.
     """
     proposals, notes = detect.propose()
     for note in notes:
@@ -765,13 +778,20 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
                         if mid[0].leaves_this_machine else "")
                 make = tui.select(f"Use {mid[0].id} as the coding model (coder_model)?{sent}",
                                   [("Yes", "engineer_build uses it unless a plan or the store says "
-                                           "otherwise"), ("No", "leave coder_model empty")],
+                                           "otherwise"),
+                                          ("No", "no default coder model: nothing is picked for "
+                                                 "you, not even a lone mid-tier model")],
                                   input_fn=input_fn) == 0
             if make:
                 if args.yes and mid[0].leaves_this_machine:
                     print(f"note:          {_egress(mid[0])}")
                 settings_mod.save(replace(current, coder_model=mid[0].id), args.settings)
                 print(f"wrote:         {args.settings} (coder_model = {mid[0].id})")
+            else:
+                settings_mod.save(replace(current, coder_model=settings_mod.NO_CODER),
+                                  args.settings)
+                print(f"wrote:         {args.settings} (coder_model = {settings_mod.NO_CODER}: "
+                      f"no default coder model)")
     return 0
 
 
@@ -1223,7 +1243,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     # The coding role's default, after the store has spoken (CHG-20261005-01).
     try:
         built_models, efforts, coder_notices = coder_defaults(
-            resolved_assignments.get("node_models") or {}, config_registry, saved)
+            resolved_assignments.get("node_models") or {}, config_registry, saved,
+            agent_command=bool(config.get("agent_command")))
     except CliError as exc:
         print(f"error: {exc}")
         return 2
@@ -1819,7 +1840,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
         # Per walk, like `current_assignments`: the registry and the store are editable from the
         # console, and so is what the coding role defaults to (CHG-20261005-01).
         coder = coder_defaults(current_assignments().get("node_models") or {},
-                               store_mod.load_registry(db) or registry, saved)
+                               store_mod.load_registry(db) or registry, saved,
+                               agent_command=bool(config.get("agent_command")))
         for notice in coder[2]:
             print(f"note: {notice}")
         return engine.RunConfig(
@@ -1973,7 +1995,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     config = load_config(args.config)
     try:
-        coder_defaults(assignments.get("node_models") or {}, registry or None, saved)
+        coder_defaults(assignments.get("node_models") or {}, registry or None, saved,
+                       agent_command=bool(config.get("agent_command")))
     except CliError as exc:
         print(f"error: {exc}")
         return 2
@@ -1994,7 +2017,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
         """
         resolved = current_assignments().get("node_models") or {}
         try:
-            merged = coder_defaults(resolved, store_mod.load_registry(db) or registry, saved)[0]
+            merged = coder_defaults(resolved, store_mod.load_registry(db) or registry, saved,
+                                    agent_command=bool(config.get("agent_command")))[0]
         except CliError:
             return {}
         build = merged.get("engineer_build")

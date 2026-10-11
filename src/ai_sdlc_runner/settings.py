@@ -62,8 +62,10 @@ account of one (CHG-20260904-19):
 The last two (CHG-20261005-01) choose a backend and say nothing about a verdict, a halt or a floor:
 
 - `coder_model` — the registry model that builds when nothing is assigned to `engineer_build`.
-  Empty means the registry's only `mid`-tier model, if there is exactly one. It is not checked
-  against a registry here, because the registry lives elsewhere; a run that cannot find it refuses.
+  Empty means the registry's only `mid`-tier model, if there is exactly one, and only when no
+  `agent_command` is configured. `none` means no default coder model at all (a No in `runner
+  setup`). Otherwise it is not checked against a registry here, because the registry lives
+  elsewhere; a run that cannot find it refuses.
 - `coder_effort` — `low`, `medium` or `high`, for `engineer_build` and the nodes that follow it.
   Whether the model can be told is its own `effort_argv`; where it cannot, the run says so.
 
@@ -102,6 +104,12 @@ FIELDS: Tuple[str, ...] = ("review_seats", "high_risk_mode", "ordinary_commands"
 EFFORTS: Tuple[str, ...] = ("low", "medium", "high")
 DEFAULT_EFFORT = "medium"
 
+#: The `coder_model` value that means *no default coder model*: `runner setup` records a user's No
+#: with it (CHG-20261005-01, review round 3). Empty cannot carry that, because empty is "the
+#: registry's only `mid` model", which would pick the model that was just declined. A registry model
+#: with this id cannot be named as the coder; name it by assigning it to `engineer_build` instead.
+NO_CODER = "none"
+
 
 class SettingsError(Exception):
     """Raised when a settings file says something this runner will not act on."""
@@ -128,7 +136,8 @@ class Settings:
     #: prefix mistake one level out.
     ordinary_commands: Tuple[str, ...] = ()
     #: The registry model that builds when nothing is assigned to `engineer_build`
-    #: (CHG-20261005-01). Empty means the registry's only `mid` model, if there is exactly one.
+    #: (CHG-20261005-01). Empty means the registry's only `mid` model, if there is exactly one and
+    #: no `agent_command` is configured; `NO_CODER` means none, whatever the registry holds.
     #: Not checked against a registry here: the registry lives elsewhere, so an unknown id is an
     #: error when a run resolves it (`cli.coder_defaults`), not when it is saved.
     coder_model: str = ""
@@ -186,7 +195,9 @@ class Settings:
             line += f"  |  vouched commands: {', '.join(sorted(self.ordinary_commands))}"
         else:
             line += "  |  no vouched commands (only repo paths and read-only git are recognised)"
-        line += (f"  |  coder model: {self.coder_model}" if self.coder_model
+        line += ("  |  coder model: none (declined; no default coder model)"
+                 if self.coder_model == NO_CODER else
+                 f"  |  coder model: {self.coder_model}" if self.coder_model
                  else "  |  coder model: the registry's only mid-tier model, if there is one")
         line += f"  |  coder effort: {self.coder_effort}"
         return line
@@ -245,7 +256,8 @@ def load(path: str = DEFAULT_PATH) -> Settings:
 
 
 def _check_coder_model(value, *, where: str = "settings") -> str:
-    """The coder model's id, stripped, or empty. Its existence is checked where a registry is."""
+    """The coder model's id, stripped, or empty (or `NO_CODER`). Its existence is checked where a
+    registry is."""
     if not isinstance(value, str):
         raise SettingsError(f"{where}: coder_model must be a model id or empty, got {value!r}")
     return value.strip()
@@ -382,7 +394,8 @@ def _screen(current: Settings):
          else "none — every target is read against the halts",
          _edit_vouched),
         ("Coder model",
-         current.coder_model if current.coder_model
+         "none — declined; no default coder model" if current.coder_model == NO_CODER
+         else current.coder_model if current.coder_model
          else "the registry's only mid-tier model, if there is exactly one",
          _edit_coder_model),
         ("Coder effort", f"currently {current.coder_effort}; engineer_build and what follows it",
@@ -458,7 +471,8 @@ def _edit_vouched(current: Settings, *, input_fn, stream_out) -> Settings:
 def _edit_coder_model(current: Settings, *, input_fn, stream_out) -> Settings:
     """Name the model that builds, or clear it. The registry is not read here, so a typo is caught
     when a run resolves it, which says so by name."""
-    said = str(input_fn("Model id for the coding role (blank to clear): ") or "").strip()
+    said = str(input_fn(f"Model id for the coding role ({NO_CODER} for no default, "
+                        f"blank to clear): ") or "").strip()
     return replace(current, coder_model=said)
 
 

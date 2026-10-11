@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_sdlc_runner import cli, detect, engine, graph, models, settings as settings_mod, store
+from ai_sdlc_runner import cli, detect, engine, graph, models, policy, settings as settings_mod, store
 
 SPEC = {
     "scope": "src/", "objective": "build the thing", "instructions": "do the work",
@@ -297,7 +297,7 @@ def test_a_lone_mid_model_that_leaves_the_machine_says_so():
 
 def test_the_run_prints_the_lone_mid_notice(tmp_path, capsys):
     _project(tmp_path, [dict(id="solo", vendor="acme", name="n", transport="cli", tier="mid",
-                             declared_reach="external", **TEMPLATE)])
+                             declared_reach="external", **TEMPLATE)], agent_command=False)
     code, out = _run(tmp_path, capsys)
     assert code == 0, out
     assert "solo is the only tier 'mid'" in out and "sends the work order" in out and "acme" in out
@@ -335,20 +335,32 @@ def test_the_effort_goes_to_the_build_node_and_what_follows_it_only():
 
 # ── 3 · through `runner run`, to the process that is spawned ───────────────────────────────────
 
-def _project(tmp_path, entries, saved=None, plan_extra=None):
+def _project(tmp_path, entries, saved=None, plan_extra=None, agent_command=True):
     """A store holding `entries`, an agent that logs its argv, and the three files `run` takes."""
     log = tmp_path / "log.jsonl"
     agent = tmp_path / "agent.py"
     agent.write_text(AGENT % {"log": str(log), "answers": ANSWERS}, encoding="utf-8")
+    if not agent_command:
+        # Without `agent_command` the stub cannot answer the seats, so everything but the coding
+        # role goes to an untiered registry model named `default`, and the coding role is left to
+        # `coder_defaults` alone.
+        entries = list(entries) + [dict(id="default", vendor="v", name="n", transport="cli")]
+        build_chain = {"engineer_build"} | {n.id for n in graph.NODES if n.follows == "engineer_build"}
+        plan_extra = {**(plan_extra or {}),
+                      "node_models": {n.id: ["default"] for n in graph.NODES
+                                      if n.role and n.role != "seat" and n.id not in build_chain},
+                      "seat_models": {seat.name: "default" for seat in policy.SEATS}}
     registry = models.Registry(models=tuple(
         models.Model(command=(sys.executable, str(agent), "--as", e["id"]), **e)
         for e in entries))
     db = store.connect(tmp_path / "config.sqlite")
     store.save_registry(db, registry)
     db.close()
+    # `agent_command` is the operator's own backend; the lone-`mid` rule must not displace it, so
+    # the tests of that rule leave it out and the tests of the order put it in.
     (tmp_path / "runner.yaml").write_text(
-        f"agent_command: {json.dumps([sys.executable, str(agent), '--as', 'default'])}\n",
-        encoding="utf-8")
+        f"agent_command: {json.dumps([sys.executable, str(agent), '--as', 'default'])}\n"
+        if agent_command else "agent_timeout: 60\n", encoding="utf-8")
     (tmp_path / "settings.json").write_text(json.dumps(saved or {}), encoding="utf-8")
     plan = {"node_specs": {n.id: dict(SPEC) for n in graph.NODES if n.role},
             "decisions": {"next_module": ["module", "none"], "feedback": "done"},
@@ -402,7 +414,8 @@ def test_run_uses_the_only_mid_model_at_the_default_effort(tmp_path, capsys):
     log = _project(
         tmp_path,
         [dict(id="mid1", vendor="v", name="n", transport="cli", tier="mid", **TEMPLATE),
-         dict(id="big", vendor="v", name="n", transport="cli", tier="high", **TEMPLATE)])
+         dict(id="big", vendor="v", name="n", transport="cli", tier="high", **TEMPLATE)],
+        agent_command=False)
     code, out = _run(tmp_path, capsys)
     assert code == 0, out
     assert _argv_of(_asks(log), "engineer_build") == [["--as", "mid1", "--effort", "medium"]]
@@ -432,7 +445,8 @@ def test_run_lets_the_plan_beat_the_coder_default(tmp_path, capsys):
 
 def test_run_reports_an_effort_the_model_could_not_take(tmp_path, capsys):
     log = _project(
-        tmp_path, [dict(id="plain", vendor="v", name="n", transport="cli", tier="mid")])
+        tmp_path, [dict(id="plain", vendor="v", name="n", transport="cli", tier="mid")],
+        agent_command=False)
     code, out = _run(tmp_path, capsys)
     assert code == 0, out
     assert _argv_of(_asks(log), "engineer_build") == [["--as", "plain"]]
@@ -665,7 +679,7 @@ def test_setup_on_a_terminal_asks_about_each_and_writes_only_the_accepted(
     assert cli.cmd_setup(args, input_fn=lambda prompt="": next(answers)) == 0
     assert {m.id for m in models.load(tmp_path / "tok" / "models.json")} == {
         "claude-sonnet-5-5", "ollama-qwen2-5-coder-7b"}
-    assert not (tmp_path / "settings.json").exists(), "coder_model was set after the user said no"
+    assert settings_mod.load(str(tmp_path / "settings.json")).coder_model == settings_mod.NO_CODER
 
 
 def test_setup_will_not_touch_a_coder_model_somebody_already_chose(machine, tmp_path):
@@ -821,7 +835,7 @@ def test_the_coder_prompt_says_the_repository_goes_to_the_vendor(
     out = capsys.readouterr().out
     assert "Use claude-sonnet-5-5 as the coding model" in out
     assert "repository's content will be sent to anthropic" in out
-    assert not (tmp_path / "settings.json").exists()
+    assert settings_mod.load(str(tmp_path / "settings.json")).coder_model == settings_mod.NO_CODER
 
 
 def test_a_local_coder_prompt_does_not_claim_egress(machine, tmp_path, monkeypatch, capsys):
@@ -931,7 +945,8 @@ def test_the_console_shows_the_coder_default_not_unused(tmp_path, monkeypatch, c
 
 def test_the_console_shows_the_lone_mid_model_as_the_coder(tmp_path, monkeypatch, capsys):
     _project(tmp_path, [dict(id="a", vendor="v", name="n", transport="cli", tier="mid", **TEMPLATE),
-                        dict(id="b", vendor="v", name="n", transport="cli", tier="low", **TEMPLATE)])
+                        dict(id="b", vendor="v", name="n", transport="cli", tier="low", **TEMPLATE)],
+             agent_command=False)
     body = _get_route(tmp_path, monkeypatch, "/config/nodes")
     assert _default_nodes(body, "a") == CODER_NODES
     assert body["by_model"]["b"]["nodes"] == [], "the other model is genuinely unused"
@@ -949,3 +964,73 @@ def test_an_assignment_beats_the_default_in_the_console_too(tmp_path, monkeypatc
 def test_the_console_page_labels_a_default_as_not_an_assignment():
     page = (Path(cli.__file__).parent / "console" / "index.html").read_text(encoding="utf-8")
     assert "n.default" in page and "not an assignment" in page
+
+
+# ── review round 3 · a No is a decision, and a rule does not displace agent_command ─────────────────
+
+def test_the_declined_value_round_trips_is_validated_and_shown(tmp_path):
+    path = str(tmp_path / "s.json")
+    settings_mod.save(settings_mod.Settings(coder_model=settings_mod.NO_CODER), path)
+    back = settings_mod.load(path)
+    assert back.coder_model == settings_mod.NO_CODER == "none"
+    assert "declined" in back.describe()
+    shown = {label: text for label, text, _ in settings_mod._screen(back)}["Coder model"]
+    assert "declined" in shown
+    with pytest.raises(settings_mod.SettingsError):          # still a string or nothing
+        settings_mod.save(settings_mod.Settings(coder_model=7), path)
+
+
+def test_a_declined_coder_model_stops_the_lone_mid_rule():
+    registry = _registry(_cli(id="a", tier="mid", declared_reach="external", vendor="acme"))
+    merged, _, notices = cli.coder_defaults(
+        {}, registry, settings_mod.Settings(coder_model=settings_mod.NO_CODER))
+    assert "engineer_build" not in merged and notices == []
+
+
+def test_a_lone_mid_model_does_not_displace_a_configured_agent_command():
+    registry = _registry(_cli(id="a", tier="mid"))
+    merged, _, notices = cli.coder_defaults(
+        {}, registry, settings_mod.Settings(), agent_command=True)
+    assert "engineer_build" not in merged
+    assert len(notices) == 1 and "agent_command" in notices[0]
+    # An explicit coder_model is the operator's word and still wins over agent_command.
+    merged, _, _ = cli.coder_defaults(
+        {}, registry, settings_mod.Settings(coder_model="a"), agent_command=True)
+    assert merged["engineer_build"] == ["a"]
+
+
+def test_run_after_a_no_does_not_send_the_build_to_that_model(tmp_path, capsys):
+    log = _project(tmp_path, [dict(id="solo", vendor="acme", name="n", transport="cli", tier="mid",
+                                   declared_reach="external", **TEMPLATE)],
+                   saved={"coder_model": settings_mod.NO_CODER}, agent_command=False)
+    code, out = _run(tmp_path, capsys)
+    assert code == 0, out
+    assert all(argv[:2] != ["--as", "solo"] for _, argv in _asks(log)), "the declined model ran"
+    assert "only tier 'mid'" not in out
+
+
+def test_run_with_a_lone_mid_model_and_agent_command_uses_agent_command(tmp_path, capsys):
+    log = _project(tmp_path, [dict(id="solo", vendor="v", name="n", transport="cli", tier="mid",
+                                   **TEMPLATE)])
+    code, out = _run(tmp_path, capsys)
+    assert code == 0, out
+    assert _argv_of(_asks(log), "engineer_build")[0][:2] == ["--as", "default"]
+    assert "agent_command is configured" in out
+
+
+def test_setup_no_then_resolving_never_builds_with_that_model(machine, tmp_path, monkeypatch):
+    # The whole path: add claude, say No to it as the coder, then resolve the way a run does.
+    assert _interactive_setup(tmp_path, monkeypatch, ["1", "3", "3", "3", "2"]) == 0
+    saved = settings_mod.load(str(tmp_path / "settings.json"))
+    db = store.connect(tmp_path / "tok" / "config.sqlite")
+    registry = store.load_registry(db)
+    db.close()
+    assert {m.id: m.tier for m in registry}["claude-sonnet-5-5"] == "mid"
+    merged, _, notices = cli.coder_defaults({}, registry, saved)
+    assert "engineer_build" not in merged and notices == []
+
+
+def test_the_codex_note_points_at_the_store_not_at_models_json(machine):
+    note = {m.id: m for m in detect.propose()[0]}["codex"].note
+    assert "POST /models" in note and "model editor" in note
+    assert "no longer read models.json" in note and "edit models.json" not in note

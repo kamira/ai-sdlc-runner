@@ -281,13 +281,22 @@ fills it, **after** `store.resolve` so the dispatch record is unchanged:
 an assignment from the plan or the store         (untouched)
   →  settings.coder_model                        (must name a registry cli model; an unknown id or an
                                                   api model is an error at run time, not at save
-                                                  time — the registry is not known to settings)
-  →  the registry's only tier "mid" model          (a "mid" api model is skipped, with a notice:
+                                                  time — the registry is not known to settings.
+                                                  The value "none" is a No from `runner setup`: no
+                                                  default coder model, and the two steps below do
+                                                  not run — nothing is picked, agent_command or
+                                                  the stub builds)
+  →  the registry's only tier "mid" model          (not when agent_command is configured: the rule
+                                                  fills the place where the stub would be and never
+                                                  displaces the operator's own command, and says so
+                                                  in a notice.
+                                                  A "mid" api model is skipped, with a notice:
                                                   nothing dispatches an api model; the pick itself
                                                   prints a notice naming the model, and saying so
                                                   when it leaves the machine)
   →  several "mid" models, no coder_model: a notice naming them, and nothing assigned — no random pick
-  →  none: unchanged (agent_command, or the stub)
+  →  agent_command                                (the runner.yaml's own command)
+  →  the stub
 ```
 
 The console shows the model that will build under `engineer_build`, `fix_pass` and
@@ -312,8 +321,13 @@ the `PATHEXT` forms are looked for (`claude.cmd`, never npm's extensionless shel
 re-asked) or **Skip**ped; `--yes` accepts all unchanged; off a terminal without `--yes` nothing is
 written. Entries go to the registry file and the store `serve` reads (`--models`,
 `--assignment-store`, `--token-dir`); when the store is empty, everything already in `models.json`
-is saved with them so `serve` does not lose it. It offers to set `coder_model` to an accepted `mid` model.
-It assigns nothing to any node. Nothing found: it says so, points here, and exits 0.
+is saved with them so `serve` does not lose it. Once the store has entries, `run` and `serve` read
+the registry from it and no longer read `models.json`; to change what is in the store use the
+console's model editor (`POST /models`, which only adds an entry under a new id) — the codex entry's
+note says this, because the codex entry names no model and its command cannot be edited in place. It offers to set `coder_model` to an accepted `mid` model. **A No is recorded**: `coder_model` is
+saved as `none`, which means no default coder model, so the lone-`mid` rule does not pick the model
+just declined (the settings screen shows it as declined; a blank answer there clears it back to the
+rule). It assigns nothing to any node. Nothing found: it says so, points here, and exits 0.
 
 Routing lives in the **factory**, never in the work order. That is what makes a panel meaningful:
 every voice receives an identical order and only the answerer differs.

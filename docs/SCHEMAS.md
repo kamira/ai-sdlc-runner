@@ -352,7 +352,7 @@ closed all along and revision 1 of this page did not say so.
 { "review_seats": null,          // null = the floor (3)
   "high_risk_mode": false,       // may the floor be crossed at all
   "ordinary_commands": [],       // tools the operator vouches for — the TOOL, never a command line
-  "coder_model": "",             // registry id for engineer_build when nothing is assigned; "" = the only mid model
+  "coder_model": "",             // registry id for engineer_build when nothing is assigned; "" = the only mid model (unless agent_command is set); "none" = no default
   "coder_effort": "medium" }     // low | medium | high — for engineer_build and what follows it
 ```
 

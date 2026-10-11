@@ -129,7 +129,7 @@ the `unrecognised-target` halt trips (CHG-20260903-47). The last two, `coder_mod
 | `review_seats` | int \| null | 1 … `len(policy.SEATS)`, or absent | How many seats open. `null` means the floor, and a count above the seats this runner defines is refused at load rather than raised when something renders it |
 | `high_risk_mode` | bool | required-ish (defaults false) | Whether the floor may be crossed at all |
 | `ordinary_commands` | list[str] | absent → none; one word each, never an executor | Commands whose **name** stops being unrecognised. The description is still read against the permanent halts — vouching clears `unrecognised-target` and nothing else, which is what the prose four lines above says |
-| `coder_model` | str | absent → empty; not checked against a registry at save time | The registry model `engineer_build` uses when nothing is assigned. Empty means the registry's only `mid` model, if exactly one. An id the registry lacks is an error when a run resolves it |
+| `coder_model` | str | absent → empty; not checked against a registry at save time | The registry model `engineer_build` uses when nothing is assigned. Empty means the registry's only `mid` model, if exactly one and no `agent_command` is configured; `none` means no default coder model (a No in `runner setup`). An id the registry lacks is an error when a run resolves it |
 | `coder_effort` | str | `low` \| `medium` \| `high`; absent → `medium` | The effort for `engineer_build` and the nodes that follow it; delivered through the model's `effort_argv` |
 
 This said *"Two fields, both about the seat floor"* over a table of two until CHG-20260902-20.
