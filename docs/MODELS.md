@@ -81,10 +81,11 @@ Only **registry model ids** can be assigned through the store. A raw command lin
   "key_env":   "ANTHROPIC_API_KEY",       // api only — the NAME of a variable. Never a key.
   "note":      "",
   "tier":      "" | "high" | "mid" | "low",      // a label a person gives it; empty = unclassified
-  "effort_argv": ["--effort", "{effort}"] }     // cli only — appended when an effort is in force
+  "effort_argv": ["--effort", "{effort}"],      // cli only — appended when an effort is in force
+  "declared_reach": "" | "local" | "internal" | "external" } // optional; may only raise the derived reach (§4)
 ```
 
-Ten fields, listed in `models.Model`, persist. Three more are **computed on every read and never stored**:
+Eleven fields, listed in `models.Model`, persist. Three more are **computed on every read and never stored**:
 
 ```jsonc
 { "reach": "local" | "internal" | "external",
@@ -138,6 +139,8 @@ optional."*
 | a `transport` outside `cli` / `api` | — |
 | a `tier` outside `high` / `mid` / `low` / empty | a label nothing reads, or a typo that classifies nothing |
 | an `effort_argv` with no `{effort}` in any element | the effort asked for would never reach the process |
+| a `declared_reach` outside `local` / `internal` / `external` / empty | a reach nobody can read |
+| a `declared_reach` nearer than the transport shows | a model labelled nearer than it is reads as safe and is not |
 
 ### A `cli` model
 
@@ -180,16 +183,17 @@ there is no path to a `Registry` holding an invalid one.
 
 ---
 
-## 4 · `reach` — computed, never declared
+## 4 · `reach` — computed from the transport; a declaration can only raise it
 
-The one field worth being certain about, and the one an operator must never label themselves:
+The one field worth being certain about, and the one an operator must never label *nearer* than it is:
 
 > *"Asking the operator to label this themselves would put the one fact worth being sure about behind
 > the one place a mistake is invisible — a model labelled `internal` pointing at a public host is a
 > configuration that reads as safe and is not."*
 
 ```
-transport == cli                          -> local
+declared_reach set                        -> that (never nearer than what follows)
+transport == cli                          -> local   (where the process runs, not where its prompt goes)
 host is localhost / localhost.localdomain -> local
 IP and is_loopback                        -> local
 IP and is_private or is_link_local        -> internal
@@ -203,6 +207,13 @@ Two decisions in there are worth reading twice:
 - **A single-label name is `internal`.** `gpu-box` is a network name; `api.example.com` is not.
 - **Unresolvable is `external`.** Not "unknown", not "assume local" — *"guessing the generous answer
   about where data goes is the wrong way to be wrong."*
+
+**`cli` means the process runs here, not that the work stays here.** `claude` and `codex` are thin
+clients that send the prompt, which carries the work order and the repository's content, to a
+vendor. `declared_reach` says so: `runner setup` writes `external` for both, and for any
+hand-written entry like them you should too. A declaration can only raise the reach, so it cannot
+make a public endpoint read `local`. `ollama` entries stay derived (`local`), which assumes the
+daemon is local: `OLLAMA_HOST` pointing at another machine is not detected.
 
 `leaves_this_machine` is simply `reach != local`. `Registry.leaving()` returns those models, and
 `GET /models` sends the list at the top level so *"what goes out from here"* never requires reading
@@ -272,10 +283,16 @@ an assignment from the plan or the store         (untouched)
                                                   api model is an error at run time, not at save
                                                   time — the registry is not known to settings)
   →  the registry's only tier "mid" model          (a "mid" api model is skipped, with a notice:
-                                                  nothing dispatches an api model)
+                                                  nothing dispatches an api model; the pick itself
+                                                  prints a notice naming the model, and saying so
+                                                  when it leaves the machine)
   →  several "mid" models, no coder_model: a notice naming them, and nothing assigned — no random pick
   →  none: unchanged (agent_command, or the stub)
 ```
+
+The console shows the model that will build under `engineer_build`, `fix_pass` and
+`engineer_selfverify`, marked as the coder default rather than an assignment (`GET /config/nodes`,
+`by_model[...].nodes[].default`).
 
 `settings.coder_effort` (`low` | `medium` | `high`, default `medium`) is the effort for
 `engineer_build` and the nodes that follow it. Other nodes get none.
@@ -286,8 +303,11 @@ Looks for `claude`, `codex` and `ollama` on the **absolute** entries of `PATH` (
 Windows), never in the working directory, and runs exactly one thing: `ollama list`, with a timeout.
 It probes no port. It proposes entries — `claude-sonnet-5-5` (tier `mid`, with an `--effort
 {effort}` template), one `codex` entry with the model left for you, and one `ollama run <model>`
-wrapper per listed model. `command[0]` is the absolute path that was found, so dispatch runs the
-program `setup` showed. Writes only what is accepted: on a terminal each proposal is **Add**ed,
+wrapper per listed model. The `claude` and `codex` entries are `declared_reach: external` and the
+`propose:` line says their prompts, repository content included, go to Anthropic and OpenAI;
+offering one as `coder_model` repeats that in the prompt (`--yes` prints it as a note). `command[0]`
+is the absolute path that was found, so dispatch runs the program `setup` showed. On Windows only
+the `PATHEXT` forms are looked for (`claude.cmd`, never npm's extensionless shell shim). Writes only what is accepted: on a terminal each proposal is **Add**ed,
 **Edit**ed (id, tier, effort template; the command stays as detected; bad input is refused and
 re-asked) or **Skip**ped; `--yes` accepts all unchanged; off a terminal without `--yes` nothing is
 written. Entries go to the registry file and the store `serve` reads (`--models`,

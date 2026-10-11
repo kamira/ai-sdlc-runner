@@ -12,8 +12,11 @@ picked. "This work order leaves the machine" is a fact about a configuration, an
 records `endpoint` and leaves the reader to notice the hostname has made that fact into a detail.
 
 So every model carries a **reach** — ``local``, ``internal`` or ``external`` — computed from what it
-actually is, and the console shows it. The point is not to discourage external models. It is that
-choosing one should be a decision somebody made rather than one they discover later, in the same way
+actually is, and the console shows it. The one thing a transport cannot show is a vendor's CLI: a
+``cli`` model is a subprocess here, and ``claude`` sends its prompt to a hosted API, so such an entry
+*declares* its reach (``declared_reach``), which may only raise the computed one.
+
+The point is not to discourage external models. It is that choosing one should be a decision somebody made rather than one they discover later, in the same way
 this repository refuses to let a node's *name* decide how its models are read.
 
 ## Keys are named, never held
@@ -178,6 +181,9 @@ def graded_by_guess(endpoint: str) -> bool:
 def reach_of(transport: str, endpoint: str = "") -> str:
     """Where a model actually is. Computed, never declared.
 
+    From the transport alone. A vendor CLI's own `Model.declared_reach` can only raise this, and is
+    applied by `Model.reach`, which is what every disclosure reads.
+
     Asking the operator to label this themselves would put the one fact worth being sure about
     behind the one place a mistake is invisible — a model labelled ``internal`` pointing at a public
     host is a configuration that reads as safe and is not.
@@ -230,10 +236,15 @@ class Model:
     #: holds no knowledge of any one CLI and a local model needs no code. Empty means this model
     #: has no effort control, which a run reports rather than refuses.
     effort_argv: Tuple[str, ...] = ()
+    #: Where the work really goes, when the transport cannot say: a `cli` model is a subprocess
+    #: here, and `claude` or `codex` is a thin client that sends the prompt to a vendor. Empty means
+    #: "derive it". It may only **raise** the derived reach (`validate`), never lower it, so it
+    #: cannot label a public endpoint `local` (CHG-20261005-01, review round 2).
+    declared_reach: str = ""
 
     @property
     def reach(self) -> str:
-        return reach_of(self.transport, self.endpoint)
+        return self.declared_reach or reach_of(self.transport, self.endpoint)
 
     @property
     def leaves_this_machine(self) -> bool:
@@ -257,7 +268,8 @@ class Model:
         # external endpoint must name a key variable. A disclosure that makes an exemption
         # acceptable has to reach the surface, or the exemption is unaccompanied.
         payload["reach_guessed"] = bool(
-            self.transport == "api" and graded_by_guess(self.endpoint))
+            self.transport == "api" and not self.declared_reach
+            and graded_by_guess(self.endpoint))
         return payload
 
 
@@ -266,6 +278,21 @@ TIERS = ("", "high", "mid", "low")
 
 #: Where an effort lands inside `Model.effort_argv`.
 EFFORT_SLOT = "{effort}"
+
+
+def _check_declared_reach(model: Model) -> None:
+    """A declared reach is one of `REACHES` and never nearer than the transport shows."""
+    if not model.declared_reach:
+        return
+    if model.declared_reach not in REACHES:
+        raise ModelError(f"model {model.id!r} has declared_reach {model.declared_reach!r}; a reach "
+                         f"is one of {list(REACHES)}, or empty to derive it")
+    derived = reach_of(model.transport, model.endpoint)
+    if REACHES.index(model.declared_reach) < REACHES.index(derived):
+        raise ModelError(
+            f"model {model.id!r} declares reach {model.declared_reach!r} but its endpoint is "
+            f"{derived!r}. A declaration may say work goes further than the transport shows, never "
+            f"less far: a model labelled nearer than it is reads as safe and is not.")
 
 
 def with_effort(model: Model, effort: str) -> Optional[List[str]]:
@@ -311,6 +338,7 @@ def validate(model: Model) -> Model:
             raise ModelError(
                 f"cli model {model.id!r} carries an endpoint or a key name it cannot use. A field "
                 f"nothing reads is one somebody will later assume was honoured.")
+        _check_declared_reach(model)
         return model
 
     if not model.endpoint:
@@ -329,6 +357,7 @@ def validate(model: Model) -> Model:
             f"{remedy}")
     if model.command:
         raise ModelError(f"api model {model.id!r} carries a command it cannot use")
+    _check_declared_reach(model)
     if model.key_env and not _ENV_NAME.match(model.key_env):
         raise ModelError(
             f"model {model.id!r} has key_env {model.key_env!r}, which is not the name of an "
@@ -417,6 +446,7 @@ def _model_from(payload: Dict[str, object]) -> Model:
         note=str(payload.get("note") or ""),
         tier=str(payload.get("tier") or ""),
         effort_argv=tuple(payload.get("effort_argv") or ()),
+        declared_reach=str(payload.get("declared_reach") or ""),
     )
 
 

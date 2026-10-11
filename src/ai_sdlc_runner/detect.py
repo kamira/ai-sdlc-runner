@@ -16,8 +16,14 @@ search, which may include the working directory, and run a different program tha
 showed.
 
 **A proposal is not a decision.** `propose` returns registry entries (claude with a tier and an effort
-template, codex with an effort template only, ollama with neither); the runner holds no table of which model is "mid" beyond the one it suggests for a
-CLI that ships exactly one default. The user accepts, edits or declines each one.
+template, codex with an effort template only, ollama with neither); the runner holds no table of which
+model is "mid" beyond the one it suggests for a CLI that ships exactly one default. The user accepts,
+edits or declines each one.
+
+**Where the work goes is said, not inferred.** `claude` and `codex` are thin clients: the prompt, which
+carries the work order and the repository's content, goes to the vendor's hosted API. Their entries
+declare reach `external`, so every surface that reports whether work leaves the machine says it does.
+`ollama` stays `local`, which assumes the daemon is local: `OLLAMA_HOST` can point it elsewhere.
 """
 from __future__ import annotations
 
@@ -43,11 +49,25 @@ def _same_place(a: str, b: str) -> bool:
         return False
 
 
-def _extensions(environ) -> Tuple[str, ...]:
-    if os.name != "nt":
+def _on_windows() -> bool:
+    """Its own function so a test can answer yes on Linux; `os.name` itself cannot be patched
+    without breaking `pathlib`, which picks its flavour from it."""
+    return os.name == "nt"
+
+
+def _extensions(environ, name: str = "") -> Tuple[str, ...]:
+    """The suffixes to try after `name`. On Windows only PATHEXT ones, as `cmd.exe` does.
+
+    The bare name is not tried there unless it already ends in one: npm installs `claude` and
+    `codex` as three files, an extensionless POSIX shell shim beside `.cmd` and `.ps1`, and
+    Windows cannot run the shim (`WinError 193`). Since the path found is the path dispatched,
+    picking it would freeze a command that never starts into the registry.
+    """
+    if not _on_windows():
         return ("",)
     raw = environ.get("PATHEXT") or ".COM;.EXE;.BAT;.CMD"
-    return ("",) + tuple(e for e in raw.split(";") if e)
+    exts = tuple(e for e in raw.split(";") if e)
+    return ("",) if name.lower().endswith(tuple(e.lower() for e in exts)) else exts
 
 
 def find_tool(name: str, path: Optional[str] = None, cwd: Optional[str] = None,
@@ -59,9 +79,9 @@ def find_tool(name: str, path: Optional[str] = None, cwd: Optional[str] = None,
     for entry in search.split(os.pathsep):
         if not entry or not os.path.isabs(entry) or _same_place(entry, here):
             continue
-        for ext in _extensions(environ):
+        for ext in _extensions(environ, name):
             candidate = Path(entry) / (name + ext)
-            if candidate.is_file() and (os.name == "nt" or os.access(str(candidate), os.X_OK)):
+            if candidate.is_file() and (_on_windows() or os.access(str(candidate), os.X_OK)):
                 return str(candidate)
     return None
 
@@ -101,15 +121,17 @@ def propose(environ=None, path: Optional[str] = None, cwd: Optional[str] = None
             id="claude-sonnet-5-5", vendor="anthropic", name="claude-sonnet-5-5",
             transport=models_mod.CLI, tier="mid",
             command=(found["claude"], "-p", "--model", "claude-sonnet-5-5"),
-            effort_argv=("--effort", "{effort}"),
-            note=f"found at {found['claude']}"))
+            effort_argv=("--effort", "{effort}"), declared_reach=models_mod.EXTERNAL,
+            note="the claude CLI sends the work order and the repository's content to Anthropic"))
     if found["codex"]:
         proposals.append(models_mod.Model(
             id="codex", vendor="openai", name="codex-default", transport=models_mod.CLI,
             command=(found["codex"], "exec", "-"),
             effort_argv=("-c", "model_reasoning_effort={effort}"),
-            note=f"found at {found['codex']}. No model is named: add `--model <name>` to the "
-                 f"command and set a tier"))
+            declared_reach=models_mod.EXTERNAL,
+            note="the codex CLI sends the work order and the repository's content to OpenAI. No "
+                 "model is named: after adding it, edit models.json to add `--model <name>` to "
+                 "the command and set a tier"))
     if found["ollama"]:
         names, problem = ollama_models(found["ollama"])
         if problem:

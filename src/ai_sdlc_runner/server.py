@@ -1204,8 +1204,15 @@ def make_handler(runner: Runner, operator: Operator,
                  registry_path: Optional[Path] = None,
                  assignments: Optional[Mapping[str, object]] = None,
                  db=None, plan_assignments: Optional[Mapping[str, object]] = None,
-                 assignment_source: Optional[Mapping[str, str]] = None):
-    """The HTTP surface. Refuses before it reads, in the order the threat model requires."""
+                 assignment_source: Optional[Mapping[str, str]] = None,
+                 coder_default=None):
+    """The HTTP surface. Refuses before it reads, in the order the threat model requires.
+
+    `coder_default` is a callable returning `{node id: [model ids]}` for the nodes the coding
+    role's default will serve on the next run, or `{}`. It is the caller's own resolution (the one
+    the run applies), passed in rather than recomputed here, so the console cannot show a coder that
+    differs from the one that builds (CHG-20261005-01, review round 2).
+    """
 
     held = {"registry": registry if registry is not None else models_mod.Registry(),
             "assignments": dict(assignments or {}),
@@ -1506,6 +1513,15 @@ def make_handler(runner: Runner, operator: Operator,
                         entry = by_model.setdefault(
                             model_id, {"nodes": [], "seats": [], "known": model_id in known})
                         entry["nodes"].append({"node_id": node_id, "mode": mode})
+                # The coding role's default is a model that builds without being assigned. Marked
+                # `default` so it is never read as an assignment: `node_models` and `source` stay
+                # what the plan and the store said.
+                for node_id, ids in (coder_default() if coder_default else {}).items():
+                    mode = graph.BY_ID[node_id].mode if node_id in graph.BY_ID else None
+                    for model_id in ids:
+                        entry = by_model.setdefault(
+                            model_id, {"nodes": [], "seats": [], "known": model_id in known})
+                        entry["nodes"].append({"node_id": node_id, "mode": mode, "default": True})
                 for seat, command in seat_models.items():
                     # A seat naming a registry model lands in that model's bucket rather than
                     # inventing a second entry for the same backend under its command line.
@@ -1678,8 +1694,8 @@ def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
           registry_path: Optional[Path] = None,
           assignments: Optional[Mapping[str, object]] = None,
           db=None, plan_assignments: Optional[Mapping[str, object]] = None,
-          assignment_source: Optional[Mapping[str, str]] = None
-          ) -> ThreadingHTTPServer:
+          assignment_source: Optional[Mapping[str, str]] = None,
+          coder_default=None) -> ThreadingHTTPServer:
     """Build the server, refusing any host that is not this machine.
 
     The refusal is here rather than in the caller because a bind address is exactly the kind of thing
@@ -1742,7 +1758,8 @@ def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
         return _OneRunner((host, port),
                           make_handler(runner, operator, registry, registry_path, assignments,
                                        db=db, plan_assignments=plan_assignments,
-                                       assignment_source=assignment_source))
+                                       assignment_source=assignment_source,
+                                       coder_default=coder_default))
     except OSError as exc:
         # Only what the errno establishes. This branch used to say "something is already there"
         # for every failure a socket can have, and `socket.gaierror` is an `OSError` — so the

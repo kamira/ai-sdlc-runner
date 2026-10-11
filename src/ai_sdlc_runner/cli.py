@@ -521,6 +521,18 @@ def cmd_policy(args: argparse.Namespace) -> int:
     return 0
 
 
+def _egress(model) -> str:
+    """Where this model's work goes, when that is not this machine; empty when it stays here.
+
+    Said wherever a model is chosen to build, because the coding node's prompt carries the
+    repository's content (CHG-20261005-01, review round 2).
+    """
+    if not model.leaves_this_machine:
+        return ""
+    return (f"{model.id} is reach {model.reach}: it sends the work order and the repository's "
+            f"content to {model.vendor}")
+
+
 def coder_defaults(node_models: Mapping[str, Sequence[str]],
                    registry: Optional["models_mod.Registry"],
                    saved: "settings_mod.Settings"):
@@ -572,6 +584,13 @@ def coder_defaults(node_models: Mapping[str, Sequence[str]],
                 mid.append(m.id)
             if len(mid) == 1:
                 merged[build] = mid
+                # Nobody was asked, so say it: the model now building was picked by a rule.
+                chosen = registry.get(mid[0])
+                notices.append(
+                    f"{chosen.id} is the only tier 'mid' model, so it builds ({build} and the "
+                    f"nodes that follow it)"
+                    + (f". {_egress(chosen)}. Set coder_model to another model to change this."
+                       if chosen.leaves_this_machine else "; it runs on this machine."))
             elif len(mid) > 1:
                 notices.append(
                     f"{len(mid)} models are tier 'mid' ({', '.join(mid)}) and settings name no "
@@ -680,8 +699,9 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
         return 0
     for model in fresh:
         print(f"propose:       {model.id}  tier={model.tier or '(none)'}  "
-              f"command={' '.join(model.command)}"
+              f"reach={model.reach}  command={' '.join(model.command)}"
               + (f"  effort={' '.join(model.effort_argv)}" if model.effort_argv else "")
+              + (f"\n               {_egress(model)}" if model.leaves_this_machine else "")
               + (f"\n               {model.note}" if model.note else ""))
     interactive = _interactive()
     if args.yes:
@@ -741,11 +761,15 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
             if args.yes:
                 make = True
             else:
-                make = tui.select(f"Use {mid[0].id} as the coding model (coder_model)?",
+                sent = (f" The repository's content will be sent to {mid[0].vendor}."
+                        if mid[0].leaves_this_machine else "")
+                make = tui.select(f"Use {mid[0].id} as the coding model (coder_model)?{sent}",
                                   [("Yes", "engineer_build uses it unless a plan or the store says "
                                            "otherwise"), ("No", "leave coder_model empty")],
                                   input_fn=input_fn) == 0
             if make:
+                if args.yes and mid[0].leaves_this_machine:
+                    print(f"note:          {_egress(mid[0])}")
                 settings_mod.save(replace(current, coder_model=mid[0].id), args.settings)
                 print(f"wrote:         {args.settings} (coder_model = {mid[0].id})")
     return 0
@@ -1961,6 +1985,24 @@ def cmd_serve(args: argparse.Namespace) -> int:
             {"node_models": store_mod.node_models(db), "seat_models": store_mod.seat_models(db)})
         return merged
 
+    def coder_default():
+        """Where the coding default will send work on the next run, for the console to show.
+
+        The same `coder_defaults` the run applies, over the same plan-over-store assignment and
+        registry, so what the console says builds is what builds. Empty when an assignment already
+        speaks for `engineer_build` or nothing is chosen.
+        """
+        resolved = current_assignments().get("node_models") or {}
+        try:
+            merged = coder_defaults(resolved, store_mod.load_registry(db) or registry, saved)[0]
+        except CliError:
+            return {}
+        build = merged.get("engineer_build")
+        if resolved.get("engineer_build") or not build:
+            return {}
+        follows = [n.id for n in graph.NODES if n.follows == "engineer_build"]
+        return {node: list(build) for node in ["engineer_build"] + follows}
+
     def build_factory():
         """A fresh factory per walk, so a seat reassigned in the console takes effect on the next
         run rather than on the next restart. Capturing one at startup froze seat routing."""
@@ -1979,7 +2021,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
                              # Computed twelve lines above by `store.resolve` and dropped
                              # until now, so a freshly started console answered
                              # `"source": {}` (CHG-20260903-39).
-                             assignment_source=assignment_source)
+                             assignment_source=assignment_source,
+                             coder_default=coder_default)
     except server.ServerError as exc:
         print(f"error: {exc}")
         return 2

@@ -120,7 +120,8 @@ def test_a_schema_3_store_migrates_and_keeps_what_it_held(tmp_path):
 
     db = store.connect(path)
     assert db.execute("PRAGMA user_version").fetchone()[0] == 4 == store.SCHEMA_VERSION
-    assert [r[1] for r in db.execute("PRAGMA table_info(models)")][-2:] == ["tier", "effort_argv"]
+    assert [r[1] for r in db.execute("PRAGMA table_info(models)")][-3:] == [
+        "tier", "effort_argv", "declared_reach"]
     old = store.load_registry(db).get("old")
     assert old.tier == "" and old.effort_argv == () and old.command == ("agent",)
     assert store.node_models(db) == {"engineer_build": ["old"]}, "the assignment was lost"
@@ -279,7 +280,27 @@ def test_coder_model_comes_before_the_lone_mid_model():
 def test_the_only_mid_model_is_the_default():
     registry = _registry(_cli(id="a", tier="mid"), _cli(id="b", tier="low"))
     merged, _, notices = cli.coder_defaults({}, registry, settings_mod.Settings())
-    assert merged["engineer_build"] == ["a"] and notices == []
+    assert merged["engineer_build"] == ["a"]
+    # Picked by a rule nobody was asked about, so it is said: which model, and that it stays here.
+    assert len(notices) == 1 and "a is the only tier 'mid'" in notices[0]
+    assert "runs on this machine" in notices[0]
+
+
+def test_a_lone_mid_model_that_leaves_the_machine_says_so():
+    registry = _registry(_cli(id="a", tier="mid", declared_reach="external", vendor="acme"))
+    merged, _, notices = cli.coder_defaults({}, registry, settings_mod.Settings())
+    assert merged["engineer_build"] == ["a"]
+    assert len(notices) == 1 and "a " in notices[0] and "acme" in notices[0]
+    assert "repository's content" in notices[0] and "external" in notices[0]
+    assert "runs on this machine" not in notices[0]
+
+
+def test_the_run_prints_the_lone_mid_notice(tmp_path, capsys):
+    _project(tmp_path, [dict(id="solo", vendor="acme", name="n", transport="cli", tier="mid",
+                             declared_reach="external", **TEMPLATE)])
+    code, out = _run(tmp_path, capsys)
+    assert code == 0, out
+    assert "solo is the only tier 'mid'" in out and "sends the work order" in out and "acme" in out
 
 
 def test_several_mid_models_are_named_and_none_is_picked():
@@ -479,17 +500,24 @@ def test_serve_refuses_an_unknown_coder_model_before_it_starts(tmp_path, monkeyp
 def _fake(directory: Path, name: str, body: str) -> Path:
     """An executable called `name` that runs the Python in `body`. A `.cmd` shim on Windows."""
     directory.mkdir(parents=True, exist_ok=True)
-    script = directory / (name + ".py")
+    # Not `.py`: a Windows PATHEXT may list it, and `find_tool` would then rightly pick the script
+    # over the shim, so the tests would assert a path nobody dispatches.
+    script = directory / (name + ".impl")
     script.write_text(body, encoding="utf-8")
     if os.name == "nt":                                      # pragma: no cover
         shim = directory / (name + ".cmd")
-        shim.write_text(f'@"{sys.executable}" "%~dp0{name}.py" %*\r\n', encoding="utf-8")
+        shim.write_text(f'@"{sys.executable}" "%~dp0{name}.impl" %*\r\n', encoding="utf-8")
         return shim
     shim = directory / name
     shim.write_text(f'#!{sys.executable}\nexec(open({str(script)!r}, encoding="utf-8").read())\n',
                     encoding="utf-8")
     shim.chmod(0o755)
     return shim
+
+
+def _shim(directory: Path, name: str) -> Path:
+    """Where `_fake` put the runnable file for `name`."""
+    return directory / (name + (".cmd" if os.name == "nt" else ""))
 
 
 def _marker(directory: Path, name: str) -> str:
@@ -530,7 +558,26 @@ def _setup(tmp_path, *extra):
 
 def test_detection_finds_the_three_tools_on_an_absolute_path(machine):
     for name in detect.TOOLS:
-        assert detect.find_tool(name, path=str(machine)), name
+        found = detect.find_tool(name, path=str(machine))
+        # The file the fake planted: `name` on POSIX, `name.cmd` on Windows, never a bare name there.
+        assert found and os.path.normcase(found) == os.path.normcase(str(_shim(machine, name))), name
+
+
+def test_on_windows_a_cmd_shim_beats_the_extensionless_npm_script(tmp_path, monkeypatch):
+    # npm's layout: a POSIX sh script beside `.cmd` and `.ps1`. Windows cannot run the first, and the
+    # path found is the path dispatched, so choosing it registers a command that never starts.
+    for leaf in ("claude", "claude.cmd", "claude.ps1"):
+        (tmp_path / leaf).write_text("x", encoding="utf-8")
+    monkeypatch.setattr(detect, "_on_windows", lambda: True)
+    environ = {"PATHEXT": ".exe;.cmd"}
+    assert detect.find_tool("claude", path=str(tmp_path), environ=environ) == str(
+        tmp_path / "claude.cmd")
+    # With no shim at all, the bare script is not an answer on Windows.
+    (tmp_path / "claude.cmd").unlink()
+    assert detect.find_tool("claude", path=str(tmp_path), environ=environ) is None
+    # A name that already carries a PATHEXT extension is tried as written.
+    assert detect.find_tool("claude.ps1", path=str(tmp_path),
+                            environ={"PATHEXT": ".ps1"}) == str(tmp_path / "claude.ps1")
 
 
 def test_detection_never_looks_in_the_working_directory_or_a_relative_entry(tmp_path, monkeypatch):
@@ -663,7 +710,7 @@ def test_setup_lets_the_user_edit_a_proposal_before_it_is_written(machine, tmp_p
     assert [m.id for m in saved] == ["my-claude"]
     edited = saved.get("my-claude")
     assert (edited.tier, edited.effort_argv) == ("high", ("--reasoning", "{effort}"))
-    assert edited.command == (str(machine / "claude"), "-p", "--model", "claude-sonnet-5-5"), \
+    assert edited.command == (detect.find_tool("claude", path=str(machine)), "-p", "--model", "claude-sonnet-5-5"), \
         "the command stays as detected"
 
 
@@ -721,3 +768,184 @@ def test_the_lone_mid_fallback_skips_a_model_that_cannot_be_dispatched():
 def test_an_api_coder_model_is_refused_with_a_clear_error():
     with pytest.raises(cli.CliError, match="api model"):
         cli.coder_defaults({}, _registry(_api(id="remote")), settings_mod.Settings(coder_model="remote"))
+
+
+# ── review round 2 ─────────────────────────────────────────────────────────────────────────────
+
+# B · where the work goes is said, on every surface
+
+def test_a_declared_reach_overrides_the_derived_one_and_round_trips(tmp_path):
+    model = _cli(declared_reach="external")
+    assert model.reach == "external" and model.leaves_this_machine
+    assert _cli().reach == "local", "no declaration: derived, as before"
+    assert model.as_dict()["leaves_this_machine"] is True
+    # models.json
+    models.save(models.Registry(models=(model,)), tmp_path / "models.json")
+    assert models.load(tmp_path / "models.json").get("opus").declared_reach == "external"
+    # the store
+    db = store.connect(tmp_path / "c.sqlite")
+    store.save_registry(db, models.Registry(models=(model,)))
+    assert store.load_registry(store.connect(tmp_path / "c.sqlite")).get("opus").reach == "external"
+
+
+def test_a_declared_reach_is_validated_and_can_only_raise():
+    with pytest.raises(models.ModelError, match="declared_reach"):
+        models.validate(_cli(declared_reach="nearby"))
+    # An api model on a public host cannot be labelled nearer than it is.
+    with pytest.raises(models.ModelError, match="never"):
+        models.validate(_api(declared_reach="local"))
+    # Raising is fine: a private endpoint declared external.
+    private = _api(endpoint="http://10.0.0.5/v1", key_env="K", declared_reach="external")
+    assert models.validate(private).reach == "external" and not private.as_dict()["reach_guessed"]
+
+
+def test_the_proposals_for_claude_and_codex_leave_the_machine_and_ollama_does_not(machine):
+    by_id = {m.id: m for m in detect.propose()[0]}
+    for model_id in ("claude-sonnet-5-5", "codex"):
+        assert by_id[model_id].reach == "external" and by_id[model_id].leaves_this_machine
+    assert by_id["ollama-llama3-8b"].reach == "local"
+
+
+def test_setup_says_before_writing_that_the_work_goes_to_the_vendor(machine, tmp_path, capsys):
+    assert _setup(tmp_path) == 0                                 # off a terminal: shows, writes nothing
+    out = capsys.readouterr().out
+    assert "reach=external" in out and "repository's content to anthropic" in out
+    assert "repository's content to openai" in out
+    assert out.count("reach=local") == 2, "the two ollama models stay local"
+
+
+def test_the_coder_prompt_says_the_repository_goes_to_the_vendor(
+        machine, tmp_path, monkeypatch, capsys):
+    # claude: add; codex, llama, qwen: skip; then the coder_model prompt, which we read and refuse.
+    assert _interactive_setup(tmp_path, monkeypatch, ["1", "3", "3", "3", "2"]) == 0
+    out = capsys.readouterr().out
+    assert "Use claude-sonnet-5-5 as the coding model" in out
+    assert "repository's content will be sent to anthropic" in out
+    assert not (tmp_path / "settings.json").exists()
+
+
+def test_a_local_coder_prompt_does_not_claim_egress(machine, tmp_path, monkeypatch, capsys):
+    # claude, codex: skip; llama: edit to tier mid and accept; qwen: skip; coder prompt: no.
+    answers = ["3", "3", "2", "", "mid", "", "3", "2"]
+    assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
+    out = capsys.readouterr().out
+    assert "Use ollama-llama3-8b as the coding model" in out and "will be sent to" not in out
+
+
+def test_setup_yes_prints_where_the_coder_sends_the_work(machine, tmp_path, capsys):
+    assert _setup(tmp_path, "--yes") == 0
+    out = capsys.readouterr().out
+    assert "note:          claude-sonnet-5-5 is reach external" in out
+
+
+def test_the_server_reports_the_setup_models_as_leaving_the_machine(
+        machine, tmp_path, monkeypatch, capsys):
+    assert _setup(tmp_path, "--yes") == 0
+    capsys.readouterr()
+    _project_files(tmp_path)
+    body = _get_route(tmp_path, monkeypatch, "/models")
+    by_id = {m["id"]: m for m in body["models"]}
+    assert by_id["claude-sonnet-5-5"]["reach"] == "external"
+    assert by_id["claude-sonnet-5-5"]["leaves_this_machine"] is True
+    assert {"claude-sonnet-5-5", "codex"} <= set(body["leaving"])
+    assert "ollama-llama3-8b" not in body["leaving"]
+
+
+def test_a_store_stamped_4_before_declared_reach_gains_the_column(tmp_path):
+    path = tmp_path / "v4.sqlite"
+    _v3_store(path)
+    raw = sqlite3.connect(str(path))
+    for column, statement in store._SCHEMA_4[:2]:
+        raw.execute(statement)
+    raw.execute("PRAGMA user_version = 4")
+    raw.commit()
+    raw.close()
+    db = store.connect(path)
+    assert "declared_reach" in [r[1] for r in db.execute("PRAGMA table_info(models)")]
+    assert store.load_registry(db).get("old").reach == "local"
+
+
+# C · the console shows the model that will build
+
+def _project_files(tmp_path):
+    """The config, settings and plan `serve` takes, without touching an existing store."""
+    agent = tmp_path / "agent.py"
+    agent.write_text("print('{}')\n", encoding="utf-8")
+    (tmp_path / "runner.yaml").write_text(
+        f"agent_command: {json.dumps([sys.executable, str(agent)])}\n", encoding="utf-8")
+    plan = {"node_specs": {n.id: dict(SPEC) for n in graph.NODES if n.role},
+            "decisions": {"next_module": ["module", "none"], "feedback": "done"}, "risk": "low"}
+    (tmp_path / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+    if not (tmp_path / "settings.json").exists():
+        (tmp_path / "settings.json").write_text("{}", encoding="utf-8")
+
+
+def _get_route(tmp_path, monkeypatch, route):
+    """Start the real `cmd_serve` on an ephemeral port, GET `route` from it, and stop it."""
+    import threading
+    import urllib.request
+    from ai_sdlc_runner import server
+
+    real, seen = server.serve, {}
+
+    def serve_and_ask(runner, operator, **kw):
+        httpd = real(runner, operator, **kw)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        try:
+            port = httpd.server_address[1]
+            req = urllib.request.Request(f"http://127.0.0.1:{port}{route}", method="GET")
+            req.add_header("X-Operator-Token", operator.token)
+            req.add_header("Host", f"127.0.0.1:{port}")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                seen["body"] = json.loads(resp.read().decode("utf-8"))
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+        raise server.ServerError("stopped by the test")
+
+    monkeypatch.setattr(server, "serve", serve_and_ask)
+    cli.main(["--config", str(tmp_path / "runner.yaml"),
+              "--settings", str(tmp_path / "settings.json"),
+              "serve", "--plan", str(tmp_path / "plan.json"), "--port", "0",
+              "--token-dir", str(tmp_path / "tok"),
+              "--assignment-store", str(tmp_path / "config.sqlite"),
+              "--ask-journal", str(tmp_path / "asks")])
+    return seen["body"]
+
+
+CODER_NODES = {"engineer_build", "fix_pass", "engineer_selfverify"}
+
+
+def _default_nodes(body, model_id):
+    return {n["node_id"] for n in body["by_model"][model_id]["nodes"] if n.get("default")}
+
+
+def test_the_console_shows_the_coder_default_not_unused(tmp_path, monkeypatch, capsys):
+    _project(tmp_path, [dict(id="coder", vendor="v", name="n", transport="cli", **TEMPLATE)],
+             saved={"coder_model": "coder"})
+    body = _get_route(tmp_path, monkeypatch, "/config/nodes")
+    assert _default_nodes(body, "coder") == CODER_NODES
+    assert body["node_models"] == {}, "a default is not an assignment"
+
+
+def test_the_console_shows_the_lone_mid_model_as_the_coder(tmp_path, monkeypatch, capsys):
+    _project(tmp_path, [dict(id="a", vendor="v", name="n", transport="cli", tier="mid", **TEMPLATE),
+                        dict(id="b", vendor="v", name="n", transport="cli", tier="low", **TEMPLATE)])
+    body = _get_route(tmp_path, monkeypatch, "/config/nodes")
+    assert _default_nodes(body, "a") == CODER_NODES
+    assert body["by_model"]["b"]["nodes"] == [], "the other model is genuinely unused"
+
+
+def test_an_assignment_beats_the_default_in_the_console_too(tmp_path, monkeypatch, capsys):
+    _project(tmp_path, [dict(id="a", vendor="v", name="n", transport="cli", tier="mid", **TEMPLATE),
+                        dict(id="b", vendor="v", name="n", transport="cli", **TEMPLATE)],
+             plan_extra={"node_models": {"engineer_build": ["b"]}})
+    body = _get_route(tmp_path, monkeypatch, "/config/nodes")
+    assert _default_nodes(body, "a") == set() and _default_nodes(body, "b") == set()
+    assert [n["node_id"] for n in body["by_model"]["b"]["nodes"]] == ["engineer_build"]
+
+
+def test_the_console_page_labels_a_default_as_not_an_assignment():
+    page = (Path(cli.__file__).parent / "console" / "index.html").read_text(encoding="utf-8")
+    assert "n.default" in page and "not an assignment" in page

@@ -88,7 +88,8 @@ The registry, plus the one question a registry cannot answer for itself.
 
 ```jsonc
 { "models": [ { "id", "vendor", "name", "transport", "command", "endpoint", "key_env", "note",
-                "tier", "effort_argv", "reach", "leaves_this_machine", "reach_guessed" } ],
+                "tier", "effort_argv", "declared_reach", "reach", "leaves_this_machine",
+                "reach_guessed" } ],
   "leaving": [ "<model id>", … ] }
 ```
 
@@ -111,13 +112,19 @@ on eight nodes looks the same in a list as one on a single node.
 ```jsonc
 { "node_models": { "<node id>": ["<model id>", …] },
   "seat_models": { "<seat>": "<model id or joined command line>" },
-  "by_model": { "<model id or command>": { "nodes": [ {"node_id", "mode"} ],
+  "by_model": { "<model id or command>": { "nodes": [ {"node_id", "mode", "default"?} ],
                                            "seats": [ "<seat>", … ],
                                            "known": true } },
   "models": [ …as in GET /models, without `leaving`… ],
   "source": { "node_models.<node id>": "plan" | "store", "seat_models.<seat>": … },
   "assignable": [ "single", "model_panel", "pool" ] }
 ```
+
+**A `by_model` node entry with `"default": true` is the coding role's default, not an assignment.**
+With nothing assigned to `engineer_build`, the run builds with `coder_model` or the registry's only
+`mid` model (`cli.coder_defaults`), and `fix_pass` and `engineer_selfverify` follow it. `serve` passes
+the server that same resolution, so the model that will build is listed under those three nodes
+instead of "used nowhere". `node_models` and `source` stay exactly what the plan and the store said.
 
 **`source` says which of two places put each assignment there.** An assignment can come from the
 plan file (this change's declaration) or from the store (the project's standing one), and **the plan
@@ -219,7 +226,7 @@ snapshot"* the whole time the sentence above said it was one.
 | `POST /config/halts` | `{version, kind, recipient?}` | a `kind` that is not one of the six permanent halts. A `recipient` is **never** refused — an organisation names its own functions, and an unrecognised one still reaches somebody because the operator is on every halt. A blank or missing `recipient` clears the route |
 | `POST /run/instruct` | `{version, instruction}` | the instruction is empty — *"an empty instruction says nothing"* |
 | `POST /attachments` | `{version, filename, data}` — `data` is **base64** | the base64 is invalid, or `attachments.py` refuses the type or size |
-| `POST /models` | `{version, model: {…10 fields, listed in `models.Model`…}}` | `_model_from` refuses an unknown field, or `validate` refuses the model |
+| `POST /models` | `{version, model: {…11 fields, listed in `models.Model`…}}` | `_model_from` refuses an unknown field, or `validate` refuses the model |
 
 ### Gate and tie are not interchangeable
 

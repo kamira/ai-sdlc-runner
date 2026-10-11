@@ -594,8 +594,8 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "propagation", "the payload sketch may omit a key the route ships again",
         REPO / "docs" / "API.md",
-        '''                "tier", "effort_argv", "reach", "leaves_this_machine", "reach_guessed" } ],''',
-        '''                "tier", "effort_argv", "reach", "leaves_this_machine" } ],''',
+        '''                "reach_guessed" } ],''',
+        '''                "leaves_this_machine" } ],''',
         "tests/test_api_schema.py"),
 
     Mutation(

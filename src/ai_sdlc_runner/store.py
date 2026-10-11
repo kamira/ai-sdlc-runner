@@ -229,7 +229,7 @@ def _migrate(db: sqlite3.Connection) -> None:
                 db.execute(statement)
             db.execute("PRAGMA user_version = 3")
     if found < 4:
-        # Schema 4 adds a model's tier and effort template (CHG-20261005-01). The two columns are
+        # Schema 4 adds a model's tier, effort template and declared reach (CHG-20261005-01). The columns are
         # added to a `models` table verified to be the schema-3 one first, and both default to
         # "nothing", so a store written before this change reads back exactly as it was.
         _verify_or_refuse(db, before=3)
@@ -241,6 +241,15 @@ def _migrate(db: sqlite3.Connection) -> None:
                 if column not in have:
                     db.execute(statement)
             db.execute("PRAGMA user_version = 4")
+    else:
+        # A store stamped 4 by the build before review round 2 has `tier` and `effort_argv` but not
+        # `declared_reach`. Schema 4 had not shipped, so it gains the column here rather than
+        # costing a fifth version; any other shape is left for the first query to refuse.
+        with _locked(db), db:
+            db.execute("BEGIN")
+            have = {row[1] for row in db.execute("PRAGMA table_info(models)")}
+            if have and "declared_reach" not in have:
+                db.execute(dict(_SCHEMA_4)["declared_reach"])
     db.commit()
 
 
@@ -325,11 +334,12 @@ _SCHEMA_3 = (
 )
 
 
-#: Schema 4: the two columns a model gained. `ADD COLUMN` rather than a rebuilt table, because the
+#: Schema 4: the three columns a model gained (tier, effort template, declared reach). `ADD COLUMN` rather than a rebuilt table, because the
 #: assignment tables point at `models(id)` and a rebuild would have to drop what they reference.
 _SCHEMA_4 = (
     ("tier", "ALTER TABLE models ADD COLUMN tier TEXT NOT NULL DEFAULT ''"),
     ("effort_argv", "ALTER TABLE models ADD COLUMN effort_argv TEXT NOT NULL DEFAULT '[]'"),
+    ("declared_reach", "ALTER TABLE models ADD COLUMN declared_reach TEXT NOT NULL DEFAULT ''"),
 )
 
 #: `models` as schema 1 created it. A store below schema 4 must hold exactly this, because the
@@ -339,7 +349,7 @@ _MODELS_BEFORE_4 = ("id", "vendor", "name", "transport", "command_json", "endpoi
 
 _EXPECTED = {
     "halt_routing": ("kind", "recipient"),
-    "models": _MODELS_BEFORE_4 + ("tier", "effort_argv"),
+    "models": _MODELS_BEFORE_4 + ("tier", "effort_argv", "declared_reach"),
     "node_assignments": ("node_id", "ordinal", "model_id"),
     "seat_assignments": ("seat", "model_id"),
     "conversations": ("conversation_id", "project_id", "project_name", "schema", "run_json"),
@@ -401,13 +411,16 @@ def save_registry(db: sqlite3.Connection, registry: models_mod.Registry) -> None
     with _locked(db), db:
         db.executemany(
             "INSERT INTO models (id, vendor, name, transport, command_json, endpoint, key_env, "
-            "note, tier, effort_argv) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "note, tier, effort_argv, declared_reach) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET vendor=excluded.vendor, name=excluded.name, "
             "transport=excluded.transport, command_json=excluded.command_json, "
             "endpoint=excluded.endpoint, key_env=excluded.key_env, note=excluded.note, "
-            "tier=excluded.tier, effort_argv=excluded.effort_argv",
+            "tier=excluded.tier, effort_argv=excluded.effort_argv, "
+            "declared_reach=excluded.declared_reach",
             [(m.id, m.vendor, m.name, m.transport, json.dumps(list(m.command)),
-              m.endpoint, m.key_env, m.note, m.tier, json.dumps(list(m.effort_argv)))
+              m.endpoint, m.key_env, m.note, m.tier, json.dumps(list(m.effort_argv)),
+              m.declared_reach)
              for m in registry])
         stale = [row[0] for row in db.execute("SELECT id FROM models")
                  if row[0] not in keep]
@@ -442,12 +455,13 @@ def load_registry(db: sqlite3.Connection) -> models_mod.Registry:
     with _locked(db):
         rows = db.execute(
             "SELECT id, vendor, name, transport, command_json, endpoint, key_env, note, tier, "
-            "effort_argv FROM models ORDER BY id").fetchall()
+            "effort_argv, declared_reach FROM models ORDER BY id").fetchall()
     return models_mod.Registry(models=tuple(
         models_mod._model_from({
             "id": r[0], "vendor": r[1], "name": r[2], "transport": r[3],
             "command": json.loads(r[4]), "endpoint": r[5], "key_env": r[6], "note": r[7],
-            "tier": r[8], "effort_argv": json.loads(r[9])})
+            "tier": r[8], "effort_argv": json.loads(r[9]),
+            "declared_reach": r[10]})
         for r in rows))
 
 

@@ -319,7 +319,7 @@ the way in — the same reason CSV cells are defused against formulas.
 
 ## 10 · Model registry — **closed**, entry *and* envelope
 
-Ten fields, listed in `models.Model`, persist. `_model_from` refuses anything else by name — and so, now, does the envelope.
+Eleven fields, listed in `models.Model`, persist. `_model_from` refuses anything else by name — and so, now, does the envelope.
 A seat found that `{"models": [], "modelz": [...]}` loaded as an **empty registry**: one typo and
 every model you configured was gone with no message, which is the same defect `_model_from` refuses
 one level down. Closed on every path in: file load, `Registry.add`, and the console's
@@ -333,7 +333,8 @@ one level down. Closed on every path in: file load, `Registry.add`, and the cons
                 "key_env": "ANTHROPIC_API_KEY",  // the NAME of an env var. Never a key.
                 "note": "",
                 "tier": "",                      // "" | "high" | "mid" | "low" — a label, not inferred
-                "effort_argv": [] } ] }          // cli only — argv template; "{effort}" is substituted
+                "effort_argv": [],               // cli only — argv template; "{effort}" is substituted
+                "declared_reach": "" } ] }       // "" | "local" | "internal" | "external" — may only raise the derived reach
 ```
 
 **Three fields, listed in `models.COMPUTED`, are computed and never stored** — `reach` is `local` /

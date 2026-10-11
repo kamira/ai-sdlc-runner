@@ -362,7 +362,11 @@ function drawModels() {
     if (use.nodes && use.nodes.length) {
       // The mode matters as much as the node: three models on a `pool` is one of them doing the
       // work, and on a `model_panel` it is three voices being adjudicated. Same list, different run.
-      use.nodes.forEach(function (n) { row("node", n.node_id + "  (" + n.mode + ")"); });
+      use.nodes.forEach(function (n) {
+        // A default is not an assignment: nothing was assigned, the coding default builds.
+        row("node", n.node_id + "  (" + n.mode + ")" +
+            (n.default ? "  coder default (settings or the only mid model), not an assignment" : ""));
+      });
     }
     if (use.seats && use.seats.length) {
       use.seats.forEach(function (seat) { row("seat", seat); });

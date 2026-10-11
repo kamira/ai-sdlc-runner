@@ -172,7 +172,8 @@ CREATE TABLE models (
   key_env      TEXT NOT NULL DEFAULT '',     -- the NAME of an env var. Never a key.
   note         TEXT NOT NULL DEFAULT '',
   tier         TEXT NOT NULL DEFAULT '',     -- '' | 'high' | 'mid' | 'low'; a label a person gives (schema 4)
-  effort_argv  TEXT NOT NULL DEFAULT '[]'    -- argv template with {effort}, as a JSON list (schema 4)
+  effort_argv  TEXT NOT NULL DEFAULT '[]',   -- argv template with {effort}, as a JSON list (schema 4)
+  declared_reach TEXT NOT NULL DEFAULT ''    -- '' (derive it) | 'local' | 'internal' | 'external'; may only raise the derived reach (schema 4)
 );
 
 -- `ordinal`, because the order of a list is load-bearing: a pool's seeded choice and a model
@@ -195,10 +196,11 @@ CREATE TABLE seat_assignments (
 `seat_assignments` arrived at schema 1; `conversations` and `turns` at schema 2, with the
 conversation-store migration this document had been describing for four rounds.
 
-**Schema 4 (CHG-20261005-01) adds two columns to `models`**, `tier` and `effort_argv`, by
+**Schema 4 (CHG-20261005-01) adds three columns to `models`**, `tier`, `effort_argv` and
+`declared_reach`, by
 `ALTER TABLE … ADD COLUMN` with a default of nothing — so a schema-3 store reads back exactly as it
 was. `_verify_or_refuse` still compares columns exactly: below schema 4 the `models` table must be
-the eight-column one, and the migration adds the other two inside one transaction with the version
+the eight-column one, and the migration adds the other three inside one transaction with the version
 stamp.
 
 That sentence used to read *"`conversations` and `turns` are not created by any code yet"*, with the
