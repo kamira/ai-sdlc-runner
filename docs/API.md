@@ -94,7 +94,8 @@ The registry, plus the one question a registry cannot answer for itself.
 ```
 
 **Three fields, listed in `models.COMPUTED`, appear here and are never persisted** — `reach`,
-`leaves_this_machine` and `reach_guessed`, computed on every read from `(transport, endpoint)`. `leaving` is the same fact stated at the top level, because
+`leaves_this_machine` and `reach_guessed`, computed on every read from `(transport, endpoint)`, with `reach`
+raised to the stored `declared_reach` when that is higher (CHG-20261005-01). `leaving` is the same fact stated at the top level, because
 *"what goes out from here"* should not require a reader to scan a list and notice a hostname.
 
 ### `GET /attachments`

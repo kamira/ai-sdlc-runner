@@ -338,7 +338,8 @@ one level down. Closed on every path in: file load, `Registry.add`, and the cons
 ```
 
 **Three fields, listed in `models.COMPUTED`, are computed and never stored** — `reach` is `local` /
-`internal` / `external` derived from `(transport, endpoint)` on every load,
+`internal` / `external` derived from `(transport, endpoint)` on every load — raised to
+`declared_reach` when that is set and higher, never lowered by it (CHG-20261005-01) —
 `leaves_this_machine` follows from it, and `reach_guessed` says whether the derivation had
 to guess. `save()` strips them, and `models.py` says why on `models.COMPUTED`'s own line:
 *"Storing one would let a stale label outlive the truth."*
