@@ -733,6 +733,20 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
     except models_mod.ModelError as exc:
         print(f"error: {registry_path} holds a model this runner refuses: {exc}")
         return 2
+    # The store is the registry `run` and `serve` read once it has entries, so an id taken there is
+    # taken: checking models.json alone let a stored entry silently win at save while the coding
+    # default still named the id the user had accepted.
+    stored_before = models_mod.Registry(models=())
+    if str(store_path).lower() != "none" and Path(store_path).exists():
+        try:
+            db = store_mod.connect(store_path)
+            stored_before = store_mod.load_registry(db)
+            db.close()
+        except store_mod.StoreError as exc:
+            print(f"error: {exc}")
+            return 2
+    known = models_mod.Registry(models=tuple(known) + tuple(
+        m for m in stored_before if not any(k.id == m.id for k in known)))
     fresh = []
     for model in proposals:
         if any(m.id == model.id for m in known):
@@ -776,12 +790,46 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
     if not accepted:
         print("Nothing written.")
         return 0
+    mid = [m for m in accepted if m.tier == "mid"]
+    # Decide the coding default before anything is written, and persist a refusal before the model
+    # exists in any registry: a failed settings write must leave a declined model ineligible for
+    # the lone-`mid` fallback, and a rerun then finds nothing written and asks again.
+    chosen = None
+    if mid:
+        try:
+            current = settings_mod.load(args.settings)
+        except settings_mod.SettingsError as exc:
+            print(f"error: {exc}")
+            return 2
+        if not current.coder_model:
+            if args.yes:
+                chosen = True
+            else:
+                sent = (f" The repository's content will be sent to {mid[0].vendor}."
+                        if mid[0].leaves_this_machine else "")
+                chosen = tui.select(f"Use {mid[0].id} as the coding model (coder_model)?{sent}",
+                                    [("Yes", "engineer_build uses it unless a plan or the store "
+                                             "says otherwise"),
+                                     ("No", "no default coder model: nothing is picked for "
+                                            "you, not even a lone mid-tier model")],
+                                    input_fn=input_fn) == 0
+            if not chosen:
+                try:
+                    settings_mod.save(replace(current, coder_model=settings_mod.NO_CODER),
+                                      args.settings)
+                except (OSError, settings_mod.SettingsError) as exc:
+                    print(f"error: could not record the refusal in {args.settings}: {paths.plain_in(str(exc))}\n"
+                          f"Nothing was added to the registry; run `runner setup` again.")
+                    return 2
+                print(f"wrote:         {args.settings} (coder_model = {settings_mod.NO_CODER}: "
+                      f"no default coder model)")
     try:
-        written = known
+        written = models_mod.load(registry_path)
         for model in accepted:
             written = written.add(model)
         models_mod.save(written, registry_path)
         print(f"wrote:         {registry_path}")
+        persisted = {m.id for m in accepted}
         if str(store_path).lower() != "none":
             db = store_mod.connect(store_path)
             stored = store_mod.load_registry(db)
@@ -799,35 +847,19 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
     except (models_mod.ModelError, store_mod.StoreError) as exc:
         print(f"error: {exc}")
         return 2
-    mid = [m for m in accepted if m.tier == "mid"]
-    if mid:
-        try:
-            current = settings_mod.load(args.settings)
-        except settings_mod.SettingsError as exc:
-            print(f"error: {exc}")
+    if chosen:
+        # Only an entry that was just persisted under the accepted id can become the default.
+        if mid[0].id not in persisted:
+            print(f"error: {mid[0].id} was not persisted; coder_model not set")
             return 2
-        if not current.coder_model:
-            if args.yes:
-                make = True
-            else:
-                sent = (f" The repository's content will be sent to {mid[0].vendor}."
-                        if mid[0].leaves_this_machine else "")
-                make = tui.select(f"Use {mid[0].id} as the coding model (coder_model)?{sent}",
-                                  [("Yes", "engineer_build uses it unless a plan or the store says "
-                                           "otherwise"),
-                                          ("No", "no default coder model: nothing is picked for "
-                                                 "you, not even a lone mid-tier model")],
-                                  input_fn=input_fn) == 0
-            if make:
-                if args.yes and mid[0].leaves_this_machine:
-                    print(f"note:          {_egress(mid[0])}")
-                settings_mod.save(replace(current, coder_model=mid[0].id), args.settings)
-                print(f"wrote:         {args.settings} (coder_model = {mid[0].id})")
-            else:
-                settings_mod.save(replace(current, coder_model=settings_mod.NO_CODER),
-                                  args.settings)
-                print(f"wrote:         {args.settings} (coder_model = {settings_mod.NO_CODER}: "
-                      f"no default coder model)")
+        if args.yes and mid[0].leaves_this_machine:
+            print(f"note:          {_egress(mid[0])}")
+        try:
+            settings_mod.save(replace(current, coder_model=mid[0].id), args.settings)
+        except (OSError, settings_mod.SettingsError) as exc:
+            print(f"error: could not write {args.settings}: {paths.plain_in(str(exc))}")
+            return 2
+        print(f"wrote:         {args.settings} (coder_model = {mid[0].id})")
     return 0
 
 

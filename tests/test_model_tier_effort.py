@@ -1074,3 +1074,70 @@ def test_serve_displays_agent_command_not_a_lone_mid_model_as_the_coder(tmp_path
     _project(tmp_path, [dict(id="solo", vendor="v", name="n", transport="cli", tier="mid", **TEMPLATE)])
     body = _get_route(tmp_path, monkeypatch, "/config/nodes")
     assert _default_nodes(body, "solo") == set()
+
+
+# ── review round 6 · ids taken in the store, and the order of persistence ───────────────────────
+
+def _stored_coder(tmp_path):
+    tok = tmp_path / "tok"
+    tok.mkdir()
+    db = store.connect(tok / "config.sqlite")
+    store.save_registry(db, models.Registry(models=(
+        _cli(id="coder", tier="high", command=("claude", "-p", "--model", "claude-opus-5")),)))
+    db.close()
+    return tok
+
+
+def test_an_edit_cannot_take_an_id_that_only_the_store_holds(machine, tmp_path, monkeypatch, capsys):
+    tok = _stored_coder(tmp_path)
+    # claude: Edit -> id "coder" (the store's), refused; give up. The rest skipped. Nothing written.
+    answers = ["2", "coder", "", "", "", "2", "3", "3", "3"]
+    assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
+    assert "already in the registry" in capsys.readouterr().out
+    assert not (tok / "models.json").exists()
+    assert not (tmp_path / "settings.json").exists()
+
+
+def test_after_a_store_collision_the_coder_is_the_entry_actually_persisted(
+        machine, tmp_path, monkeypatch):
+    tok = _stored_coder(tmp_path)
+    # First try takes "coder" and is refused; the retry names it "sonnet-2"; Yes to the coder question.
+    answers = ["2", "coder", "", "", "", "1", "sonnet-2", "", "", "", "3", "3", "3", "1"]
+    assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
+    assert settings_mod.load(str(tmp_path / "settings.json")).coder_model == "sonnet-2"
+    db = store.connect(tok / "config.sqlite")
+    stored = store.load_registry(db)
+    assert stored.get("coder").tier == "high", "the stored entry is untouched"
+    assert stored.get("sonnet-2").tier == "mid"
+
+
+def test_setup_yes_skips_a_proposal_whose_id_the_store_already_holds(machine, tmp_path):
+    tok = tmp_path / "tok"
+    tok.mkdir()
+    db = store.connect(tok / "config.sqlite")
+    store.save_registry(db, models.Registry(models=(
+        _cli(id="claude-sonnet-5-5", tier="high", command=("claude", "-p", "--model", "x")),)))
+    db.close()
+    assert _setup(tmp_path, "--yes") == 0
+    assert not (tmp_path / "settings.json").exists(), "nothing accepted, so no coder default set"
+    assert store.load_registry(store.connect(tok / "config.sqlite")).get("claude-sonnet-5-5").tier == "high"
+
+
+def test_a_failed_settings_write_after_no_leaves_the_declined_model_unregistered(
+        machine, tmp_path, monkeypatch, capsys):
+    real = settings_mod.save
+
+    def broken(*a, **k):
+        raise PermissionError("read-only")
+    monkeypatch.setattr(settings_mod, "save", broken)
+    answers = ["1", "3", "3", "3", "2"]                  # add claude, skip the rest, No to the coder
+    assert _interactive_setup(tmp_path, monkeypatch, answers) == 2
+    assert "run `runner setup` again" in capsys.readouterr().out
+    # No registry holds the declined model, so no fallback can select it.
+    assert not (tmp_path / "tok" / "models.json").exists()
+    assert not (tmp_path / "tok" / "config.sqlite").exists()
+    # A rerun, with settings writable again, repairs it.
+    monkeypatch.setattr(settings_mod, "save", real)
+    assert _interactive_setup(tmp_path, monkeypatch, ["1", "3", "3", "3", "2"]) == 0
+    assert settings_mod.load(str(tmp_path / "settings.json")).coder_model == settings_mod.NO_CODER
+    assert models.load(tmp_path / "tok" / "models.json").get("claude-sonnet-5-5")
