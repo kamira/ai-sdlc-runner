@@ -646,11 +646,41 @@ def _interactive() -> bool:
     return bool(sys.stdin.isatty() and sys.stdout.isatty())
 
 
-def _edit_proposal(model, known, accepted, input_fn):
-    """Let the user change a proposal's id, tier and effort template; `None` if they give up.
+def _takes_model_name(model) -> bool:
+    """claude and codex are the detected tools that accept a model name on their command line."""
+    return model.vendor in ("anthropic", "openai")
 
-    The command stays as detected: it carries the absolute path that was found, and typing a
-    different one here would defeat that. Bad input is refused with a reason and asked again, never
+
+def _model_name_of(model) -> str:
+    cmd = list(model.command)
+    for flag in ("--model", "-m"):
+        if flag in cmd and cmd.index(flag) + 1 < len(cmd):
+            return cmd[cmd.index(flag) + 1]
+    return ""
+
+
+def _with_model_name(model, name: str):
+    """The command with the model name set: claude's `--model` value replaced, codex's `-m` appended.
+
+    Only the flag's value changes, so the absolute path in `command[0]` is kept. The edited entry
+    keeps `declared_reach`, so a codex entry given a name still says it leaves the machine.
+    """
+    cmd = list(model.command)
+    if "--model" in cmd and cmd.index("--model") + 1 < len(cmd):
+        cmd[cmd.index("--model") + 1] = name
+    elif "-m" in cmd and cmd.index("-m") + 1 < len(cmd):
+        cmd[cmd.index("-m") + 1] = name
+    else:
+        cmd += ["-m", name]
+    return tuple(cmd)
+
+
+def _edit_proposal(model, known, accepted, input_fn):
+    """Let the user change a proposal's id, tier, effort template and model name; `None` if they give up.
+
+    The executable stays as detected: it carries the absolute path that was found, and typing a
+    different one here would defeat that. The model name, for the tools that take one, is the
+    only other part of the command that can change. Bad input is refused with a reason and asked again, never
     written; a blank answer keeps the current value, and `-` clears the tier or the template.
     """
     taken = {m.id for m in known} | {m.id for m in accepted}
@@ -663,10 +693,16 @@ def _edit_proposal(model, known, accepted, input_fn):
                               f"(- for none) [{' '.join(model.effort_argv) or 'none'}]: ")
                      or "").strip()
         argv = model.effort_argv if not effort else (() if effort == "-" else tuple(effort.split()))
+        command, name = model.command, model.name
+        if _takes_model_name(model):
+            given = str(input_fn(f"model name, e.g. gpt-5 [{_model_name_of(model) or 'tool default'}]: ")
+                        or "").strip()
+            if given:
+                command, name = _with_model_name(model, given), given
         try:
             if new_id in taken:
                 raise models_mod.ModelError(f"{new_id!r} is already in the registry")
-            edited = replace(model, id=new_id, tier=tier, effort_argv=argv)
+            edited = replace(model, id=new_id, tier=tier, effort_argv=argv, command=command, name=name)
             models_mod.validate(edited)
             return edited
         except models_mod.ModelError as exc:
@@ -728,7 +764,7 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
         for model in fresh:
             choice = tui.select(f"Add {model.id} to the registry?",
                                 [("Add it", f"{' '.join(model.command)}"),
-                                 ("Edit", "change the id, tier or effort template first"),
+                                 ("Edit", "change the id, tier, effort template or model name first"),
                                  ("Skip", "leave it out")],
                                 input_fn=input_fn)
             if choice == 1:

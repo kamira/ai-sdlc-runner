@@ -130,10 +130,8 @@ def propose(environ=None, path: Optional[str] = None, cwd: Optional[str] = None
             effort_argv=("-c", "model_reasoning_effort={effort}"),
             declared_reach=models_mod.EXTERNAL,
             note="the codex CLI sends the work order and the repository's content to OpenAI. No "
-                 "model is named. Once the store has entries `run` and `serve` no longer read "
-                 "models.json, so editing it changes nothing: in the console's model editor "
-                 "(POST /models) add a second entry under a new id, with `--model <name>` in "
-                 "its command and a tier. That route only adds; it does not change this one"))
+                 "model is named: choose Edit here and give a model name (and a tier), and the "
+                 "entry is saved with `-m <name>` and still marked as leaving this machine"))
     if found["ollama"]:
         names, problem = ollama_models(found["ollama"])
         if problem:

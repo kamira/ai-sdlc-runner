@@ -718,7 +718,7 @@ def _interactive_setup(tmp_path, monkeypatch, answers):
 
 def test_setup_lets_the_user_edit_a_proposal_before_it_is_written(machine, tmp_path, monkeypatch):
     # claude: Edit (2) -> id, tier, effort template; codex/llama/qwen: skip; coder_model: no.
-    answers = ["2", "my-claude", "high", "--reasoning {effort}", "3", "3", "3", "2"]
+    answers = ["2", "my-claude", "high", "--reasoning {effort}", "", "3", "3", "3", "2"]
     assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
     saved = models.load(tmp_path / "tok" / "models.json")
     assert [m.id for m in saved] == ["my-claude"]
@@ -731,21 +731,21 @@ def test_setup_lets_the_user_edit_a_proposal_before_it_is_written(machine, tmp_p
 def test_an_invalid_edit_is_refused_and_asked_again_never_written(
         machine, tmp_path, monkeypatch, capsys):
     # First try: tier "ultra" -> refused, "Yes" try again (1); second try: blank = keep everything.
-    answers = ["2", "", "ultra", "", "1", "", "", "", "3", "3", "3", "2"]
+    answers = ["2", "", "ultra", "", "", "1", "", "", "", "", "3", "3", "3", "2"]
     assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
     assert "not accepted" in capsys.readouterr().out
     assert models.load(tmp_path / "tok" / "models.json").get("claude-sonnet-5-5").tier == "mid"
 
 
 def test_giving_up_on_a_bad_edit_skips_the_proposal(machine, tmp_path, monkeypatch):
-    answers = ["2", "", "ultra", "", "2", "3", "3", "3"]
+    answers = ["2", "", "ultra", "", "", "2", "3", "3", "3"]
     assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
     assert not (tmp_path / "tok").exists()
 
 
 def test_an_edit_cannot_take_an_id_already_in_the_registry(machine, tmp_path, monkeypatch, capsys):
     # claude: add; codex: edit to the id "claude-sonnet-5-5" -> refused, give up; the rest skipped.
-    answers = ["1", "2", "claude-sonnet-5-5", "", "", "2", "3", "3", "2"]
+    answers = ["1", "2", "claude-sonnet-5-5", "", "", "", "2", "3", "3", "2"]
     assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
     assert "already in the registry" in capsys.readouterr().out
     assert [m.id for m in models.load(tmp_path / "tok" / "models.json")] == ["claude-sonnet-5-5"]
@@ -1032,5 +1032,45 @@ def test_setup_no_then_resolving_never_builds_with_that_model(machine, tmp_path,
 
 def test_the_codex_note_points_at_the_store_not_at_models_json(machine):
     note = {m.id: m for m in detect.propose()[0]}["codex"].note
-    assert "POST /models" in note and "model editor" in note
-    assert "no longer read models.json" in note and "edit models.json" not in note
+    # The remedy is inside `setup` itself: the console has no model editor at this commit.
+    assert "Edit" in note and "model name" in note
+    assert "console" not in note and "POST /models" not in note and "editor" not in note
+
+
+# ── review round 4 · naming a model in Edit, and the lone-mid rule on `serve` ───────────────────────
+
+def test_edit_sets_codexs_model_and_the_entry_still_leaves_the_machine(machine, tmp_path, monkeypatch):
+    # claude: skip; codex: Edit -> id, tier, effort template all kept, model name gpt-5; the rest skipped.
+    answers = ["3", "2", "", "", "", "gpt-5", "3", "3", "2"]
+    assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
+    codex = models.load(tmp_path / "tok" / "models.json").get("codex")
+    assert codex.command[-2:] == ("-m", "gpt-5")
+    assert codex.command[0] == detect.find_tool("codex", path=str(machine))
+    assert codex.declared_reach == models.EXTERNAL and codex.leaves_this_machine
+    db = store.connect(tmp_path / "tok" / "config.sqlite")
+    from_store = store.load_registry(db).get("codex")
+    db.close()
+    assert from_store.command[-2:] == ("-m", "gpt-5") and from_store.leaves_this_machine
+
+
+def test_edit_replaces_claudes_model_value(machine, tmp_path, monkeypatch):
+    answers = ["2", "", "", "", "claude-opus-x", "3", "3", "3", "2"]
+    assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
+    claude = models.load(tmp_path / "tok" / "models.json").get("claude-sonnet-5-5")
+    assert claude.command == (detect.find_tool("claude", path=str(machine)), "-p", "--model",
+                              "claude-opus-x")
+    assert claude.leaves_this_machine
+
+
+def test_serve_keeps_agent_command_over_a_lone_mid_model_in_make_config(
+        tmp_path, monkeypatch, capsys):
+    _project(tmp_path, [dict(id="solo", vendor="v", name="n", transport="cli", tier="mid", **TEMPLATE)])
+    code, out, make_config = _serve(tmp_path, monkeypatch, capsys)
+    assert code == 2 and "stopped by the test" in out, out
+    assert "engineer_build" not in make_config((), (), ()).node_models
+
+
+def test_serve_displays_agent_command_not_a_lone_mid_model_as_the_coder(tmp_path, monkeypatch, capsys):
+    _project(tmp_path, [dict(id="solo", vendor="v", name="n", transport="cli", tier="mid", **TEMPLATE)])
+    body = _get_route(tmp_path, monkeypatch, "/config/nodes")
+    assert _default_nodes(body, "solo") == set()

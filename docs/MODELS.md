@@ -322,9 +322,9 @@ re-asked) or **Skip**ped; `--yes` accepts all unchanged; off a terminal without 
 written. Entries go to the registry file and the store `serve` reads (`--models`,
 `--assignment-store`, `--token-dir`); when the store is empty, everything already in `models.json`
 is saved with them so `serve` does not lose it. Once the store has entries, `run` and `serve` read
-the registry from it and no longer read `models.json`; to change what is in the store use the
-console's model editor (`POST /models`, which only adds an entry under a new id) — the codex entry's
-note says this, because the codex entry names no model and its command cannot be edited in place. It offers to set `coder_model` to an accepted `mid` model. **A No is recorded**: `coder_model` is
+the registry from it and no longer read `models.json`. The codex entry names no model; choose
+**Edit** in `setup` and give a model name — for codex it is appended as `-m <name>`, for claude it
+replaces the `--model` value — and the edited entry keeps its `external` reach. It offers to set `coder_model` to an accepted `mid` model. **A No is recorded**: `coder_model` is
 saved as `none`, which means no default coder model, so the lone-`mid` rule does not pick the model
 just declined (the settings screen shows it as declined; a blank answer there clears it back to the
 rule). It assigns nothing to any node. Nothing found: it says so, points here, and exits 0.
