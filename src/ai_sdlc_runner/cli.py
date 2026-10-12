@@ -751,8 +751,16 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
     # taken: checking models.json alone let a stored entry silently win at save while the coding
     # default still named the id the user had accepted.
     # Read without migrating: only an accepted write may change the store's schema.
-    stored_ids = (store_mod.stored_model_ids(store_path)
-                  if str(store_path).lower() != "none" and Path(store_path).exists() else frozenset())
+    # A store that exists but cannot be read is a refusal here, before anything is asked: reading it
+    # as "no ids" could let an accepted id collide with a stored one that save time then finds.
+    try:
+        stored_ids = (store_mod.stored_model_ids(store_path)
+                      if str(store_path).lower() != "none" and Path(store_path).exists()
+                      else frozenset())
+    except store_mod.StoreError as exc:
+        print(f"error: {exc}\nNothing was asked or written; fix or move the store and run "
+              f"`runner setup` again.")
+        return 2
     taken_ids = {m.id for m in known} | set(stored_ids)
     fresh = []
     for model in proposals:
@@ -814,12 +822,18 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
             else:
                 sent = (f" The repository's content will be sent to {mid[0].vendor}."
                         if mid[0].leaves_this_machine else "")
-                chosen = tui.select(f"Use {mid[0].id} as the coding model (coder_model)?{sent}",
+                answer = tui.select(f"Use {mid[0].id} as the coding model (coder_model)?{sent}",
                                     [("Yes", "engineer_build uses it unless a plan or the store "
                                              "says otherwise"),
                                      ("No", "no default coder model: nothing is picked for "
                                             "you, not even a lone mid-tier model")],
-                                    input_fn=input_fn) == 0
+                                    input_fn=input_fn)
+                if answer is None:
+                    # Backing out is not a refusal: only an explicit No may switch the default off.
+                    print("cancelled:     no answer to the coder question; nothing was written. "
+                          "Run `runner setup` again.")
+                    return 2
+                chosen = answer == 0
             if not chosen:
                 try:
                     settings_mod.save(replace(current, coder_model=settings_mod.NO_CODER),
@@ -837,6 +851,7 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
         models_mod.save(written, registry_path)
         print(f"wrote:         {registry_path}")
         persisted = {m.id for m in accepted}
+        confirmed = written
         if str(store_path).lower() != "none":
             db = store_mod.connect(store_path)
             stored = store_mod.load_registry(db)
@@ -849,7 +864,9 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
                     if not any(m.id == model.id for m in stored):
                         stored = stored.add(model)
             store_mod.save_registry(db, stored)
+            stored = store_mod.load_registry(db)
             db.close()
+            confirmed = stored
             print(f"wrote:         {store_path}")
     except (models_mod.ModelError, store_mod.StoreError) as exc:
         print(f"error: {exc}")
@@ -858,6 +875,13 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
         # Only an entry that was just persisted under the accepted id can become the default.
         if mid[0].id not in persisted:
             print(f"error: {mid[0].id} was not persisted; coder_model not set")
+            return 2
+        # What `run` will read must be what the user accepted, not an entry that was already there.
+        held = next((m for m in confirmed if m.id == mid[0].id), None)
+        if held is None or (held.command, held.tier, held.reach) != (
+                mid[0].command, mid[0].tier, mid[0].reach):
+            print(f"error: the registry holds a different {mid[0].id} than the one accepted; "
+                  f"coder_model not set")
             return 2
         if args.yes and mid[0].leaves_this_machine:
             print(f"note:          {_egress(mid[0])}")

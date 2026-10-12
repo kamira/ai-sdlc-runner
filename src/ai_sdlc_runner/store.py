@@ -450,17 +450,21 @@ def stored_model_ids(path: "str | Path") -> frozenset:
     `setup` needs these before anyone has accepted anything, and `connect` migrates (and commits)
     the store to the current schema: a setup that then wrote nothing would still have made the
     store unreadable by the previous runner. So this opens the file read-only, whatever its schema
-    version. A store that cannot be read this way (absent, locked, not a database, no `models`
-    table yet) yields no ids; the write path, which does migrate, is where that is reported.
+    version. A store that cannot be read this way (locked, not a database) raises `StoreError`; one with no `models`
+    table yet) is refused rather than read as "no ids": an empty set would let setup accept an id
+    the store already holds, and a later successful read at save time would keep the stored entry
+    under the id the user accepted. A store with no `models` table yet really has no ids.
     """
     try:
         db = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
-    except (sqlite3.Error, OSError, ValueError):
-        return frozenset()
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        raise StoreError(f"cannot read the store {path}: {paths.plain_in(str(exc))}") from exc
     try:
         return frozenset(r[0] for r in db.execute("SELECT id FROM models"))
-    except sqlite3.Error:
-        return frozenset()
+    except sqlite3.Error as exc:
+        if "no such table" in str(exc):
+            return frozenset()
+        raise StoreError(f"cannot read the store {path}: {paths.plain_in(str(exc))}") from exc
     finally:
         db.close()
 

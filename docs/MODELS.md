@@ -214,7 +214,8 @@ vendor. `declared_reach` says so: `runner setup` writes `external` for both, and
 hand-written entry like them you should too. A declaration can only raise the reach, so it cannot
 make a public endpoint read `local`. `ollama` entries stay derived (`local`), which assumes the
 daemon is local: `OLLAMA_HOST` pointing at another machine is not detected as a different reach,
-though `setup` prints a note when it is set to a non-loopback host. The exception is an Ollama
+though `setup` prints a note (host and port only, never credentials) when it is set to a
+non-loopback host. The exception is an Ollama
 **cloud** model (a `ollama list` name whose tag ends in `cloud`, such as `qwen3-coder:480b-cloud`):
 `ollama run` sends it to ollama.com, so `setup` proposes it as `declared_reach: external` with vendor
 `ollama.com`.
@@ -333,7 +334,10 @@ the registry from it and no longer read `models.json`. The codex entry names no 
 replaces the `--model` value — and the edited entry keeps its `external` reach. It offers to set `coder_model` to an accepted `mid` model. **A No is recorded**: `coder_model` is
 saved as `none`, which means no default coder model, so the lone-`mid` rule does not pick the model
 just declined (the settings screen shows it as declined; a blank answer there clears it back to the
-rule). It assigns nothing to any node. Nothing found: it says so, points here, and exits 0.
+rule). Only an explicit No is recorded: backing out of the question (an empty line, `q`, EOF, Esc)
+writes nothing and exits non-zero. A store that exists but cannot be read is refused before anything
+is asked, and `coder_model` is set only after the persisted entry is read back and equals the accepted
+one. It assigns nothing to any node. Nothing found: it says so, points here, and exits 0.
 
 Routing lives in the **factory**, never in the work order. That is what makes a panel meaningful:
 every voice receives an identical order and only the answerer differs.

@@ -32,6 +32,7 @@ import re
 import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple
+from urllib.parse import urlsplit
 
 from . import models as models_mod, paths
 
@@ -121,6 +122,23 @@ def _loopback_host(host: str) -> bool:
     return bare.lower() in ("", "localhost", "::1", "0.0.0.0") or bare.startswith("127.")
 
 
+def _host_port(value: str) -> str:
+    """Only `host[:port]` of an `OLLAMA_HOST` value, safe to print.
+
+    The value may carry credentials (`https://user:secret@host`), a path, a query or a fragment,
+    and the note goes to the terminal and to any log of it. An unparsable value prints no part of it.
+    """
+    try:
+        parsed = urlsplit(value if "://" in value else "//" + value)
+        host, port = parsed.hostname, parsed.port
+    except ValueError:
+        return "a host that could not be read (its value is not printed)"
+    if not host:
+        return "a host that could not be read (its value is not printed)"
+    host = f"[{host}]" if ":" in host else host
+    return f"{host}:{port}" if port else host
+
+
 def plain_id(prefix: str, name: str) -> str:
     """A registry id for a vendor's own model name, which may carry `:` and `.`."""
     return prefix + "-" + re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-")
@@ -154,7 +172,7 @@ def propose(environ=None, path: Optional[str] = None, cwd: Optional[str] = None
             notes.append(problem)
         host = (os.environ if environ is None else environ).get("OLLAMA_HOST", "")
         if host and not _loopback_host(host):
-            notes.append(f"OLLAMA_HOST is {host}: `ollama list` and `ollama run` talk to that host, "
+            notes.append(f"OLLAMA_HOST is {_host_port(host)}: `ollama list` and `ollama run` talk to that host, "
                          f"so these models may run elsewhere than this machine; they are labelled "
                          f"local only because the daemon is assumed to be")
         for name in names:

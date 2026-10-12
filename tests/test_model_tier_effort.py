@@ -1205,17 +1205,65 @@ def test_setup_still_sees_a_collision_in_a_schema_3_store(machine, tmp_path, cap
     assert "already there: codex" in capsys.readouterr().out
 
 
-def test_an_unreadable_store_does_not_stop_setup_from_refusing_what_it_can_see(
-        machine, tmp_path, capsys):
+def test_an_unreadable_store_is_refused_before_anything_is_asked(machine, tmp_path, capsys, monkeypatch):
     tok = tmp_path / "tok"
     tok.mkdir()
     (tok / "config.sqlite").write_bytes(b"this is not a database" * 50)
-    (tok / "models.json").write_text(json.dumps({"models": [dict(
-        id="codex", vendor="v", name="n", transport="cli", command=["x"])]}), encoding="utf-8")
-    assert store.stored_model_ids(tok / "config.sqlite") == frozenset()
-    assert _setup(tmp_path) == 0
-    out = capsys.readouterr().out
-    assert "already there: codex" in out and "propose:       claude-sonnet-5-5" in out
+    with pytest.raises(store.StoreError):
+        store.stored_model_ids(tok / "config.sqlite")
+    asked = []
+    monkeypatch.setattr(cli, "_interactive", lambda: True)
+    args = cli.build_parser().parse_args(
+        ["--settings", str(tmp_path / "settings.json"), "setup", "--token-dir", str(tok)])
+    assert cli.cmd_setup(args, input_fn=lambda prompt="": asked.append(prompt) or "1") == 2
+    assert asked == [] and "cannot read the store" in capsys.readouterr().out
+    assert not (tok / "models.json").exists() and not (tmp_path / "settings.json").exists()
+    assert _setup(tmp_path, "--yes") == 2
+
+
+def test_a_stored_entry_that_is_not_the_accepted_one_is_never_made_the_coder(
+        machine, tmp_path, monkeypatch, capsys):
+    # The store holds an external high-tier claude-sonnet-5-5; the id read missed it (as a read
+    # failure that cleared by save time would), so setup accepts its own local mid-tier proposal.
+    tok = tmp_path / "tok"
+    tok.mkdir()
+    db = store.connect(tok / "config.sqlite")
+    other = models.Model(id="claude-sonnet-5-5", vendor="other", name="n", transport=models.CLI,
+                         tier="high", command=("elsewhere",), declared_reach=models.EXTERNAL)
+    store.save_registry(db, models.Registry(models=(other,)))
+    db.close()
+    monkeypatch.setattr(store, "stored_model_ids", lambda path: frozenset())
+    assert _interactive_setup(tmp_path, monkeypatch, ["1", "3", "3", "3", "1"]) == 2
+    assert "different claude-sonnet-5-5" in capsys.readouterr().out
+    assert not (tmp_path / "settings.json").exists()
+
+
+def test_cancelling_the_coder_question_writes_nothing_but_no_does(machine, tmp_path, monkeypatch, capsys):
+    for cancel in ("", "q", "quit", "exit"):
+        home = tmp_path / ("c" + cancel)
+        home.mkdir()
+        assert _interactive_setup(home, monkeypatch, ["1", "3", "3", "3", cancel]) == 2, cancel
+        assert not (home / "settings.json").exists() and not (home / "tok").exists(), cancel
+        assert "nothing was written" in capsys.readouterr().out
+    # EOF at the prompt is the same cancel.
+    eof = tmp_path / "eof"
+    eof.mkdir()
+    answers = iter(["1", "3", "3", "3"])
+
+    def feed(prompt=""):
+        try:
+            return next(answers)
+        except StopIteration:
+            raise EOFError
+    monkeypatch.setattr(cli, "_interactive", lambda: True)
+    args = cli.build_parser().parse_args(
+        ["--settings", str(eof / "settings.json"), "setup", "--token-dir", str(eof / "tok")])
+    assert cli.cmd_setup(args, input_fn=feed) == 2
+    assert not (eof / "settings.json").exists() and not (eof / "tok").exists()
+    no = tmp_path / "no"
+    no.mkdir()
+    assert _interactive_setup(no, monkeypatch, ["1", "3", "3", "3", "2"]) == 0
+    assert settings_mod.load(str(no / "settings.json")).coder_model == settings_mod.NO_CODER
 
 
 def test_an_ollama_cloud_model_is_proposed_as_leaving_the_machine(machine, tmp_path, capsys):
@@ -1245,6 +1293,16 @@ def test_the_coder_question_names_ollama_com_for_a_cloud_model(
     assert "will be sent to ollama.com" in capsys.readouterr().out
 
 
+def test_the_ollama_host_note_never_prints_credentials(machine, tmp_path, monkeypatch, capsys):
+    for value in ("https://operator:EXAMPLE_SECRET@gpu.example:11434/path?token=EXAMPLE_SECRET#EXAMPLE_SECRET",
+                  "operator:EXAMPLE_SECRET@gpu.example:11434", "http://operator:EXAMPLE_SECRET@[::2]:99999"):
+        monkeypatch.setenv("OLLAMA_HOST", value)
+        assert _setup(tmp_path) == 0
+        out = capsys.readouterr().out
+        assert "EXAMPLE_SECRET" not in out and "operator" not in out and "OLLAMA_HOST is " in out
+    assert detect._host_port("https://u:p@gpu.example:11434/x") == "gpu.example:11434"
+
+
 def test_edit_can_raise_a_reach(machine, tmp_path, monkeypatch):
     # claude, codex: skip; llama3 (local): Edit -> id, tier, effort kept, reach external; qwen skipped.
     answers = ["3", "3", "2", "", "", "", "external", "3"]
@@ -1264,7 +1322,7 @@ def test_edit_cannot_lower_a_reach(machine, tmp_path, monkeypatch, capsys):
 def test_a_remote_ollama_host_is_noted(machine, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("OLLAMA_HOST", "http://gpu-box.example:11434")
     assert _setup(tmp_path) == 0
-    assert "OLLAMA_HOST is http://gpu-box.example:11434" in capsys.readouterr().out
+    assert "OLLAMA_HOST is gpu-box.example:11434:" in capsys.readouterr().out
     for local in ("127.0.0.1:11434", "localhost", "http://[::1]:11434", "0.0.0.0"):
         assert detect._loopback_host(local), local
     _, notes = detect.propose(environ={"OLLAMA_HOST": "127.0.0.1:11434", "PATH": str(machine)},
