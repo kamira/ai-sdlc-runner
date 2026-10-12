@@ -675,7 +675,7 @@ def _with_model_name(model, name: str):
     return tuple(cmd)
 
 
-def _edit_proposal(model, known, accepted, input_fn):
+def _edit_proposal(model, taken_ids, accepted, input_fn):
     """Let the user change a proposal's id, tier, effort template and model name; `None` if they give up.
 
     The executable stays as detected: it carries the absolute path that was found, and typing a
@@ -683,7 +683,7 @@ def _edit_proposal(model, known, accepted, input_fn):
     only other part of the command that can change. Bad input is refused with a reason and asked again, never
     written; a blank answer keeps the current value, and `-` clears the tier or the template.
     """
-    taken = {m.id for m in known} | {m.id for m in accepted}
+    taken = set(taken_ids) | {m.id for m in accepted}
     while True:
         new_id = str(input_fn(f"id [{model.id}]: ") or "").strip() or model.id
         tier = str(input_fn(f"tier (high/mid/low, - for none) [{model.tier or 'none'}]: ")
@@ -693,6 +693,8 @@ def _edit_proposal(model, known, accepted, input_fn):
                               f"(- for none) [{' '.join(model.effort_argv) or 'none'}]: ")
                      or "").strip()
         argv = model.effort_argv if not effort else (() if effort == "-" else tuple(effort.split()))
+        reach_in = str(input_fn("reach (local/internal/external, can only be raised) "
+                                f"[{model.reach}]: ") or "").strip().lower()
         command, name = model.command, model.name
         if _takes_model_name(model):
             given = str(input_fn(f"model name, e.g. gpt-5 [{_model_name_of(model) or 'tool default'}]: ")
@@ -702,7 +704,19 @@ def _edit_proposal(model, known, accepted, input_fn):
         try:
             if new_id in taken:
                 raise models_mod.ModelError(f"{new_id!r} is already in the registry")
-            edited = replace(model, id=new_id, tier=tier, effort_argv=argv, command=command, name=name)
+            declared = model.declared_reach
+            if reach_in:
+                if reach_in not in models_mod.REACHES:
+                    raise models_mod.ModelError(
+                        f"reach {reach_in!r} is not one of {list(models_mod.REACHES)}")
+                # Never lowered, the rule `_check_declared_reach` applies to a hand-written entry.
+                if models_mod.REACHES.index(reach_in) < models_mod.REACHES.index(model.reach):
+                    raise models_mod.ModelError(
+                        f"reach {reach_in!r} is nearer than this entry's {model.reach!r}; setup can "
+                        f"only raise a reach")
+                declared = reach_in
+            edited = replace(model, id=new_id, tier=tier, effort_argv=argv, command=command, name=name,
+                             declared_reach=declared)
             models_mod.validate(edited)
             return edited
         except models_mod.ModelError as exc:
@@ -736,20 +750,13 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
     # The store is the registry `run` and `serve` read once it has entries, so an id taken there is
     # taken: checking models.json alone let a stored entry silently win at save while the coding
     # default still named the id the user had accepted.
-    stored_before = models_mod.Registry(models=())
-    if str(store_path).lower() != "none" and Path(store_path).exists():
-        try:
-            db = store_mod.connect(store_path)
-            stored_before = store_mod.load_registry(db)
-            db.close()
-        except store_mod.StoreError as exc:
-            print(f"error: {exc}")
-            return 2
-    known = models_mod.Registry(models=tuple(known) + tuple(
-        m for m in stored_before if not any(k.id == m.id for k in known)))
+    # Read without migrating: only an accepted write may change the store's schema.
+    stored_ids = (store_mod.stored_model_ids(store_path)
+                  if str(store_path).lower() != "none" and Path(store_path).exists() else frozenset())
+    taken_ids = {m.id for m in known} | set(stored_ids)
     fresh = []
     for model in proposals:
-        if any(m.id == model.id for m in known):
+        if model.id in taken_ids:
             print(f"already there: {model.id}")
         else:
             fresh.append(model)
@@ -782,7 +789,7 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
                                  ("Skip", "leave it out")],
                                 input_fn=input_fn)
             if choice == 1:
-                model = _edit_proposal(model, known, accepted, input_fn)
+                model = _edit_proposal(model, taken_ids, accepted, input_fn)
                 if model is not None:
                     accepted.append(model)
             elif choice == 0:

@@ -444,6 +444,27 @@ def _assigned_to(db: sqlite3.Connection, model_id: str) -> List[str]:
     return nodes + seats
 
 
+def stored_model_ids(path: "str | Path") -> frozenset:
+    """The ids in the store's `models` table, read without opening it for writing or migrating it.
+
+    `setup` needs these before anyone has accepted anything, and `connect` migrates (and commits)
+    the store to the current schema: a setup that then wrote nothing would still have made the
+    store unreadable by the previous runner. So this opens the file read-only, whatever its schema
+    version. A store that cannot be read this way (absent, locked, not a database, no `models`
+    table yet) yields no ids; the write path, which does migrate, is where that is reported.
+    """
+    try:
+        db = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
+    except (sqlite3.Error, OSError, ValueError):
+        return frozenset()
+    try:
+        return frozenset(r[0] for r in db.execute("SELECT id FROM models"))
+    except sqlite3.Error:
+        return frozenset()
+    finally:
+        db.close()
+
+
 def load_registry(db: sqlite3.Connection) -> models_mod.Registry:
     """Read it back, **through `models.validate`**.
 

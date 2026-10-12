@@ -213,7 +213,11 @@ clients that send the prompt, which carries the work order and the repository's 
 vendor. `declared_reach` says so: `runner setup` writes `external` for both, and for any
 hand-written entry like them you should too. A declaration can only raise the reach, so it cannot
 make a public endpoint read `local`. `ollama` entries stay derived (`local`), which assumes the
-daemon is local: `OLLAMA_HOST` pointing at another machine is not detected.
+daemon is local: `OLLAMA_HOST` pointing at another machine is not detected as a different reach,
+though `setup` prints a note when it is set to a non-loopback host. The exception is an Ollama
+**cloud** model (a `ollama list` name whose tag ends in `cloud`, such as `qwen3-coder:480b-cloud`):
+`ollama run` sends it to ollama.com, so `setup` proposes it as `declared_reach: external` with vendor
+`ollama.com`.
 
 `leaves_this_machine` is simply `reach != local`. `Registry.leaving()` returns those models, and
 `GET /models` sends the list at the top level so *"what goes out from here"* never requires reading
@@ -317,9 +321,11 @@ wrapper per listed model. The `claude` and `codex` entries are `declared_reach: 
 offering one as `coder_model` repeats that in the prompt (`--yes` prints it as a note). `command[0]`
 is the absolute path that was found, so dispatch runs the program `setup` showed. On Windows only
 the `PATHEXT` forms are looked for (`claude.cmd`, never npm's extensionless shell shim). Writes only what is accepted: on a terminal each proposal is **Add**ed,
-**Edit**ed (id, tier, effort template; the command stays as detected; bad input is refused and
-re-asked) or **Skip**ped; `--yes` accepts all unchanged; off a terminal without `--yes` nothing is
-written. Entries go to the registry file and the store `serve` reads (`--models`,
+**Edit**ed (id, tier, effort template, reach, which can only be raised; the command stays as
+detected; bad input is refused and re-asked) or **Skip**ped; `--yes` accepts all unchanged; off a
+terminal without `--yes` nothing is written, and the store is not touched either: the ids already in
+it are read through a read-only connection that does not migrate it, so only an accepted write can
+change its schema. Entries go to the registry file and the store `serve` reads (`--models`,
 `--assignment-store`, `--token-dir`); when the store is empty, everything already in `models.json`
 is saved with them so `serve` does not lose it. Once the store has entries, `run` and `serve` read
 the registry from it and no longer read `models.json`. The codex entry names no model; choose

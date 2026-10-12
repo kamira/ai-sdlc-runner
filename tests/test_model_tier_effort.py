@@ -718,7 +718,7 @@ def _interactive_setup(tmp_path, monkeypatch, answers):
 
 def test_setup_lets_the_user_edit_a_proposal_before_it_is_written(machine, tmp_path, monkeypatch):
     # claude: Edit (2) -> id, tier, effort template; codex/llama/qwen: skip; coder_model: no.
-    answers = ["2", "my-claude", "high", "--reasoning {effort}", "", "3", "3", "3", "2"]
+    answers = ["2", "my-claude", "high", "--reasoning {effort}", "", "", "3", "3", "3", "2"]
     assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
     saved = models.load(tmp_path / "tok" / "models.json")
     assert [m.id for m in saved] == ["my-claude"]
@@ -731,21 +731,21 @@ def test_setup_lets_the_user_edit_a_proposal_before_it_is_written(machine, tmp_p
 def test_an_invalid_edit_is_refused_and_asked_again_never_written(
         machine, tmp_path, monkeypatch, capsys):
     # First try: tier "ultra" -> refused, "Yes" try again (1); second try: blank = keep everything.
-    answers = ["2", "", "ultra", "", "", "1", "", "", "", "", "3", "3", "3", "2"]
+    answers = ["2", "", "ultra", "", "", "", "1", "", "", "", "", "", "3", "3", "3", "2"]
     assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
     assert "not accepted" in capsys.readouterr().out
     assert models.load(tmp_path / "tok" / "models.json").get("claude-sonnet-5-5").tier == "mid"
 
 
 def test_giving_up_on_a_bad_edit_skips_the_proposal(machine, tmp_path, monkeypatch):
-    answers = ["2", "", "ultra", "", "", "2", "3", "3", "3"]
+    answers = ["2", "", "ultra", "", "", "", "2", "3", "3", "3"]
     assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
     assert not (tmp_path / "tok").exists()
 
 
 def test_an_edit_cannot_take_an_id_already_in_the_registry(machine, tmp_path, monkeypatch, capsys):
     # claude: add; codex: edit to the id "claude-sonnet-5-5" -> refused, give up; the rest skipped.
-    answers = ["1", "2", "claude-sonnet-5-5", "", "", "", "2", "3", "3", "2"]
+    answers = ["1", "2", "claude-sonnet-5-5", "", "", "", "", "2", "3", "3", "2"]
     assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
     assert "already in the registry" in capsys.readouterr().out
     assert [m.id for m in models.load(tmp_path / "tok" / "models.json")] == ["claude-sonnet-5-5"]
@@ -840,7 +840,7 @@ def test_the_coder_prompt_says_the_repository_goes_to_the_vendor(
 
 def test_a_local_coder_prompt_does_not_claim_egress(machine, tmp_path, monkeypatch, capsys):
     # claude, codex: skip; llama: edit to tier mid and accept; qwen: skip; coder prompt: no.
-    answers = ["3", "3", "2", "", "mid", "", "3", "2"]
+    answers = ["3", "3", "2", "", "mid", "", "", "3", "2"]
     assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
     out = capsys.readouterr().out
     assert "Use ollama-llama3-8b as the coding model" in out and "will be sent to" not in out
@@ -1041,7 +1041,7 @@ def test_the_codex_note_points_at_the_store_not_at_models_json(machine):
 
 def test_edit_sets_codexs_model_and_the_entry_still_leaves_the_machine(machine, tmp_path, monkeypatch):
     # claude: skip; codex: Edit -> id, tier, effort template all kept, model name gpt-5; the rest skipped.
-    answers = ["3", "2", "", "", "", "gpt-5", "3", "3", "2"]
+    answers = ["3", "2", "", "", "", "", "gpt-5", "3", "3", "2"]
     assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
     codex = models.load(tmp_path / "tok" / "models.json").get("codex")
     assert codex.command[-2:] == ("-m", "gpt-5")
@@ -1054,7 +1054,7 @@ def test_edit_sets_codexs_model_and_the_entry_still_leaves_the_machine(machine, 
 
 
 def test_edit_replaces_claudes_model_value(machine, tmp_path, monkeypatch):
-    answers = ["2", "", "", "", "claude-opus-x", "3", "3", "3", "2"]
+    answers = ["2", "", "", "", "", "claude-opus-x", "3", "3", "3", "2"]
     assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
     claude = models.load(tmp_path / "tok" / "models.json").get("claude-sonnet-5-5")
     assert claude.command == (detect.find_tool("claude", path=str(machine)), "-p", "--model",
@@ -1091,7 +1091,7 @@ def _stored_coder(tmp_path):
 def test_an_edit_cannot_take_an_id_that_only_the_store_holds(machine, tmp_path, monkeypatch, capsys):
     tok = _stored_coder(tmp_path)
     # claude: Edit -> id "coder" (the store's), refused; give up. The rest skipped. Nothing written.
-    answers = ["2", "coder", "", "", "", "2", "3", "3", "3"]
+    answers = ["2", "coder", "", "", "", "", "2", "3", "3", "3"]
     assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
     assert "already in the registry" in capsys.readouterr().out
     assert not (tok / "models.json").exists()
@@ -1102,7 +1102,7 @@ def test_after_a_store_collision_the_coder_is_the_entry_actually_persisted(
         machine, tmp_path, monkeypatch):
     tok = _stored_coder(tmp_path)
     # First try takes "coder" and is refused; the retry names it "sonnet-2"; Yes to the coder question.
-    answers = ["2", "coder", "", "", "", "1", "sonnet-2", "", "", "", "3", "3", "3", "1"]
+    answers = ["2", "coder", "", "", "", "", "1", "sonnet-2", "", "", "", "", "3", "3", "3", "1"]
     assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
     assert settings_mod.load(str(tmp_path / "settings.json")).coder_model == "sonnet-2"
     db = store.connect(tok / "config.sqlite")
@@ -1141,3 +1141,132 @@ def test_a_failed_settings_write_after_no_leaves_the_declined_model_unregistered
     assert _interactive_setup(tmp_path, monkeypatch, ["1", "3", "3", "3", "2"]) == 0
     assert settings_mod.load(str(tmp_path / "settings.json")).coder_model == settings_mod.NO_CODER
     assert models.load(tmp_path / "tok" / "models.json").get("claude-sonnet-5-5")
+
+
+# ── review round 7 · setup reads the store without migrating it; ollama cloud models leave ──────────
+
+CLOUD_LIST = """
+import sys
+if sys.argv[1:] == ["list"]:
+    print("NAME                      ID        SIZE      MODIFIED")
+    print("llama3:8b                 abc123    4.7 GB    2 days ago")
+    print("qwen3-coder:480b-cloud    def456    -         3 weeks ago")
+    print("gpt-oss:120b-cloud        ghi789    -         3 weeks ago")
+"""
+
+
+def _schema3_store(tmp_path, ids=()):
+    """A store left at schema 3, as the previous runner wrote it."""
+    import sqlite3
+    tok = tmp_path / "tok"
+    tok.mkdir()
+    path = tok / "config.sqlite"
+    db = store.connect(path)
+    store.save_registry(db, models.Registry(models=tuple(_cli(id=i) for i in ids)))
+    db.close()
+    raw = sqlite3.connect(str(path))
+    # The schema-4 columns are what the previous runner does not know; without them this is its store.
+    for column in ("tier", "effort_argv", "declared_reach"):
+        raw.execute(f"ALTER TABLE models DROP COLUMN {column}")
+    raw.execute("PRAGMA user_version = 3")
+    raw.commit()
+    raw.close()
+    return path
+
+
+def _version(path):
+    import sqlite3
+    raw = sqlite3.connect(str(path))
+    try:
+        return raw.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        raw.close()
+
+
+def test_a_setup_that_writes_nothing_leaves_a_schema_3_store_byte_for_byte(machine, tmp_path):
+    path = _schema3_store(tmp_path, ids=("codex",))
+    before = path.read_bytes()
+    assert _version(path) == 3
+    assert _setup(tmp_path) == 0                       # off a terminal, no --yes: "Nothing written."
+    assert path.read_bytes() == before and _version(path) == 3
+
+
+def test_skipping_every_proposal_leaves_a_schema_3_store_alone(machine, tmp_path, monkeypatch):
+    path = _schema3_store(tmp_path)
+    before = path.read_bytes()
+    # claude, codex, llama, qwen: skip each.
+    assert _interactive_setup(tmp_path, monkeypatch, ["3", "3", "3", "3"]) == 0
+    assert path.read_bytes() == before and _version(path) == 3
+
+
+def test_setup_still_sees_a_collision_in_a_schema_3_store(machine, tmp_path, capsys):
+    _schema3_store(tmp_path, ids=("codex",))
+    assert _setup(tmp_path, "--yes") == 0
+    assert "already there: codex" in capsys.readouterr().out
+
+
+def test_an_unreadable_store_does_not_stop_setup_from_refusing_what_it_can_see(
+        machine, tmp_path, capsys):
+    tok = tmp_path / "tok"
+    tok.mkdir()
+    (tok / "config.sqlite").write_bytes(b"this is not a database" * 50)
+    (tok / "models.json").write_text(json.dumps({"models": [dict(
+        id="codex", vendor="v", name="n", transport="cli", command=["x"])]}), encoding="utf-8")
+    assert store.stored_model_ids(tok / "config.sqlite") == frozenset()
+    assert _setup(tmp_path) == 0
+    out = capsys.readouterr().out
+    assert "already there: codex" in out and "propose:       claude-sonnet-5-5" in out
+
+
+def test_an_ollama_cloud_model_is_proposed_as_leaving_the_machine(machine, tmp_path, capsys):
+    _fake(machine, "ollama", CLOUD_LIST)
+    proposals, _ = detect.propose(path=str(machine))
+    by_id = {m.id: m for m in proposals}
+    cloud = by_id["ollama-qwen3-coder-480b-cloud"]
+    assert cloud.reach == models.EXTERNAL and cloud.vendor == "ollama.com"
+    assert cloud.leaves_this_machine and "ollama.com" in cloud.note
+    assert by_id["ollama-gpt-oss-120b-cloud"].reach == models.EXTERNAL
+    assert by_id["ollama-llama3-8b"].reach == models.LOCAL
+    assert _setup(tmp_path) == 0
+    out = capsys.readouterr().out
+    assert ("ollama-qwen3-coder-480b-cloud is reach external: it sends the work order and the "
+            "repository's content to ollama.com") in out
+
+
+def test_the_coder_question_names_ollama_com_for_a_cloud_model(
+        machine, tmp_path, monkeypatch, capsys):
+    _fake(machine, "ollama", CLOUD_LIST)
+    monkeypatch.setattr(cli, "_interactive", lambda: True)
+    args = cli.build_parser().parse_args(
+        ["--settings", str(tmp_path / "settings.json"), "setup", "--token-dir", str(tmp_path / "tok")])
+    # claude, codex, llama: skip; qwen cloud: Edit -> id, tier mid, effort, reach, kept; gpt-oss: skip.
+    feed = iter(["3", "3", "3", "2", "", "mid", "", "", "3"])
+    cli.cmd_setup(args, input_fn=lambda prompt="": next(feed, "2"))
+    assert "will be sent to ollama.com" in capsys.readouterr().out
+
+
+def test_edit_can_raise_a_reach(machine, tmp_path, monkeypatch):
+    # claude, codex: skip; llama3 (local): Edit -> id, tier, effort kept, reach external; qwen skipped.
+    answers = ["3", "3", "2", "", "", "", "external", "3"]
+    assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
+    raised = models.load(tmp_path / "tok" / "models.json").get("ollama-llama3-8b")
+    assert raised.reach == models.EXTERNAL and raised.leaves_this_machine
+
+
+def test_edit_cannot_lower_a_reach(machine, tmp_path, monkeypatch, capsys):
+    # claude is external: asking for local is refused; give up on it, skip the rest. Nothing written.
+    answers = ["2", "", "", "", "local", "", "2", "3", "3", "3"]
+    assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
+    assert "only raise a reach" in capsys.readouterr().out
+    assert not (tmp_path / "tok").exists()
+
+
+def test_a_remote_ollama_host_is_noted(machine, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("OLLAMA_HOST", "http://gpu-box.example:11434")
+    assert _setup(tmp_path) == 0
+    assert "OLLAMA_HOST is http://gpu-box.example:11434" in capsys.readouterr().out
+    for local in ("127.0.0.1:11434", "localhost", "http://[::1]:11434", "0.0.0.0"):
+        assert detect._loopback_host(local), local
+    _, notes = detect.propose(environ={"OLLAMA_HOST": "127.0.0.1:11434", "PATH": str(machine)},
+                              path=str(machine))
+    assert not any("OLLAMA_HOST" in n for n in notes)

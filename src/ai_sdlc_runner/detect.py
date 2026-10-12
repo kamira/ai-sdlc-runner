@@ -105,6 +105,22 @@ def ollama_models(executable: str, timeout: int = OLLAMA_TIMEOUT) -> Tuple[List[
     return names, ""
 
 
+def is_ollama_cloud(name: str) -> bool:
+    """`qwen3-coder:480b-cloud`, `gpt-oss:cloud`: a tag ending in `cloud` runs on ollama.com."""
+    tag = name.rsplit(":", 1)[1].lower() if ":" in name else ""
+    return tag == "cloud" or tag.endswith("-cloud")
+
+
+def _loopback_host(host: str) -> bool:
+    """Is an `OLLAMA_HOST` value this machine? Scheme, credentials and port are ignored."""
+    bare = host.split("://", 1)[-1].split("/", 1)[0].rsplit("@", 1)[-1]
+    if bare.startswith("[") and "]" in bare:
+        bare = bare[1:bare.index("]")]
+    else:
+        bare = bare.split(":", 1)[0]
+    return bare.lower() in ("", "localhost", "::1", "0.0.0.0") or bare.startswith("127.")
+
+
 def plain_id(prefix: str, name: str) -> str:
     """A registry id for a vendor's own model name, which may carry `:` and `.`."""
     return prefix + "-" + re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-")
@@ -136,7 +152,21 @@ def propose(environ=None, path: Optional[str] = None, cwd: Optional[str] = None
         names, problem = ollama_models(found["ollama"])
         if problem:
             notes.append(problem)
+        host = (os.environ if environ is None else environ).get("OLLAMA_HOST", "")
+        if host and not _loopback_host(host):
+            notes.append(f"OLLAMA_HOST is {host}: `ollama list` and `ollama run` talk to that host, "
+                         f"so these models may run elsewhere than this machine; they are labelled "
+                         f"local only because the daemon is assumed to be")
         for name in names:
+            if is_ollama_cloud(name):
+                # `ollama run` hands a cloud model to ollama.com, whatever the daemon's address.
+                proposals.append(models_mod.Model(
+                    id=plain_id("ollama", name), vendor="ollama.com", name=name,
+                    transport=models_mod.CLI, command=(found["ollama"], "run", name),
+                    declared_reach=models_mod.EXTERNAL,
+                    note="a cloud model: ollama sends the work order and the repository's content "
+                         "to ollama.com"))
+                continue
             proposals.append(models_mod.Model(
                 id=plain_id("ollama", name), vendor="ollama", name=name,
                 transport=models_mod.CLI, command=(found["ollama"], "run", name),
