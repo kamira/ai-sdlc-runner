@@ -751,6 +751,15 @@ def test_an_edit_cannot_take_an_id_already_in_the_registry(machine, tmp_path, mo
     assert [m.id for m in models.load(tmp_path / "tok" / "models.json")] == ["claude-sonnet-5-5"]
 
 
+def test_an_edit_cannot_take_the_reserved_id_none(machine, tmp_path, monkeypatch, capsys):
+    # `none` is what settings store for "no default coder", so a model so named would read as a
+    # refusal after a Yes. Refused and asked again; here the user gives up on that proposal.
+    answers = ["1", "2", "none", "", "", "", "", "2", "3", "3", "2"]
+    assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
+    assert "is reserved" in capsys.readouterr().out
+    assert [m.id for m in models.load(tmp_path / "tok" / "models.json")] == ["claude-sonnet-5-5"]
+
+
 def test_a_proposals_command_starts_with_the_absolute_path_that_was_found(machine):
     by_id = {m.id: m for m in detect.propose()[0]}
     for model_id, tool in (("claude-sonnet-5-5", "claude"), ("codex", "codex"),

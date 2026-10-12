@@ -85,6 +85,8 @@ def test_the_page_says_reach_is_computed_and_never_stored():
 @pytest.mark.parametrize("model, fragment", [
     (_cli(id=""),                       "not a plain name"),
     (_cli(id="two words"),              "not a plain name"),
+    (_cli(id="none"),                   "is reserved"),
+    (_cli(id="None"),                   "is reserved"),
     (_cli(vendor=""),                   "names no vendor"),
     (_cli(name=""),                     "names no model at the vendor"),
     (_cli(transport="carrier-pigeon"),  "unknown transport"),

@@ -302,12 +302,21 @@ def with_effort(model: Model, effort: str) -> Optional[List[str]]:
     return [word.replace(EFFORT_SLOT, effort) for word in model.effort_argv]
 
 
+#: The settings' refusal sentinel (`settings.NO_CODER`); no model may carry it as an id.
+RESERVED_ID = "none"
+
+
 def validate(model: Model) -> Model:
     """Every refusal this registry makes, in one place so none of them is optional."""
     if not model.id or not _ENV_NAME.match(model.id.replace("-", "_")):
         raise ModelError(
             f"model id {model.id!r} is not a plain name. It is used as a key in config and on the "
             f"wire; something that needs quoting will be quoted differently in two places.")
+    if model.id.lower() == RESERVED_ID:
+        raise ModelError(
+            f"model id {model.id!r} is reserved: `{RESERVED_ID}` is what the settings store for "
+            f"\"no default coder model\", so a model called that would read as a refusal the "
+            f"moment it was chosen as the coder. Pick another id.")
     if not model.vendor:
         raise ModelError(f"model {model.id!r} names no vendor — which API this speaks is not "
                          f"derivable from the endpoint, and guessing it would be inventing one")
