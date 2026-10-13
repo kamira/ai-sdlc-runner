@@ -98,19 +98,26 @@ def test_cycle_index_zero_options_is_noop():
 class _FakeScreen:
     """A minimal stand-in for a curses `stdscr`, driven by a scripted key sequence."""
 
-    def __init__(self, keys):
+    def __init__(self, keys, size=(24, 80)):
         self._keys = list(keys)
+        self._size = size
+        self.screen = {}    # row -> text, as of the last erase
+        self.at_input = []  # the screen's rows each time input was requested
+
+    def getmaxyx(self):
+        return self._size
 
     def erase(self):
-        pass
+        self.screen = {}
 
-    def addstr(self, *a, **k):
-        pass
+    def addstr(self, row, col, text, *a):
+        self.screen[row] = text
 
     def refresh(self):
         pass
 
     def getch(self):
+        self.at_input.append([self.screen[r] for r in sorted(self.screen)])
         return self._keys.pop(0)
 
 
@@ -131,3 +138,53 @@ def test_curses_select_on_cancel_returns_none(monkeypatch):
     monkeypatch.setattr(curses, "COLS", 80, raising=False)
     screen = _FakeScreen([ord("q")])
     assert tui._curses_select_on(screen, "pick:", OPTIONS) is None
+
+
+BODY = ["Yes makes claude-sonnet-5-5 the coding model. The repository's content will be sent to "
+        "anthropic. A Yes takes precedence over agent_command."]
+
+
+def _flat(lines):
+    return " ".join(" ".join(lines).split())
+
+
+def test_curses_body_is_on_screen_when_input_is_read(monkeypatch):
+    # Each frame erases the screen, so the body must be drawn inside it, at getch time.
+    curses = pytest.importorskip("curses")
+    monkeypatch.setattr(curses, "COLS", 80, raising=False)
+    screen = _FakeScreen([curses.KEY_DOWN, 10], size=(24, 60))
+    assert tui._curses_select_on(screen, "pick:", OPTIONS, BODY) == 1
+    assert len(screen.at_input) == 2
+    for frame in screen.at_input:
+        assert BODY[0] in _flat(frame)
+    assert all(len(line) <= 59 for line in screen.at_input[0])
+
+
+def test_curses_body_too_tall_raises_rather_than_clipping(monkeypatch):
+    curses = pytest.importorskip("curses")
+    monkeypatch.setattr(curses, "COLS", 80, raising=False)
+    screen = _FakeScreen([10], size=(8, 40))
+    with pytest.raises(tui._TooSmall):
+        tui._curses_select_on(screen, "pick:", OPTIONS, BODY)
+    assert screen.at_input == []
+
+
+def test_select_falls_back_to_numbered_with_body_on_a_small_screen(monkeypatch, capsys):
+    curses = pytest.importorskip("curses")
+    monkeypatch.setattr(tui, "_want_curses", lambda *a: True)
+    monkeypatch.setattr(curses, "wrapper", lambda fn: fn(_FakeScreen([10], size=(8, 40))))
+    monkeypatch.setattr(curses, "curs_set", lambda n: None)
+    monkeypatch.setattr(curses, "use_default_colors", lambda: None)
+    monkeypatch.setattr(curses, "init_pair", lambda *a: None)
+    monkeypatch.setenv("COLUMNS", "40")
+    assert tui.select("pick:", OPTIONS, input_fn=lambda p: "2", body=BODY) == 1
+    assert BODY[0] in _flat(capsys.readouterr().out.splitlines())
+
+
+def test_numbered_prompt_prints_body_before_the_title(monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "50")
+    tui._numbered_select("pick:", OPTIONS, input_fn=lambda p: "1", body=BODY)
+    out = capsys.readouterr().out
+    assert out.index("anthropic") < out.index("pick:")
+    assert BODY[0] in _flat(out.splitlines())
+    assert max(len(line) for line in out.splitlines()) <= 49

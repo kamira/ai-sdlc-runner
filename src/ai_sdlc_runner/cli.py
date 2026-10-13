@@ -21,10 +21,8 @@ import argparse
 import io
 import json
 import os
-import shutil
 import subprocess
 import sys
-import textwrap
 from dataclasses import replace
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence
@@ -570,7 +568,7 @@ def coder_defaults(node_models: Mapping[str, Sequence[str]],
                 f"for \"no default coder model\", so it is refused as the coder. Rename the model "
                 f"in the registry, or assign another.")
     if not merged.get(build):
-        if saved.coder_model.lower() == settings_mod.NO_CODER:
+        if models_mod.is_reserved(saved.coder_model):
             pass                    # declined in `setup`: no default coder model, and no rule picks one
         elif saved.coder_model:
             if registry is None:
@@ -820,11 +818,13 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
     else:
         accepted = []
         for model in fresh:
+            # The egress line is the body so it is on the menu's screen, not only above it.
             choice = tui.select(f"Add {model.id} to the registry?",
                                 [("Add it", f"{' '.join(model.command)}"),
                                  ("Edit", "change the id, tier, effort template or model name first"),
                                  ("Skip", "leave it out")],
-                                input_fn=input_fn)
+                                input_fn=input_fn,
+                                body=[_egress(model)] if model.leaves_this_machine else ())
             if choice == 1:
                 model = _edit_proposal(model, taken_ids, accepted, input_fn)
                 if model is not None:
@@ -852,11 +852,9 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
             if args.yes:
                 chosen = True
             else:
-                # The curses menu draws the title on one row and the key hint on the next, and
-                # truncates option text to the screen width, so a disclosure kept in the title or
-                # an option description is cut off at 80 columns. It is printed as ordinary wrapped
-                # lines before the menu instead, and the menu text stays short.
-                width = shutil.get_terminal_size((80, 24)).columns
+                # The disclosure goes to `tui.select` as its body: the curses renderer erases the
+                # screen before every frame, so text printed ahead of the menu is not on it when
+                # the user answers.
                 disclosure = (f"Yes makes {mid[0].id} the coding model (coder_model): engineer_build "
                               f"uses it unless a plan or the store says otherwise.")
                 if mid[0].leaves_this_machine:
@@ -865,11 +863,10 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
                     disclosure += " A Yes takes precedence over agent_command."
                 disclosure += (" No leaves no default coder model: nothing is picked for you, not "
                                "even a lone mid-tier model.")
-                print("\n".join(textwrap.wrap(disclosure, max(width - 1, 20))))
                 answer = tui.select("Use it as the coding model?",
                                     [("Yes", "set coder_model"),
                                      ("No", "no default coder model")],
-                                    input_fn=input_fn)
+                                    input_fn=input_fn, body=[disclosure])
                 if answer is None:
                     # Backing out is not a refusal: only an explicit No may switch the default off.
                     print("cancelled:     no answer to the coder question; nothing was written. "

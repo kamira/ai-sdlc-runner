@@ -1458,28 +1458,87 @@ def test_the_coder_prompt_says_a_yes_takes_precedence_over_agent_command(
     assert settings_mod.load(str(tmp_path / "settings.json")).coder_model == "claude-sonnet-5-5"
 
 
-def test_the_coder_disclosure_is_printed_whole_before_a_short_menu_title(
-        machine, tmp_path, monkeypatch, capsys):
-    # The curses menu cuts a title and option text at the screen width, so the disclosure must be
-    # ordinary output lines, each within 80 columns, printed before the question is asked.
-    monkeypatch.setenv("COLUMNS", "80")
+def test_the_coder_disclosure_is_the_menu_body_not_text_printed_before_it(
+        machine, tmp_path, monkeypatch):
+    # The curses menu erases the screen on every frame, so the disclosure must travel to
+    # `tui.select` as its body; text printed ahead of the menu is not on screen at the answer.
     seen = []
     real_select = cli.tui.select
 
     def spy(title, options, **kw):
-        seen.append((title, options, capsys.readouterr().out))
+        seen.append((title, options, kw.get("body")))
         return real_select(title, options, **kw)
 
     monkeypatch.setattr(cli.tui, "select", spy)
     _with_agent_command()
     assert _interactive_setup(tmp_path, monkeypatch, ["1", "3", "3", "3", "2"]) == 0
-    title, options, before = seen[-1]
+    title, options, body = seen[-1]
     assert len(title) < 60 and all(len(d) < 40 for _, d in options)
-    flat = " ".join(before.split())
+    flat = " ".join(" ".join(body).split())
     assert "claude-sonnet-5-5" in flat
     assert "The repository's content will be sent to anthropic." in flat
     assert "A Yes takes precedence over agent_command." in flat
-    # `before` also holds the previous menu's echo, so measure from the disclosure's first line.
-    lines = before.splitlines()
-    mine = lines[next(i for i, line in enumerate(lines) if line.startswith("Yes makes")):]
-    assert len(mine) > 1 and max(len(line) for line in mine) <= 79
+    assert "No leaves no default coder model" in flat
+
+
+def test_the_add_question_carries_the_egress_line_as_its_body(machine, tmp_path, monkeypatch):
+    bodies = []
+    real_select = cli.tui.select
+
+    def spy(title, options, **kw):
+        if title.startswith("Add "):
+            bodies.append((title, kw.get("body")))
+        return real_select(title, options, **kw)
+
+    monkeypatch.setattr(cli.tui, "select", spy)
+    _with_agent_command()
+    _interactive_setup(tmp_path, monkeypatch, ["3", "3", "3", "3", "2"])
+    claude = next(b for t, b in bodies if "claude" in t)
+    assert claude and "anthropic" in " ".join(claude)
+
+
+def test_the_disclosure_is_on_the_curses_screen_when_the_coder_question_is_answered(
+        machine, tmp_path, monkeypatch):
+    # Cut-the-wire test for the curses renderer: run the real `_curses_select_on` on a fake stdscr
+    # and read what it holds when input is requested.
+    curses = pytest.importorskip("curses")
+    monkeypatch.setattr(curses, "COLS", 80, raising=False)
+    frames = []
+
+    class Screen:
+        def __init__(self):
+            self.screen = {}
+
+        def getmaxyx(self):
+            return (30, 80)
+
+        def erase(self):
+            self.screen = {}
+
+        def addstr(self, row, col, text, *a):
+            self.screen[row] = text
+
+        def refresh(self):
+            pass
+
+        def getch(self):
+            frames.append(" ".join(" ".join(self.screen[r] for r in sorted(self.screen)).split()))
+            return 10
+
+    def curses_select(title, options, *, input_fn=None, **kw):
+        if title.startswith("Use it as"):
+            return cli.tui._curses_select_on(Screen(), title, options, kw["body"])
+        return 0 if title.startswith("Add claude") else 2
+
+    monkeypatch.setattr(cli.tui, "select", curses_select)
+    _with_agent_command()
+    assert _interactive_setup(tmp_path, monkeypatch, []) == 0
+    assert len(frames) == 1
+    for sentence in ("claude-sonnet-5-5", "The repository's content will be sent to anthropic.",
+                     "A Yes takes precedence over agent_command.", "No leaves no default coder model"):
+        assert sentence in frames[0]
+
+
+def test_the_refusal_sentinel_has_one_source():
+    assert settings_mod.NO_CODER is models.RESERVED_ID
+    assert settings_mod.NO_CODER == "none"

@@ -89,7 +89,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional, Tuple
 
-from . import paths, policy, tui
+from . import models, paths, policy, tui
 
 DEFAULT_PATH = "config/settings.json"
 
@@ -110,7 +110,7 @@ DEFAULT_EFFORT = "medium"
 #: refuses new models with this id (`models.RESERVED_ID`); one that predates the rule still loads,
 #: warns, and is never the coder: this value always reads as the refusal, `coder_defaults`
 #: skips it in the lone-`mid` rule, and refuses an `engineer_build` assignment naming it.
-NO_CODER = "none"
+NO_CODER = models.RESERVED_ID
 
 
 class SettingsError(Exception):
@@ -198,7 +198,7 @@ class Settings:
         else:
             line += "  |  no vouched commands (only repo paths and read-only git are recognised)"
         line += ("  |  coder model: none (declined; no default coder model)"
-                 if self.coder_model == NO_CODER else
+                 if models.is_reserved(self.coder_model) else
                  f"  |  coder model: {self.coder_model}" if self.coder_model
                  else "  |  coder model: the registry's only mid-tier model, if there is one")
         line += f"  |  coder effort: {self.coder_effort}"
@@ -396,7 +396,7 @@ def _screen(current: Settings):
          else "none — every target is read against the halts",
          _edit_vouched),
         ("Coder model",
-         "none — declined; no default coder model" if current.coder_model == NO_CODER
+         "none — declined; no default coder model" if models.is_reserved(current.coder_model)
          else current.coder_model if current.coder_model
          else "the registry's only mid-tier model, if there is exactly one",
          _edit_coder_model),
