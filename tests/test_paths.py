@@ -255,6 +255,9 @@ ALLOWED_DIRECT_WRITES = {
         "`shutil.*` rule the seats asked for, and kept broad: a rule that enumerated only the "
         "writing half of shutil would be the kind of list that goes stale, which is worse than one "
         "false positive with a reason beside it",
+    ("cli.py", "shutil.get_terminal_size"):
+        "not a write at all — `runner setup` asks how wide the terminal is so it can wrap a "
+        "disclosure. Caught by the same deliberately broad `shutil.*` rule as `shutil.which` above",
     ("worktree.py", "tempfile.mkdtemp"):
         "the directory the module worktrees are made under, in the system temp root. No flow can "
         "make that path deep — the segments are a fixed prefix and `module-NNN` — and it is created "

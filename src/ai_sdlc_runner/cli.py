@@ -21,8 +21,10 @@ import argparse
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
+import textwrap
 from dataclasses import replace
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence
@@ -850,14 +852,23 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
             if args.yes:
                 chosen = True
             else:
-                sent = (f" The repository's content will be sent to {mid[0].vendor}."
-                        if mid[0].leaves_this_machine else "")
-                answer = tui.select(f"Use {mid[0].id} as the coding model (coder_model)?{sent}",
-                                    [("Yes", "engineer_build uses it unless a plan or the store "
-                                             "says otherwise; it takes precedence over "
-                                             "agent_command"),
-                                     ("No", "no default coder model: nothing is picked for "
-                                            "you, not even a lone mid-tier model")],
+                # The curses menu draws the title on one row and the key hint on the next, and
+                # truncates option text to the screen width, so a disclosure kept in the title or
+                # an option description is cut off at 80 columns. It is printed as ordinary wrapped
+                # lines before the menu instead, and the menu text stays short.
+                width = shutil.get_terminal_size((80, 24)).columns
+                disclosure = (f"Yes makes {mid[0].id} the coding model (coder_model): engineer_build "
+                              f"uses it unless a plan or the store says otherwise.")
+                if mid[0].leaves_this_machine:
+                    disclosure += (f" The repository's content will be sent to {mid[0].vendor}.")
+                if has_agent_command:
+                    disclosure += " A Yes takes precedence over agent_command."
+                disclosure += (" No leaves no default coder model: nothing is picked for you, not "
+                               "even a lone mid-tier model.")
+                print("\n".join(textwrap.wrap(disclosure, max(width - 1, 20))))
+                answer = tui.select("Use it as the coding model?",
+                                    [("Yes", "set coder_model"),
+                                     ("No", "no default coder model")],
                                     input_fn=input_fn)
                 if answer is None:
                     # Backing out is not a refusal: only an explicit No may switch the default off.

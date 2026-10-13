@@ -873,8 +873,10 @@ def test_the_coder_prompt_says_the_repository_goes_to_the_vendor(
     # claude: add; codex, llama, qwen: skip; then the coder_model prompt, which we read and refuse.
     assert _interactive_setup(tmp_path, monkeypatch, ["1", "3", "3", "3", "2"]) == 0
     out = capsys.readouterr().out
-    assert "Use claude-sonnet-5-5 as the coding model" in out
-    assert "repository's content will be sent to anthropic" in out
+    flat = " ".join(out.split())
+    assert "Yes makes claude-sonnet-5-5 the coding model" in flat
+    assert "repository's content will be sent to anthropic" in flat
+    assert "takes precedence over agent_command" not in flat, "no agent_command is configured here"
     assert settings_mod.load(str(tmp_path / "settings.json")).coder_model == settings_mod.NO_CODER
 
 
@@ -883,7 +885,8 @@ def test_a_local_coder_prompt_does_not_claim_egress(machine, tmp_path, monkeypat
     answers = ["3", "3", "2", "", "mid", "", "", "3", "2"]
     assert _interactive_setup(tmp_path, monkeypatch, answers) == 0
     out = capsys.readouterr().out
-    assert "Use ollama-llama3-8b as the coding model" in out and "will be sent to" not in out
+    flat = " ".join(out.split())
+    assert "Yes makes ollama-llama3-8b the coding model" in flat and "will be sent to" not in flat
 
 
 def test_setup_yes_prints_where_the_coder_sends_the_work(machine, tmp_path, capsys):
@@ -1449,6 +1452,34 @@ def test_the_off_terminal_hint_says_what_yes_does_to_coder_model(machine, tmp_pa
 def test_the_coder_prompt_says_a_yes_takes_precedence_over_agent_command(
         machine, tmp_path, monkeypatch, capsys):
     # claude: add; codex, llama, qwen: skip; "use claude as the coder?": Yes.
+    _with_agent_command()
     assert _interactive_setup(tmp_path, monkeypatch, ["1", "3", "3", "3", "1"]) == 0
-    assert "takes precedence over agent_command" in capsys.readouterr().out
+    assert "takes precedence over agent_command" in " ".join(capsys.readouterr().out.split())
     assert settings_mod.load(str(tmp_path / "settings.json")).coder_model == "claude-sonnet-5-5"
+
+
+def test_the_coder_disclosure_is_printed_whole_before_a_short_menu_title(
+        machine, tmp_path, monkeypatch, capsys):
+    # The curses menu cuts a title and option text at the screen width, so the disclosure must be
+    # ordinary output lines, each within 80 columns, printed before the question is asked.
+    monkeypatch.setenv("COLUMNS", "80")
+    seen = []
+    real_select = cli.tui.select
+
+    def spy(title, options, **kw):
+        seen.append((title, options, capsys.readouterr().out))
+        return real_select(title, options, **kw)
+
+    monkeypatch.setattr(cli.tui, "select", spy)
+    _with_agent_command()
+    assert _interactive_setup(tmp_path, monkeypatch, ["1", "3", "3", "3", "2"]) == 0
+    title, options, before = seen[-1]
+    assert len(title) < 60 and all(len(d) < 40 for _, d in options)
+    flat = " ".join(before.split())
+    assert "claude-sonnet-5-5" in flat
+    assert "The repository's content will be sent to anthropic." in flat
+    assert "A Yes takes precedence over agent_command." in flat
+    # `before` also holds the previous menu's echo, so measure from the disclosure's first line.
+    lines = before.splitlines()
+    mine = lines[next(i for i, line in enumerate(lines) if line.startswith("Yes makes")):]
+    assert len(mine) > 1 and max(len(line) for line in mine) <= 79
