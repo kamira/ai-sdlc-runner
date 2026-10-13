@@ -227,7 +227,8 @@ Both seats named it. `models.py` says **"Computed, never declared"**, and `save(
 
 `reach` is what the console shows to say **whether a model leaves this machine**. Persisted, one
 endpoint edit that forgets to recompute leaves the console showing `local` about something external.
-It is derived from `(transport, endpoint)` on every read, and `_model_from` would **refuse** a
+It is derived from `(transport, endpoint)` on every read, and raised to `declared_reach` when that is
+higher (never lowered), and `_model_from` would **refuse** a
 payload containing it anyway, with this project's doctrine in the message:
 
 ```

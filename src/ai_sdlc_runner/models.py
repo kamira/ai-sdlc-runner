@@ -302,21 +302,38 @@ def with_effort(model: Model, effort: str) -> Optional[List[str]]:
     return [word.replace(EFFORT_SLOT, effort) for word in model.effort_argv]
 
 
-#: The settings' refusal sentinel (`settings.NO_CODER`); no model may carry it as an id.
+#: The settings' refusal sentinel (`settings.NO_CODER`); no model may be *created* with it as an id.
+#: Refused in `validate_new`, not `validate`: `validate` runs on every load, and a registry that
+#: already holds a model so named (it was accepted before this was reserved) must still load, or
+#: `run` and `serve` stop on data the previous runner wrote (CHG-20261005-01, review round 10).
 RESERVED_ID = "none"
 
 
-def validate(model: Model) -> Model:
-    """Every refusal this registry makes, in one place so none of them is optional."""
-    if not model.id or not _ENV_NAME.match(model.id.replace("-", "_")):
-        raise ModelError(
-            f"model id {model.id!r} is not a plain name. It is used as a key in config and on the "
-            f"wire; something that needs quoting will be quoted differently in two places.")
-    if model.id.lower() == RESERVED_ID:
+def is_reserved(model_id: str) -> bool:
+    return model_id.lower() == RESERVED_ID
+
+
+def reserved_in(registry: "Registry") -> List[str]:
+    """The ids in `registry` that read as the refusal sentinel, so a load can name them."""
+    return [m.id for m in registry if is_reserved(m.id)]
+
+
+def validate_new(model: Model) -> Model:
+    """`validate`, plus the refusals that apply only where a model is created or renamed."""
+    if is_reserved(model.id):
         raise ModelError(
             f"model id {model.id!r} is reserved: `{RESERVED_ID}` is what the settings store for "
             f"\"no default coder model\", so a model called that would read as a refusal the "
             f"moment it was chosen as the coder. Pick another id.")
+    return validate(model)
+
+
+def validate(model: Model) -> Model:
+    """Every refusal this registry makes on a load, in one place so none of them is optional."""
+    if not model.id or not _ENV_NAME.match(model.id.replace("-", "_")):
+        raise ModelError(
+            f"model id {model.id!r} is not a plain name. It is used as a key in config and on the "
+            f"wire; something that needs quoting will be quoted differently in two places.")
     if not model.vendor:
         raise ModelError(f"model {model.id!r} names no vendor — which API this speaks is not "
                          f"derivable from the endpoint, and guessing it would be inventing one")
@@ -413,7 +430,7 @@ class Registry:
         raise ModelError(f"no model {model_id!r}; this project has {[m.id for m in self.models]}")
 
     def add(self, model: Model) -> "Registry":
-        return Registry(models=self.models + (validate(model),))
+        return Registry(models=self.models + (validate_new(model),))
 
     def remove(self, model_id: str) -> "Registry":
         self.get(model_id)

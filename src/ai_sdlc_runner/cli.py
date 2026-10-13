@@ -560,7 +560,7 @@ def coder_defaults(node_models: Mapping[str, Sequence[str]],
     notices: List[str] = []
     build = "engineer_build"
     if not merged.get(build):
-        if saved.coder_model == settings_mod.NO_CODER:
+        if saved.coder_model.lower() == settings_mod.NO_CODER:
             pass                    # declined in `setup`: no default coder model, and no rule picks one
         elif saved.coder_model:
             if registry is None:
@@ -607,6 +607,10 @@ def coder_defaults(node_models: Mapping[str, Sequence[str]],
                     f"{len(mid)} models are tier 'mid' ({', '.join(mid)}) and settings name no "
                     f"coder_model, so {build} is left unassigned rather than chosen at random. "
                     f"Set coder_model to one of them.")
+    for reserved in (models_mod.reserved_in(registry) if registry is not None else ()):
+        # Said wherever the coder is decided, because `coder_model` = this id reads as a refusal.
+        notices.append(f"model {reserved!r} is called what settings store for \"no default coder "
+                       f"model\", so it can never be the coder. Rename it in the registry to use it.")
     follows = [n.id for n in graph.NODES if n.follows == build]
     efforts = {node: saved.coder_effort for node in [build] + follows}
     return merged, efforts, notices
@@ -717,7 +721,7 @@ def _edit_proposal(model, taken_ids, accepted, input_fn):
                 declared = reach_in
             edited = replace(model, id=new_id, tier=tier, effort_argv=argv, command=command, name=name,
                              declared_reach=declared)
-            models_mod.validate(edited)
+            models_mod.validate_new(edited)
             return edited
         except models_mod.ModelError as exc:
             print(f"not accepted:  {exc}")
@@ -2081,6 +2085,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
               f"but this one. An assignment left pointing at nothing does not stop this console: "
               f"it starts clean and says nothing.")
         return 2
+
+    # An old entry with the settings' refusal id still loads; say so where the registry is final.
+    for reserved in models_mod.reserved_in(registry):
+        print(f"warning:       model {reserved!r} is called what settings store for \"no default "
+              f"coder model\", so it can never be the coder. Rename it in the registry.")
 
     # The plan's assignment is this change's declaration; the store's is the project's standing one.
     # The plan wins where it says something, and `resolve` says which source each one came from.

@@ -507,8 +507,8 @@ because the order is the property.
 ## 16 · Model management
 
 Entry 10 is the model **shape**. [`MODELS.md`](MODELS.md) is the part that governs it — every
-refusal `validate()` makes, how `reach` is computed from `(transport, endpoint)` and why an operator
-must never label it themselves, and how a model gets from the registry to an actual ask through
+refusal `validate()` makes, how `reach` is derived from `(transport, endpoint)` and raised to
+`declared_reach` when that is higher (never lowered), and how a model gets from the registry to an actual ask through
 `node_models`, `seat_models` and the factory's resolution order.
 
 One thing it records that appears nowhere else: **an `api` model validates, lists, and cannot be

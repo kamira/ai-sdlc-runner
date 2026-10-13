@@ -760,6 +760,37 @@ def test_an_edit_cannot_take_the_reserved_id_none(machine, tmp_path, monkeypatch
     assert [m.id for m in models.load(tmp_path / "tok" / "models.json")] == ["claude-sonnet-5-5"]
 
 
+def test_run_and_serve_start_over_a_stored_model_called_none_and_it_is_never_the_coder(
+        tmp_path, monkeypatch, capsys):
+    # Written before `none` was reserved. It must not stop the registry loading, must be named, and
+    # must not build: `coder_model` = none is the refusal, whatever the registry holds.
+    log = _project(tmp_path, [dict(id="none", vendor="v", name="n", transport="cli", tier="mid")],
+                   saved={"coder_model": "none"}, agent_command=False)
+    code, out = _run(tmp_path, capsys)
+    assert code == 0, out
+    assert "'none'" in out and "can never be the coder" in out
+    assert _argv_of(_asks(log), "engineer_build") == [], "the model called none built"
+    code, out, make_config = _serve(tmp_path, monkeypatch, capsys)
+    assert code == 2 and "stopped by the test" in out, out
+    assert "warning:" in out and "'none'" in out
+    assert "engineer_build" not in make_config((), (), ()).node_models
+
+
+def test_a_mid_model_called_none_is_not_chosen_whatever_the_case_of_the_setting():
+    registry = _registry(_cli(id="none", tier="mid"))
+    merged, _, notices = cli.coder_defaults(
+        {}, registry, settings_mod.Settings(coder_model="None"))
+    assert "engineer_build" not in merged
+    assert any("can never be the coder" in n for n in notices)
+
+
+def test_the_console_route_cannot_create_a_model_called_none():
+    # `POST /models` builds the model with `_model_from` and calls `Registry.add`.
+    with pytest.raises(models.ModelError, match="is reserved"):
+        models.Registry().add(models._model_from(
+            dict(id="none", vendor="v", name="n", transport="cli", command=["x"])))
+
+
 def test_a_proposals_command_starts_with_the_absolute_path_that_was_found(machine):
     by_id = {m.id: m for m in detect.propose()[0]}
     for model_id, tool in (("claude-sonnet-5-5", "claude"), ("codex", "codex"),

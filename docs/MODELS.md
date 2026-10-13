@@ -134,7 +134,7 @@ optional."*
 | Refused | Because |
 |---|---|
 | an `id` that is not a plain name | it is a key in config *and* on the wire; something that needs quoting gets quoted differently in two places |
-| an `id` of `none` (any case) | `none` is what the settings store for "no default coder model"; a model so named would read as a refusal once chosen as the coder |
+| a **new** `id` of `none` (any case): setup's Add and Edit, `POST /models` | `none` is what the settings store for "no default coder model"; a model so named would read as a refusal once chosen as the coder. An entry already called `none` still loads (refusing it on load would stop `run` and `serve`), is named in a warning, and can never be the coder |
 | no `vendor` | which API this speaks is not derivable from the endpoint, and guessing would be inventing one |
 | no `name` | — |
 | a `transport` outside `cli` / `api` | — |

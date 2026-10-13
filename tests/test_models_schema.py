@@ -85,8 +85,6 @@ def test_the_page_says_reach_is_computed_and_never_stored():
 @pytest.mark.parametrize("model, fragment", [
     (_cli(id=""),                       "not a plain name"),
     (_cli(id="two words"),              "not a plain name"),
-    (_cli(id="none"),                   "is reserved"),
-    (_cli(id="None"),                   "is reserved"),
     (_cli(vendor=""),                   "names no vendor"),
     (_cli(name=""),                     "names no model at the vendor"),
     (_cli(transport="carrier-pigeon"),  "unknown transport"),
@@ -109,6 +107,22 @@ def test_every_refusal_the_page_documents_actually_fires(model, fragment):
 def test_two_models_with_one_id_are_refused():
     with pytest.raises(models.ModelError, match="two models are called"):
         models.Registry(models=(_cli(), _cli()))
+
+
+@pytest.mark.parametrize("model_id", ["none", "None", "NONE"])
+def test_the_reserved_id_is_refused_when_a_model_is_created_but_not_when_one_is_loaded(
+        model_id, tmp_path):
+    # `none` is the settings' refusal sentinel. A registry written before it was reserved must still
+    # load, or `run` and `serve` stop on data the previous runner accepted.
+    with pytest.raises(models.ModelError, match="is reserved"):
+        models.Registry().add(_cli(id=model_id))
+    with pytest.raises(models.ModelError, match="is reserved"):
+        models.validate_new(_cli(id=model_id))
+    held = models.Registry(models=(_cli(id=model_id),))
+    assert models.reserved_in(held) == [model_id]
+    where = tmp_path / "models.json"
+    models.save(held, where)
+    assert [m.id for m in models.load(where)] == [model_id]
 
 
 def test_a_valid_model_of_each_transport_is_accepted():

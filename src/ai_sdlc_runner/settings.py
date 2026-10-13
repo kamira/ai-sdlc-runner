@@ -106,8 +106,9 @@ DEFAULT_EFFORT = "medium"
 
 #: The `coder_model` value that means *no default coder model*: `runner setup` records a user's No
 #: with it (CHG-20261005-01, review round 3). Empty cannot carry that, because empty is "the
-#: registry's only `mid` model", which would pick the model that was just declined. A registry model
-#: with this id cannot be named as the coder; name it by assigning it to `engineer_build` instead.
+#: registry's only `mid` model", which would pick the model that was just declined. The registry
+#: refuses new models with this id (`models.RESERVED_ID`); one that predates the rule still loads,
+#: warns, and can never be the coder, because this value always reads as the refusal.
 NO_CODER = "none"
 
 
@@ -472,7 +473,7 @@ def _edit_coder_model(current: Settings, *, input_fn, stream_out) -> Settings:
     """Name the model that builds, or clear it. The registry is not read here, so a typo is caught
     when a run resolves it, which says so by name."""
     said = str(input_fn(f"Model id for the coding role ({NO_CODER} for no default, "
-                        f"blank to clear): ") or "").strip()
+                        f"blank to clear; a registry model called {NO_CODER} cannot be the coder): ") or "").strip()
     return replace(current, coder_model=said)
 
 
