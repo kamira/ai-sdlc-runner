@@ -463,7 +463,9 @@ CREATE TABLE turns (
 CREATE TABLE models (
   id TEXT PRIMARY KEY, vendor TEXT NOT NULL, name TEXT NOT NULL, transport TEXT NOT NULL,
   command_json TEXT NOT NULL DEFAULT '[]', endpoint TEXT NOT NULL DEFAULT '',
-  key_env TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '');
+  key_env TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
+  tier TEXT NOT NULL DEFAULT '', effort_argv TEXT NOT NULL DEFAULT '[]',
+  declared_reach TEXT NOT NULL DEFAULT '');
 ```
 
 All six are live in [`store.py`](../src/ai_sdlc_runner/store.py): `models`,

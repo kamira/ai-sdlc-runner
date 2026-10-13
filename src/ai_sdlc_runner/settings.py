@@ -108,7 +108,8 @@ DEFAULT_EFFORT = "medium"
 #: with it (CHG-20261005-01, review round 3). Empty cannot carry that, because empty is "the
 #: registry's only `mid` model", which would pick the model that was just declined. The registry
 #: refuses new models with this id (`models.RESERVED_ID`); one that predates the rule still loads,
-#: warns, and can never be the coder, because this value always reads as the refusal.
+#: warns, and is never the coder: this value always reads as the refusal, `coder_defaults`
+#: skips it in the lone-`mid` rule, and refuses an `engineer_build` assignment naming it.
 NO_CODER = "none"
 
 

@@ -200,7 +200,8 @@ conversation-store migration this document had been describing for four rounds.
 `declared_reach`, by
 `ALTER TABLE … ADD COLUMN` with a default of nothing — so a schema-3 store reads back exactly as it
 was. `_verify_or_refuse` still compares columns exactly: below schema 4 the `models` table must be
-the eight-column one, and the migration adds the other three inside one transaction with the version
+the eight-column one (or already the eleven-column one, when a store was half-built from the current DDL;
+the migration skips columns that are present), and the migration adds the other three inside one transaction with the version
 stamp.
 
 That sentence used to read *"`conversations` and `turns` are not created by any code yet"*, with the

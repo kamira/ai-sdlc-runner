@@ -710,7 +710,9 @@ runner run --plan plan.json --assignment-store none         # the plan alone (ru
 (`--yes` to accept off a terminal). A model carries an optional `tier` and an `effort_argv`
 template; with nothing assigned to `engineer_build`, the `coder_model` setting — or the registry's
 only `mid` model, when no `agent_command` is configured and you did not answer No in `setup` —
-builds, at `coder_effort`. The `claude` and `codex` entries `setup` writes declare
+builds, at `coder_effort`. A `coder_model` you set overrides a configured `agent_command` (a
+notice says so); `setup --yes` does not set one when `agent_command` is configured. A model called
+`none` is never the coder. The `claude` and `codex` entries `setup` writes declare
 `declared_reach: external`, because those CLIs send the prompt, repository content included, to
 their vendor; `setup` says so before it writes and when it offers one as the coder. See
 `docs/MODELS.md`.
@@ -832,7 +834,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 2797 tests
+pytest -q          # 2804 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

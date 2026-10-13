@@ -124,17 +124,30 @@ to notice.
 
 ---
 
-## 3 · Every refusal, in the order `validate` makes them
+## 3 · Every refusal `validate` makes on a load, and the one `validate_new` adds
 
-`validate()`'s docstring: *"Every refusal this registry makes, in one place so none of them is
-optional."*
+`validate()`'s docstring: *"Every refusal this registry makes on a load, in one place so none of
+them is optional."* Below, the `validate_new` row comes first and is the only one that is not made
+on a load; the rest are `validate`'s. The `declared_reach` rows run after the transport checks in
+the code, not before them.
 
-### Always
+### Only where a model is created or renamed (`validate_new`)
+
+| Refused | Because |
+|---|---|
+| a **new** `id` of `none` (any case): setup's Add and Edit, `POST /models` (through `Registry.add`) | `none` is what the settings store for "no default coder model"; a model so named would read as a refusal once chosen as the coder |
+
+An entry already called `none` still loads, because `validate` does not refuse it and refusing it on
+load would stop `run` and `serve`. It is named in a warning, and it is never the coder:
+`cli.coder_defaults` skips it in the lone-`mid` rule, treats `coder_model` = `none` (any case) as a
+No, and refuses an `engineer_build` assignment naming it from the plan or the store. Another node
+may still be assigned it.
+
+### Always (`validate`)
 
 | Refused | Because |
 |---|---|
 | an `id` that is not a plain name | it is a key in config *and* on the wire; something that needs quoting gets quoted differently in two places |
-| a **new** `id` of `none` (any case): setup's Add and Edit, `POST /models` | `none` is what the settings store for "no default coder model"; a model so named would read as a refusal once chosen as the coder. An entry already called `none` still loads (refusing it on load would stop `run` and `serve`), is named in a warning, and can never be the coder |
 | no `vendor` | which API this speaks is not derivable from the endpoint, and guessing would be inventing one |
 | no `name` | — |
 | a `transport` outside `cli` / `api` | — |
@@ -281,7 +294,8 @@ a seat naming a registry model id      (resolved first, so the two naming scheme
 
 `engineer_build` is the one coding node that picks a model; `fix_pass` and `engineer_selfverify`
 follow it. When nothing is assigned to it — by the plan or by the store — `cli.coder_defaults`
-fills it, **after** `store.resolve` so the dispatch record is unchanged:
+fills it, **after** `store.resolve` so the dispatch record is unchanged. (An assignment of a model
+called `none` to `engineer_build` is the one thing it refuses rather than leaves alone.)
 
 ```
 an assignment from the plan or the store         (untouched)
@@ -291,7 +305,10 @@ an assignment from the plan or the store         (untouched)
                                                   The value "none" is a No from `runner setup`: no
                                                   default coder model, and the two steps below do
                                                   not run — nothing is picked, agent_command or
-                                                  the stub builds)
+                                                  the stub builds.
+                                                  When agent_command is configured, an id here
+                                                  overrides it, and a notice says so, naming where
+                                                  the work goes if it leaves the machine)
   →  the registry's only tier "mid" model          (not when agent_command is configured: the rule
                                                   fills the place where the stub would be and never
                                                   displaces the operator's own command, and says so
@@ -299,7 +316,8 @@ an assignment from the plan or the store         (untouched)
                                                   A "mid" api model is skipped, with a notice:
                                                   nothing dispatches an api model; the pick itself
                                                   prints a notice naming the model, and saying so
-                                                  when it leaves the machine)
+                                                  when it leaves the machine. A model called "none"
+                                                  is not counted)
   →  several "mid" models, no coder_model: a notice naming them, and nothing assigned — no random pick
   →  agent_command                                (the runner.yaml's own command)
   →  the stub
@@ -320,7 +338,10 @@ It probes no port. It proposes entries — `claude-sonnet-5-5` (tier `mid`, with
 {effort}` template), one `codex` entry with the model left for you, and one `ollama run <model>`
 wrapper per listed model. The `claude` and `codex` entries are `declared_reach: external` and the
 `propose:` line says their prompts, repository content included, go to Anthropic and OpenAI;
-offering one as `coder_model` repeats that in the prompt (`--yes` prints it as a note). `command[0]`
+offering one as `coder_model` repeats that in the prompt (`--yes` prints it as a note). The Yes
+answer says it takes precedence over a configured `agent_command`; **`--yes` does not set
+`coder_model` when `agent_command` is configured in runner.yaml** (it says so, and the off-terminal
+hint says what `--yes` will do), and sets it only when there is none. `command[0]`
 is the absolute path that was found, so dispatch runs the program `setup` showed. On Windows only
 the `PATHEXT` forms are looked for (`claude.cmd`, never npm's extensionless shell shim). Writes only what is accepted: on a terminal each proposal is **Add**ed,
 **Edit**ed (id, tier, effort template, reach, which can only be raised; the command stays as

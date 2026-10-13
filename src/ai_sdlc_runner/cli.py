@@ -542,12 +542,14 @@ def coder_defaults(node_models: Mapping[str, Sequence[str]],
     the store still win where they speak and the engine's dispatch record is unchanged: this only
     fills `engineer_build` when nothing is assigned to it. In order:
 
-    1. an assignment from the plan or the store: untouched;
+    1. an assignment from the plan or the store: untouched, except that one naming a reserved id
+       (`models.is_reserved`) is refused, because that id reads as the settings' refusal;
     2. `coder_model` from settings, which must name a registry model (an unknown id is an error
        here, because the registry is not known to settings and a typo must not fall through to a
        different model). The value `settings.NO_CODER` is a user's *No*: nothing is assigned and
-       steps 3 and 4 do not run, because a declined model must not be picked by a rule;
-    3. the registry's only `mid` model, **unless `agent_command` is configured** — that command was
+       steps 3 and 4 do not run, because a declined model must not be picked by a rule. When
+       `agent_command` is configured this value overrides it, and a notice says so;
+    3. the registry's only `mid` model (a reserved id is not counted), **unless `agent_command` is configured** — that command was
        written by the operator for this runner, and a rule must not displace it (it only fills the
        place where there would otherwise be the stub);
     4. several `mid` models and no `coder_model`: a notice naming them, and nothing assigned.
@@ -559,6 +561,12 @@ def coder_defaults(node_models: Mapping[str, Sequence[str]],
     merged = {node: list(ids) for node, ids in node_models.items()}
     notices: List[str] = []
     build = "engineer_build"
+    for assigned in merged.get(build, ()):
+        if models_mod.is_reserved(assigned):
+            raise CliError(
+                f"{build} is assigned the model {assigned!r}, which is called what settings store "
+                f"for \"no default coder model\", so it is refused as the coder. Rename the model "
+                f"in the registry, or assign another.")
     if not merged.get(build):
         if saved.coder_model.lower() == settings_mod.NO_CODER:
             pass                    # declined in `setup`: no default coder model, and no rule picks one
@@ -576,6 +584,15 @@ def coder_defaults(node_models: Mapping[str, Sequence[str]],
                     f"settings name coder_model {saved.coder_model!r}, an api model, and nothing "
                     f"dispatches an api model. Name a cli model, or clear coder_model.")
             merged[build] = [saved.coder_model]
+            if agent_command:
+                # Round 3 decided the explicit word wins; what was missing is saying so, because
+                # `setup --yes` can write this value without the operator having typed it.
+                notices.append(
+                    f"coder_model {saved.coder_model!r} overrides the configured agent_command: "
+                    f"{build} and the nodes that follow it use that model, not the command"
+                    + (f". {_egress(registry.get(saved.coder_model))}"
+                       if registry.get(saved.coder_model).leaves_this_machine else "")
+                    + ". Clear coder_model to use agent_command again.")
         elif registry is not None and agent_command:
             only = [m.id for m in registry if m.tier == "mid" and m.transport == models_mod.CLI]
             if only:
@@ -585,8 +602,8 @@ def coder_defaults(node_models: Mapping[str, Sequence[str]],
         elif registry is not None:
             mid = []
             for m in registry:
-                if m.tier != "mid":
-                    continue
+                if m.tier != "mid" or models_mod.is_reserved(m.id):
+                    continue    # a reserved id is named below, and never a candidate
                 if m.transport != models_mod.CLI:
                     # Picking it would fail partway through a walk, after earlier nodes had run.
                     notices.append(f"{m.id} is tier 'mid' but is an api model, which cannot be "
@@ -610,7 +627,8 @@ def coder_defaults(node_models: Mapping[str, Sequence[str]],
     for reserved in (models_mod.reserved_in(registry) if registry is not None else ()):
         # Said wherever the coder is decided, because `coder_model` = this id reads as a refusal.
         notices.append(f"model {reserved!r} is called what settings store for \"no default coder "
-                       f"model\", so it can never be the coder. Rename it in the registry to use it.")
+                       f"model\", so it is never chosen as the coder and an {build} assignment "
+                       f"naming it is refused. Rename it in the registry to use it.")
     follows = [n.id for n in graph.NODES if n.follows == build]
     efforts = {node: saved.coder_effort for node in [build] + follows}
     return merged, efforts, notices
@@ -741,6 +759,8 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
     the lone-`mid` rule pick the very model that was just declined.
     """
     proposals, notes = detect.propose()
+    # `--yes` must not displace an operator's own command with a model nobody typed (review round 11).
+    has_agent_command = bool(load_config(args.config).get("agent_command"))
     for note in notes:
         print(f"note:          {note}")
     token_dir = Path(args.token_dir)
@@ -790,7 +810,10 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
         accepted = list(fresh)
     elif not interactive:
         print("Nothing written. Re-run with --yes to add these, or run `runner setup` in a terminal "
-              "to choose one by one.")
+              "to choose one by one. "
+              + ("--yes leaves coder_model alone, because agent_command is configured."
+                 if has_agent_command else
+                 "If coder_model is empty, --yes also sets it to the tier 'mid' model it adds."))
         return 0
     else:
         accepted = []
@@ -820,7 +843,10 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
         except settings_mod.SettingsError as exc:
             print(f"error: {exc}")
             return 2
-        if not current.coder_model:
+        if not current.coder_model and args.yes and has_agent_command:
+            print(f"note:          agent_command is configured, so coder_model is left empty; "
+                  f"{mid[0].id} is added but does not replace it. Set coder_model to use it.")
+        elif not current.coder_model:
             if args.yes:
                 chosen = True
             else:
@@ -828,7 +854,8 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
                         if mid[0].leaves_this_machine else "")
                 answer = tui.select(f"Use {mid[0].id} as the coding model (coder_model)?{sent}",
                                     [("Yes", "engineer_build uses it unless a plan or the store "
-                                             "says otherwise"),
+                                             "says otherwise; it takes precedence over "
+                                             "agent_command"),
                                      ("No", "no default coder model: nothing is picked for "
                                             "you, not even a lone mid-tier model")],
                                     input_fn=input_fn)
@@ -2089,7 +2116,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
     # An old entry with the settings' refusal id still loads; say so where the registry is final.
     for reserved in models_mod.reserved_in(registry):
         print(f"warning:       model {reserved!r} is called what settings store for \"no default "
-              f"coder model\", so it can never be the coder. Rename it in the registry.")
+              f"coder model\", so it is never chosen as the coder and an engineer_build assignment "
+              f"naming it is refused. Rename it in the registry.")
 
     # The plan's assignment is this change's declaration; the store's is the project's standing one.
     # The plan wins where it says something, and `resolve` says which source each one came from.

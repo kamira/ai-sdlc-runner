@@ -768,7 +768,7 @@ def test_run_and_serve_start_over_a_stored_model_called_none_and_it_is_never_the
                    saved={"coder_model": "none"}, agent_command=False)
     code, out = _run(tmp_path, capsys)
     assert code == 0, out
-    assert "'none'" in out and "can never be the coder" in out
+    assert "'none'" in out and "never chosen as the coder" in out
     assert _argv_of(_asks(log), "engineer_build") == [], "the model called none built"
     code, out, make_config = _serve(tmp_path, monkeypatch, capsys)
     assert code == 2 and "stopped by the test" in out, out
@@ -781,7 +781,7 @@ def test_a_mid_model_called_none_is_not_chosen_whatever_the_case_of_the_setting(
     merged, _, notices = cli.coder_defaults(
         {}, registry, settings_mod.Settings(coder_model="None"))
     assert "engineer_build" not in merged
-    assert any("can never be the coder" in n for n in notices)
+    assert any("never chosen as the coder" in n for n in notices)
 
 
 def test_the_console_route_cannot_create_a_model_called_none():
@@ -1368,3 +1368,87 @@ def test_a_remote_ollama_host_is_noted(machine, tmp_path, monkeypatch, capsys):
     _, notes = detect.propose(environ={"OLLAMA_HOST": "127.0.0.1:11434", "PATH": str(machine)},
                               path=str(machine))
     assert not any("OLLAMA_HOST" in n for n in notes)
+
+
+# ── review round 11 · a reserved id is never the coder on any path; --yes keeps agent_command ───────
+
+def test_a_lone_mid_model_called_none_is_not_chosen_with_an_empty_coder_model():
+    # The case round 10's tests missed: no `coder_model` at all, so the lone-mid rule runs.
+    merged, _, notices = cli.coder_defaults(
+        {}, _registry(_cli(id="none", tier="mid")), settings_mod.Settings())
+    assert "engineer_build" not in merged
+    assert not any("so it builds" in n for n in notices)
+    assert any("'none'" in n and "never chosen as the coder" in n for n in notices)
+    # It does not count toward "several": the other mid model is the only candidate.
+    merged, _, _ = cli.coder_defaults(
+        {}, _registry(_cli(id="none", tier="mid"), _cli(id="b", tier="mid")), settings_mod.Settings())
+    assert merged["engineer_build"] == ["b"]
+
+
+def test_an_assignment_of_a_model_called_none_to_the_coder_is_refused():
+    registry = _registry(_cli(id="none", tier="mid"), _cli(id="b"))
+    for ids in (["none"], ["b", "None"]):
+        with pytest.raises(cli.CliError, match="refused as the coder"):
+            cli.coder_defaults({"engineer_build": ids}, registry, settings_mod.Settings())
+    # Another node may still hold it: only the coding role is promised.
+    merged, _, _ = cli.coder_defaults({"qa": ["none"]}, registry, settings_mod.Settings())
+    assert merged["qa"] == ["none"]
+
+
+def test_run_with_a_lone_mid_model_called_none_does_not_build_with_it(tmp_path, capsys):
+    log = _project(tmp_path, [dict(id="none", vendor="v", name="n", transport="cli", tier="mid")],
+                   agent_command=False)
+    code, out = _run(tmp_path, capsys)
+    assert code == 0, out
+    assert _argv_of(_asks(log), "engineer_build") == [], "the model called none built"
+    assert "so it builds" not in out
+
+
+def test_an_explicit_coder_model_over_agent_command_says_so_and_where_the_work_goes():
+    registry = _registry(_cli(id="a", tier="mid", declared_reach="external", vendor="acme"))
+    _, _, notices = cli.coder_defaults(
+        {}, registry, settings_mod.Settings(coder_model="a"), agent_command=True)
+    [notice] = notices
+    assert "coder_model 'a'" in notice and "overrides the configured agent_command" in notice
+    assert "acme" in notice, "an external coder's notice must say where the work goes"
+    # No command configured: nothing is overridden, so nothing is said.
+    _, _, notices = cli.coder_defaults({}, registry, settings_mod.Settings(coder_model="a"))
+    assert notices == []
+    # A recorded No overrides nothing.
+    _, _, notices = cli.coder_defaults(
+        {}, registry, settings_mod.Settings(coder_model=settings_mod.NO_CODER), agent_command=True)
+    assert notices == []
+
+
+def _with_agent_command():
+    # `machine` chdirs to a work directory, and `--config` defaults to config/runner.yaml in it.
+    Path("config").mkdir(exist_ok=True)
+    Path("config", "runner.yaml").write_text('agent_command: ["python", "agent.py"]\n', encoding="utf-8")
+
+
+def test_setup_yes_leaves_coder_model_alone_when_agent_command_is_configured(
+        machine, tmp_path, capsys):
+    _with_agent_command()
+    assert _setup(tmp_path, "--yes") == 0
+    out = capsys.readouterr().out
+    assert "agent_command is configured, so coder_model is left empty" in out
+    assert len(models.load(tmp_path / "tok" / "models.json")) == 4, "the models are still added"
+    assert settings_mod.load(str(tmp_path / "settings.json")).coder_model == "", \
+        "--yes wrote neither a model nor a refusal over the operator's command"
+
+
+def test_the_off_terminal_hint_says_what_yes_does_to_coder_model(machine, tmp_path, capsys):
+    assert _setup(tmp_path) == 0
+    assert "--yes also sets it to the tier 'mid' model" in capsys.readouterr().out
+    _with_agent_command()
+    assert _setup(tmp_path) == 0
+    assert "--yes leaves coder_model alone, because agent_command is configured" in \
+        capsys.readouterr().out
+
+
+def test_the_coder_prompt_says_a_yes_takes_precedence_over_agent_command(
+        machine, tmp_path, monkeypatch, capsys):
+    # claude: add; codex, llama, qwen: skip; "use claude as the coder?": Yes.
+    assert _interactive_setup(tmp_path, monkeypatch, ["1", "3", "3", "3", "1"]) == 0
+    assert "takes precedence over agent_command" in capsys.readouterr().out
+    assert settings_mod.load(str(tmp_path / "settings.json")).coder_model == "claude-sonnet-5-5"

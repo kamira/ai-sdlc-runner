@@ -123,8 +123,9 @@ on eight nodes looks the same in a list as one on a single node.
 
 **A `by_model` node entry with `"default": true` is the coding role's default, not an assignment.**
 With nothing assigned to `engineer_build`, the run builds with `coder_model` or the registry's only
-`mid` model, unless `coder_model` is `none` or a runner.yaml `agent_command` is configured
-(`cli.coder_defaults`), and `fix_pass` and `engineer_selfverify` follow it. `serve` passes
+`mid` model (a model called `none` is never picked, and an assignment naming it is refused), unless
+`coder_model` is `none` or a runner.yaml `agent_command` is configured — an explicit `coder_model`
+still wins over `agent_command`, with a notice (`cli.coder_defaults`), and `fix_pass` and `engineer_selfverify` follow it. `serve` passes
 the server that same resolution, so the model that will build is listed under those three nodes
 instead of "used nowhere". `node_models` and `source` stay exactly what the plan and the store said.
 
@@ -228,7 +229,7 @@ snapshot"* the whole time the sentence above said it was one.
 | `POST /config/halts` | `{version, kind, recipient?}` | a `kind` that is not one of the six permanent halts. A `recipient` is **never** refused — an organisation names its own functions, and an unrecognised one still reaches somebody because the operator is on every halt. A blank or missing `recipient` clears the route |
 | `POST /run/instruct` | `{version, instruction}` | the instruction is empty — *"an empty instruction says nothing"* |
 | `POST /attachments` | `{version, filename, data}` — `data` is **base64** | the base64 is invalid, or `attachments.py` refuses the type or size |
-| `POST /models` | `{version, model: {…11 fields, listed in `models.Model`…}}` | `_model_from` refuses an unknown field, or `validate` refuses the model |
+| `POST /models` | `{version, model: {…11 fields, listed in `models.Model`…}}` | `_model_from` refuses an unknown field, or the model is refused (`validate`, and for a new id `validate_new`, which refuses `none`) |
 
 ### Gate and tie are not interchangeable
 
