@@ -247,9 +247,12 @@ def test_unlink_removes_a_deep_file(tmp_path):
 ALLOWED_DIRECT_WRITES = {
     # (module, function called) : why it does not go through paths.py
     ("store.py", "sqlite3.connect"):
-        "the database open itself; sqlite takes a path string rather than a handle, so it is given "
-        "paths.real(file) and preceded by paths.check(file) two lines above — routed, just not "
-        "through a paths.* call the scanner can see",
+        "the database opens themselves (connect, and stored_model_ids which setup uses to read the "
+        "store without migrating it); sqlite takes a path string rather than a handle, so both are "
+        "given paths.real(...) — routed, just not through a paths.* call the scanner can see. "
+        "connect is preceded by paths.check(file) and paths.makedirs a few lines above; "
+        "stored_model_ids is preceded by paths.exists(path), which refuses a missing file so the "
+        "plain connect cannot create one, and sets PRAGMA query_only = 1 before reading",
     ("worktree.py", "shutil.which"):
         "not a write at all — it asks whether `git` is on PATH. Caught by the deliberately broad "
         "`shutil.*` rule the seats asked for, and kept broad: a rule that enumerated only the "

@@ -779,7 +779,7 @@ def cmd_setup(args: argparse.Namespace, *, input_fn=input) -> int:
     # as "no ids" could let an accepted id collide with a stored one that save time then finds.
     try:
         stored_ids = (store_mod.stored_model_ids(store_path)
-                      if str(store_path).lower() != "none" and Path(store_path).exists()
+                      if str(store_path).lower() != "none" and paths.exists(store_path)
                       else frozenset())
     except store_mod.StoreError as exc:
         print(f"error: {exc}\nNothing was asked or written; fix or move the store and run "

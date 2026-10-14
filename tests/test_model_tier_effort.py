@@ -1246,6 +1246,25 @@ def test_setup_still_sees_a_collision_in_a_schema_3_store(machine, tmp_path, cap
     assert "already there: codex" in capsys.readouterr().out
 
 
+def test_stored_model_ids_reads_through_the_long_path_layer(tmp_path, monkeypatch):
+    path = _schema3_store(tmp_path, ids=("codex",))
+    before = path.read_bytes()
+    seen = []
+    real = store.paths.real
+    monkeypatch.setattr(store.paths, "real", lambda p: seen.append(p) or real(p))
+    assert store.stored_model_ids(path) == frozenset({"codex"})
+    assert seen == [path, path]                         # the existence check, then the connect
+    assert path.read_bytes() == before and _version(path) == 3
+
+
+def test_stored_model_ids_on_a_missing_path_refuses_and_creates_nothing(tmp_path):
+    tok = tmp_path / "tok"
+    tok.mkdir()
+    with pytest.raises(store.StoreError):
+        store.stored_model_ids(tok / "config.sqlite")
+    assert list(tok.iterdir()) == []
+
+
 def test_an_unreadable_store_is_refused_before_anything_is_asked(machine, tmp_path, capsys, monkeypatch):
     tok = tmp_path / "tok"
     tok.mkdir()

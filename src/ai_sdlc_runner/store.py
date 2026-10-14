@@ -445,20 +445,32 @@ def _assigned_to(db: sqlite3.Connection, model_id: str) -> List[str]:
 
 
 def stored_model_ids(path: "str | Path") -> frozenset:
-    """The ids in the store's `models` table, read without opening it for writing or migrating it.
+    """The ids in the store's `models` table, read without writing to it or migrating it.
 
     `setup` needs these before anyone has accepted anything, and `connect` migrates (and commits)
     the store to the current schema: a setup that then wrote nothing would still have made the
-    store unreadable by the previous runner. So this opens the file read-only, whatever its schema
-    version. A store that cannot be read this way (locked, not a database) raises `StoreError`, and
-    the caller refuses: an empty set there would let setup accept an id the store already holds. A
-    store with no `models` table yet really has no ids, so that case returns an empty set.
+    store unreadable by the previous runner. So this reads the file as it is, whatever its schema
+    version, and never migrates.
+
+    Read-only is `PRAGMA query_only = 1` on an ordinary connection opened through
+    `paths.real(path)`, the same long form `connect` uses. It is not the `file:...?mode=ro` URI:
+    that URI is built from `Path.resolve().as_uri()`, so it is not routed through `paths.real` and
+    carries no extended-length prefix, and on Windows past MAX_PATH SQLite answers "unable to open
+    database file" for a store every other command opens. An ordinary connect would create a
+    missing file, so a path that does not exist is refused with `StoreError` before connecting;
+    nothing is created. A store that cannot be read (locked, not a database) also raises
+    `StoreError`, and the caller refuses: an empty set there would let setup accept an id the store
+    already holds. A store with no `models` table yet really has no ids, so that case returns an
+    empty set.
     """
+    if not paths.exists(path):
+        raise StoreError(f"cannot read the store {path}: no such file")
     try:
-        db = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
+        db = sqlite3.connect(paths.real(path))
     except (sqlite3.Error, OSError, ValueError) as exc:
         raise StoreError(f"cannot read the store {path}: {paths.plain_in(str(exc))}") from exc
     try:
+        db.execute("PRAGMA query_only = 1")
         return frozenset(r[0] for r in db.execute("SELECT id FROM models"))
     except sqlite3.Error as exc:
         if "no such table" in str(exc):
