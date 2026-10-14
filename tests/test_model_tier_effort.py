@@ -1247,14 +1247,79 @@ def test_setup_still_sees_a_collision_in_a_schema_3_store(machine, tmp_path, cap
 
 
 def test_stored_model_ids_reads_through_the_long_path_layer(tmp_path, monkeypatch):
+    import urllib.parse
     path = _schema3_store(tmp_path, ids=("codex",))
     before = path.read_bytes()
     seen = []
     real = store.paths.real
     monkeypatch.setattr(store.paths, "real", lambda p: seen.append(p) or real(p))
+    opened = []
+    connect = sqlite3.connect
+    monkeypatch.setattr(store.sqlite3, "connect",
+                        lambda *a, **k: opened.append((a, k)) or connect(*a, **k))
     assert store.stored_model_ids(path) == frozenset({"codex"})
-    assert seen == [path, path]                         # the existence check, then the connect
+    assert seen == [path, path]                         # the existence check, then the URI
+    uri = "file:" + urllib.parse.quote(real(path), safe="/\\:") + "?mode=ro"
+    assert opened == [((uri,), {"uri": True})]
     assert path.read_bytes() == before and _version(path) == 3
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a Windows name cannot contain '?'")
+def test_stored_model_ids_reads_a_path_with_uri_metacharacters(tmp_path):
+    odd = tmp_path / "a?b#c%d%41 e"
+    odd.mkdir()
+    path = _schema3_store(odd, ids=("codex", "qwen"))
+    assert store.stored_model_ids(path) == frozenset({"codex", "qwen"})
+
+
+def _hot_journal_store(tmp_path):
+    """A real hot rollback journal: a copy of a store taken while a transaction is mid-flight."""
+    src = tmp_path / "src"
+    src.mkdir()
+    db_file = src / "config.sqlite"
+    db = sqlite3.connect(str(db_file), isolation_level=None)
+    db.execute("PRAGMA journal_mode = DELETE")
+    db.execute("PRAGMA cache_size = 1")
+    for statement in store._SCHEMA_1 + store._SCHEMA_2 + store._SCHEMA_3:
+        db.execute(statement)
+    db.execute("INSERT INTO models (id, vendor, name, transport, command_json) "
+               "VALUES ('codex', 'v', 'n', 'cli', '[\"agent\"]')")
+    db.execute("PRAGMA user_version = 3")
+    db.execute("CREATE TABLE filler (x BLOB)")
+    for _ in range(40):
+        db.execute("INSERT INTO filler VALUES (zeroblob(4096))")
+    clean = db_file.read_bytes()
+    db.execute("BEGIN")
+    db.execute("UPDATE filler SET x = randomblob(4096)")
+    db.execute("INSERT INTO models (id, vendor, name, transport, command_json) "
+               "VALUES ('extra', 'v', 'n', 'cli', '[\"agent\"]')")
+    dest = tmp_path / "tok"
+    dest.mkdir()
+    try:
+        journal = src / "config.sqlite-journal"
+        assert journal.exists()
+        copy = dest / "config.sqlite"
+        copy.write_bytes(db_file.read_bytes())
+        (dest / "config.sqlite-journal").write_bytes(journal.read_bytes())
+    finally:
+        db.close()
+    return copy, clean
+
+
+def test_a_store_with_a_hot_journal_is_refused_and_left_byte_for_byte(machine, tmp_path, capsys):
+    copy, clean = _hot_journal_store(tmp_path)
+    journal = copy.with_name("config.sqlite-journal")
+    assert journal.exists() and journal.stat().st_size > 0
+    assert copy.read_bytes() != clean                   # pages really spilled into the db file
+    db_before, journal_before = copy.read_bytes(), journal.read_bytes()
+    with pytest.raises(store.StoreError):
+        store.stored_model_ids(copy)
+    assert copy.read_bytes() == db_before and journal.read_bytes() == journal_before
+    assert _setup(tmp_path, "--yes") == 2
+    assert "cannot read the store" in capsys.readouterr().out
+    assert copy.read_bytes() == db_before and journal.read_bytes() == journal_before
+    assert not (tmp_path / "settings.json").exists()
+    assert not (tmp_path / "tok" / "models.json").exists()
 
 
 def test_stored_model_ids_on_a_missing_path_refuses_and_creates_nothing(tmp_path):

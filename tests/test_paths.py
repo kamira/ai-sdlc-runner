@@ -248,11 +248,13 @@ ALLOWED_DIRECT_WRITES = {
     # (module, function called) : why it does not go through paths.py
     ("store.py", "sqlite3.connect"):
         "the database opens themselves (connect, and stored_model_ids which setup uses to read the "
-        "store without migrating it); sqlite takes a path string rather than a handle, so both are "
-        "given paths.real(...) — routed, just not through a paths.* call the scanner can see. "
-        "connect is preceded by paths.check(file) and paths.makedirs a few lines above; "
-        "stored_model_ids is preceded by paths.exists(path), which refuses a missing file so the "
-        "plain connect cannot create one, and sets PRAGMA query_only = 1 before reading",
+        "store without migrating it); sqlite takes a path string rather than a handle, so connect "
+        "is given paths.real(...) and stored_model_ids a file: URI built from paths.real(...) "
+        "(percent-encoded, ?mode=ro, uri=True) — routed, just not through a paths.* call the "
+        "scanner can see. connect is preceded by paths.check(file) and paths.makedirs a few "
+        "lines above; stored_model_ids is preceded by paths.exists(path), which refuses a "
+        "missing file with a clear error, and mode=ro opens read-only (it never creates a file "
+        "and refuses to roll back a hot journal)",
     ("worktree.py", "shutil.which"):
         "not a write at all — it asks whether `git` is on PATH. Caught by the deliberately broad "
         "`shutil.*` rule the seats asked for, and kept broad: a rule that enumerated only the "
