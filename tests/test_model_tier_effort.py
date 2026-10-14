@@ -1199,21 +1199,19 @@ if sys.argv[1:] == ["list"]:
 
 
 def _schema3_store(tmp_path, ids=()):
-    """A store left at schema 3, as the previous runner wrote it."""
-    import sqlite3
+    """A store left at schema 3, as the previous runner wrote it: built from the shipped DDL."""
     tok = tmp_path / "tok"
     tok.mkdir()
     path = tok / "config.sqlite"
-    db = store.connect(path)
-    store.save_registry(db, models.Registry(models=tuple(_cli(id=i) for i in ids)))
+    db = sqlite3.connect(str(path))
+    for statement in store._SCHEMA_1 + store._SCHEMA_2 + store._SCHEMA_3:
+        db.execute(statement)
+    for i in ids:
+        db.execute("INSERT INTO models (id, vendor, name, transport, command_json) "
+                   "VALUES (?, 'v', 'n', 'cli', '[\"agent\"]')", (i,))
+    db.execute("PRAGMA user_version = 3")
+    db.commit()
     db.close()
-    raw = sqlite3.connect(str(path))
-    # The schema-4 columns are what the previous runner does not know; without them this is its store.
-    for column in ("tier", "effort_argv", "declared_reach"):
-        raw.execute(f"ALTER TABLE models DROP COLUMN {column}")
-    raw.execute("PRAGMA user_version = 3")
-    raw.commit()
-    raw.close()
     return path
 
 
