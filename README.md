@@ -206,8 +206,8 @@ on the node. The difference is declared in `graph.Node.mode`, never inferred fro
 | `model_panel` | N voices on **one question**, adjudicated | N |
 | `pool` | a pool the main dispatches to; **one** does the work | 1 |
 | `follows` | whichever model answered the node it names | 1 |
-| `seat_panel` | the review seats — independence is not configurable | one per seat |
-| `survey` | every seat asked, **all** answers kept, nothing adjudicated | one per seat |
+| `seat_panel` | the review seats — independence is not configurable | one per (seat, model) |
+| `survey` | every seat asked, **all** answers kept, nothing adjudicated | one per (seat, model) |
 
 Same three ids in `node_models`; entirely different runs. A pool's choice is **random on purpose** —
 any cleverer rule is the runner deciding which model is better at a task it has not seen — and
@@ -217,7 +217,7 @@ earlier ask shifts the ordinal and can change later dispatches. Every dispatch i
 what actually makes "which model built this" answerable.
 
 **One ask, one session.** Every asking node gets its own session, opened and closed around a single
-ask. A multi-seat review is several asks, so each seat is its own session — otherwise "three seats"
+ask. A multi-seat review is several asks, so each seat — and each model on a seat — is its own session — otherwise "three seats"
 is one model answering three times in one context, which is the anchoring the seats were bought to
 avoid.
 
@@ -842,7 +842,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 2896 tests
+pytest -q          # 2910 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

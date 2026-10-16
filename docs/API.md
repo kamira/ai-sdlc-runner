@@ -203,14 +203,14 @@ merged assignment with its provenance and the new version —
 
 ```jsonc
 { "node_models": { "<node id>": ["<model id>", …] },
-  "seat_models": { "<seat>": "<model id>" },
+  "seat_models": { "<seat>": ["<model id>", …] },
   "source": { "node_models.<node id>": "plan" | "store", … },
   "version": 7 }
 ```
 
 Three of `GET /config/nodes`'s keys — `node_models`, `seat_models` and `source` — and the version
-the edit advanced to. `seat_models` values are **not** joined here the way that route joins them;
-this one answers the stored id. [Below](#the-three-assignment-routes-return-the-resolved-assignment)
+the edit advanced to. `seat_models` values are lists of model ids (a seat's models in order); that route
+does not join them, and this one answers the stored ids. [Below](#the-three-assignment-routes-return-the-resolved-assignment)
 now says the same thing about the same routes. Until CHG-20260908-02 it did not: it said **two**
 routes and **three** keys, while the sentence above this table said all of them return the run
 snapshot. Why neither was noticed is not measured here. What is measurable: no guard in this

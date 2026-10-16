@@ -87,7 +87,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from . import models, paths, policy, tui
 
@@ -396,10 +396,15 @@ def edit(settings: Settings, *, input_fn=input, stream_out=None) -> Optional[Set
     not, and it is the one place a wrong answer writes a safety bypass to disk.
     """
     current = settings
+    #: What the last edit refused and why. Shown as the body of the next menu: in a real session
+    #: (`cmd_settings` gives no `stream_out`) a line printed before a menu is erased by it, so the
+    #: reason has to be on the menu itself. Cleared once that menu has been shown.
+    notes: List[str] = []
     while True:
         rows = _screen(current)
         choice = tui.select(f"Settings — {current.describe()}", [row[:2] for row in rows],
-                            input_fn=input_fn, stream_out=stream_out)
+                            input_fn=input_fn, stream_out=stream_out, body=tuple(notes))
+        del notes[:]
         if choice is None:
             return None
         _, _, effect = rows[choice]
@@ -407,7 +412,7 @@ def edit(settings: Settings, *, input_fn=input, stream_out=None) -> Optional[Set
             return current
         if effect is _DISCARD:
             return None
-        current = effect(current, input_fn=input_fn, stream_out=stream_out)
+        current = effect(current, input_fn=input_fn, stream_out=stream_out, notes=notes)
 
 
 #: The two effects that end the screen. Sentinels rather than strings, so a row cannot be given an
@@ -449,6 +454,14 @@ def _screen(current: Settings):
     ]
 
 
+def _refused(message: str, notes: Optional[List[str]], stream_out) -> None:
+    """Say why an edit was not kept: on the next menu (`notes`), and on `stream_out` if given."""
+    if notes is not None:
+        notes.append(message)
+    if stream_out is not None:
+        print(message, file=stream_out)
+
+
 def _seat_options():
     """The seat counts a person may pick, each paired with the value it yields.
 
@@ -460,13 +473,12 @@ def _seat_options():
              policy.SEAT_FLOOR)]
     for n in range(1, policy.SEAT_FLOOR):
         rows.append((f"{n}", "below the floor — needs high-risk mode, and the run records it", n))
-    extra = policy.SEAT_FLOOR + 1
-    if extra <= policy.MAX_SEAT_COUNT:
-        rows.append((f"{extra}", "more review than the floor asks for", extra))
+    for n in range(policy.SEAT_FLOOR + 1, policy.MAX_SEAT_COUNT + 1):
+        rows.append((f"{n}", "more review than the floor asks for", n))
     return rows
 
 
-def _edit_seats(current: Settings, *, input_fn, stream_out) -> Settings:
+def _edit_seats(current: Settings, *, input_fn, stream_out, notes=None) -> Settings:
     """Pick a seat count. The options below the floor say so in the option itself."""
     rows = _seat_options()
     choice = tui.select(f"How many review seats? (floor {policy.SEAT_FLOOR})",
@@ -477,7 +489,7 @@ def _edit_seats(current: Settings, *, input_fn, stream_out) -> Settings:
                      input_fn=input_fn, stream_out=stream_out)
 
 
-def _edit_dimensions(current: Settings, *, input_fn, stream_out) -> Settings:
+def _edit_dimensions(current: Settings, *, input_fn, stream_out, notes=None) -> Settings:
     """Pick the seats that open. A multi-select built on `tui.select`: each pick toggles a seat, and
     the order they were switched on is the order they open. Done keeps the choice; Clear unsets it.
 
@@ -487,7 +499,9 @@ def _edit_dimensions(current: Settings, *, input_fn, stream_out) -> Settings:
     chosen = list(current.review_dimensions or ())
     while True:
         rows = [(f"[{'x' if seat.name in chosen else ' '}] {seat.name}",
-                 f"{seat.label}{' — off unless chosen' if seat.opt_in else ''}",
+                 f"{seat.label} — {seat.question}"
+                 f"{' The veto seat: required unless high-risk mode is on.' if seat.veto else ''}"
+                 f"{' Off unless chosen.' if seat.opt_in else ''}",
                  seat.name) for seat in policy.SEATS]
         rows.append(("Done", f"open {len(chosen)} seat(s), in the order ticked", None))
         rows.append(("Clear", "unset review_dimensions; review_seats decides again", ""))
@@ -511,9 +525,8 @@ def _edit_dimensions(current: Settings, *, input_fn, stream_out) -> Settings:
     if missing and not current.high_risk_mode:
         # `load` refuses this list without the mode, so the screen does not write it. Turn the mode
         # on first — a panel with no veto is a decision, not a side effect of a tick.
-        if stream_out is not None:
-            print(f"not kept: {missing} is the veto seat, and a list without it needs high-risk "
-                  f"mode. Turn that on first, or tick {missing[0]}.", file=stream_out)
+        _refused(f"not kept: {', '.join(missing)} is the veto seat, and a list without it needs "
+                 f"high-risk mode. Turn that on first, or tick {missing[0]}.", notes, stream_out)
         return current
     if len(chosen) < policy.SEAT_FLOOR and not current.high_risk_mode:
         if not tui.confirm_high_risk(len(chosen), policy.SEAT_FLOOR,
@@ -523,7 +536,7 @@ def _edit_dimensions(current: Settings, *, input_fn, stream_out) -> Settings:
     return after
 
 
-def _edit_vouched(current: Settings, *, input_fn, stream_out) -> Settings:
+def _edit_vouched(current: Settings, *, input_fn, stream_out, notes=None) -> Settings:
     """Add or remove a vouched command.
 
     **The field the screen could not reach** (CHG-20260904-17, idiom seat 2a). `engine.py` refuses
@@ -552,13 +565,12 @@ def _edit_vouched(current: Settings, *, input_fn, stream_out) -> Settings:
     try:
         _check_vouched([said])
     except SettingsError as refused:
-        if stream_out is not None:
-            print(f"not vouched: {refused}", file=stream_out)
+        _refused(f"not vouched: {refused}", notes, stream_out)
         return current
     return replace(current, ordinary_commands=current.ordinary_commands + (said,))
 
 
-def _edit_coder_model(current: Settings, *, input_fn, stream_out) -> Settings:
+def _edit_coder_model(current: Settings, *, input_fn, stream_out, notes=None) -> Settings:
     """Name the model that builds, or clear it. The registry is not read here, so a typo is caught
     when a run resolves it, which says so by name."""
     said = str(input_fn(f"Model id for the coding role ({NO_CODER} for no default, "
@@ -566,7 +578,7 @@ def _edit_coder_model(current: Settings, *, input_fn, stream_out) -> Settings:
     return replace(current, coder_model=said)
 
 
-def _edit_coder_effort(current: Settings, *, input_fn, stream_out) -> Settings:
+def _edit_coder_effort(current: Settings, *, input_fn, stream_out, notes=None) -> Settings:
     rows = [(name, "the default" if name == DEFAULT_EFFORT else "", name) for name in EFFORTS]
     choice = tui.select("Effort for the coding role", [row[:2] for row in rows],
                         input_fn=input_fn, stream_out=stream_out)
@@ -575,7 +587,7 @@ def _edit_coder_effort(current: Settings, *, input_fn, stream_out) -> Settings:
     return replace(current, coder_effort=rows[choice][2])
 
 
-def _toggle_high_risk(current: Settings, *, input_fn, stream_out) -> Settings:
+def _toggle_high_risk(current: Settings, *, input_fn, stream_out, notes=None) -> Settings:
     """Turning the bypass **on** asks; turning it off does not.
 
     An asymmetry on purpose. Re-enforcing a floor needs no ceremony — it can only make the run
@@ -587,17 +599,15 @@ def _toggle_high_risk(current: Settings, *, input_fn, stream_out) -> Settings:
                 and len(current.review_dimensions) < policy.SEAT_FLOOR):
             # Not clamped, as a seat count is: a named list cannot be raised to the floor without
             # choosing seats for the user, and `load` refuses it. Say so rather than write it.
-            if stream_out is not None:
-                print(f"kept on: review_dimensions names {len(current.review_dimensions)} seat(s), "
-                      f"below the floor of {policy.SEAT_FLOOR}. Choose more first.",
-                      file=stream_out)
+            _refused(f"kept on: review_dimensions names {len(current.review_dimensions)} seat(s), "
+                     f"below the floor of {policy.SEAT_FLOOR}. Choose more first.",
+                     notes, stream_out)
             return current
         if (current.review_dimensions is not None
                 and policy.vetoes_missing(current.review_dimensions)):
-            if stream_out is not None:
-                print(f"kept on: review_dimensions leaves out "
-                      f"{policy.vetoes_missing(current.review_dimensions)}, the veto seat. Choose "
-                      f"it first.", file=stream_out)
+            _refused(f"kept on: review_dimensions leaves out "
+                     f"{', '.join(policy.vetoes_missing(current.review_dimensions))}, the veto "
+                     f"seat. Choose it first.", notes, stream_out)
             return current
         return replace(current, high_risk_mode=False)
     return _crossing(current, replace(current, high_risk_mode=True),

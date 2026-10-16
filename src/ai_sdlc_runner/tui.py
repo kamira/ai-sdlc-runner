@@ -125,7 +125,8 @@ def _curses_select_on(stdscr, title: str, options: Sequence[Option],
     ``body`` is text the user must read before answering (a disclosure). It is wrapped to the
     window and redrawn above the options on every frame, because each frame erases the screen and
     anything printed before the menu opened is not on it. If it and the options do not fit, this
-    raises `_TooSmall` rather than drop part of it.
+    raises `_TooSmall` rather than drop part of it; options alone too tall for the window are the
+    same case.
     """
     import curses
 
@@ -134,13 +135,14 @@ def _curses_select_on(stdscr, title: str, options: Sequence[Option],
     key_up = (curses.KEY_UP, ord("k"))
     key_down = (curses.KEY_DOWN, ord("j"))
     while True:
-        lines: List[str] = []
-        if body:
-            rows, cols = stdscr.getmaxyx()
-            lines = _wrap_body(body, cols - 1)
-            # title, hint, blank, body, blank, options, blank, the description line
-            if 3 + len(lines) + 1 + n + 2 > rows:
-                raise _TooSmall()
+        # **Checked with or without a body.** Only a body was checked, so a menu of seventeen
+        # options on an 18-row terminal drew its first rows and lost the last two (Done, Clear) to
+        # the `curses.error` swallowed below, with nothing on screen to say they existed.
+        rows, cols = stdscr.getmaxyx()
+        lines = _wrap_body(body, cols - 1) if body else []
+        # title, hint, blank, body, blank, options, blank, the description line
+        if (3 + len(lines) + 1 if lines else 3) + n + 2 > rows:
+            raise _TooSmall()
         top = 3 + len(lines) + 1 if lines else 3
         stdscr.erase()
         stdscr.addstr(0, 0, title)
@@ -198,7 +200,8 @@ def select(
     """Show ``title`` and a list of ``options``; return the chosen 0-based index, or ``None`` to cancel.
 
     ``body`` (paragraphs) is shown above the options by both renderers; see `_curses_select_on`.
-    A terminal too small for it gets the numbered prompt, never a clipped body.
+    A terminal too small for it, or for the options alone, gets the numbered prompt, never a clipped
+    menu.
 
     Uses the curses arrow-key menu when interactive; otherwise a numbered prompt. ``input_fn`` is
     injectable so the fallback can be tested without a real TTY.

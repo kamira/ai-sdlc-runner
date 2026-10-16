@@ -505,7 +505,11 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
         entries = seat_models.get(seat) or []
         entry = entries[position or 0] if (position or 0) < len(entries) else None
         if entry is None:
-            return None
+            # No model routed to the seat: it runs the default backend, whose command is the
+            # `agent_command` (`None` when there is none and the stub answers). Its identity is that
+            # command, so a seat that moves to or from a named model is a different voice.
+            return (list(default) if isinstance(default, (list, tuple))
+                    else str(default).split() if default else None)
         if isinstance(entry, str) and registry is not None:
             try:
                 return list(registry.get(entry).command)
@@ -558,9 +562,11 @@ def cmd_policy(args: argparse.Namespace) -> int:
     for gate, grades in policy.GATES.items():
         print(f"  {gate:22s} " + "  ".join(f"{r}:{grades[r]}" for r in policy.RISKS))
     print(f"\nseats (floor {policy.SEAT_FLOOR})")
+    width = max(len(seat.name) for seat in policy.SEATS)
     for seat in policy.SEATS:
-        print(f"  {seat.name:12s} {'veto' if seat.veto else '    '}  {seat.label}"
+        print(f"  {seat.name:{width}s} {'veto' if seat.veto else '    '}  {seat.label}"
               f"{'  (off unless chosen)' if seat.opt_in else ''}")
+        print(f"  {'':{width}s}       {seat.question}")
     return 0
 
 
@@ -1454,7 +1460,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             dimensions = None
         if dimensions is not None and policy.vetoes_missing(dimensions):
             print(f"note:          --no-high-risk-mode: review_dimensions leaves out "
-                  f"{policy.vetoes_missing(dimensions)}, the veto seat, opening "
+                  f"{', '.join(policy.vetoes_missing(dimensions))}, the veto seat, opening "
                   f"{policy.SEAT_FLOOR}")
             dimensions = None
     else:

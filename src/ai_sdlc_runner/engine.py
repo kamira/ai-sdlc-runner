@@ -1319,11 +1319,11 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
         same = previous is None or _same_question(previous, order)
         # **And it is the same model's answer.** The ask id says where in the walk, not who was
         # asked: `[opus, codex]` resumed as `[opus, other]` has an `-m1` journaled for codex, and
-        # reusing it reported `other` as the voice that said it. An entry journaled without an
-        # identity (before a seat could have several models) is reused as it always was.
+        # reusing it reported `other` as the voice that said it. Every seat ask has an identity, the
+        # default backend's included, and the two must be equal: an entry with no recorded identity
+        # (journaled before this change) is asked again, as is one that differs either way.
         if same and identity is not None and journal is not None and ask_id is not None:
-            recorded = journal.voice_of(ask_id)
-            same = recorded is None or recorded == dict(identity)
+            same = journal.voice_of(ask_id) == dict(identity)
         if (same
                 and (heard is None or heard(answered[ask_id]))
                 and _acceptable(accept, answered[ask_id])):
@@ -1354,9 +1354,9 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
                 journal.forget_after(ask_id)
     if journal is not None and ask_id is not None:
         journal.record(ask_id, node_id, seat, order, voice=identity)
-    # The conversation gets the model. `journal.record` has never taken one, so the existing durable
-    # record cannot say which model said what -- which is most of what a panel is for. Found by an
-    # independent seat reading this function's signature against the journal's.
+    # The conversation gets the model by name. The journal keeps a seat ask's `voice` (model and
+    # argv) for the resume check, but not a name for every ask, and the conversation is the record
+    # that says which model said what -- which is most of what a panel is for.
     if conversation is not None:
         conversation.ask(ask_id or "", node_id, role, seat, model or voice, order)
     # Everything from here to the answer is inside the recorder. A seat found the first version
@@ -2395,15 +2395,15 @@ def _seat_voices(factory: SessionFactory, seat: str) -> List[Tuple[Optional[int]
 
 
 def _seat_identity(factory: SessionFactory, seat: str, position: Optional[int],
-                   label: Optional[str]) -> Optional[Dict[str, object]]:
+                   label: Optional[str]) -> Dict[str, object]:
     """Who a seat session is put to, for the journal: the label, and the argv the factory resolves.
 
     `factory.voice_identity(seat, position)` is `cli.session_factory`'s own resolution, so what is
     compared on resume is what would run. A factory without it is identified by the label alone.
-    A seat with no model routed to it has no identity (`None`): it is the default backend, as ever.
+    A seat with no model routed to it is the default backend and has an identity too, `{"model":
+    None, "argv": <the factory's default command>}`, so moving a seat between the default backend
+    and a named model is a change of voice like any other.
     """
-    if label is None:
-        return None
     resolve = getattr(factory, "voice_identity", None)
     return {"model": label, "argv": resolve(seat, position) if callable(resolve) else None}
 

@@ -1213,7 +1213,7 @@ def seat_names(count: int) -> List[str]:
     if count > MAX_SEAT_COUNT:
         raise PolicyError(
             f"{count} seats requested but a seat count opens at most {MAX_SEAT_COUNT}. "
-            f"{[s.name for s in SEATS if s.opt_in]} are opt-in: they open only when "
+            f"{', '.join(s.name for s in SEATS if s.opt_in)} are opt-in: they open only when "
             f"`review_dimensions` names them")
     return [s.name for s in PREFIX_SEATS[:count]]
 
@@ -1234,7 +1234,8 @@ def resolve_dimensions(names: Sequence[str], high_risk_mode: bool) -> List[str]:
     chosen = list(names)
     unknown = [n for n in chosen if n not in BY_SEAT]
     if unknown:
-        raise PolicyError(f"no seat {unknown!r}; this runner's seats are {[s.name for s in SEATS]}")
+        raise PolicyError(f"no seat {', '.join(unknown)}; this runner's seats are "
+                          f"{', '.join(s.name for s in SEATS)}")
     repeated = sorted({n for n in chosen if chosen.count(n) > 1})
     if repeated:
         raise PolicyError(f"seat(s) {repeated} named more than once; a seat opens once")
@@ -1248,9 +1249,10 @@ def resolve_dimensions(names: Sequence[str], high_risk_mode: bool) -> List[str]:
     missing = vetoes_missing(chosen)
     if missing and not high_risk_mode:
         raise PolicyError(
-            f"review_dimensions leaves out {missing}, the veto seat: the one seat that cannot be "
-            f"outvoted, because its subject is a matter of fact. Name it, or enable high-risk "
-            f"mode to open a panel without it — the run then records that it had no veto.")
+            f"review_dimensions leaves out {', '.join(missing)}, the veto seat: the one seat that "
+            f"cannot be outvoted, because its subject is a matter of fact. Name it, or enable "
+            f"high-risk mode to open a panel without it — the run then records that it had no "
+            f"veto.")
     return chosen
 
 

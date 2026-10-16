@@ -216,8 +216,18 @@ design**, and it overwrites.
 
 ```jsonc
 { "ask_id": "000-pm_plan", "node_id": "pm_plan", "seat": null,
-  "status": "pending|answered|refused", "order": { …schema 5… }, "result": { … } }
+  "status": "pending|answered|refused", "order": { …schema 5… }, "result": { … },
+  "voice": { "model": "opus" | null, "argv": ["claude", "-p"] | null } }   // seat asks only
 ```
+
+**`voice` is who a seat ask was put to** (CHG-20261005-02). `model` is the seat's model id for that
+session, `null` for a seat with no model, which runs the default backend; `argv` is the command the
+session factory resolves for it (for the default backend, the `agent_command`, or `null` when there
+is none). A seat with several models has one entry per model, the ask id taking `-m<N>` (`N` the
+model's position) after the seat: `004-lead_review-defect-m1`; a seat with one model or none keeps
+`NNN-node-seat`. A resume reuses a journaled seat answer only when its `voice` equals the voice
+about to be asked; an entry that differs, or has no `voice` (written before this field existed), is
+asked again. An ask that is not a seat ask has no `voice`.
 
 **Two order shapes can sit in one journal.** An entry written before CHG-20260925-01 has no `reply`.
 A resumed run compares such an entry with the new order minus its `reply`; an entry that has a
@@ -234,8 +244,8 @@ older runner wrote past a failed build holds the self-check and the review of th
 An entry whose question changed does not cut the rest; the later entries are still reused where
 they ask the same.
 
-**It carries no model and no operator turn.** That is why the conversation store is not derived
-from it.
+**It carries no operator turn, and a model only through a seat ask's `voice`.** That is why the
+conversation store is not derived from it.
 
 ## 8 · Conversation document + turn
 
@@ -278,8 +288,8 @@ body fields per kind.
 | `closed` | `state` (`finished`/`suspended`/`stopped`), `at_node`, `why`, `risk`, `change_class` |
 | `review` | `by`, `note` — an operator saying they looked at an `emergency` run afterwards |
 
-`model` is what was **asked for**; `backend` is what **answered**. They come apart on a seat panel,
-which routes by seat name and passes no model at all.
+`model` is what was **asked for**; `backend` is what **answered**. They come apart where a seat has
+no model assigned: the ask names none, and the default backend answers.
 
 A reader may add `incomplete_lines` (a torn write) and `duplicate_seqs` (what `file` can report but
 not refuse).
@@ -309,7 +319,7 @@ The **HTML** export groups turns into *stops*: consecutive turns at one `node_id
 gathered — a node revisited later is a **second** stop, and merging the two would hide the loop
 the format exists to show.
 
-An `answer` carries `ask_id` and no `node_id`, so its node is read back out of the `NNN-node_id[-seat]`
+An `answer` carries `ask_id` and no `node_id`, so its node is read back out of the `NNN-node_id[-seat[-mN]]`
 form of the id. Without that, every ask/answer pair splits in two: 53 stops for 55 turns, a list
 wearing a waterfall's markup.
 

@@ -870,6 +870,69 @@ def test_a_resume_re_asks_when_the_same_id_now_runs_another_command(tmp_path):
     assert sorted({p for s, p in moved.opened if s == "defect"}) == [0], "only opus moved"
 
 
+def _real_factory(assignment, default=("default-x",)):
+    """`cli.session_factory`'s own routing and identity, with the Panel's sessions."""
+    inner = cli.session_factory({"agent_command": list(default)}, assignment, registry=_registry())
+    opened = []
+
+    def factory(seat=None, position=None):
+        opened.append((seat, position))
+        return Panel()(seat, position)
+    factory.seat_models = inner.seat_models
+    factory.voice_identity = inner.voice_identity
+    factory.opened = opened
+    return factory
+
+
+def _conformance_opened(factory):
+    return [p for s, p in factory.opened if s == "conformance"]
+
+
+@pytest.mark.parametrize("before, after, reused", [
+    (["opus"], None, False),               # named -> default backend
+    (None, ["opus"], False),               # default backend -> named
+    (["opus"], ["codex"], False),          # named -> another named
+    (None, None, True),                    # default -> default: unchanged
+    (["opus"], ["opus"], True),            # named -> the same named: unchanged
+])
+def test_a_resume_compares_the_default_backend_as_a_voice_too(tmp_path, before, after, reused):
+    """Round 2, finding 1. Cut the default backend's identity (`voice_identity` returning `None`
+    for a seat with no model, or `_seat_identity` returning `None` for it) and the first two cases
+    reuse an answer given by the other backend."""
+    first = _real_factory({"conformance": before} if before else {})
+    _journaled_walk(tmp_path, None, resume=False, factory=first)
+    second = _real_factory({"conformance": after} if after else {})
+    _, report = _journaled_walk(tmp_path, None, resume=True, factory=second)
+    assert report.halted_at == "done"
+    if reused:
+        assert _conformance_opened(second) == [], "nothing was asked again"
+    else:
+        assert _conformance_opened(second), "the new voice was asked"
+        assert all(s == "conformance" for s, _ in second.opened), "and only that seat"
+
+
+def test_a_default_backend_whose_command_changed_is_asked_again(tmp_path):
+    _journaled_walk(tmp_path, None, resume=False, factory=_real_factory({}, default=("one",)))
+    again = _real_factory({}, default=("two",))
+    _journaled_walk(tmp_path, None, resume=True, factory=again)
+    assert _conformance_opened(again)
+
+
+def test_a_journal_entry_with_no_voice_is_asked_again(tmp_path):
+    """This change has not shipped, so an entry without a `voice` is not trusted: re-ask."""
+    first = _real_factory({})
+    _journaled_walk(tmp_path, None, resume=False, factory=first)
+    for path in (tmp_path / "journal").glob("*conformance*.json"):
+        entry = json.loads(path.read_text())
+        assert entry["voice"] == {"model": None, "argv": ["default-x"]}
+        del entry["voice"]
+        path.write_text(json.dumps(entry))
+    second = _real_factory({})
+    _journaled_walk(tmp_path, None, resume=True, factory=second)
+    assert _conformance_opened(second), "the legacy entries were not reused"
+    assert all(s == "conformance" for s, _ in second.opened), "the other seats' entries were"
+
+
 # Seat verdicts: all pass -> pass; any fail -> fail; any unreached (no fail) -> the run stops.
 
 PREFIX_SEATS = [s.name for s in policy.PREFIX_SEATS]
@@ -960,7 +1023,7 @@ def test_no_high_risk_mode_on_the_command_line_drops_a_list_without_the_veto_sea
                      "allow", "--plan", plan_file, "--confirm", "merge", "--no-high-risk-mode"])
     out = capsys.readouterr().out
     assert code == 0, out
-    assert "leaves out ['conformance'], the veto seat" in out and "conformance=pass" in out
+    assert "leaves out conformance, the veto seat" in out and "conformance=pass" in out
 
 
 def test_run_refuses_a_plan_list_the_registry_cannot_resolve(tmp_path, py_stub, capsys):
@@ -974,3 +1037,125 @@ def test_run_refuses_a_plan_list_the_registry_cannot_resolve(tmp_path, py_stub, 
                      "--assignment-store", "none"])
     out = capsys.readouterr().out
     assert code == 2 and "seat 'defect'" in out and "no model registry" in out, out
+
+
+def test_serve_refuses_a_plan_list_the_registry_cannot_resolve(tmp_path, monkeypatch):
+    """Round 2, finding 2: the wire from `serve`'s `build_factory` to `cli.check_seat_models`.
+    Cut it and the list reaches `session_factory` as the legacy argv, and the walk starts."""
+    from ai_sdlc_runner import server
+    seen = {}
+
+    class Httpd:
+        server_address = ("127.0.0.1", 0)
+
+        def serve_forever(self):
+            try:
+                seen["runner"]._walk(None)      # `build_factory` runs before the config is read
+            except Exception as exc:            # noqa: BLE001 - whatever it raised is the result
+                seen["raised"] = exc
+
+        def server_close(self):
+            pass
+
+    def fake_serve(runner, *args, **kwargs):
+        seen["runner"] = runner
+        return Httpd()
+    monkeypatch.setattr(server, "serve", fake_serve)
+    code = cli.main(["serve", "--plan", _plan_file(tmp_path, {"defect": ["opus", "codex"]}),
+                     "--assignment-store", str(tmp_path / "config.sqlite"),
+                     "--token-dir", str(tmp_path / "tok")])
+    assert code == 0
+    assert isinstance(seen.get("raised"), cli.CliError), seen.get("raised")
+    assert "seat 'defect'" in str(seen["raised"]) and "unknown model id" in str(seen["raised"])
+
+
+# The settings screen in a real session: no `stream_out`, and curses erases each menu.
+
+def _fake_curses(monkeypatch, screen):
+    curses = pytest.importorskip("curses")
+    monkeypatch.setattr(curses, "COLS", 80, raising=False)
+    monkeypatch.setattr(curses, "wrapper", lambda fn: fn(screen))
+    monkeypatch.setattr(curses, "curs_set", lambda n: None)
+    monkeypatch.setattr(curses, "use_default_colors", lambda: None)
+    monkeypatch.setattr(curses, "init_pair", lambda *a: None)
+    monkeypatch.setattr("ai_sdlc_runner.tui._want_curses", lambda *a: True)
+    return curses
+
+
+def test_a_refused_dimension_list_is_on_the_next_menu_in_a_real_session(monkeypatch):
+    """Round 2, finding 4. Cut `notes` (the body of the next menu) and the reason is printed
+    nowhere: `cmd_settings` passes no stream, and curses erases whatever came before a menu."""
+    from test_tui import _FakeScreen
+    curses = pytest.importorskip("curses")
+    down, enter = curses.KEY_DOWN, 10
+    keys = ([down, enter]                         # main menu: Review dimensions
+            + [down, enter]                       # tick defect (conformance left out)
+            + [down] * len(policy.SEATS) + [enter]  # the picker reopens at its top: to "Done"
+            + [ord("q")])                         # the next main menu: cancel
+    screen = _FakeScreen(keys, size=(30, 100))
+    _fake_curses(monkeypatch, screen)
+    assert settings_mod.edit(settings_mod.Settings(), input_fn=lambda p: "") is None
+    last = " ".join(" ".join(screen.at_input[-1]).split())
+    assert "conformance is the veto seat" in last and "needs high-risk mode" in last, last
+    assert not any("is the veto seat, and a list" in " ".join(f) for f in screen.at_input[:-1])
+
+
+def test_a_refused_dimension_list_is_on_the_next_numbered_menu(monkeypatch, capsys):
+    monkeypatch.setenv("AI_SDLC_NO_CURSES", "1")
+    done = len(policy.SEATS) + 1
+    answers = iter(["2", "2", str(done), "q"])    # dimensions; tick defect; Done; cancel
+    assert settings_mod.edit(settings_mod.Settings(), input_fn=lambda p: next(answers)) is None
+    out = capsys.readouterr().out
+    reason = out.index("is the veto seat, and a list without it")
+    assert reason < out.rindex("Settings —"), "before the menu that follows the refusal"
+    assert out.count("is the veto seat, and a list without it") == 1, "shown once, not carried on"
+
+
+def test_the_picker_says_conformance_is_the_veto_seat_and_shows_each_question(monkeypatch):
+    shown = {}
+
+    def capture(title, options, **kw):
+        shown.update({label: desc for label, desc in options})
+        return None
+    monkeypatch.setattr("ai_sdlc_runner.tui.select", capture)
+    settings_mod._edit_dimensions(settings_mod.Settings(), input_fn=None, stream_out=None)
+    conformance = shown["[ ] conformance"]
+    assert "veto seat" in conformance and "required unless high-risk mode" in conformance
+    for seat in policy.SEATS:
+        assert seat.question in shown[f"[ ] {seat.name}"]
+
+
+def test_the_seat_count_editor_offers_every_count_up_to_the_most_a_count_opens():
+    counts = [row[2] for row in settings_mod._seat_options()]
+    assert sorted(counts) == list(range(1, policy.MAX_SEAT_COUNT + 1))
+
+
+def test_runner_policy_shows_each_seat_in_full_with_its_question(capsys):
+    assert cli.main(["policy"]) == 0
+    out = capsys.readouterr().out
+    for seat in policy.SEATS:
+        assert seat.question in out
+    line = [l for l in out.splitlines() if l.startswith("  observability")][0]
+    assert "(off unless chosen)" in line and line.split()[1] != "(off", line
+
+
+def test_the_dimension_picker_shows_done_and_clear_in_a_short_terminal(monkeypatch, capsys):
+    """Round 2, finding 5. Cut the unconditional size check and the 18-row screen draws the first
+    rows and silently loses Done and Clear."""
+    from test_tui import _FakeScreen
+    options = [(f"seat {i}", "") for i in range(15)] + [("Done", ""), ("Clear", "")]
+    short = _FakeScreen([10], size=(18, 80))
+    _fake_curses(monkeypatch, short)
+    import ai_sdlc_runner.tui as tui_mod
+    with pytest.raises(tui_mod._TooSmall):
+        tui_mod._curses_select_on(short, "t", options)
+    # Through `select`: the numbered prompt prints every row, so Done is reachable.
+    assert tui_mod.select("t", options, input_fn=lambda p: "16") == 15
+    out = capsys.readouterr().out
+    assert "16. Done" in out and "17. Clear" in out
+    assert short.at_input == [], "nothing was drawn on the short screen"
+    # A tall enough screen shows both rows, inside its height.
+    tall = _FakeScreen([10], size=(24, 80))
+    assert tui_mod._curses_select_on(tall, "t", options) == 0
+    assert any(line.endswith("Done") for line in tall.at_input[0])
+    assert max(tall.screen) < 24, "every row drawn is inside the window"
