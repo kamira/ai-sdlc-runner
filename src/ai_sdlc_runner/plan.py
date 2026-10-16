@@ -155,8 +155,8 @@ def check(payload: Mapping[str, object], where: str = "the plan") -> Dict[str, o
                     f"the rest are never used, so this is refused rather than half-applied.")
             # **The whole body above was guarded by `node_models`, so iterating `seat_models`
             # checked nothing** (CHG-20260903-35, defect seat L-55). The guard is right —
-            # `store.seat_models(db)` is `Dict[str, str]` and `engine` reads it as a single
-            # value — but `seat_models` then got **no shape check at all** where `node_models`
+            # `store.seat_models(db)` was `Dict[str, str]` and `engine` read it as a single
+            # value (it is a `Dict[str, List[str]]` now, below) — but `seat_models` then got **no shape check at all** where `node_models`
             # gets one, and the failure is silent rather than merely unchecked:
             #
             #     seat_models {"defect": ""}    ACCEPTED   node_models same value  REFUSED
@@ -177,6 +177,12 @@ def check(payload: Mapping[str, object], where: str = "the plan") -> Dict[str, o
                     f"{where} assigns seat {owner!r} {value!r}; `seat_models` holds a model id "
                     f"per seat — a non-empty string, or a non-empty list of them. An empty one "
                     f"reads as configured and dispatches that seat to the default backend.")
+            if (key == "seat_models" and isinstance(value, (list, tuple))
+                    and len(set(value)) != len(value)):
+                raise PlanError(
+                    f"{where} lists a model more than once on seat {owner!r}: "
+                    f"{list(value)!r}. Each model on a seat is its own session, and the same "
+                    f"model twice is one voice counted twice.")
 
     # A node spec whose fields are present but blank (CHG-20260823-34). Checked here as well as at
     # render time so it costs no asks: a blank `engineer_build` refused only at dispatch surfaces

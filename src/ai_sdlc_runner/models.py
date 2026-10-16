@@ -476,28 +476,57 @@ def _model_from(payload: Dict[str, object]) -> Model:
     )
 
 
-def seat_entries(value, registry: Optional["Registry"] = None) -> List[object]:
-    """One seat's models as a list: each entry a model id (`str`) or an argv (`list` of `str`).
+def seat_entries(value, registry: Optional["Registry"] = None, *,
+                 legacy_argv: bool = False) -> List[object]:
+    """One seat's models as a list: each entry a model id (`str`) or, for the legacy form, an argv.
 
     `seat_models` used to give a seat **one** model — a string, or one argv from `--seat-model` —
-    and now gives it a list (CHG-20261005-02). Every reader goes through here, so the old shape is
-    one place's job. `None`, `""` and `[]` are no model: the seat asks the default backend, as ever.
+    and now gives it a list of model ids (CHG-20261005-02). Every reader goes through here, so the
+    old shape is one place's job. `None`, `""` and `[]` are no model: the seat asks the default
+    backend, as ever.
 
-    **A flat list of strings is ambiguous** — three ids, or one argv — and the registry settles it:
-    it is a list of ids only when every word is a model id the registry has. Anything else is the
-    old one-argv shape, which is how a command typed in the operator's shell reaches a seat. An
-    argv inside a list is unambiguous, and `cmd_run` builds one that way.
+    **The contract.** A value is one of:
+
+    - a string — a model id, or (as before this change) a command line the factory splits;
+    - a list of model ids. Every one must be a model the `registry` has, and no id may repeat:
+      an unknown id is refused naming it, and so is a list when there is no registry to check it
+      against. A list is never read as a command because one of its ids is missing.
+
+    **The one legacy form** is a flat list of words that is one argv — what `--seat-model` and
+    `session_factory(seat_models={"conformance": ["python3", "agent.py"]})` produced before. It is
+    read as an argv only when `legacy_argv` is set, which only `cli.session_factory` does, and only
+    when the list's first word is not a model id the registry has (or there is no registry). A list
+    that starts with a model id is a list of ids, so `["opus", "missing"]` is refused, not run.
+    Values from a plan, the store or the console never reach this with `legacy_argv`: `cmd_run` and
+    `serve` check them with this function first.
     """
     if value is None or value == "" or value == []:
         return []
     if isinstance(value, str):
         return [value]
     items = list(value)
-    if all(isinstance(i, str) for i in items):
-        if len(items) == 1 or (registry is not None and all(_has(registry, i) for i in items)):
-            return items
-        return [items]                    # the old shape: one argv
-    return [list(i) if isinstance(i, (list, tuple)) else str(i) for i in items]
+    if not all(isinstance(i, str) for i in items):
+        raise ModelError(
+            f"a seat's models are model ids, got {value!r}. `seat_models` holds a model id or a "
+            f"list of model ids")
+    if legacy_argv and (registry is None or not _has(registry, items[0])):
+        return [items]                    # the legacy form: one argv
+    repeated = sorted({i for i in items if items.count(i) > 1})
+    if repeated:
+        raise ModelError(
+            f"model(s) {repeated} listed more than once on one seat. Each model on a seat is its "
+            f"own session; the same model twice is one voice counted twice, and a seat passes "
+            f"only when every one of them passes")
+    if registry is None:
+        raise ModelError(
+            f"seat models {items!r} cannot be checked: there is no model registry loaded "
+            f"(`--assignment-store none`), so none of them is a model id this project has")
+    unknown = [i for i in items if not _has(registry, i)]
+    if unknown:
+        raise ModelError(
+            f"seat models name unknown model id(s) {unknown!r}; this project has "
+            f"{sorted(m.id for m in registry)}. A list is model ids only, never a command")
+    return items
 
 
 def _has(registry: "Registry", model_id: str) -> bool:

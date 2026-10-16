@@ -202,6 +202,10 @@ class Settings:
         elif self.raised_to_the_floor():
             line += (f" ({self.review_seats} requested, raised to the floor — turn on high-risk "
                      f"mode to actually run {self.review_seats})")
+        no_veto = (policy.vetoes_missing(self.review_dimensions)
+                   if self.review_dimensions is not None else [])
+        if no_veto:
+            line += f"  |  no veto seat open ({', '.join(no_veto)} is not named)"
         if self.high_risk_mode:
             line += "  |  high-risk mode: ON"
             if self.below_floor():
@@ -306,7 +310,7 @@ def _check_seats(seats, *, where: str = "settings"):
     """The seat count, or `None`. Bounded **at both ends**.
 
     The lower bound was here from the start; there was no upper one, and `policy.seat_names`
-    refuses anything above `len(policy.SEATS)`. So `{"review_seats": 5}` loaded, and every surface
+    refuses anything above `policy.MAX_SEAT_COUNT`. So `{"review_seats": 5}` loaded, and every surface
     that renders it — `runner settings --show`, the edit screen's own header — raised `PolicyError`
     out of a `cmd_settings` that catches `SettingsError` only. The command built to make a bypass
     visible *"whether or not anybody is there to look at a prompt"* was the one that tracebacked
@@ -317,11 +321,13 @@ def _check_seats(seats, *, where: str = "settings"):
     if not isinstance(seats, int) or isinstance(seats, bool) or seats < 1:
         raise SettingsError(f"{where}: review_seats must be a whole number of at least 1, "
                             f"got {seats!r}")
-    if seats > len(policy.SEATS):
+    if seats > policy.MAX_SEAT_COUNT:
         raise SettingsError(
-            f"{where}: review_seats is {seats} and this runner defines {len(policy.SEATS)} "
-            f"seat(s): {', '.join(s.name for s in policy.SEATS)}. Asking for more opens none of "
-            f"them — the panel is the seats that exist, not a number.")
+            f"{where}: review_seats is {seats} and a seat count opens at most "
+            f"{policy.MAX_SEAT_COUNT}: {', '.join(s.name for s in policy.PREFIX_SEATS)}. Asking "
+            f"for more opens none of them — the panel is the seats that exist, not a number. "
+            f"The opt-in seats ({', '.join(s.name for s in policy.SEATS if s.opt_in)}) open only "
+            f"when review_dimensions names them.")
     return seats
 
 
@@ -447,7 +453,7 @@ def _seat_options():
     """The seat counts a person may pick, each paired with the value it yields.
 
     One list rather than two. `options` and `values` were parallel lists with
-    `extra <= len(policy.SEATS)` written twice, so a value could drift from the label above it and
+    `extra <= policy.MAX_SEAT_COUNT` written twice, so a value could drift from the label above it and
     nothing would say so (CHG-20260904-17).
     """
     rows = [(f"{policy.SEAT_FLOOR} (the floor)", "every seat the panel is meant to have",
@@ -455,7 +461,7 @@ def _seat_options():
     for n in range(1, policy.SEAT_FLOOR):
         rows.append((f"{n}", "below the floor — needs high-risk mode, and the run records it", n))
     extra = policy.SEAT_FLOOR + 1
-    if extra <= len(policy.SEATS):
+    if extra <= policy.MAX_SEAT_COUNT:
         rows.append((f"{extra}", "more review than the floor asks for", extra))
     return rows
 
@@ -481,7 +487,7 @@ def _edit_dimensions(current: Settings, *, input_fn, stream_out) -> Settings:
     chosen = list(current.review_dimensions or ())
     while True:
         rows = [(f"[{'x' if seat.name in chosen else ' '}] {seat.name}",
-                 f"{seat.label}{'' if seat.enabled_by_default else ' — off unless chosen'}",
+                 f"{seat.label}{' — off unless chosen' if seat.opt_in else ''}",
                  seat.name) for seat in policy.SEATS]
         rows.append(("Done", f"open {len(chosen)} seat(s), in the order ticked", None))
         rows.append(("Clear", "unset review_dimensions; review_seats decides again", ""))
@@ -501,6 +507,14 @@ def _edit_dimensions(current: Settings, *, input_fn, stream_out) -> Settings:
     if not chosen:
         return replace(current, review_dimensions=None)
     after = replace(current, review_dimensions=tuple(chosen))
+    missing = policy.vetoes_missing(chosen)
+    if missing and not current.high_risk_mode:
+        # `load` refuses this list without the mode, so the screen does not write it. Turn the mode
+        # on first — a panel with no veto is a decision, not a side effect of a tick.
+        if stream_out is not None:
+            print(f"not kept: {missing} is the veto seat, and a list without it needs high-risk "
+                  f"mode. Turn that on first, or tick {missing[0]}.", file=stream_out)
+        return current
     if len(chosen) < policy.SEAT_FLOOR and not current.high_risk_mode:
         if not tui.confirm_high_risk(len(chosen), policy.SEAT_FLOOR,
                                      input_fn=input_fn, stream_out=stream_out):
@@ -577,6 +591,13 @@ def _toggle_high_risk(current: Settings, *, input_fn, stream_out) -> Settings:
                 print(f"kept on: review_dimensions names {len(current.review_dimensions)} seat(s), "
                       f"below the floor of {policy.SEAT_FLOOR}. Choose more first.",
                       file=stream_out)
+            return current
+        if (current.review_dimensions is not None
+                and policy.vetoes_missing(current.review_dimensions)):
+            if stream_out is not None:
+                print(f"kept on: review_dimensions leaves out "
+                      f"{policy.vetoes_missing(current.review_dimensions)}, the veto seat. Choose "
+                      f"it first.", file=stream_out)
             return current
         return replace(current, high_risk_mode=False)
     return _crossing(current, replace(current, high_risk_mode=True),

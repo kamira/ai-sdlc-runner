@@ -267,23 +267,37 @@ A node with nothing here is asked **once**, however it is declared.
 ### `seat_models` — by review seat
 
 ```jsonc
-"seat_models": { "conformance": "opus", "defect": ["opus", "codex"], "risk": [["python3", "agent.py"]] }
+"seat_models": { "conformance": "opus", "defect": ["opus", "codex"] }
 ```
 
 Or on the command line: `--seat-model SEAT=COMMAND`, repeatable (one command, and it replaces the
-seat's list for that run).
+seat's list for that run). A model may not appear twice on one seat — the plan, the store, the
+console and the factory all refuse it, and the seat panel judges each session by its position, so a
+duplicate could not hide a `fail` even if one got through.
 
 **A seat has a list of models (CHG-20261005-02).** Each is its own session and its own journalled ask,
 and the seat passes only when **every** one passes: any `fail` is the seat's `fail`; otherwise any
 `undecided` makes it `undecided`, which `adjudicate` counts as not passing. The seats' words are then
 adjudicated as before — veto, then majority. A seat with no models is one ask on the default backend.
-A model that returns no verdict at all stops the run, as one seat's silence always did.
+A model that returns no verdict at all is **unreached**: with no `fail` beside it the seat is
+unreached and the run stops, as one seat's silence always did; with a `fail` the seat is `fail` and
+the unreached model is listed under `unreached` in the adjudication. A resumed run reuses a seat
+model's journaled answer only if it was put to the same model — the id and the command it resolves
+to; a changed assignment is asked again.
 
-**The old shape still reads.** A string is a one-element list. A *flat* list of strings is ambiguous —
-several model ids, or one argv — and is read as ids only when the registry has every one; otherwise it
-is one argv, which is what it always was. An argv inside a list (`[["python3", "agent.py"]]`) is never
-ambiguous. The plan accepts a string or a non-empty list of strings; the store holds ids only; `POST
-/config/seats` takes `model_id` as a string or a list of ids.
+**The contract.** A value is a string (a model id, or a command line, as before) or a list of model
+ids. Every id in a list must be one the registry has, and none may repeat; an unknown id is refused
+naming it, and so is a list when there is no registry (`--assignment-store none`). A list is never
+read as a command. The plan accepts a string or a non-empty list of strings, checked by `cmd_run`
+and `serve` against the registry before a run; the store holds ids only; `POST /config/seats` takes
+`model_id` as a string or a list of ids.
+
+**The one legacy form** is a flat argv list — `--seat-model SEAT="python3 agent.py"`, or
+`session_factory(seat_models={"conformance": ["python3", "agent.py"]})`. `cli.session_factory`
+alone reads it, and only when the list's first word is not a registry model id (or there is no
+registry). A list that starts with a model id is a list of ids, so `["opus", "missing"]` is refused
+rather than run as `opus missing`; and `--seat-model defect=opus` names the model `opus`, not a
+program of that name.
 
 A seat may name a **registry model id** or a raw command. The id is resolved **first**, deliberately:
 *"a plain string that happens to be a model id meaning 'run this program called claude' would be a

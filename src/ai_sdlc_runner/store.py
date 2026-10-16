@@ -589,6 +589,11 @@ def set_seat_model(db: sqlite3.Connection, seat: str,
     _check_seat(seat)
     listed = [model_ids] if isinstance(model_ids, str) else list(model_ids or ())
     listed = [m for m in listed if m]
+    repeated = sorted({m for m in listed if listed.count(m) > 1})
+    if repeated:
+        raise StoreError(
+            f"model(s) {repeated} listed more than once on seat {seat!r}. Each model on a seat is "
+            f"its own session; the same model twice is one voice counted twice")
     with _locked(db), db:
         db.execute("DELETE FROM seat_assignments WHERE seat = ?", (seat,))
         for position, model_id in enumerate(listed):
@@ -667,7 +672,8 @@ def resolve(plan: Mapping[str, object], stored: Mapping[str, object]
     return merged, source
 
 
-def overrides(plan: Mapping[str, object], stored: Mapping[str, object]) -> Dict[str, str]:
+def overrides(plan: Mapping[str, object], stored: Mapping[str, object]
+              ) -> Dict[str, Union[str, List[str]]]:
     """The assignments the plan **displaced** — not the ones it merely named.
 
     `resolve`'s map answers *which source put an assignment there*, and for that question
@@ -682,7 +688,7 @@ def overrides(plan: Mapping[str, object], stored: Mapping[str, object]) -> Dict[
     why this reads the two inputs instead. Returns ``key -> what the store had``, so a caller can
     say what was displaced and not only how many.
     """
-    displaced: Dict[str, str] = {}
+    displaced: Dict[str, Union[str, List[str]]] = {}
     for half in ("node_models", "seat_models"):
         from_plan = dict(plan.get(half) or {})
         from_store = dict(stored.get(half) or {})

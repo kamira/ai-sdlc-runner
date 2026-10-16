@@ -121,10 +121,26 @@ class AskJournal:
         return self.dir / f"{ask_id}.json"
 
     def record(self, ask_id: str, node_id: str, seat: Optional[str],
-               order: Mapping[str, object]) -> str:
-        self._write(ask_id, {"ask_id": ask_id, "node_id": node_id, "seat": seat,
-                             "status": "pending", "order": dict(order)})
+               order: Mapping[str, object],
+               voice: Optional[Mapping[str, object]] = None) -> str:
+        payload = {"ask_id": ask_id, "node_id": node_id, "seat": seat,
+                   "status": "pending", "order": dict(order)}
+        if voice is not None:
+            # Which model this ask was put to, and the command it resolved to. A journaled answer
+            # is the answer of *that* model: a resume under another assignment must not hand it to
+            # a different one (CHG-20261005-02, review round 1).
+            payload["voice"] = dict(voice)
+        self._write(ask_id, payload)
         return ask_id
+
+    def voice_of(self, ask_id: str) -> Optional[Dict[str, object]]:
+        """The model identity journaled with ``ask_id``, or `None` if none was (an older entry)."""
+        try:
+            payload = json.loads(paths.read_text(self._path(ask_id)))
+        except (OSError, ValueError):
+            return None
+        voice = payload.get("voice") if isinstance(payload, dict) else None
+        return dict(voice) if isinstance(voice, dict) else None
 
     def answered(self, ask_id: str, result: Mapping[str, object]) -> None:
         payload = json.loads(paths.read_text(self._path(ask_id)))
@@ -307,6 +323,10 @@ class Ask:
     #: differ, and a record that cannot say which model said what has kept the votes and thrown
     #: away the thing being voted on.
     model: Optional[str] = None
+    #: Which of the seat's models this session was (`None` for a seat with no model routed to it).
+    #: The seat panel judges by (seat, position), not by `model`: two sessions of one model on one
+    #: seat are two voices, and a label cannot tell them apart (CHG-20261005-02, review round 1).
+    position: Optional[int] = None
 
 
 #: What a returned report **is**. Before task 1 there was no way to tell: a gate halt set
@@ -1274,7 +1294,8 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
          resumed: Optional[List[str]] = None,
          heard: Optional[Callable[[Mapping[str, object]], bool]] = None,
          effort: str = "", effort_not_applied: Optional[List[str]] = None,
-         position: Optional[int] = None, voice: Optional[str] = None):
+         position: Optional[int] = None, voice: Optional[str] = None,
+         identity: Optional[Mapping[str, object]] = None):
     """Open a session, ask once, close it — the close guaranteed even if the ask raises.
 
     ``seen`` holds the session **objects**, not their ``id()``: an id is not an identity once the
@@ -1296,6 +1317,13 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
         # and an option order does not carry the brief. Checking here is what lets the next walk
         # re-ask and overwrite it.
         same = previous is None or _same_question(previous, order)
+        # **And it is the same model's answer.** The ask id says where in the walk, not who was
+        # asked: `[opus, codex]` resumed as `[opus, other]` has an `-m1` journaled for codex, and
+        # reusing it reported `other` as the voice that said it. An entry journaled without an
+        # identity (before a seat could have several models) is reused as it always was.
+        if same and identity is not None and journal is not None and ask_id is not None:
+            recorded = journal.voice_of(ask_id)
+            same = recorded is None or recorded == dict(identity)
         if (same
                 and (heard is None or heard(answered[ask_id]))
                 and _acceptable(accept, answered[ask_id])):
@@ -1325,7 +1353,7 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
             if journal is not None and ask_id is not None:
                 journal.forget_after(ask_id)
     if journal is not None and ask_id is not None:
-        journal.record(ask_id, node_id, seat, order)
+        journal.record(ask_id, node_id, seat, order, voice=identity)
     # The conversation gets the model. `journal.record` has never taken one, so the existing durable
     # record cannot say which model said what -- which is most of what a panel is for. Found by an
     # independent seat reading this function's signature against the journal's.
@@ -2366,11 +2394,38 @@ def _seat_voices(factory: SessionFactory, seat: str) -> List[Tuple[Optional[int]
     return [(i, models_mod.entry_label(e)) for i, e in enumerate(entries)]
 
 
+def _seat_identity(factory: SessionFactory, seat: str, position: Optional[int],
+                   label: Optional[str]) -> Optional[Dict[str, object]]:
+    """Who a seat session is put to, for the journal: the label, and the argv the factory resolves.
+
+    `factory.voice_identity(seat, position)` is `cli.session_factory`'s own resolution, so what is
+    compared on resume is what would run. A factory without it is identified by the label alone.
+    A seat with no model routed to it has no identity (`None`): it is the default backend, as ever.
+    """
+    if label is None:
+        return None
+    resolve = getattr(factory, "voice_identity", None)
+    return {"model": label, "argv": resolve(seat, position) if callable(resolve) else None}
+
+
 def _seat_ask_id(report: "RunReport", node: graph.Node, seat: str,
                  position: Optional[int], voices: int) -> str:
     """`NNN-node-seat`, as it always was; a seat with several models adds `-mN` so each is its own."""
     base = f"{len(report.asks):03d}-{node.id}-{seat}"
     return base if voices < 2 else f"{base}-m{position}"
+
+
+def _survey_key(seat: str, voices: Sequence[Tuple[Optional[int], Optional[str]]],
+                position: Optional[int], label: Optional[str]) -> str:
+    """The key one survey answer is kept under: the seat, then `[model]` for a seat of several.
+
+    A model named twice on one seat gets its position too, so the second answer cannot replace the
+    first and take its safety findings with it.
+    """
+    if len(voices) < 2:
+        return seat
+    twice = [l for _, l in voices].count(label) > 1
+    return f"{seat}[{label}#{position}]" if twice else f"{seat}[{label}]"
 
 
 def _record_seat_model(report: "RunReport", node: graph.Node, seat: str,
@@ -2389,8 +2444,8 @@ def _seat_verdict(spoken: Sequence[str]) -> str:
     odd = [w for w in spoken if w not in policy.VERDICTS]
     if odd:
         return odd[0]
-    if any(w == "fail" for w in spoken):
-        return "fail"
+    if any(w == policy.FAIL for w in spoken):
+        return policy.FAIL
     return policy.PASS if all(w == policy.PASS for w in spoken) else policy.UNDECIDED
 
 
@@ -2444,21 +2499,30 @@ def _adjudicate(node: graph.Node, report: "RunReport",
     """
     rework: Optional[Dict[str, object]] = None
     verdicts = {}
-    silent = []
-    # The latest answer from each (seat, model): a node visited again — the module loop sends a
-    # rejected change back to `lead_review` — must be judged on this lap's answers and not on every
-    # lap's. For a seat with no models the key is just the seat, which is what overwriting by seat
-    # always did.
-    latest: Dict[Tuple[str, Optional[str]], Optional[str]] = {}
+    # The latest answer from each session, keyed (seat, position): a node visited again — the
+    # module loop sends a rejected change back to `lead_review` — must be judged on this lap's
+    # answers and not on every lap's. **By position, not by the model's label**: two sessions of
+    # one model on one seat share a label, and keying by it let the later answer replace the
+    # earlier, so a `fail` was lost (CHG-20261005-02, review round 1). For a seat with no models the
+    # position is `None`, which is what overwriting by seat always did.
+    latest: Dict[Tuple[str, Optional[int]], Tuple[Optional[str], Optional[str]]] = {}
     for ask in report.asks:
         if ask.node_id == node.id and ask.seat:
-            latest[(ask.seat, ask.model)] = _spoken(ask.result or {})
+            latest[(ask.seat, ask.position)] = (_spoken(ask.result or {}), ask.model)
     said: Dict[str, List[str]] = {}
-    for (seat, model), spoken in latest.items():
+    unnamed: Dict[str, List[str]] = {}
+    for (seat, _position), (spoken, model) in latest.items():
         if spoken is None:
-            silent.append(seat if not model else f"{seat} ({model})")
+            unnamed.setdefault(seat, []).append(seat if not model else f"{seat} ({model})")
         else:
             said.setdefault(seat, []).append(spoken)
+    # A session that named no verdict is **unreached**: it has no word, and a seat that said nothing
+    # is not a seat that voted no. A seat with any unreached session and no `fail` is unreached, and
+    # the run stops there, as it does for a seat of one model. With a `fail` the seat's word is
+    # already `fail` and an unknown cannot change it, so the `fail` stands and the unreached
+    # session is listed beside it in the adjudication.
+    silent = [label for seat, labels in unnamed.items()
+              if policy.FAIL not in said.get(seat, []) for label in labels]
     for seat, words in said.items():
         verdicts[seat] = _seat_verdict(words)
     if silent:
@@ -2476,6 +2540,9 @@ def _adjudicate(node: graph.Node, report: "RunReport",
         # Which model said what, where a seat had several: the seat's word above is their
         # conjunction and would otherwise hide who objected.
         entry["by_model"] = {seat: list(words) for seat, words in said.items() if len(words) > 1}
+    still_silent = {seat: list(labels) for seat, labels in unnamed.items()}
+    if still_silent:
+        entry["unreached"] = still_silent    # only seats that also said `fail` get this far
     report.adjudications.append(entry)
     if outcome["outcome"] != policy.PASS:
         # The seats send work back too, and their objections are the ones most worth keeping whole:
@@ -2768,6 +2835,18 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
         report.relaxations.append(note)
         if cfg.seats_from:
             report.relaxation_authorisers[note] = cfg.seats_from
+
+    no_veto = policy.vetoes_missing(seat_list)
+    if no_veto:
+        # `resolve_dimensions` refuses this unless high-risk mode is on, so reaching here means the
+        # user chose it (CHG-20261005-02). Recorded as the below-floor note is: nothing in the
+        # panel's verdicts says that nobody could veto.
+        note = (f"high-risk mode: review opened without {', '.join(no_veto)}, the veto seat "
+                f"({', '.join(seat_list)}). Nothing in this panel can veto, so scope is decided "
+                f"by majority")
+        report.relaxations.append(note)
+        if cfg.seats_from:
+            report.relaxation_authorisers.setdefault(note, cfg.seats_from)
 
     # A confirmation is spent, not standing. Counted per gate and decremented at each stop it
     # covers, because the operator confirmed *that* stop having seen it — an independent verifier
@@ -3317,11 +3396,13 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                             conversation=cfg.conversation, role=node.role, resumed=report.resumed,
                                       workspace=_workspace(node, build_cycles),
                                       heard=lambda a, _n=node: _heard(_n, SURVEY, a),
-                                      position=position, voice=label)
-                        report.asks.append(Ask(node.id, node.role, seat, result, model=label))
+                                      position=position, voice=label,
+                                      identity=_seat_identity(factory, seat, position, label))
+                        report.asks.append(Ask(node.id, node.role, seat, result,
+                                               model=label, position=position))
                         _record_seat_model(report, node, seat, label)
                         answers.append(result)
-                        said[seat if len(voices) < 2 else f"{seat}[{label}]"] = result
+                        said[_survey_key(seat, voices, position, label)] = result
                 _note_panel_diversity(node, report, opened[before:])
                 # The two inputs, resolved into the one number both readers below take.
                 asked_somebody = ((len(report.asks) - asks_before)
@@ -3431,8 +3512,10 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                             conversation=cfg.conversation, role=node.role, resumed=report.resumed,
                                       workspace=_workspace(node, build_cycles),
                                       heard=lambda a, _n=node: _heard(_n, SEATS, a),
-                                      position=position, voice=label)
-                        report.asks.append(Ask(node.id, node.role, seat, result, model=label))
+                                      position=position, voice=label,
+                                      identity=_seat_identity(factory, seat, position, label))
+                        report.asks.append(Ask(node.id, node.role, seat, result,
+                                               model=label, position=position))
                         _record_seat_model(report, node, seat, label)
                         answers.append(result)
                 panel_sessions = opened[before:]

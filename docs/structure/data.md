@@ -124,11 +124,12 @@ cannot change what a gate verdict is, which kinds are permanent halts, or the ad
 the `unrecognised-target` halt trips (CHG-20260903-47). `coder_model` and
 `coder_effort` choose a backend and touch no verdict (CHG-20261005-01). `review_dimensions`
 names the review seats that open, in order, and replaces the `review_seats` count while it is set;
-the floor applies to its length (CHG-20261005-02).
+the floor applies to its length, and it must include the veto seat `conformance` unless high-risk
+mode is on (CHG-20261005-02).
 
 | Field | Type | Constraint | Description |
 |-------|------|------------|-------------|
-| `review_seats` | int \| null | 1 … `len(policy.SEATS)`, or absent | How many seats open. `null` means the floor, and a count above the seats this runner defines is refused at load rather than raised when something renders it |
+| `review_seats` | int \| null | 1 … `policy.MAX_SEAT_COUNT` (12), or absent | How many seats open. `null` means the floor, and a count above the twelve seats that are not opt-in is refused at load rather than raised when something renders it |
 | `high_risk_mode` | bool | required-ish (defaults false) | Whether the floor may be crossed at all |
 | `ordinary_commands` | list[str] | absent → none; one word each, never an executor | Commands whose **name** stops being unrecognised. The description is still read against the permanent halts — vouching clears `unrecognised-target` and nothing else, which is what the prose four lines above says |
 | `coder_model` | str | absent → empty; not checked against a registry at save time | The registry model `engineer_build` uses when nothing is assigned. Empty means the registry's only `mid` model, if exactly one and no `agent_command` is configured; `none` means no default coder model (a No in `runner setup`), and a model so named is never picked. A set `coder_model` overrides a configured `agent_command`, with a notice. An id the registry lacks is an error when a run resolves it |

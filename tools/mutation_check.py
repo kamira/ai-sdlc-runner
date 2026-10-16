@@ -3207,7 +3207,7 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         'settings', 'a seat count no panel can open loads, and every surface crashes on it',
         SRC / 'settings.py',
-        '    if seats > len(policy.SEATS):',
+        '    if seats > policy.MAX_SEAT_COUNT:',
         '    if False:',
         'tests/test_settings.py'),
 

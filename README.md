@@ -167,11 +167,13 @@ vouched for as ordinary, because the name says nothing about what it will do.
 
 ### Review seats
 
-Fifteen seats, each answering a **different question**; **four open by default** and an install that
-sets nothing opens exactly those. The floor is three; going below it needs an explicit high-risk-mode
-bypass, which is recorded. `review_dimensions` in `config/settings.json` (or `runner settings`) names
-the seats you want, in order, and replaces the `review_seats` count while it is set; `intake_review`
-asks the same seats. A seat may have **several models** (`seat_models`): each is its own session, and
+Fifteen seats, each answering a **different question**; **three open by default** (`conformance`,
+`defect`, `risk`) and an install that sets nothing opens exactly those. The floor is three; going
+below it needs an explicit high-risk-mode bypass, which is recorded. `review_seats` opens the first
+N of the twelve seats that are not opt-in (at most 12). `review_dimensions` in
+`config/settings.json` (or `runner settings`) names the seats you want, in order, and replaces the
+`review_seats` count while it is set; it must include `conformance`, the veto seat, unless high-risk
+mode is on (the run then records that it had no veto). `intake_review` asks the same seats. A seat may have **several models** (`seat_models`): each is its own session, and
 the seat passes only if every one does. The run report says which models answered which seat.
 
 | Seat | Asks | |
@@ -181,7 +183,7 @@ the seat passes only if every one does. The run report says which models answere
 | `risk` | What does this make hard to undo? | |
 | `idiom` | Does this read like the code around it? Is any of it unnecessary? | |
 | `security` `ux` `ci` `modularity` `privacy` `performance` `portability` `docs` | the other eight dimensions, each with its own question (`runner policy` lists them) | |
-| `observability` `supply_chain` `i18n` | three more, **off unless you name them** | |
+| `observability` `supply_chain` `i18n` | three more, **opt-in**: only `review_dimensions` opens them, no seat count does | |
 
 Adjudication is **veto → majority → a tie decides nothing**. The veto seat's subject is a matter of
 fact, and counting votes on a fact is how a panel talks itself out of one.
@@ -840,7 +842,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 2871 tests
+pytest -q          # 2896 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

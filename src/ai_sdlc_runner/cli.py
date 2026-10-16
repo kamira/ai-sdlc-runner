@@ -270,6 +270,22 @@ class _Process(engine.Session):
         pass
 
 
+def check_seat_models(seat_models: Dict[str, object],
+                      registry: Optional[models_mod.Registry]) -> None:
+    """Refuse a plan's or the store's list of seat models that is not model ids the registry has.
+
+    `session_factory` also reads the one legacy form, a flat argv, and would read a list of ids it
+    could not check as that. These values come from the plan, the store or the console and are never
+    an argv, so they are held to the strict contract here first (CHG-20261005-02, review round 1).
+    """
+    for seat, value in seat_models.items():
+        if isinstance(value, (list, tuple)):
+            try:
+                models_mod.seat_entries(value, registry)
+            except models_mod.ModelError as exc:
+                raise CliError(f"seat {seat!r}: {exc}") from exc
+
+
 def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = None,
                     registry: Optional["models_mod.Registry"] = None,
                     risk: str = "high", require_sandbox: bool = False,
@@ -304,8 +320,11 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
     # Each seat's models as a list of entries — a model id or an argv — whatever shape came in
     # (CHG-20261005-02). The engine reads this back as `factory.seat_models` to know how many
     # sessions a seat opens, so what it counts and what is routed here are one thing.
-    seat_models = {seat: models_mod.seat_entries(value, registry)
-                   for seat, value in (seat_models or {}).items()}
+    try:
+        seat_models = {seat: models_mod.seat_entries(value, registry, legacy_argv=True)
+                       for seat, value in (seat_models or {}).items()}
+    except models_mod.ModelError as exc:
+        raise CliError(str(exc)) from exc
     default = config.get("agent_command")
     timeout = int(config.get("agent_timeout", DEFAULT_AGENT_TIMEOUT))
     retries = int(config.get("agent_retries", 0))
@@ -481,7 +500,21 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
         process.effort_applied = effort_applied
         return process
 
+    def voice_identity(seat: Optional[str], position: Optional[int]):
+        """The argv a seat's `position`th model would run, as the engine journals it."""
+        entries = seat_models.get(seat) or []
+        entry = entries[position or 0] if (position or 0) < len(entries) else None
+        if entry is None:
+            return None
+        if isinstance(entry, str) and registry is not None:
+            try:
+                return list(registry.get(entry).command)
+            except models_mod.ModelError:
+                pass
+        return list(entry) if isinstance(entry, (list, tuple)) else str(entry).split()
+
     factory.seat_models = seat_models    # read by the engine: how many sessions each seat opens
+    factory.voice_identity = voice_identity   # and what each one would run, journaled with its ask
     factory.isolated = isolated      # read by `cmd_run` for the report line
     factory.bounded = bounded        # and the same for the sandbox
     return factory
@@ -527,7 +560,7 @@ def cmd_policy(args: argparse.Namespace) -> int:
     print(f"\nseats (floor {policy.SEAT_FLOOR})")
     for seat in policy.SEATS:
         print(f"  {seat.name:12s} {'veto' if seat.veto else '    '}  {seat.label}"
-              f"{'' if seat.enabled_by_default else '  (off unless chosen)'}")
+              f"{'  (off unless chosen)' if seat.opt_in else ''}")
     return 0
 
 
@@ -1419,6 +1452,11 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"note:          --no-high-risk-mode: review_dimensions names {len(dimensions)} "
                   f"seat(s), below the floor, opening {policy.SEAT_FLOOR}")
             dimensions = None
+        if dimensions is not None and policy.vetoes_missing(dimensions):
+            print(f"note:          --no-high-risk-mode: review_dimensions leaves out "
+                  f"{policy.vetoes_missing(dimensions)}, the veto seat, opening "
+                  f"{policy.SEAT_FLOOR}")
+            dimensions = None
     else:
         high_risk = bool(args.high_risk_mode) or saved.high_risk_mode
     if seats is not None and seats < policy.SEAT_FLOOR and not high_risk:
@@ -1490,6 +1528,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         proceed_unsafe="--proceed-unsafe" if getattr(args, "proceed_unsafe", False) else "",
     )
     seat_models = dict(resolved_assignments.get("seat_models") or {})
+    try:
+        check_seat_models(seat_models, config_registry)
+    except CliError as exc:
+        print(f"error: {exc}")
+        return 2
     for pair in args.seat_model or ():
         seat, _, command = pair.partition("=")
         if not command:
@@ -1498,7 +1541,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         if seat not in policy.BY_SEAT:
             print(f"error: no seat {seat!r}; this runner defines {sorted(policy.BY_SEAT)}")
             return 2
-        seat_models[seat] = [command.split()]       # one argv, as a one-element list of models
+        seat_models[seat] = command.split()         # the legacy form: one argv
     trees = None            # bound before the try: the except path closes it
     try:
         # **With the registry.** Without it `session_factory` cannot turn a stored model id into
@@ -2199,10 +2242,13 @@ def cmd_serve(args: argparse.Namespace) -> int:
     def build_factory():
         """A fresh factory per walk, so a seat reassigned in the console takes effect on the next
         run rather than on the next restart. Capturing one at startup froze seat routing."""
-        return session_factory(config, dict(current_assignments().get("seat_models") or {}),
+        seats_now = dict(current_assignments().get("seat_models") or {})
+        live = store_mod.load_registry(db) or registry
+        check_seat_models(seats_now, live)
+        return session_factory(config, seats_now,
                                risk=args.risk or plan.get("risk", "high"),
                                require_sandbox=bool(getattr(args, "sandbox", False)),
-                               registry=store_mod.load_registry(db) or registry)
+                               registry=live)
     operator = server.Operator.mint(Path(args.token_dir))
     runner = server.Runner(walk=lambda cfg: engine.walk(cfg, build_factory(), enabled=True),
                            make_config=make_config, store=store)

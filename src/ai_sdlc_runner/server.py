@@ -1531,8 +1531,14 @@ def make_handler(runner: Runner, operator: Operator,
                     # A seat naming a registry model lands in that model's bucket rather than
                     # inventing a second entry for the same backend under its command line. One
                     # bucket per model of the seat (CHG-20261005-02).
-                    labels = [models_mod.entry_label(e)
-                              for e in models_mod.seat_entries(command, reg)]
+                    try:
+                        labels = [models_mod.entry_label(e)
+                                  for e in models_mod.seat_entries(command, reg)]
+                    except models_mod.ModelError:
+                        # A plan's list the registry cannot resolve: shown as written, and refused
+                        # when a run starts, rather than failing the whole page.
+                        labels = ([str(m) for m in command]
+                                  if isinstance(command, (list, tuple)) else [str(command)])
                     shown_seats[seat] = labels
                     for label in labels:
                         entry = by_model.setdefault(

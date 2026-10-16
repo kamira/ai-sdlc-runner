@@ -359,10 +359,13 @@ closed all along and revision 1 of this page did not say so.
 ```
 
 `review_dimensions` (CHG-20261005-02) is a list of names from `policy.SEATS` — fifteen, of which the
-first four open by default and `observability`, `supply_chain` and `i18n` are off unless named. When
+first three (`conformance`, `defect`, `risk`) open by default, `review_seats` takes a prefix of the
+twelve that are not opt-in, and `observability`, `supply_chain` and `i18n` open only when named. When
 it is set it **replaces** the `review_seats` prefix and `review_seats` is ignored (`runner settings
---show` says so). An unknown name, a repeat, or fewer names than the floor (3) is refused at load and
-at save; high-risk mode lowers the floor, as it does for a count. `intake_review` asks the same seats.
+--show` says so). An unknown name, a repeat, fewer names than the floor (3), or a list that leaves out
+`conformance` (the veto seat) is refused at load and at save; high-risk mode allows the last two, as
+it does for a count, and a run without `conformance` records that in `relaxations`.
+`intake_review` asks the same seats.
 
 ## 12 · Attachment manifest
 
@@ -400,7 +403,8 @@ relaxation_authorisers`
 for `intake_review` and `lead_review`, one entry per session in the order they were asked. A model
 is its registry id, or its argv joined by spaces for a command; a seat nobody routed reads
 `"(default backend)"`. A seat with several models also adds `by_model` to its adjudication
-(`{seat: [word, …]}`), because the seat's own word is their conjunction.
+(`{seat: [word, …]}`), because the seat's own word is their conjunction. A seat that said `fail`
+while one of its models named no verdict adds `unreached` (`{seat: ["seat (model)", …]}`).
 
 `intake_asked_somebody` answers one question — *did the intake survey open a session this lap?*
 — measured over that node's seat asks alone and **before** the escalation dispatches its own option

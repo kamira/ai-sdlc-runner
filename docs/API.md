@@ -112,7 +112,7 @@ on eight nodes looks the same in a list as one on a single node.
 
 ```jsonc
 { "node_models": { "<node id>": ["<model id>", …] },
-  "seat_models": { "<seat>": "<model id or joined command line>" },
+  "seat_models": { "<seat>": ["<model id or joined command line>", …] },
   "by_model": { "<model id or command>": { "nodes": [ {"node_id", "mode", "default"?} ],
                                            "seats": [ "<seat>", … ],
                                            "known": true } },

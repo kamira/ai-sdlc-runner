@@ -29,14 +29,17 @@ ANSWERS = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
 
 FIFTEEN = ["conformance", "defect", "risk", "idiom", "security", "ux", "ci", "modularity",
            "privacy", "performance", "portability", "docs", "observability", "supply_chain", "i18n"]
-OFF_BY_DEFAULT = ["observability", "supply_chain", "i18n"]
+OPT_IN = ["observability", "supply_chain", "i18n"]
 
 
 # ── 1 · the fifteen seats ──────────────────────────────────────────────────────────────────────
 
 def test_the_fifteen_seat_ids_are_pinned_in_order():
     assert [s.name for s in policy.SEATS] == FIFTEEN
-    assert policy.seat_names(15) == FIFTEEN, "the cap is the count of seats that exist"
+    assert policy.seat_names(12) == FIFTEEN[:12], "the cap is the seats that are not opt-in"
+    for count in (13, 15):
+        with pytest.raises(policy.PolicyError, match="opt-in"):
+            policy.seat_names(count)
 
 
 def test_the_four_existing_seats_are_unchanged_and_only_conformance_vetoes():
@@ -48,11 +51,24 @@ def test_the_four_existing_seats_are_unchanged_and_only_conformance_vetoes():
     assert [s.name for s in policy.SEATS if s.veto] == ["conformance"]
 
 
-def test_three_seats_are_off_unless_chosen_and_the_default_is_still_four_seats_deep():
-    assert [s.name for s in policy.SEATS if not s.enabled_by_default] == OFF_BY_DEFAULT
-    # An install that sets nothing opens the floor, which is a prefix of the first four.
-    assert settings_mod.Settings().seats() == policy.SEAT_FLOOR
+def test_three_seats_are_opt_in_and_the_default_is_three_seats_deep():
+    assert [s.name for s in policy.SEATS if s.opt_in] == OPT_IN
+    # An install that sets nothing opens the floor, which is the first three seats.
+    assert settings_mod.Settings().seats() == policy.SEAT_FLOOR == 3
     assert policy.seat_names(policy.SEAT_FLOOR) == FIFTEEN[:3]
+
+
+def test_no_seat_count_opens_an_opt_in_seat_and_only_a_named_list_does(tmp_path):
+    """Cut the wire (`seat_names` taking `SEATS[:count]` again) and a count of 13 opens one."""
+    assert not set(policy.seat_names(policy.MAX_SEAT_COUNT)) & set(OPT_IN)
+    assert policy.MAX_SEAT_COUNT == 12
+    with pytest.raises(settings_mod.SettingsError, match="opt-in"):
+        settings_mod.load(_write(tmp_path, review_seats=13))
+    with pytest.raises(policy.PolicyError, match="opt-in"):
+        engine.walk(_cfg(review_seats=13), Panel(), enabled=True)
+    named = ("conformance", "defect", "observability")
+    report = engine.walk(_cfg(review_dimensions=named), Panel(), enabled=True)
+    assert [s for s, _ in _seats_at(report, "lead_review")] == list(named)
 
 
 def test_the_labels_and_questions_are_the_ones_the_user_gave():
@@ -64,13 +80,17 @@ def test_the_labels_and_questions_are_the_ones_the_user_gave():
     assert all(s.question.strip() and s.label.strip() for s in policy.SEATS)
 
 
-def test_the_seats_match_config_panel_json_when_that_file_exists():
-    panel = ROOT / "config" / "panel.json"
-    if not panel.is_file():
-        pytest.skip("config/panel.json lands with CHG-20260929-01; until it does there is nothing "
-                    "to compare the runner's seat vocabulary against")
-    dims = json.loads(panel.read_text(encoding="utf-8"))["dimensions"]
+def test_the_seats_match_config_panel_json():
+    """Ids, labels and opt-in for all fifteen; questions for the eleven new seats only. The four
+    existing seats keep the questions the runner's panel has always asked, which `config/panel.json`
+    words differently (CHG-20261005-02, Interpreted)."""
+    dims = json.loads((ROOT / "config" / "panel.json").read_text(encoding="utf-8"))["dimensions"]
     assert [(d["id"], d["label"]) for d in dims] == [(s.name, s.label) for s in policy.SEATS]
+    assert [d["enabled"] for d in dims] == [not s.opt_in for s in policy.SEATS]
+    assert [d["question"] for d in dims[4:]] == [s.question for s in policy.SEATS[4:]]
+    assert [d["question"] for d in dims[:4]] != [s.question for s in policy.SEATS[:4]], (
+        "the four existing seats' questions are the runner's own; if they now match, say so in "
+        "the record and compare all fifteen")
 
 
 # ── 2 · review_dimensions in settings ──────────────────────────────────────────────────────────
@@ -103,6 +123,7 @@ def test_a_list_loads_in_the_order_given_and_round_trips(tmp_path):
     (["conformance", "defect", "nobody"], "no seat"),
     (["conformance", "defect", "defect"], "more than once"),
     (["conformance", "defect"], "below the floor of 3"),
+    (["defect", "risk", "idiom"], "the veto seat"),
     ([], "at least one"),
     ("conformance", "list of seat names"),
     ([1, 2, 3], "list of seat names"),
@@ -134,13 +155,13 @@ def test_save_refuses_what_load_would(tmp_path):
 
 
 def test_review_seats_is_ignored_when_dimensions_are_set_and_show_says_so(tmp_path):
-    s = settings_mod.Settings(review_seats=4, review_dimensions=("ux", "ci", "docs"))
+    s = settings_mod.Settings(review_seats=4, review_dimensions=("conformance", "ci", "docs"))
     assert s.seats() == 3
     assert "review_seats is ignored" in s.describe()
-    assert "ux, ci, docs" in s.describe()
+    assert "conformance, ci, docs" in s.describe()
     assert "ignored" not in settings_mod.Settings(review_seats=4).describe()
     # And the command that prints it.
-    path = _write(tmp_path, review_seats=2, review_dimensions=["ux", "ci", "docs"])
+    path = _write(tmp_path, review_seats=2, review_dimensions=["conformance", "ci", "docs"])
     out = io.StringIO()
     import contextlib
     with contextlib.redirect_stdout(out):
@@ -148,10 +169,10 @@ def test_review_seats_is_ignored_when_dimensions_are_set_and_show_says_so(tmp_pa
     assert code == 0 and "review_seats is ignored" in out.getvalue()
 
 
-def test_the_seat_count_cap_reflects_fifteen(tmp_path):
-    assert settings_mod._check_seats(15) == 15
-    with pytest.raises(settings_mod.SettingsError, match="defines 15"):
-        settings_mod._check_seats(16)
+def test_the_seat_count_cap_is_the_twelve_seats_that_are_not_opt_in(tmp_path):
+    assert settings_mod._check_seats(12) == 12
+    with pytest.raises(settings_mod.SettingsError, match="at most 12"):
+        settings_mod._check_seats(13)
 
 
 def _pick(names_in_order, *, done=True):
@@ -171,10 +192,10 @@ def test_the_screen_has_a_row_and_the_multi_select_keeps_the_order_ticked():
         settings_mod.Settings(), input_fn=lambda _p: next(answers), stream_out=io.StringIO())
     assert chosen.review_dimensions == ("security", "conformance", "ci")
     # A second pick of the same seat un-ticks it.
-    answers = _pick(["security", "conformance", "ci", "ux", "conformance"])
+    answers = _pick(["security", "conformance", "ci", "ux", "ux", "defect"])
     chosen = settings_mod._edit_dimensions(
         settings_mod.Settings(), input_fn=lambda _p: next(answers), stream_out=io.StringIO())
-    assert chosen.review_dimensions == ("security", "ci", "ux")
+    assert chosen.review_dimensions == ("security", "conformance", "ci", "defect")
     # Clear unsets it.
     clear = iter([str(len(policy.SEATS) + 2)])
     cleared = settings_mod._edit_dimensions(
@@ -185,20 +206,20 @@ def test_the_screen_has_a_row_and_the_multi_select_keeps_the_order_ticked():
 def test_the_editor_below_the_floor_asks_and_declining_changes_nothing():
     start = settings_mod.Settings()
     # One scripted stream: the ticks, Done, then the confirmation's answer ("Keep the floor" = 1).
-    script = list(_pick(["security", "ci"])) + ["1"]
+    script = list(_pick(["conformance", "ci"])) + ["1"]
     it = iter(script)
     out = settings_mod._edit_dimensions(start, input_fn=lambda _p: next(it),
                                         stream_out=io.StringIO())
     assert out == start, "declining the high-risk confirmation must leave the settings alone"
-    script = list(_pick(["security", "ci"])) + ["2"]
+    script = list(_pick(["conformance", "ci"])) + ["2"]
     it = iter(script)
     out = settings_mod._edit_dimensions(start, input_fn=lambda _p: next(it),
                                         stream_out=io.StringIO())
-    assert out.review_dimensions == ("security", "ci") and out.high_risk_mode is True
+    assert out.review_dimensions == ("conformance", "ci") and out.high_risk_mode is True
 
 
 def test_turning_high_risk_off_is_kept_while_dimensions_are_below_the_floor():
-    s = settings_mod.Settings(review_dimensions=("security", "ci"), high_risk_mode=True)
+    s = settings_mod.Settings(review_dimensions=("conformance", "ci"), high_risk_mode=True)
     out = settings_mod._toggle_high_risk(s, input_fn=input, stream_out=io.StringIO())
     assert out == s
 
@@ -217,8 +238,8 @@ class Panel:
     """A factory that records every session it opens and answers by (seat, label).
 
     `seat_models` is the attribute `cli.session_factory` sets and the engine reads. `verdicts` maps
-    `(seat, label)` — or just `seat` — to what that voice says at `lead_review`; everything else
-    passes. `journal_dir`, when given, lets a session check that its question was written down
+    `(seat, position)`, `(seat, label)` — or just `seat` — to what that voice says at
+    `lead_review`, first match winning in that order; everything else passes. `journal_dir`, when given, lets a session check that its question was written down
     before it opened (KN-7).
     """
 
@@ -244,7 +265,9 @@ class Panel:
                 if order.get("seat"):
                     if node == "intake_review":
                         return {"problems": [], "missing": [], "unsafe": []}
-                    said = me.verdicts.get((seat, label), me.verdicts.get(seat, "pass"))
+                    said = me.verdicts.get(
+                        (seat, position),
+                        me.verdicts.get((seat, label), me.verdicts.get(seat, "pass")))
                     return {} if said is None else {"verdict": said}
                 branch = ANSWERS.get(node)
                 return {"verdict": branch} if branch else {"ok": True}
@@ -285,7 +308,7 @@ def test_review_dimensions_decide_which_seats_lead_review_and_the_survey_open():
 
 def test_review_seats_is_ignored_when_dimensions_are_given_even_below_the_floor():
     """`review_seats=1` without high-risk mode would raise on its own; with dimensions it is unread."""
-    chosen = ("defect", "risk", "docs")
+    chosen = ("conformance", "risk", "docs")
     report = engine.walk(_cfg(review_dimensions=chosen, review_seats=1), Panel(), enabled=True)
     assert [s for s, _ in _seats_at(report, "lead_review")] == list(chosen)
 
@@ -295,13 +318,14 @@ def test_the_engine_enforces_the_floor_on_dimensions_too():
         engine.walk(_cfg(review_dimensions=("security", "docs")), Panel(), enabled=True)
     with pytest.raises(policy.PolicyError, match="no seat"):
         engine.walk(_cfg(review_dimensions=("security", "docs", "nope")), Panel(), enabled=True)
-    low = engine.walk(_cfg(review_dimensions=("security", "docs"), high_risk_mode=True,
+    low = engine.walk(_cfg(review_dimensions=("conformance", "docs"), high_risk_mode=True,
                            seats_from="settings.json"), Panel(), enabled=True)
-    assert any("below the floor" in r and "security, docs" in r for r in low.relaxations)
+    assert any("below the floor" in r and "conformance, docs" in r for r in low.relaxations)
 
 
 def test_resolve_dimensions_is_the_policy_the_settings_and_engine_share():
-    assert policy.resolve_dimensions(["docs", "ci", "ux"], False) == ["docs", "ci", "ux"]
+    names = ["docs", "conformance", "ux"]
+    assert policy.resolve_dimensions(names, False) == names
     with pytest.raises(policy.PolicyError):
         policy.resolve_dimensions(["docs", "docs", "ux"], False)
 
@@ -462,19 +486,36 @@ def test_the_old_shapes_still_read():
     f = cli.session_factory({"agent_command": ["d"]}, {"defect": ["custom", "cmd"]}, registry=reg)
     assert f.seat_models == {"defect": [["custom", "cmd"]]}
     assert f(seat="defect").argv == ["custom", "cmd"]
-    f = cli.session_factory({"agent_command": ["d"]}, {"defect": [["custom", "cmd"], "opus"]},
-                            registry=reg)
-    assert f(seat="defect", position=1).argv == ["claude-x"]
     assert models.seat_entries(None) == [] and models.seat_entries("") == []
     assert models.seat_entries(["opus", "codex"], reg) == ["opus", "codex"]
-    assert models.seat_entries(["opus", "codex"]) == [["opus", "codex"]], "no registry: one argv"
+    # The legacy argv is read only where `session_factory` asks for it, and no registry is needed.
+    assert models.seat_entries(["custom", "cmd"], reg, legacy_argv=True) == [["custom", "cmd"]]
+    assert models.seat_entries(["custom", "cmd"], None, legacy_argv=True) == [["custom", "cmd"]]
 
 
-def test_an_unknown_id_in_a_seat_list_is_an_error_not_a_fallback_to_the_default():
-    f = cli.session_factory({"agent_command": ["d"]}, {"defect": ["opus", "nobody-x"]},
-                            registry=_registry())
-    assert f.seat_models == {"defect": [["opus", "nobody-x"]]}, "read as the old one-argv shape"
-    assert f(seat="defect").argv == ["opus", "nobody-x"], "as it always did for an unknown word"
+def test_a_list_is_model_ids_and_never_a_command():
+    """Cut the wire (`seat_entries` returning `[items]` for an unknown id again) and these three
+    read `["opus", "missing"]` as one argv."""
+    reg = _registry()
+    with pytest.raises(models.ModelError, match="'missing'"):
+        models.seat_entries(["opus", "missing"], reg)
+    with pytest.raises(models.ModelError, match="no model registry"):
+        models.seat_entries(["opus", "codex"])
+    with pytest.raises(models.ModelError, match="model ids"):
+        models.seat_entries([["custom", "cmd"], "opus"], reg)
+    # Through the factory the legacy argv still reads, and a list that starts with an id does not
+    # turn into an argv when a later word is not one.
+    with pytest.raises(cli.CliError, match="'nobody-x'"):
+        cli.session_factory({"agent_command": ["d"]}, {"defect": ["opus", "nobody-x"]},
+                            registry=reg)
+    with pytest.raises(cli.CliError, match="repeated|more than once"):
+        cli.session_factory({"agent_command": ["d"]}, {"defect": ["opus", "opus"]}, registry=reg)
+    # A plan's or the store's list is checked strictly before the factory ever sees it.
+    with pytest.raises(cli.CliError, match="seat 'defect'.*'nobody-x'"):
+        cli.check_seat_models({"defect": ["custom", "nobody-x"]}, reg)
+    with pytest.raises(cli.CliError, match="no model registry"):
+        cli.check_seat_models({"defect": ["opus", "codex"]}, None)
+    cli.check_seat_models({"defect": ["opus", "codex"], "risk": "anything at all"}, reg)
 
 
 def test_a_walk_through_the_real_factory_opens_a_session_per_model(tmp_path):
@@ -667,24 +708,25 @@ def test_run_opens_the_seats_the_settings_file_names(tmp_path, py_stub, capsys):
     default three, so `security` never appears."""
     from test_settings import _shipped
     config, settings_file, plan_file = _shipped(
-        tmp_path, py_stub, review_dimensions=["security", "ux", "docs"])
+        tmp_path, py_stub, review_dimensions=["security", "ux", "conformance"])
     code = cli.main(["--config", config, "--settings", settings_file, "run", "--undeclared",
                      "allow", "--plan", plan_file, "--confirm", "merge"])
     out = capsys.readouterr().out
     assert code == 0, out
-    for seat in ("security", "ux", "docs"):
+    for seat in ("security", "ux", "conformance"):
         assert f"{seat}=pass" in out
-    assert "conformance=" not in out
+    assert "defect=" not in out
     assert "seat models:   lead_review: security=(default backend); ux=" in out
 
 
 def test_a_seat_count_typed_for_this_run_beats_the_saved_list(tmp_path, py_stub, capsys):
     from test_settings import _shipped
     config, settings_file, plan_file = _shipped(
-        tmp_path, py_stub, review_dimensions=["security", "ux", "docs"])
-    cli.main(["--config", config, "--settings", settings_file, "run", "--undeclared", "allow",
-              "--plan", plan_file, "--confirm", "merge", "--review-seats", "3"])
+        tmp_path, py_stub, review_dimensions=["security", "ux", "docs", "conformance"])
+    code = cli.main(["--config", config, "--settings", settings_file, "run", "--undeclared",
+                     "allow", "--plan", plan_file, "--confirm", "merge", "--review-seats", "3"])
     out = capsys.readouterr().out
+    assert code == 0, out
     assert "conformance=pass" in out and "security=" not in out
 
 
@@ -693,7 +735,7 @@ def test_serve_builds_its_config_from_the_saved_list(tmp_path, py_stub, monkeypa
     from test_settings import _shipped
     from ai_sdlc_runner import server
     config, settings_file, plan_file = _shipped(
-        tmp_path, py_stub, review_dimensions=["ci", "docs", "ux"])
+        tmp_path, py_stub, review_dimensions=["ci", "docs", "conformance"])
     caught = {}
 
     def fake_serve(runner, *a, **k):
@@ -704,4 +746,231 @@ def test_serve_builds_its_config_from_the_saved_list(tmp_path, py_stub, monkeypa
               "--token-dir", str(tmp_path / "tok"),
               "--assignment-store", str(tmp_path / "config.sqlite")])
     cfg = caught["runner"]._make_config([], (), ())
-    assert cfg.review_dimensions == ("ci", "docs", "ux")
+    assert cfg.review_dimensions == ("ci", "docs", "conformance")
+
+
+# ── review round 1 ─────────────────────────────────────────────────────────────────────────────
+
+def _lead_review(report):
+    return [a for a in report.adjudications if a["node_id"] == "lead_review"][0]
+
+
+def test_the_same_model_twice_on_a_seat_cannot_hide_a_fail():
+    """Round 1, finding 1. Cut the wire (`_adjudicate` keying `latest` by `ask.model` again) and
+    position 0's `fail` is overwritten by position 1's `pass`, so the seat passes."""
+    twice = {"defect": ["opus", "opus"]}
+    panel = Panel(seat_models=twice, verdicts={("defect", 0): "fail", ("defect", 1): "pass"})
+    first = _lead_review(engine.walk(_cfg(), panel, enabled=True))
+    assert first["verdicts"]["defect"] == "fail"
+    assert first["by_model"] == {"defect": ["fail", "pass"]}, "the dissent is in the report"
+    # Either order, and the veto seat too: a duplicate cannot launder a veto.
+    panel = Panel(seat_models={"conformance": ["opus", "opus"]},
+                  verdicts={("conformance", 1): "fail"})
+    again = {"next_module": ["module", "none", "none", "none", "none", "none"], "feedback": "done"}
+    report = engine.walk(_cfg(decisions=again), panel, enabled=True)
+    veto = _lead_review(report)
+    assert veto["outcome"] == "fail" and veto["vetoed"] == ["conformance"]
+
+
+def test_the_same_model_twice_keeps_both_survey_answers():
+    class Surveyed(Panel):
+        def __call__(self, seat=None, position=None):
+            session = super().__call__(seat, position)
+            ask = session.ask
+
+            def ask_(order):
+                if order["node_id"] == "intake_review" and seat == "defect":
+                    return {"problems": [f"voice {position}"], "missing": [], "unsafe": []}
+                return ask(order)
+            session.ask = ask_
+            return session
+
+    report = engine.walk(_cfg(), Surveyed(seat_models={"defect": ["opus", "opus"]}), enabled=True)
+    assert sorted(report.survey["problems"].values()) == [["voice 0"], ["voice 1"]]
+
+
+def test_a_duplicate_model_on_one_seat_is_refused_at_every_door(tmp_path):
+    with pytest.raises(plan.PlanError, match="more than once on seat 'defect'"):
+        plan.load(_plan_file(tmp_path, {"defect": ["opus", "opus"]}))
+    db = store.connect(tmp_path / "c.sqlite")
+    store.save_registry(db, _registry())
+    with pytest.raises(store.StoreError, match="more than once on seat 'defect'"):
+        store.set_seat_model(db, "defect", ["opus", "codex", "opus"])
+    assert store.seat_models(db) == {}, "a refused write changes nothing"
+    with pytest.raises(models.ModelError, match="more than once"):
+        models.seat_entries(["opus", "opus"], _registry())
+    from test_store import _Console
+    console = _Console(tmp_path / "console")
+    try:
+        for model_id in ("opus", "codex"):
+            assert console.post("/models", {"model": {
+                "id": model_id, "vendor": "a", "name": "o", "transport": "cli",
+                "command": [model_id, "-p"]}})[0] == 200
+        code, out = console.post("/config/seats", {"seat": "defect", "model_id": ["opus", "opus"]})
+        assert code == 409 and "more than once" in out["error"], out
+    finally:
+        console.close()
+
+
+# A seat's models in the report and the journal are bound to who they were put to.
+
+def _journaled_walk(tmp_path, seat_models, *, resume, factory=None):
+    journal = engine.AskJournal(tmp_path / "journal")
+    panel = factory or Panel(seat_models=seat_models)
+    report = engine.walk(_cfg(journal=journal, resume=resume), panel, enabled=True)
+    return panel, report
+
+
+def test_a_resume_with_the_same_assignment_reuses_every_answer(tmp_path):
+    seats = {"defect": ["opus", "codex"]}
+    _journaled_walk(tmp_path, seats, resume=False)
+    panel, report = _journaled_walk(tmp_path, seats, resume=True)
+    assert panel.opened == [], "nothing was asked again"
+    assert report.halted_at == "done" and report.resumed
+
+
+def test_a_resume_with_a_replaced_model_asks_the_replacement_not_the_old_answer(tmp_path):
+    """Round 1, finding 2. Cut the wire (`identity=` in the two seat `_ask` calls, or the
+    comparison in `_ask`) and the replacement is never opened and is reported as answering."""
+    _journaled_walk(tmp_path, {"defect": ["opus", "codex"]}, resume=False)
+    panel, report = _journaled_walk(
+        tmp_path, {"defect": ["opus", "replacement"]}, resume=True,
+        factory=Panel(seat_models={"defect": ["opus", "replacement"]},
+                      verdicts={("defect", "replacement"): "fail"}))
+    assert [p for s, p in panel.opened if s == "defect"] == [1, 1], "survey and review, position 1"
+    assert ("defect", 0) not in panel.opened, "the unchanged model is not asked again"
+    assert _lead_review(report)["verdicts"]["defect"] == "fail", "the replacement's own word"
+    assert report.seat_models["lead_review"]["defect"] == ["opus", "replacement"]
+
+
+def test_a_resume_re_asks_when_the_same_id_now_runs_another_command(tmp_path):
+    """The identity is the command the factory resolves, not only the id."""
+    def real(command):
+        reg = models.Registry(models=(
+            models.Model(id="opus", vendor="a", name="o", transport="cli", command=(command,)),
+            models.Model(id="codex", vendor="b", name="c", transport="cli",
+                         command=("codex-x",))))
+        inner = cli.session_factory({"agent_command": ["default-x"]},
+                                    {"defect": ["opus", "codex"]}, registry=reg)
+        opened = []
+
+        def factory(seat=None, position=None):
+            opened.append((seat, position))
+            return Panel()(seat, position)
+        factory.seat_models = inner.seat_models
+        factory.voice_identity = inner.voice_identity
+        factory.opened = opened
+        return factory
+    _journaled_walk(tmp_path, None, resume=False, factory=real("claude-x"))
+    same = real("claude-x")
+    _journaled_walk(tmp_path, None, resume=True, factory=same)
+    assert same.opened == []
+    moved = real("claude-y")
+    _journaled_walk(tmp_path, None, resume=True, factory=moved)
+    assert sorted({p for s, p in moved.opened if s == "defect"}) == [0], "only opus moved"
+
+
+# Seat verdicts: all pass -> pass; any fail -> fail; any unreached (no fail) -> the run stops.
+
+PREFIX_SEATS = [s.name for s in policy.PREFIX_SEATS]
+
+
+def _dims_with(seat):
+    return tuple(dict.fromkeys(("conformance", "defect", "risk", seat)))
+
+
+@pytest.mark.parametrize("seat", PREFIX_SEATS)
+def test_every_seat_is_pass_fail_or_unreached_by_its_models(seat):
+    """Round 1, finding 4. A model that names no verdict is unreached. Without a `fail` it makes
+    the seat unreached and the run stops, naming it; with one the seat is `fail`, and the
+    unreached model is listed beside it."""
+    models_here = {seat: ["opus", "codex"]}
+    dims = _dims_with(seat)
+
+    def run(opus, codex):
+        panel = Panel(seat_models=models_here,
+                      verdicts={(seat, "opus"): opus, (seat, "codex"): codex})
+        again = {"next_module": ["module"] + ["none"] * 8, "feedback": "done"}
+        return engine.walk(_cfg(review_dimensions=dims, high_risk_mode=True, decisions=again),
+                           panel, enabled=True)
+
+    assert _lead_review(run("pass", "pass"))["verdicts"][seat] == "pass"
+    assert _lead_review(run("pass", "fail"))["verdicts"][seat] == "fail"
+    assert _lead_review(run("fail", "pass"))["verdicts"][seat] == "fail"
+    for opus, codex in (("pass", None), (None, "pass"), (None, "undecided")):
+        with pytest.raises(engine.EngineError, match=rf"{seat} \((opus|codex)\)"):
+            run(opus, codex)
+    mixed = _lead_review(run("fail", None))
+    assert mixed["verdicts"][seat] == "fail" and mixed["unreached"] == {seat: [f"{seat} (codex)"]}
+
+
+# The veto seat can be left out of a named list only in high-risk mode, and the run says so.
+
+def test_a_list_without_the_veto_seat_is_refused_unless_high_risk_mode_is_on(tmp_path):
+    """Round 1, finding 6. Cut the wire (`vetoes_missing` in `resolve_dimensions`) and all of the
+    refusals below load."""
+    names = ["defect", "risk", "idiom"]
+    with pytest.raises(policy.PolicyError, match="veto seat"):
+        policy.resolve_dimensions(names, False)
+    assert policy.resolve_dimensions(names, True) == names
+    with pytest.raises(settings_mod.SettingsError, match="conformance.*veto seat"):
+        settings_mod.load(_write(tmp_path, review_dimensions=names))
+    with pytest.raises(settings_mod.SettingsError, match="veto seat"):
+        settings_mod.save(settings_mod.Settings(review_dimensions=tuple(names)),
+                          str(tmp_path / "s.json"))
+    allowed = settings_mod.load(_write(tmp_path, review_dimensions=names, high_risk_mode=True))
+    assert allowed.review_dimensions == tuple(names)
+    assert "no veto seat open (conformance is not named)" in allowed.describe()
+    with pytest.raises(policy.PolicyError, match="veto seat"):
+        engine.walk(_cfg(review_dimensions=tuple(names)), Panel(), enabled=True)
+
+
+def test_a_run_without_the_veto_seat_records_it_like_the_high_risk_note():
+    names = ("defect", "risk", "idiom")
+    report = engine.walk(_cfg(review_dimensions=names, high_risk_mode=True,
+                              seats_from="settings.json"), Panel(), enabled=True)
+    note = [r for r in report.relaxations if "veto seat" in r]
+    assert len(note) == 1
+    assert note[0].startswith("high-risk mode: review opened without conformance")
+    assert report.relaxation_authorisers[note[0]] == "settings.json"
+    assert [s for s, _ in _seats_at(report, "lead_review")] == list(names)
+    with_veto = engine.walk(_cfg(review_dimensions=("conformance", "defect", "risk")),
+                            Panel(), enabled=True)
+    assert not [r for r in with_veto.relaxations if "veto seat" in r]
+
+
+def test_the_editor_and_the_toggle_keep_a_list_without_the_veto_seat_out_of_the_file():
+    start = settings_mod.Settings()
+    out = io.StringIO()
+    it = _pick(["defect", "risk", "idiom"])
+    kept = settings_mod._edit_dimensions(start, input_fn=lambda _p: next(it), stream_out=out)
+    assert kept == start and "veto seat" in out.getvalue()
+    on = settings_mod.Settings(review_dimensions=("defect", "risk", "idiom"), high_risk_mode=True)
+    out = io.StringIO()
+    assert settings_mod._toggle_high_risk(on, input_fn=input, stream_out=out) == on
+    assert "veto seat" in out.getvalue()
+
+
+def test_no_high_risk_mode_on_the_command_line_drops_a_list_without_the_veto_seat(
+        tmp_path, py_stub, capsys):
+    from test_settings import _shipped
+    config, settings_file, plan_file = _shipped(
+        tmp_path, py_stub, review_dimensions=["defect", "risk", "idiom"], high_risk_mode=True)
+    code = cli.main(["--config", config, "--settings", settings_file, "run", "--undeclared",
+                     "allow", "--plan", plan_file, "--confirm", "merge", "--no-high-risk-mode"])
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert "leaves out ['conformance'], the veto seat" in out and "conformance=pass" in out
+
+
+def test_run_refuses_a_plan_list_the_registry_cannot_resolve(tmp_path, py_stub, capsys):
+    """The wire from `cmd_run` to `cli.check_seat_models`: cut it and the list reaches the factory
+    as the legacy argv, and the run starts."""
+    from test_settings import _shipped
+    config, settings_file, _ = _shipped(tmp_path, py_stub)
+    plan_file = _plan_file(tmp_path, {"defect": ["opus", "codex"]})
+    code = cli.main(["--config", config, "--settings", settings_file, "run", "--undeclared",
+                     "allow", "--plan", plan_file, "--confirm", "merge",
+                     "--assignment-store", "none"])
+    out = capsys.readouterr().out
+    assert code == 2 and "seat 'defect'" in out and "no model registry" in out, out
