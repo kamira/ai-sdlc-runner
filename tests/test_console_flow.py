@@ -92,7 +92,8 @@ class Console:
     def harness(self, scenario, **args):
         done = subprocess.run(
             [NODE, str(HARNESS), str(PAGE), self.base, self.operator.token, scenario,
-             json.dumps(args)], capture_output=True, text=True, timeout=60)
+             json.dumps(args)], capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=60)
         assert done.returncode == 0, done.stderr
         return json.loads(done.stdout)
 
@@ -1018,3 +1019,17 @@ def test_the_stop_message_for_a_broken_settings_file_says_only_what_works(
         make_config((), (), ())
     message = str(raised.value)
     assert "fix the settings file" in message and "from the console" not in message, message
+
+
+def test_every_text_mode_subprocess_run_names_its_encoding():
+    """Node writes UTF-8 and the harness leaves non-ASCII unescaped; a locale codec (cp950,
+    cp1252) would mis-decode it, so a text-mode run must say which codec it reads."""
+    tree = ast.parse(pathlib.Path(__file__).read_text(encoding="utf-8"))
+    runs = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute) and n.func.attr == "run"
+            and isinstance(n.func.value, ast.Name) and n.func.value.id == "subprocess"]
+    assert runs, "no subprocess.run found; this check would pass on nothing"
+    for call in runs:
+        names = {k.arg for k in call.keywords}
+        if names & {"text", "universal_newlines"}:
+            assert "encoding" in names, f"line {call.lineno}: subprocess.run(text=True) names no encoding"
