@@ -88,13 +88,20 @@ const document = {
 
 let inflight = 0;
 const sent = [];
-const refusing = {};          // path -> sentence: the fake server answer for a route, 409
+const refusing = {};          // "METHOD path" or path -> sentence: the fake answer for a route, 409
+const holds = {};             // "METHOD path" -> promise: the next such request waits for it first
 const context = vm.createContext({
   document, console, JSON, Math, Object, Array, String, Number, Error, Promise, setTimeout,
   location: { hash: "#token=" + token, pathname: "/", host: base.replace("http://", "") },
   history: { replaceState() {} },
   sessionStorage: (() => { const s = {}; return { getItem: (k) => s[k] || null, setItem: (k, v) => { s[k] = v; } }; })(),
   fetch: (path, opts) => {
+    const key = opts.method + " " + path;
+    if (holds[key]) {
+      const gate = holds[key];
+      delete holds[key];
+      return gate.then(() => context.fetch(path, opts));
+    }
     inflight++;
     sent.push({ path, method: opts.method, body: opts.body ? JSON.parse(opts.body) : null });
     // A request counts as in flight until the page has read its body, not only until the headers
@@ -104,8 +111,9 @@ const context = vm.createContext({
       r.json = () => read().finally(() => { inflight--; });
       return r;
     };
-    if (refusing[path]) {
-      return Promise.resolve(counted(new Response(JSON.stringify({ error: refusing[path] }),
+    const say = refusing[key] || refusing[path];
+    if (say) {
+      return Promise.resolve(counted(new Response(JSON.stringify({ error: say }),
                                                   { status: 409 })));
     }
     return fetch(base + path, opts).then(counted, (e) => { inflight--; throw e; });
@@ -212,8 +220,7 @@ async function boot() {
     button(p, "save " + args.seat + " models").onclick(); await settle();
     out.error = text("#panelerr"); out.status = text("#panelok");
     out.sent = sent.filter((s) => s.method === "POST");
-  }
-  else if (scenario === "two_sections") {          // edit two sections, save one: the other keeps
+  } else if (scenario === "two_sections") {          // edit two sections, save one: the other keeps
     run("openPanel(" + JSON.stringify(args.node) + ")"); await settle();
     const p = byId["#panel"];
     const boxes = (q, label) =>
@@ -266,6 +273,66 @@ async function boot() {
     run("openPanel(" + JSON.stringify(args.node) + ")"); await settle();
     out.live = { status: document.querySelector("#panelok").attrs["aria-live"],
                  error: document.querySelector("#panelerr").attrs.role };
+  } else if (scenario === "late_save") {          // a save answered after another panel opened
+    run("openPanel(" + JSON.stringify(args.node) + ")"); await settle();
+    const p = byId["#panel"];
+    const b = p.all((c) => c.tagName === "input" && c.attrs["aria-label"] === args.model)[args.nth];
+    b.checked = true; b.onchange();
+    let release;
+    holds["POST /config/seats"] = new Promise((r) => { release = r; });
+    button(p, "save " + args.seat + " models").onclick();
+    run("openPanel(" + JSON.stringify(args.other) + ")"); await settle();
+    out.openedAt = run("panelVersion");
+    release(); await settle();
+    out.versionAfter = run("panelVersion");
+    out.status = text("#panelok"); out.error = text("#panelerr");
+    out.stored = (await (await fetch(base + "/config/nodes",
+      { headers: { "X-Operator-Token": token } })).json()).seat_models;
+    const q = byId["#panel"];
+    button(q, "save " + args.seat + " models").onclick(); await settle();
+    out.error2 = text("#panelerr"); out.status2 = text("#panelok");
+  } else if (scenario === "overlap") {             // two panels opened, the first answers last
+    let release;
+    holds["GET /config/nodes"] = new Promise((r) => { release = r; });
+    run("openPanel(" + JSON.stringify(args.first) + ")");
+    run("state.version = state.version + 50");
+    out.second = run("state.version");
+    run("openPanel(" + JSON.stringify(args.second) + ")"); await settle();
+    release(); await settle();
+    out.panelVersion = run("panelVersion"); out.title = text("#paneltitle");
+  } else if (scenario === "readback_refused") {    // the write lands, the read-back is refused
+    run("openPanel(" + JSON.stringify(args.node) + ")"); await settle();
+    const p = byId["#panel"];
+    if (args.press === "seat") {
+      const b = p.all((c) => c.tagName === "input" && c.attrs["aria-label"] === "opus")[args.nth];
+      b.checked = true; b.onchange();
+    } else {
+      const b = box(p, "open the security seat"); b.checked = true; b.onchange();
+    }
+    refusing["GET /config/seats"] = args.say;
+    button(p, args.press === "seat" ? "save " + args.seat + " models"
+                                    : "save the review dimensions").onclick();
+    await settle();
+    out.status = text("#panelok"); out.error = text("#panelerr");
+  } else if (scenario === "opened") {              // where focus is after open, and after close
+    run("openPanel(" + JSON.stringify(args.node) + ")");
+    out.atOpen = { id: active && active.id, tabindex: active && active.attrs.tabindex };
+    await settle();
+    out.afterLoad = { id: active && active.id, mounted: mounted(active) };
+    docListeners.keydown.forEach((f) => f({ key: "Escape" })); await settle();
+    out.afterClose = active && active.attrs["data-node"];
+  } else if (scenario === "chart") {               // what the chart says about visited nodes
+    run("state = { at: " + JSON.stringify(args.at) + ", visited: " + JSON.stringify(args.visited) +
+        ", version: 1 }");
+    run("drawFlow()");
+    const nodes = byId["#flow"].all((c) => c.tagName === "g" && c.attrs["data-node"] !== undefined);
+    out.nodes = {};
+    for (const g of nodes) {
+      out.nodes[g.attrs["data-node"]] = { label: g.attrs["aria-label"], text: g.textContent };
+    }
+    out.edges = byId["#flow"].all((c) => c.tagName === "path" && c.attrs["data-from"] !== undefined)
+      .map((c) => ({ from: c.attrs["data-from"], to: c.attrs["data-to"],
+                     cls: c.attrs["class"], label: c.attrs["aria-label"] || null }));
   } else if (scenario === "plan_seat") {           // a seat the plan sets
     run("openPanel(" + JSON.stringify(args.node) + ")"); await settle();
     const p = byId["#panel"];

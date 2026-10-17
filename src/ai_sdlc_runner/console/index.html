@@ -46,7 +46,7 @@
   main.wide{grid-template-columns:1fr;height:auto}
   main.wide aside{border-right:0;overflow:visible}
   .chart .edge{fill:none;stroke:var(--line);stroke-width:1.5}
-  .chart .edge.taken{stroke:var(--go);stroke-width:2}
+  .chart .edge.taken{stroke:var(--go);stroke-width:3}
   .chart .edge.back{stroke-dasharray:3 3}
   .chart .elabel{font-family:var(--mono);font-size:8.5px;fill:var(--faint)}
   .chart .box{fill:var(--card);stroke:var(--line);stroke-width:1.5}
@@ -57,7 +57,7 @@
   .chart .n.done .box{fill:var(--soft);stroke:var(--line)}
   .chart .n.done .name{fill:var(--faint)}
 
-  /* HERE — the one thing this panel exists to answer */
+  /* HERE — the one thing this chart exists to answer */
   .chart .n.here .box{fill:var(--wait);stroke:var(--wait);stroke-width:2.5}
   .chart .n.here .name{fill:var(--bg);font-weight:700}
   .chart .n.here .who{fill:var(--bg);opacity:.8}
@@ -332,12 +332,12 @@ function describeNode(n) {
 function shapeFor(n, p, g) {
   // Shape says the kind, so it survives without colour: a step is a rectangle, a decision a
   // hexagon, a loop a pill, a terminal a dashed pill (double-lined when it is a permanent halt).
-  var cls = { "class": "box" };
+  var attrs = { "class": "box" };
   if (n.kind === "decision") {
     var c = 12;
-    cls.points = [p.x + c, p.y, p.x + W - c, p.y, p.x + W, p.y + H / 2, p.x + W - c, p.y + H,
+    attrs.points = [p.x + c, p.y, p.x + W - c, p.y, p.x + W, p.y + H / 2, p.x + W - c, p.y + H,
                   p.x + c, p.y + H, p.x, p.y + H / 2].join(" ");
-    return svg("polygon", cls, g);
+    return svg("polygon", attrs, g);
   }
   var round = (n.kind === "loop" || n.kind === "terminal") ? H / 2 : 5;
   if (n.kind === "terminal" && n.permanent) {
@@ -360,10 +360,16 @@ function drawFlow() {
 
   // edges first, so nodes sit on top of them
   L.edges.forEach(function (e) {
-    // "taken" means this edge was actually walked — both ends visited, in order.
+    // "taken" is what the code checks: both ends are among the visited nodes. It is not proof this
+    // edge was the one walked, or that they were visited in this order.
     var walked = seen.indexOf(e.from) >= 0 && seen.indexOf(e.to) >= 0;
-    svg("path", { "class": "edge" + (e.back ? " back" : "") + (walked ? " taken" : ""), d: e.d,
-                  "data-from": e.from, "data-to": e.to }, root);
+    var ep = svg("path", { "class": "edge" + (e.back ? " back" : "") + (walked ? " taken" : ""),
+                           d: e.d, "data-from": e.from, "data-to": e.to }, root);
+    // Not colour alone: a taken edge is also drawn twice as thick, and named for a screen reader.
+    if (walked) {
+      ep.setAttribute("role", "img");
+      ep.setAttribute("aria-label", "edge " + e.from + " to " + e.to + ", both ends visited");
+    }
     if (e.label) {
       svg("text", { "class": "elabel", x: e.lx, y: e.ly }, root).textContent = e.label;
     }
@@ -374,8 +380,10 @@ function drawFlow() {
     var p = L.pos[n.id];
     var cls = "n" + (n.id === here ? " here" : seen.indexOf(n.id) >= 0 ? " done" : "") +
               " " + n.kind + (n.id === picked ? " picked" : "");
+    var visited = n.id !== here && seen.indexOf(n.id) >= 0;
     var g = svg("g", { "class": cls, tabindex: 0, role: "button", "data-node": n.id,
                        "aria-label": describeNode(n) + (n.id === here ? ", the run is here" : "") +
+                                     (visited ? ", visited" : "") +
                                      ". Press Enter to open its settings." }, root);
     var t = svg("title", {}, g);
     t.textContent = n.label + (n.gate ? "  ·  gate: " + n.gate : "") + "  ·  " + n.mode +
@@ -387,9 +395,10 @@ function drawFlow() {
     shapeFor(n, p, g);
     if (n.gate) svg("circle", { "class": "gatepin", cx: p.x + W - 9, cy: p.y + 8, r: 2.6 }, g);
     svg("text", { "class": "name", x: p.x + 14, y: p.y + 14 }, g).textContent = n.id;
-    // Words for what colour would say: a gate, a halt, and where the run is.
+    // Words for what colour would say: a gate, a halt, where the run is, and a check for visited.
     var who = (n.role || "runner") + " · " + n.mode;
-    var tags = (n.gate ? "gate " : "") + (n.permanent ? "HALT " : "") + (n.id === here ? "HERE" : "");
+    var tags = (visited ? "\u2713 " : "") + (n.gate ? "gate " : "") + (n.permanent ? "HALT " : "") +
+               (n.id === here ? "HERE" : "");
     svg("text", { "class": "who", x: p.x + 14, y: p.y + 25 }, g).textContent = who;
     if (tags) svg("text", { "class": "tag", x: p.x + W - 14, y: p.y + 25,
                             "text-anchor": "end" }, g).textContent = tags.trim();
@@ -495,10 +504,11 @@ function drawLegend() {
   $("#legend").innerHTML =
     '<span class="sw" style="background:var(--wait);border-color:var(--wait)"></span>' +
     '<b>where the run is</b><br>' +
-    '<span class="sw" style="background:var(--soft)"></span>already visited<br>' +
+    '<span class="sw" style="background:var(--soft)"></span>already visited (also marked ' +
+    '<b>\u2713</b> on the node)<br>' +
     '<span class="sw" style="background:var(--card)"></span>not reached yet<br>' +
     '<span class="sw" style="background:var(--go);border-color:var(--go)"></span>' +
-    'an edge this run took<br>' +
+    'an edge with both ends visited, drawn thicker (the run may not have walked that edge)<br>' +
     '<span class="sw" style="background:var(--wait);border-radius:50%;border-color:var(--wait)">' +
     '</span>the node has a gate (also written <b>gate</b> on it)<br>' +
     'shapes: rectangle = step, hexagon = decision, pill = loop, dashed pill = end ' +
@@ -513,6 +523,9 @@ function drawLegend() {
 // nodes. Every save is a route that already validates; whatever the server refuses is put on
 // screen word for word, and nothing here decides on the server's behalf.
 var picked = null, seatInfo = null, seatInfoError = "", configOk = false, panelVersion = null;
+// Counts panel openings and closings. A save or a load that finishes under another count belongs
+// to a panel that is gone, and writes nothing into the one on screen.
+var panelEpoch = 0;
 
 function el(tag, cls, text) {
   var e = document.createElement(tag);
@@ -666,9 +679,11 @@ function panelStatus(text, ok) {
 // Every save ends here. It submits the version this panel was **loaded at**, not the latest one
 // streamed since: a second tab's change moves the version, the server refuses the stale write and
 // its sentence is shown, instead of this panel overwriting what it never saw. A save of ours
-// advances that version to the one the server answers with, so the next save in this panel
-// is not mistaken for a stale one. Nothing is rebuilt but what `o.after` redraws, so a save in one
-// section leaves the unsaved edits in the others alone.
+// advances that version to the one the server answers with (the one its own edit produced), so
+// the next save in this panel is not mistaken for a stale one. Nothing is rebuilt but what
+// `o.after` redraws, so a save in one section leaves the unsaved edits in the others alone.
+// The answer belongs to the panel that sent it: if another has opened since, the version, the
+// status and the redraw are dropped, or that panel would hold a version newer than what it shows.
 function save(path, body, o) {
   o = o || { label: "the settings" };
   panelError(""); panelStatus("");
@@ -677,19 +692,27 @@ function save(path, body, o) {
     return;
   }
   body.version = panelVersion;
+  var epoch = panelEpoch;
   api("POST", path, body).then(function (out) {
+    if (epoch !== panelEpoch) return;
     if (out && typeof out.version === "number") {
       panelVersion = out.version;
       if (state) state.version = out.version;
     }
     panelStatus("Saved: " + o.label + " (version " + panelVersion + ").", true);
-    return loadConfig(true).then(function () {
+    return loadConfig(true).then(function (fresh) {
+      if (!fresh) return;
+      // The read of the seats can be refused after a write that went through (the seats route
+      // does not read the settings file, the read does). It is said here, since nothing else
+      // redraws the part of the panel that would show it.
+      if (seatInfoError) panelError(seatInfoError);
       var again = o.after && o.after();
       if (again && again.focus) again.focus();
     }, function (e) {
       panelError("saved, but the settings could not be read back: " + e.message);
     });
   }, function (e) {
+    if (epoch !== panelEpoch) return;
     panelStatus("Not saved: the server refused it.");
     panelError(e.message);
   }).catch(function (e) { panelError(e.message); });
@@ -703,6 +726,7 @@ function seatDefaults() {
 }
 
 function renderDimensions(host) {
+  if (!seatInfo) return;          // the read-back was refused: `save()` has said so, keep the list
   host.innerHTML = "";
   host.appendChild(el("h3", null, "review dimensions"));
   var set = seatInfo.review_dimensions;
@@ -792,6 +816,7 @@ function renderSeatEditor(host) {
 
 function renderPanel() {
   var box = $("#panel");
+  var kept = document.activeElement && document.activeElement.id === "paneltitle";
   box.innerHTML = "";
   var n = picked && nodeById(picked);
   if (!n) { box.hidden = true; return; }
@@ -800,6 +825,7 @@ function renderPanel() {
   var head = el("div", "ph");
   var title = el("h3", null, n.id + " — " + n.label);
   title.id = "paneltitle";
+  title.setAttribute("tabindex", "-1");
   head.appendChild(title);
   var x = el("button", null, "close"); x.type = "button";
   x.setAttribute("aria-label", "close the settings for " + n.id + " (Escape)");
@@ -880,6 +906,7 @@ function renderPanel() {
       "A " + n.mode + " node takes no model list, so there is nothing to choose here."));
   }
   box.appendChild(editor);
+  if (kept && title.focus) title.focus();
   if (title.scrollIntoView) title.scrollIntoView({ block: "nearest" });
 }
 
@@ -887,21 +914,28 @@ function renderPanel() {
 // version read **before** the fetch, so a change landing during it makes the next save stale and
 // refused rather than silently included. A save passes `keep`: its own answer already set the
 // version, and the unsaved editors beside it were drawn from the older one.
+// It resolves true when its answer was applied and false when another panel opened or this one
+// closed meanwhile: that answer is older than the screen and is dropped whole, version and data
+// together, so a panel never holds a version newer than the settings it shows.
 function loadConfig(keep) {
-  var at = state ? state.version : null;
+  var at = state ? state.version : null, epoch = panelEpoch;
+  var got = {};
   return api("GET", "/config/nodes").then(function (a) {
-    assign = a;
+    got.assign = a;
     return api("GET", "/config/seats").then(function (s) {
-      seatInfo = s; seatInfoError = "";
-    }, function (e) { seatInfo = null; seatInfoError = e.message; });
+      got.seatInfo = s; got.seatInfoError = "";
+    }, function (e) { got.seatInfo = null; got.seatInfoError = e.message; });
   }).then(function () {
+    if (epoch !== panelEpoch) return false;
+    assign = got.assign; seatInfo = got.seatInfo; seatInfoError = got.seatInfoError;
     configOk = true;
     if (!keep) panelVersion = at;
     drawModels();
+    return true;
   });
 }
 
-function refreshConfig() { return loadConfig().then(renderPanel); }
+function refreshConfig() { return loadConfig().then(function () { renderPanel(); }); }
 
 // The panel opens beside the flow, not under it: with the flow expanded to the page width the panel
 // would sit below the chart and the node that opened it would scroll away, so opening one narrows it.
@@ -916,20 +950,26 @@ function setExpanded(on) {
 }
 
 function openPanel(id) {
-  picked = id; configOk = false; panelVersion = null;
+  picked = id; configOk = false; panelVersion = null; panelEpoch++;
+  var epoch = panelEpoch;
   if ($("#app").className === "wide") setExpanded(false);
   drawFlow();
   var again = document.querySelector('[data-node="' + id + '"]');
-  if (again && again.focus) again.focus();
   if (again && again.scrollIntoView) again.scrollIntoView({ block: "nearest", inline: "nearest" });
   // The panel is drawn before the fetch, so a refusal of `GET /config/nodes` has a line to land on.
+  // Focus goes into it, onto its heading: a keyboard user would otherwise be a whole chart of Tab
+  // stops away from it, and a screen reader would say nothing. `renderPanel` keeps it there when
+  // the load redraws the panel.
   renderPanel();
-  loadConfig().then(renderPanel, function (e) { panelError(e.message); });
+  var title = $("#paneltitle");
+  if (title && title.focus) title.focus();
+  loadConfig().then(function (fresh) { if (fresh) renderPanel(); },
+                    function (e) { if (epoch === panelEpoch) panelError(e.message); });
 }
 
 function closePanel() {
   var was = picked;
-  picked = null;
+  picked = null; panelEpoch++;
   renderPanel();
   drawFlow();
   var again = was && document.querySelector('[data-node="' + was + '"]');

@@ -2059,8 +2059,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
         try:
             live = settings_mod.load(args.settings)
         except settings_mod.SettingsError as exc:
-            raise CliError(f"{exc} — this walk is not started; fix the file, or save it again "
-                           f"from the console")
+            raise CliError(f"{exc} — this walk is not started; fix the settings file, then "
+                           f"start the run again")
         coder = coder_defaults(current_assignments().get("node_models") or {},
                                store_mod.load_registry(db) or registry, live,
                                agent_command=bool(config.get("agent_command")))
@@ -2247,9 +2247,12 @@ def cmd_serve(args: argparse.Namespace) -> int:
         """
         resolved = current_assignments().get("node_models") or {}
         try:
-            merged = coder_defaults(resolved, store_mod.load_registry(db) or registry, saved,
+            # The file `make_config` reads for the next walk, not the copy read at startup. When it
+            # does not load that walk does not start, so there is no coder to name.
+            merged = coder_defaults(resolved, store_mod.load_registry(db) or registry,
+                                    settings_mod.load(args.settings),
                                     agent_command=bool(config.get("agent_command")))[0]
-        except CliError:
+        except (CliError, settings_mod.SettingsError):
             return {}
         build = merged.get("engineer_build")
         if resolved.get("engineer_build") or not build:

@@ -660,16 +660,19 @@ def test_a_config_edit_checks_and_bumps_the_version_without_letting_go(console):
     """Three separate critical sections is a check-then-act window.
 
     Two threads validate version N, both write, both bump — and the double-submit the version
-    exists to refuse happens anyway. `Runner.edit` holds one lock across all three.
+    exists to refuse happens anyway. `Runner.edit_versioned` (which `Runner.edit` calls) holds one
+    lock across all three, and reads the version it answers inside it.
     """
     import inspect
     from ai_sdlc_runner import server as server_mod
 
-    edit = inspect.getsource(server_mod.Runner.edit)
+    assert "edit_versioned" in inspect.getsource(server_mod.Runner.edit)
+    edit = inspect.getsource(server_mod.Runner.edit_versioned)
     assert "with self._lock:" in edit
     body = edit.split("with self._lock:")[1]
     for step in ("_require_version", "write()", "self.state.version += 1"):
         assert step in body, f"{step} is outside the lock"
+    assert "return out, self.state.version" in body, "the version answered is read outside the lock"
 
 
 def test_adding_a_model_also_checks_the_version(console):

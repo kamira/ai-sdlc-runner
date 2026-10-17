@@ -118,7 +118,7 @@ loader's sentence.
 
 ```jsonc
 { "seats": [ { "name", "label", "question", "veto", "opt_in" } ],   // policy.SEATS, in order; only conformance vetoes
-  "review_dimensions": [ "<seat>", … ] | null,    // null: the first `review_seats` (or the floor) open
+  "review_dimensions": [ "<seat>", … ] | null,    // null: the first `review_seats` (or the floor) seats that are not opt-in open
   "review_seats": 4 | null,
   "high_risk_mode": false,
   "floor": 3,
@@ -151,9 +151,9 @@ instead of "used nowhere". `node_models` and `source` stay exactly what the plan
 **`source` says which of two places put each assignment there.** An assignment can come from the
 plan file (this change's declaration) or from the store (the project's standing one), and **the plan
 wins**. A console showing the merged result with no provenance could not say that it had — and an
-override nobody can see is worse than no override. **The console this repository ships is that
-console** from CHG-20261005-03: the models list draws the merged assignments through `by_model`,
-and the node panel reads `source` for one sentence only — that the plan sets a node or a seat and
+override nobody can see is worse than no override. **The console this repository ships**
+(CHG-20261005-03) draws the merged assignments in the models list through `by_model`, and the node
+panel reads `source` for one sentence only — that the plan sets a node or a seat and
 wins over what is saved, in which case it offers no save. `runner run` and `runner serve` each
 print a count to the terminal; no view lists every assignment's provenance.
 
@@ -211,9 +211,13 @@ If the version does not match the run's current one:
 ```
 
 **Every POST under `/run` and `/attachments` returns the run snapshot**
-([§3](#3--the-run-snapshot)) with `200`. `POST /models` does not, and neither do the three
-`/config/*` writes: they go through one function (`server.py`'s `_config_edit`) and answer the
-merged assignment with its provenance and the new version —
+([§3](#3--the-run-snapshot)) with `200`. `POST /models` does not, and neither do the four
+`/config/*` writes. Three of them (`nodes`, `seats`, `halts`) go through one function
+(`server.py`'s `_config_edit`) and answer the merged assignment with its provenance and the new
+version; `POST /config/dimensions` goes through `Runner.edit_versioned` directly and answers the
+`GET /config/seats` shape plus `version`. In both, **`version` is the one that edit itself
+produced**, read inside the same lock that checked and advanced it, so another tab's commit
+landing a moment later is not reported as this edit's. The merged-assignment shape is —
 
 ```jsonc
 { "node_models": { "<node id>": ["<model id>", …] },

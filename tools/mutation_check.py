@@ -3467,8 +3467,9 @@ MUTATIONS: List[Mutation] = [
     #
     # **One fix here is deliberately unregistered.** `server.py`'s comment above `"assignable"`
     # carried the same false claim as the page and was corrected in the same change (and again in
-    # CHG-20261005-03, when the node panel began to read it), and no mutation of it can be caught: `_console_code()` strips comments from the *console* so a
-    # comment cannot satisfy the console rule, and no guard reads `server.py`'s comments at all.
+    # CHG-20261005-03, when the node panel began to read it), and no mutation of it can be
+    # caught: `_console_code()` strips comments from the *console* so a comment cannot satisfy the
+    # console rule, and no guard reads `server.py`'s comments at all.
     # Writing a second vocabulary check over source-file prose would pin the wording of a comment
     # and nothing else, which is the class this repository's own records call its recurring defect.
     # The page is the copy three surfaces are written against, and the page is the copy pinned.
@@ -3477,7 +3478,7 @@ MUTATIONS: List[Mutation] = [
     # `by_model` carrier, or to the page's "no shipped console reads it" sentences (which no longer
     # say that) cannot turn a guard red. The three that can still fail one are kept.
     #
-    # **The page reads `by_model` in two places** (`drawModels` and the node panel's coder-default
+    # **The page read `by_model` in two places** (`drawModels` and the node panel's coder-default
     # line), and a mutation of one read left the other satisfying the guard, which looks for the
     # identifier in executable page text. CHG-20261005-03 review round 1 therefore gave the page a
     # single read, `byModelOf()`, that both call; the entry below edits that one line.

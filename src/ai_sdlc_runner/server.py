@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import dataclasses
 import errno
+import functools
 import json
 import os
 import queue
@@ -754,12 +755,21 @@ class Runner:
         Three separate critical sections is a check-then-act window: two threads validate the same
         version, both write, and the double-submit the version exists to refuse happens anyway.
         """
+        return self.edit_versioned(version, write)[0]
+
+    def edit_versioned(self, version: int, write):
+        """`edit`, and the version **this** edit produced, read before the lock is let go.
+
+        A caller that reads `state.version` after `edit` returns can get another tab's version:
+        its commit can land between the two. The page adopts the number it is answered with as the
+        version its next save submits, so it must be this edit's own (CHG-20261005-03, round 2).
+        """
         with self._lock:
             self._require_version(version)
             out = write()
             self.state.version += 1
             self._publish()
-            return out
+            return out, self.state.version
 
     def publish_config_change(self) -> None:
         """A configuration edit advances the version and wakes every listener."""
@@ -1216,8 +1226,7 @@ def _refusals_answered(route):
             self._json(409, {"error": str(exc)})
         except Exception as exc:
             self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
-    wrapper.__name__ = route.__name__
-    return wrapper
+    return functools.wraps(route)(wrapper)
 
 
 def make_handler(runner: Runner, operator: Operator,
@@ -1314,8 +1323,8 @@ def make_handler(runner: Runner, operator: Operator,
                     raise ServerError(str(exc))
                 return _reassign()
 
-        out = runner.edit(body.get("version"), under_lock)
-        return {**out, "version": runner.state.version}
+        out, produced = runner.edit_versioned(body.get("version"), under_lock)
+        return {**out, "version": produced}
 
     def _assign_node(body):
         node_id = str(body.get("node_id") or "")
@@ -1385,8 +1394,10 @@ def make_handler(runner: Runner, operator: Operator,
                 raise ServerError(str(exc))
             return _seat_choices()
 
-        out = runner.edit(body.get("version"), write)
-        return {**out, "version": runner.state.version}
+        # Not `_config_edit`: this writes the settings file, which needs neither `held_lock` nor
+        # the store's, only the version check and the advance `edit_versioned` makes.
+        out, produced = runner.edit_versioned(body.get("version"), write)
+        return {**out, "version": produced}
 
     def _route_halt(body):
         """Who a permanent halt of one kind reaches first, for this project (CHG-20260827-19).

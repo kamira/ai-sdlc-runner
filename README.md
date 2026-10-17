@@ -435,22 +435,29 @@ asked, which model answered, and what it said.
 **Click a node** (or Tab to it and press Enter or Space; Escape closes) and its settings open. The
 node's role, mode, gate and what the role may do (spawn, write, execute) are shown and **not
 editable** — they are governance, in `policy.py`. What you can choose is who answers: for a node
-whose mode carries models (`single`, `model_panel`, `pool`) the registry's models, each with its tier,
-effort template and **reach** (where the work goes, and a guessed reach marked as a guess), in order; for the review-seat nodes (`lead_review`, `intake_review`) which
-review dimensions open, in what order, and which models sit on each seat. Saving goes through
-`POST /config/nodes`, `/config/seats` and `/config/dimensions`, and whatever the server refuses —
-a seat that does not exist, a panel below the floor of three without high-risk mode, a list without
-`conformance` (the veto seat, marked as required unless high-risk mode is on), a model listed twice
-or not in the registry — is printed in the panel, in the server's words. The three opt-in seats are
-marked and open only when ticked; each seat's question is shown. A node or seat the plan file sets
-is shown as the plan's and offers no save, because the plan wins. A save in one section leaves
-unsaved edits in the others, is checked against the version the panel was loaded at (so a second
-tab's change refuses it), and says "Saved" or "Not saved" in a live region. A dimension choice is written to the settings file and the next
-walk reads it. The **models list** shows each model's tier, its effort template, and every node
-(with its role) and seat it answers, or says it is used nowhere. The diagram is drawn in the browser
-from `GET /flow`, with no library and nothing fetched from outside this machine; shapes (rectangle
-step, hexagon decision, pill loop, dashed pill end) and the words *gate*, *HALT* and *HERE* carry
-what colour would otherwise carry.
+whose mode carries models (`single`, `model_panel`, `pool`) the registry's models, each with its
+tier, effort template and **reach** (where the work goes, and a guessed reach marked as a guess), in
+order; for the review-seat nodes (`lead_review`, `intake_review`) which review dimensions open, in
+what order, and which models sit on each seat. Saving goes through `POST /config/nodes`,
+`/config/seats` and `/config/dimensions`, and whatever the server refuses — a seat that does not
+exist, a panel below the floor of three without high-risk mode, a list without `conformance` (the
+veto seat, marked as required unless high-risk mode is on), a model listed twice or not in the
+registry — is printed in the panel, in the server's words, including a refusal of the read that
+follows a save. The three opt-in seats are marked and open only when ticked; each seat's question
+is shown. A node or seat the plan file sets is shown as the plan's and offers no save, because the
+plan wins. A save in one section leaves unsaved edits in the others, is checked against the version
+the panel was loaded at (so a second tab's change refuses it, and so does the run moving on, since
+the one version counts both), and says "Saved" or "Not saved" in a live region; a save answered
+after another node's panel opened changes nothing in that panel. Opening a node moves keyboard
+focus to the panel's heading, and closing it returns focus to the node. A dimension choice is
+written to the settings file and the next walk reads it. The **models list** shows each model's
+tier, its effort template, and every node (with its role) and seat it answers, or says it is used
+nowhere; the coder it names is the one the next walk will build with. The diagram is drawn in the
+browser from `GET /flow`, with no library and nothing fetched from outside this machine; shapes
+(rectangle step, hexagon decision, pill loop, dashed pill end) and the words *gate*, *HALT* and
+*HERE* carry what colour would otherwise carry. A visited node also shows a check mark and says
+"visited" in its accessible name; an edge with both ends visited (not necessarily the edge the run
+walked) is drawn thicker and named for a screen reader.
 
 A run in progress can be added to: type more and press *add to the brief*, or attach a spec. Every
 work order from then on carries all of it, numbered, so a reviewer can see that something **arrived
@@ -862,7 +869,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 2957 tests
+pytest -q          # 2966 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

@@ -37,8 +37,8 @@ from test_server import _without_comments  # noqa: E402
 
 PAGE = ROOT / "src" / "ai_sdlc_runner" / "console" / "index.html"
 HARNESS = ROOT / "tests" / "console_harness.js"
-NODE = shutil.which("node") or ("/opt/node22/bin/node" if pathlib.Path("/opt/node22/bin/node").exists()
-                                else None)
+_KNOWN_NODE = pathlib.Path("/opt/node22/bin/node")
+NODE = shutil.which("node") or (str(_KNOWN_NODE) if _KNOWN_NODE.exists() else None)
 needs_node = pytest.mark.skipif(
     NODE is None, reason="`node` is not on PATH (looked at /opt/node22/bin/node too), so the "
                          "page's JavaScript cannot be run here; the static and route tests still do")
@@ -60,8 +60,8 @@ class Console:
         self.settings_path = tmp_path / "settings.json"
         self.db = store.connect(tmp_path / "config.sqlite")
         self.operator = server.Operator.mint(tmp_path)
-        runner = server.Runner(walk=lambda cfg: engine.RunReport(),
-                               make_config=lambda *a, **k: None)
+        runner = self.runner = server.Runner(walk=lambda cfg: engine.RunReport(),
+                                             make_config=lambda *a, **k: None)
         # A plan's assignments, as `cmd_serve` hands them over: merged, and with their provenance.
         merged, source = store.resolve(plan or {}, {})
         self.httpd = server.serve(runner, self.operator, port=0, db=self.db,
@@ -807,3 +807,214 @@ def test_a_settings_file_that_stops_loading_stops_the_walk(tmp_path, monkeypatch
     runner = server.Runner(walk=lambda cfg: engine.RunReport(), make_config=make_config)
     snapshot = runner.start("do it", 0)
     assert snapshot["state"] == engine.STOPPED and "not started" in snapshot["error"], snapshot
+
+
+# ── review round 2 ────────────────────────────────────────────────────────────────────────────
+
+@needs_node
+def test_a_refused_read_after_a_save_is_shown(console):
+    """The seats POST does not read the settings file and the seats GET does, so a save can go
+    through and its read-back be refused. That sentence reaches the alert line, and a dimensions
+    save does not turn it into a TypeError.
+
+    *cut*: drop `if (seatInfoError) panelError(seatInfoError)` from `save()` (the seat case), or
+    the `if (!seatInfo) return` of `renderDimensions` (the dimensions case).
+    """
+    node = _seat_node().id
+    seat = console.harness("readback_refused", node=node, press="seat", seat="risk",
+                           nth=_seat_index("risk"), say="the settings file is invalid")
+    assert seat["status"].startswith("Saved: the models on risk")
+    assert seat["error"] == "the settings file is invalid"
+    dims = console.harness("readback_refused", node=node, press="dimensions",
+                           say="the settings file is invalid")
+    assert dims["error"] == "the settings file is invalid", dims
+    assert "null" not in dims["error"] and "TypeError" not in dims["error"]
+
+
+@needs_node
+def test_a_save_answered_after_another_panel_opened_does_not_re_authorise_that_panel(console):
+    """Save `risk` on one seat node, and open the other seat node before the answer arrives (its
+    read returns the old settings). The late answer must not give the new panel the newer version:
+    saving its still-empty `risk` would then erase what the first save wrote.
+
+    *cut*: drop the `epoch !== panelEpoch` guard in `save()`'s success handler.
+    """
+    seat_nodes = [n.id for n in graph.NODES if n.mode in (graph.SEAT_PANEL, graph.SURVEY)]
+    assert len(seat_nodes) >= 2
+    out = console.harness("late_save", node=seat_nodes[0], other=seat_nodes[1], seat="risk",
+                          model="opus", nth=_seat_index("risk"))
+    assert out["versionAfter"] == out["openedAt"], "the late answer moved the new panel's version"
+    assert out["stored"] == {"risk": ["opus"]}
+    assert out["status"] == "", "the late answer wrote its status into another panel"
+    assert out["stored"] == console.call("/config/nodes")[1]["seat_models"]
+    assert "you answered version" in out["error2"], out
+    assert console.call("/config/nodes")[1]["seat_models"] == {"risk": ["opus"]}
+
+
+@needs_node
+def test_a_panel_opened_first_but_answered_last_does_not_set_the_version(console):
+    """Two nodes opened in a row; the first one's read answers after the second's. Its older
+    answer is dropped whole: the panel on screen keeps the version it read before its own fetch.
+
+    *cut*: drop the `epoch !== panelEpoch` return in `loadConfig()`.
+    """
+    seat_nodes = [n.id for n in graph.NODES if n.mode in (graph.SEAT_PANEL, graph.SURVEY)]
+    out = console.harness("overlap", first=seat_nodes[0], second=seat_nodes[1])
+    assert out["panelVersion"] == out["second"], out
+    assert out["title"].startswith(seat_nodes[1])
+
+
+def test_a_config_write_answers_the_version_its_own_edit_made(console, monkeypatch):
+    """Another tab's commit landing right after this edit's lock is let go must not change what
+    this edit answers: the client adopts that number as its next save's version.
+
+    *cut*: answer `runner.state.version` after the edit in `_config_edit` / `_set_dimensions`.
+    """
+    runner = console.runner
+    real = runner.edit_versioned
+
+    def then_another_tab(version, write):
+        done = real(version, write)
+        runner.publish_config_change()           # the other tab, between release and answer
+        return done
+
+    monkeypatch.setattr(runner, "edit_versioned", then_another_tab)
+    for path, body in (("/config/seats", {"seat": "risk", "model_id": ["opus"]}),
+                       ("/config/dimensions", {"review_dimensions": None})):
+        before = console.call("/run")[1]["version"]
+        code, out = console.call(path, {**body, "version": before})
+        assert code == 200, out
+        assert out["version"] == before + 1, (path, out["version"], before)
+        assert console.call("/run")[1]["version"] == before + 2
+
+
+@needs_node
+def test_opening_a_node_moves_focus_into_its_panel_and_closing_returns_it(console):
+    """Enter on a node puts focus on the panel's heading (a focus target, named by the region),
+    it stays there when the loaded settings redraw the panel, and Escape returns it to the node.
+
+    *cut*: drop the `title.focus()` in `openPanel` (or the `kept` refocus in `renderPanel`).
+    """
+    node = _seat_node().id
+    out = console.harness("opened", node=node)
+    assert out["atOpen"] == {"id": "paneltitle", "tabindex": "-1"}
+    assert out["afterLoad"] == {"id": "paneltitle", "mounted": True}
+    assert out["afterClose"] == node
+    assert 'aria-labelledby="paneltitle"' in PAGE.read_text(encoding="utf-8")
+
+
+@needs_node
+def test_visited_nodes_and_taken_edges_say_so_without_colour(console):
+    """A visited node carries a check mark and "visited" in its accessible name; the node the run is
+    at says HERE and not visited; an edge with both ends visited has an accessible name.
+
+    *cut*: drop the `visited` check mark from `tags`, or the `, visited` from the label, or the
+    `aria-label` on the taken edge.
+    """
+    flow = [n for n in graph.NODES]
+    seen, here = [flow[0].id, flow[1].id], flow[2].id
+    out = console.harness("chart", at=here, visited=seen + [here])
+    assert "\u2713" in out["nodes"][seen[0]]["text"] and "visited" in out["nodes"][seen[0]]["label"]
+    assert "HERE" in out["nodes"][here]["text"] and "visited" not in out["nodes"][here]["label"]
+    unseen = flow[-1].id
+    assert "\u2713" not in out["nodes"][unseen]["text"]
+    assert "visited" not in out["nodes"][unseen]["label"]
+    taken = [e for e in out["edges"] if "taken" in e["cls"]]
+    assert taken and all(e["label"] and e["from"] in e["label"] and e["to"] in e["label"]
+                         for e in taken)
+    assert all(e["label"] is None for e in out["edges"] if "taken" not in e["cls"])
+
+
+def test_the_page_says_only_what_the_taken_check_does():
+    """The comment and legend must not claim an order or a walked edge the code does not check.
+
+    *cut*: put "in order" / "this run took" back.
+    """
+    page = PAGE.read_text(encoding="utf-8")
+    assert "both ends visited, in order" not in page and "an edge this run took" not in page
+    assert "seen.indexOf(e.from) >= 0 && seen.indexOf(e.to) >= 0" in page
+
+
+def _serve_for_console(tmp_path, monkeypatch, capsys):
+    """`cmd_serve`, as far as the arguments it gives `server.serve` and the `make_config` it gives
+    the `Runner`; `real_serve` is the function the test may call afterwards."""
+    real_serve = server.serve
+    seen = {}
+
+    class Catch:
+        def __init__(self, **kw):
+            seen["make_config"] = kw["make_config"]
+
+    def capture(*a, **kw):
+        seen["args"], seen["kw"] = a, kw
+        raise server.ServerError("stopped by the test")
+
+    monkeypatch.setattr(server, "Runner", Catch)
+    monkeypatch.setattr(server, "serve", capture)
+    code = cli.main(["--config", str(tmp_path / "runner.yaml"),
+                     "--settings", str(tmp_path / "settings.json"),
+                     "serve", "--plan", str(tmp_path / "plan.json"),
+                     "--token-dir", str(tmp_path / "tok"),
+                     "--assignment-store", str(tmp_path / "config.sqlite"),
+                     "--ask-journal", str(tmp_path / "asks")])
+    out = capsys.readouterr().out
+    assert code == 2 and "stopped by the test" in out, out
+    monkeypatch.undo()
+    return real_serve, seen, seen["make_config"]
+
+
+def test_the_console_names_the_coder_the_next_walk_will_use(tmp_path, monkeypatch, capsys):
+    """`make_config` re-reads the settings file per walk. The console's coder default read the copy
+    from startup, so after the file changed it named one coder and the walk built with another.
+
+    *cut*: pass `saved` instead of `settings_mod.load(args.settings)` in `coder_default()`.
+    """
+    from test_model_tier_effort import TEMPLATE, _project
+    _project(tmp_path, [dict(id="a", vendor="v", name="n", transport="cli", **TEMPLATE),
+                        dict(id="b", vendor="v", name="n", transport="cli", **TEMPLATE)],
+             saved={"coder_model": "a"})
+    real_serve, seen, make_config = _serve_for_console(tmp_path, monkeypatch, capsys)
+    coder_default = seen["kw"]["coder_default"]
+    path = tmp_path / "settings.json"
+    build_chain = {"engineer_build"} | {n.id for n in graph.NODES if n.follows == "engineer_build"}
+    assert set(coder_default()) == build_chain and coder_default()["engineer_build"] == ["a"]
+
+    path.write_text(json.dumps({"coder_model": "b"}), encoding="utf-8")
+    assert coder_default()["engineer_build"] == ["b"]
+    assert make_config((), (), ()).node_models["engineer_build"] == ["b"]
+
+    # Through the route the page reads, so the model list and the node panel say "b" too.
+    operator = seen["args"][1]
+    runner = server.Runner(walk=lambda cfg: engine.RunReport(), make_config=make_config)
+    httpd = real_serve(runner, operator, **{**seen["kw"], "port": 0})
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{httpd.server_address[1]}/config/nodes")
+        request.add_header("X-Operator-Token", operator.token)
+        with urllib.request.urlopen(request, timeout=10) as response:
+            by_model = json.loads(response.read())["by_model"]
+    finally:
+        httpd.shutdown()
+    assert any(u.get("default") for u in by_model["b"]["nodes"]), by_model
+    assert "a" not in by_model or not any(u.get("default") for u in by_model["a"]["nodes"])
+
+    path.write_text("{not json", encoding="utf-8")
+    assert coder_default() == {}, "a file that does not load starts no walk, so names no coder"
+
+
+def test_the_stop_message_for_a_broken_settings_file_says_only_what_works(
+        tmp_path, monkeypatch, capsys):
+    """The console cannot save the review dimensions while the file does not load (the save reads
+    it first), so the message must not send the operator there.
+
+    *cut*: put "save it again from the console" back in the `CliError` of `make_config`.
+    """
+    from test_model_tier_effort import TEMPLATE, _project
+    _project(tmp_path, [dict(id="a", vendor="v", name="n", transport="cli", **TEMPLATE)])
+    _, _, make_config = _serve_for_console(tmp_path, monkeypatch, capsys)
+    (tmp_path / "settings.json").write_text("{not json", encoding="utf-8")
+    with pytest.raises(cli.CliError) as raised:
+        make_config((), (), ())
+    message = str(raised.value)
+    assert "fix the settings file" in message and "from the console" not in message, message
