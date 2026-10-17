@@ -66,6 +66,9 @@ class El {
   }
   querySelector(sel) { return this.all((c) => c.matches(sel))[0] || null; }
 }
+// Ids the page gives to elements it builds. Looked up in the tree, so an element that is not in it
+// is not found; every other id is a fixed element of the page and is made on first use.
+const BUILT = ["panelerr", "panelok", "paneltitle"];
 const document = {
   get activeElement() { return active; },
   createElement: (t) => new El(t),
@@ -73,6 +76,10 @@ const document = {
   createTextNode: (t) => { const e = new El("#text"); e._text = t; return e; },
   addEventListener: (t, f) => { (docListeners[t] = docListeners[t] || []).push(f); },
   querySelector(sel) {
+    if (sel[0] === "#" && BUILT.indexOf(sel.slice(1)) >= 0) {
+      const root = byId["#panel"];
+      return (root && root.all((c) => c.id === sel.slice(1))[0]) || null;
+    }
     if (sel[0] === "#") return byId[sel] = byId[sel] || Object.assign(new El("div"), { id: sel.slice(1) });
     const flowBox = byId["#flow"];
     return flowBox ? flowBox.querySelector(sel) : null;
@@ -81,6 +88,7 @@ const document = {
 
 let inflight = 0;
 const sent = [];
+const refusing = {};          // path -> sentence: the fake server answer for a route, 409
 const context = vm.createContext({
   document, console, JSON, Math, Object, Array, String, Number, Error, Promise, setTimeout,
   location: { hash: "#token=" + token, pathname: "/", host: base.replace("http://", "") },
@@ -89,7 +97,18 @@ const context = vm.createContext({
   fetch: (path, opts) => {
     inflight++;
     sent.push({ path, method: opts.method, body: opts.body ? JSON.parse(opts.body) : null });
-    return fetch(base + path, opts).finally(() => { inflight--; });
+    // A request counts as in flight until the page has read its body, not only until the headers
+    // arrive: the page's `.then` after `r.json()` is what starts the next request.
+    const counted = (r) => {
+      const read = r.json.bind(r);
+      r.json = () => read().finally(() => { inflight--; });
+      return r;
+    };
+    if (refusing[path]) {
+      return Promise.resolve(counted(new Response(JSON.stringify({ error: refusing[path] }),
+                                                  { status: 409 })));
+    }
+    return fetch(base + path, opts).then(counted, (e) => { inflight--; throw e; });
   },
 });
 vm.runInContext(script.slice(0, script.indexOf("// --- go")), context);
@@ -101,7 +120,12 @@ async function settle() {
     quiet = inflight === 0 ? quiet + 1 : 0;
   }
 }
-const text = (id) => (byId[id] ? byId[id].textContent.replace(/\s+/g, " ").trim() : "");
+const text = (id) => {
+  const e = document.querySelector(id);
+  return e ? e.textContent.replace(/\s+/g, " ").trim() : "";
+};
+const who = (e) => (e ? (e.attrs["aria-label"] || e._text) : null);
+const mounted = (e) => !!e && byId["#panel"].all((c) => c === e).length === 1;
 const find = (root, pred) => root.all(pred)[0];
 const button = (root, label) => find(root, (c) => c.tagName === "button" &&
   (c._text === label || c.attrs["aria-label"] === label));
@@ -157,7 +181,7 @@ async function boot() {
                          boxes: p.all((c) => c.tagName === "input").length };
     }
   } else if (scenario === "drive_save") {          // the page's own save(), with a body of our choosing
-    run("picked = " + JSON.stringify(args.node)); run("renderPanel()");
+    run("openPanel(" + JSON.stringify(args.node) + ")"); await settle();
     run("save(" + JSON.stringify(args.path) + ", " + JSON.stringify(args.body) + ")");
     await settle(); out.error = text("#panelerr");
   } else if (scenario === "save_models") {          // tick a model on a node, press save
@@ -165,7 +189,8 @@ async function boot() {
     const p = byId["#panel"];
     for (const m of args.tick) { const b = box(p, m); b.checked = true; b.onchange(); }
     button(p, "save the models for " + args.node).onclick(); await settle();
-    out.error = text("#panelerr"); out.sent = sent.filter((s) => s.method === "POST");
+    out.error = text("#panelerr"); out.status = text("#panelok");
+    out.sent = sent.filter((s) => s.method === "POST");
   } else if (scenario === "save_dimensions") {      // reorder / untick seats, press save
     run("openPanel(" + JSON.stringify(args.node) + ")"); await settle();
     for (const step of args.steps) {
@@ -175,7 +200,8 @@ async function boot() {
       if (step.tick) { const b = box(p, "open the " + step.tick + " seat"); b.checked = true; b.onchange(); }
     }
     button(byId["#panel"], args.press || "save the review dimensions").onclick(); await settle();
-    out.error = text("#panelerr"); out.sent = sent.filter((s) => s.method === "POST");
+    out.error = text("#panelerr"); out.status = text("#panelok");
+    out.sent = sent.filter((s) => s.method === "POST");
   } else if (scenario === "save_seat_models") {
     run("openPanel(" + JSON.stringify(args.node) + ")"); await settle();
     const p = byId["#panel"];
@@ -184,7 +210,68 @@ async function boot() {
       b.checked = true; b.onchange();
     }
     button(p, "save " + args.seat + " models").onclick(); await settle();
-    out.error = text("#panelerr"); out.sent = sent.filter((s) => s.method === "POST");
+    out.error = text("#panelerr"); out.status = text("#panelok");
+    out.sent = sent.filter((s) => s.method === "POST");
+  }
+  else if (scenario === "two_sections") {          // edit two sections, save one: the other keeps
+    run("openPanel(" + JSON.stringify(args.node) + ")"); await settle();
+    const p = byId["#panel"];
+    const boxes = (q, label) =>
+      q.all((c) => c.tagName === "input" && c.attrs["aria-label"] === label);
+    const seatBox = (a) => boxes(p, a.model)[a.nth];
+    for (const a of args.seats) { seatBox(a).checked = true; seatBox(a).onchange(); }
+    for (const d of args.untick || []) {
+      const b = box(p, "open the " + d + " seat"); b.checked = false; b.onchange();
+    }
+    button(p, "save " + args.seats[0].seat + " models").onclick(); await settle();
+    const q = byId["#panel"];
+    out.status = text("#panelok"); out.error = text("#panelerr");
+    out.focus = who(active); out.focusMounted = mounted(active);
+    out.otherSeatTicked = boxes(q, args.seats[1].model)[args.seats[1].nth].checked;
+    out.dimensionsTicked = (args.untick || []).map(
+      (d) => box(q, "open the " + d + " seat").checked);
+    button(q, "save " + args.seats[1].seat + " models").onclick(); await settle();
+    out.error2 = text("#panelerr"); out.status2 = text("#panelok");
+    out.sent = sent.filter((s) => s.method === "POST");
+  } else if (scenario === "stale_editor") {         // a second tab moves the version
+    run("openPanel(" + JSON.stringify(args.node) + ")"); await settle();
+    out.openedAt = run("state.version");
+    const p = byId["#panel"];
+    for (const m of args.tick) { const b = box(p, m); b.checked = true; b.onchange(); }
+    run('api("POST", "/config/seats",' +
+        ' { seat: "risk", model_id: ["local"], version: state.version })' +
+        '.then(function () { return api("GET", "/run"); }).then(function (s) { state = s; })');
+    await settle();
+    out.movedTo = run("state.version");
+    button(p, "save the models for " + args.node).onclick(); await settle();
+    out.error = text("#panelerr"); out.status = text("#panelok");
+    out.sent = sent.filter((s) => s.method === "POST" && s.path === "/config/nodes");
+  } else if (scenario === "open_refused") {        // GET /config/nodes is refused on open
+    refusing["/config/nodes"] = args.say;
+    run("openPanel(" + JSON.stringify(args.node) + ")"); await settle();
+    out.error = text("#panelerr"); out.panel = text("#panel"); out.hidden = byId["#panel"].hidden;
+  } else if (scenario === "focus") {               // the control acted on keeps focus
+    run("openPanel(" + JSON.stringify(args.node) + ")"); await settle();
+    let p = byId["#panel"];
+    const b = box(p, "open the security seat"); b.checked = true; b.onchange();
+    out.afterTick = { who: who(active), mounted: mounted(active) };
+    button(p, "move security earlier").onclick();
+    out.afterMove = { who: who(active), mounted: mounted(active) };
+    const m = p.all((c) => c.tagName === "input" && c.attrs["aria-label"] === "opus")[args.nth];
+    m.checked = true; m.onchange();
+    out.afterPick = { who: who(active), mounted: mounted(active) };
+    button(p, "save the review dimensions").onclick(); await settle();
+    out.afterSave = { who: who(active), mounted: mounted(active) };
+  } else if (scenario === "live") {                // the two lines a result is announced on
+    run("openPanel(" + JSON.stringify(args.node) + ")"); await settle();
+    out.live = { status: document.querySelector("#panelok").attrs["aria-live"],
+                 error: document.querySelector("#panelerr").attrs.role };
+  } else if (scenario === "plan_seat") {           // a seat the plan sets
+    run("openPanel(" + JSON.stringify(args.node) + ")"); await settle();
+    const p = byId["#panel"];
+    out.text = text("#panel");
+    out.buttons = p.all((c) => c.tagName === "button").map((x) => x._text);
+    out.locked = p.all((c) => c.tagName === "input" && c.disabled).length;
   }
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e.stack); process.exit(1); });

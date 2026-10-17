@@ -111,7 +111,10 @@ raised to the stored `declared_reach` when that is higher (CHG-20261005-01). `le
 
 ### `GET /config/seats`
 The review seats a user may open, and what the settings file chooses now (CHG-20261005-03). Read
-from the settings file on every call. A server started without one answers `409`.
+from the settings file on every call. A server started without a settings file answers `200` with
+the defaults (nothing chosen): this is a read, and only `POST /config/dimensions` needs a file to
+write, so only it is refused there. A settings file that does not load answers `409` with the
+loader's sentence.
 
 ```jsonc
 { "seats": [ { "name", "label", "question", "veto", "opt_in" } ],   // policy.SEATS, in order; only conformance vetoes
@@ -149,10 +152,10 @@ instead of "used nowhere". `node_models` and `source` stay exactly what the plan
 plan file (this change's declaration) or from the store (the project's standing one), and **the plan
 wins**. A console showing the merged result with no provenance could not say that it had — and an
 override nobody can see is worse than no override. **The console this repository ships is that
-console** until CHG-20261005-03: the models list draws the merged assignments through `by_model`,
-and the node panel reads `source` for one sentence only — that the plan sets a node and wins over
-what is saved. `runner run` and `runner serve` each print a count to the terminal; no view lists
-every assignment's provenance.
+console** from CHG-20261005-03: the models list draws the merged assignments through `by_model`,
+and the node panel reads `source` for one sentence only — that the plan sets a node or a seat and
+wins over what is saved, in which case it offers no save. `runner run` and `runner serve` each
+print a count to the terminal; no view lists every assignment's provenance.
 
 **`assignable` is the three modes that do anything with a list.** It is for a client that wants to
 refuse a node before it posts — `POST /config/nodes` refuses the same node anyway, with a `409`
@@ -164,23 +167,18 @@ and this page's claim that the console greys the other four out had nothing to g
 appears in `by_model` even with empty `nodes` and `seats` — that is how "configured but unused"
 becomes visible.
 
-**`known` is built here and read by nothing**, like `assignable` above it and like the
-per-assignment provenance. Inside the branch that builds this answer the key is written on three
-lines — `server.py:1489`, `:1498`, `:1503` — and a **local dict of the same name**, the registry
-index, is built at `:1483` and read at `:1489`, `:1494`, `:1498` and `:1502`. Two of those lines do
-both: `"known": model_id in known` at `:1489` and `"known": label in known` at `:1498` each write
-the key and read the local in one expression. Six lines, eight occurrences, and no split of the
-lines into two sets is right — which is why this record's first count (six writes) and its second
-(three and three) were both refused. No client in this repository reads the key back: the console
-decides "not in the registry" from the model list, not from this.
+**`known` is built here and read by no client in this repository.** The console decides "not in
+the registry" from the model list, not from this key. In the branch that builds this answer the key
+is written in four places — the `node_models` loop, the coding default's loop, the seat loop and the
+loop over registry models nothing uses — and each of the four also reads a local dict of the same
+name, the registry index (three test membership in it, the fourth iterates it), so a count of lines
+that mention `known` counts two different things.
 
 It is **nested** inside `by_model`, and that is why no guard says so: CHG-20260907-28 built a rule
 over this route's keys — the one that holds `source` and `assignable` — and it reads the **top
-level** only. `assignable`'s unread status is held by that guard; this one's is held by this
-paragraph, which is weaker and is the reason it is written here rather than left implied. Whether
-an unread key should ship at all is the question
-CHG-20260907-28 left open for `assignable`; this entry only stops the page implying somebody reads
-this one.
+level** only. That rule, and `test_the_page_documents_this_route_and_promises_no_reader_it_does_not_have`
+over this section, hold what they can; whether an unread nested key should ship at all is a
+question this entry does not settle.
 
 ### `GET /whoami`
 ```jsonc
@@ -241,8 +239,8 @@ snapshot"* the whole time the sentence above said it was one.
 | `POST /run/decide` | `{version, node_id, branch}` | the run is not suspended, or is suspended on a **gate** rather than a tie |
 | `POST /run/proceed` | `{version, node_id?}` | the run is not suspended on findings a seat called **unsafe**, or `node_id` names a different stop. There is no gate to confirm here: the answer is a decision about what was shown, so it is refused at every other shape rather than treated as one |
 | `POST /config/nodes` | `{version, node_id, models: [...]}` | no such node; a node whose **mode ignores** a model list; a model the registry does not have; `models` not a list |
-| `POST /config/seats` | `{version, seat, model_id}` — `model_id` a model id **or a list of them**, in order; empty clears | no such seat; a model the registry does not have; `model_id` neither a string nor a list of strings |
-| `POST /config/dimensions` | `{version, review_dimensions}` — a list of seat names, **in the order they open**, or `null` to clear | the refusals `runner settings` gives, because it saves through `settings.save`: an unknown seat, a seat named twice, an empty list, fewer than the floor (3) without high-risk mode; not a list or `null`; a server started without a settings file. Answers the `GET /config/seats` shape plus `version`, and the **next walk** reads the file, so the choice reaches the next run |
+| `POST /config/seats` | `{version, seat, model_id}` — `model_id` a model id **or a list of them**, in order; empty clears | no such seat; a model the registry does not have; a model listed twice; `model_id` neither a string nor a list of strings |
+| `POST /config/dimensions` | `{version, review_dimensions}` — a list of seat names, **in the order they open**, or `null` to clear | the refusals `runner settings` gives, because it saves through `settings.save`: an unknown seat, a seat named twice, an empty list, fewer than the floor (3) without high-risk mode, a list without `conformance` (the veto seat) outside high-risk mode; not a list or `null`; a server started without a settings file. Answers the `GET /config/seats` shape plus `version`, and the **next walk** reads the file, so the choice reaches the next run |
 | `POST /config/halts` | `{version, kind, recipient?}` | a `kind` that is not one of the six permanent halts. A `recipient` is **never** refused — an organisation names its own functions, and an unrecognised one still reaches somebody because the operator is on every halt. A blank or missing `recipient` clears the route |
 | `POST /run/instruct` | `{version, instruction}` | the instruction is empty — *"an empty instruction says nothing"* |
 | `POST /attachments` | `{version, filename, data}` — `data` is **base64** | the base64 is invalid, or `attachments.py` refuses the type or size |

@@ -56,14 +56,18 @@ def _code():
 class Console:
     """A real server with a store, a registry of two models and a settings file."""
 
-    def __init__(self, tmp_path):
+    def __init__(self, tmp_path, plan=None):
         self.settings_path = tmp_path / "settings.json"
         self.db = store.connect(tmp_path / "config.sqlite")
         self.operator = server.Operator.mint(tmp_path)
         runner = server.Runner(walk=lambda cfg: engine.RunReport(),
                                make_config=lambda *a, **k: None)
+        # A plan's assignments, as `cmd_serve` hands them over: merged, and with their provenance.
+        merged, source = store.resolve(plan or {}, {})
         self.httpd = server.serve(runner, self.operator, port=0, db=self.db,
-                                  settings_path=str(self.settings_path))
+                                  settings_path=str(self.settings_path),
+                                  assignments=merged, plan_assignments=plan or {},
+                                  assignment_source=source)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
         self.base = f"http://127.0.0.1:{self.httpd.server_address[1]}"
         for model in (OPUS, LOCAL):
@@ -197,6 +201,10 @@ def test_opt_in_seats_open_only_when_named(console):
     chosen = ["conformance", "defect", "risk", *opt_in]
     code, out = console.post("/config/dimensions", {"review_dimensions": chosen})
     assert code == 200 and out["review_dimensions"] == chosen, out
+    # And left out, they stay closed: the list the file holds is exactly the one saved.
+    code, out = console.post("/config/dimensions", {"review_dimensions": chosen[:3]})
+    assert code == 200 and out["review_dimensions"] == chosen[:3]
+    assert settings.load(str(console.settings_path)).review_dimensions == tuple(chosen[:3])
 
 
 def test_seat_models_are_distinct_registered_ids_and_the_refusal_is_the_servers(console):
@@ -611,3 +619,191 @@ def test_the_models_list_shows_tier_effort_and_the_nodes_and_seats_each_model_an
     local = models[models.index("local"):models.index("opus")]
     assert "tier low" in local and "no effort control" in local
     assert "nothing dispatches to it" in local, "an unused model must say so"
+
+
+# ── review round 1 (CHG-20261005-03) ──────────────────────────────────────────────────────────
+
+def _seat_node():
+    return next(n for n in graph.NODES if n.mode == graph.SEAT_PANEL)
+
+
+def _seat_index(name):
+    return [s.name for s in policy.SEATS].index(name)
+
+
+@needs_node
+def test_saving_one_section_keeps_the_unsaved_edits_in_the_others(console):
+    """Edit two seats and the dimension list, save one seat: the others still hold their edit, and
+    saving the second then succeeds (its version advanced with the first save).
+
+    *cut*: make `save()` redraw the whole panel (call `renderPanel()` after it) and the second seat,
+    and the unticked `risk`, snap back to what is stored.
+    """
+    out = console.harness("two_sections", node=_seat_node().id, untick=["risk"], seats=[
+        {"seat": "risk", "nth": _seat_index("risk"), "model": "local"},
+        {"seat": "defect", "nth": _seat_index("defect"), "model": "opus"}])
+    assert out["status"].startswith("Saved: the models on risk") and out["error"] == ""
+    assert out["otherSeatTicked"] is True, "saving risk discarded the unsaved edit on defect"
+    assert out["dimensionsTicked"] == [False], "saving risk put the unsaved dimension edit back"
+    assert out["error2"] == "" and out["status2"].startswith("Saved: the models on defect")
+    assert [(s["body"]["seat"], s["body"]["model_id"]) for s in out["sent"]] == [
+        ("risk", ["local"]), ("defect", ["opus"])]
+    assert console.call("/config/nodes")[1]["seat_models"] == {"risk": ["local"],
+                                                                "defect": ["opus"]}
+
+
+@needs_node
+def test_an_editor_submits_the_version_it_opened_from_so_a_second_tab_is_not_overwritten(console):
+    """Open an editor, let another tab change the configuration (the version moves and the page's
+    state follows, as the stream would), then save: the request carries the opened version, the
+    server refuses it, its sentence is on screen and nothing is written.
+
+    *cut*: send `state.version` instead of `panelVersion` in `save()` and the save goes through.
+    """
+    node = _first(lambda m: m == graph.POOL)
+    out = console.harness("stale_editor", node=node.id, tick=["opus"])
+    assert out["movedTo"] > out["openedAt"]
+    assert [s["body"]["version"] for s in out["sent"]] == [out["openedAt"]]
+    assert f"you answered version {out['openedAt']}" in out["error"], out["error"]
+    assert out["status"].startswith("Not saved")
+    assert console.call("/config/nodes")[1]["node_models"] == {}
+
+
+@needs_node
+def test_a_refused_read_while_opening_a_node_is_shown(console):
+    """*cut*: render the panel only after `loadConfig()` resolves (as `openPanel` did) and the
+    refusal has no line to land on: the panel stays closed and the error is lost."""
+    out = console.harness("open_refused", node=_seat_node().id, say="the store is locked")
+    assert out["error"] == "the store is locked"
+    assert out["hidden"] is False and "settings are not loaded" in out["panel"]
+
+
+@pytest.mark.parametrize("content", ["{not json", json.dumps({"review_seats": 0}),
+                                     json.dumps({"review_seats": 13})])
+def test_the_seats_route_answers_a_bad_settings_file_instead_of_dropping_the_connection(
+        console, content):
+    """*cut*: take the `try`/`except` out of `do_GET` and the client sees a dropped connection."""
+    console.settings_path.write_text(content, encoding="utf-8")
+    code, out = console.call("/config/seats")
+    assert code == 409 and "settings" in out["error"], out
+
+
+def test_a_server_with_no_settings_file_answers_the_seats_route_with_the_defaults(tmp_path):
+    """`GET /config/seats` is a read: it answers 200 with defaults, and only a write is refused."""
+    operator = server.Operator.mint(tmp_path)
+    runner = server.Runner(walk=lambda cfg: engine.RunReport(), make_config=lambda *a, **k: None)
+    db = store.connect(tmp_path / "c.sqlite")
+    httpd = server.serve(runner, operator, port=0, db=db)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{httpd.server_address[1]}/config/seats")
+        request.add_header("X-Operator-Token", operator.token)
+        with urllib.request.urlopen(request, timeout=10) as response:
+            body = json.loads(response.read())
+        assert response.status == 200 and body["review_dimensions"] is None
+        assert body["review_seats"] is None and body["floor"] == policy.SEAT_FLOOR
+    finally:
+        httpd.shutdown()
+        db.close()
+
+
+@needs_node
+def test_a_seat_or_node_the_plan_sets_says_so_and_offers_no_save(tmp_path):
+    """`store.resolve` lets the plan win, so a save there would change nothing the run reads.
+
+    *cut*: drop the `fixed` test in `renderSeatEditor` or the node editor and the save button, and
+    the unlocked boxes, come back.
+    """
+    node = _first(lambda m: m == graph.POOL)
+    made = Console(tmp_path, plan={"seat_models": {"defect": ["opus"]},
+                                   "node_models": {node.id: ["local"]}})
+    try:
+        seat = made.harness("plan_seat", node=_seat_node().id)
+        assert "defect — set by the plan" in seat["text"]
+        assert "The plan file sets this seat" in seat["text"]
+        assert "save defect models" not in seat["buttons"]
+        assert "save risk models" in seat["buttons"]
+        assert seat["locked"] == 2, "the plan's seat shows its two registry models, locked"
+        panel = made.harness("panel", ids=[node.id])["panels"][node.id]
+        assert "The plan file sets this node" in panel["text"]
+        assert f"save the models for {node.id}" not in panel["buttons"]
+        # And a seat the plan is silent about is still editable.
+        quiet = next(n for n in graph.NODES if n.mode == graph.SURVEY)
+        assert "save risk models" in made.harness("plan_seat", node=quiet.id)["buttons"]
+    finally:
+        made.close()
+
+
+@needs_node
+def test_the_control_acted_on_keeps_focus_and_a_save_says_what_happened(console):
+    """Ticking a box, moving a row, picking a model and saving each redraw rows; focus lands on the
+    control the user pressed, mounted in the new tree.
+
+    *cut*: drop the `want`/`keyed` restore in `checklist()` and `active` is a removed element.
+    """
+    out = console.harness("focus", node=_seat_node().id, nth=0)
+    assert out["afterTick"] == {"who": "open the security seat", "mounted": True}
+    assert out["afterMove"] == {"who": "move security earlier", "mounted": True}
+    assert out["afterPick"] == {"who": "opus", "mounted": True}
+    assert out["afterSave"] == {"who": "save the review dimensions", "mounted": True}
+
+
+@needs_node
+def test_a_save_and_a_refusal_are_each_stated_in_words_in_a_live_region(console):
+    """*cut*: drop `panelStatus` from `save()`, or the `aria-live` on the status line."""
+    ok = console.harness("save_models", node=_first(lambda m: m == graph.POOL).id, tick=["opus"])
+    assert ok["error"] == "" and ok["status"].startswith("Saved: the models for")
+    refused = console.harness("save_dimensions", node=_seat_node().id, steps=[
+        {"untick": "risk"}, {"untick": "defect"}])
+    assert refused["status"] == "Not saved: the server refused it."
+    assert "below the floor" in refused["error"]
+    live = console.harness("live", node=_seat_node().id)["live"]
+    assert live == {"status": "polite", "error": "alert"}
+
+
+@needs_node
+def test_the_model_picker_shows_where_each_model_sends_the_work(console):
+    """Every row of a picker states `reach`, and says when it is a guess.
+
+    *cut*: drop `reachSpan(m)` from the picker's `fill` (or the guessed note) and these fail.
+    """
+    assert console.post("/models", {"model": {
+        "id": "far", "vendor": "v", "name": "n", "transport": "api",
+        "endpoint": "https://api.example.com/v1", "key_env": "KEY"}})[0] == 200
+    assert console.post("/models", {"model": {
+        "id": "box", "vendor": "v", "name": "n", "transport": "api",
+        "endpoint": "http://gpu-box:8000/v1"}})[0] == 200
+    node = _first(lambda m: m == graph.POOL)
+    text = console.harness("panel", ids=[node.id])["panels"][node.id]["text"]
+    row = lambda m: re.search(m + r" tier .*?(?= (?:far|box|local|opus) tier| save )", text)
+    assert "reach external" in row("far").group(0), text
+    assert "reach internal? guessed from the host name, not measured" in row("box").group(0)
+    assert "reach local" in row("local").group(0)
+
+
+def test_a_settings_file_that_stops_loading_stops_the_walk(tmp_path, monkeypatch, capsys):
+    """`make_config` used to fall back to the settings read at startup, so a malformed file brought
+    back the weaker review the operator had since tightened. Now the walk is not started, and the
+    error is the one `Runner` puts on the console.
+
+    *cut*: put `live = saved` back in the `except` of `make_config` and nothing is raised.
+    """
+    from test_model_tier_effort import TEMPLATE, _project, _serve
+    _project(tmp_path, [dict(id="coder", vendor="v", name="n", transport="cli", **TEMPLATE)],
+             saved={"high_risk_mode": True, "review_seats": 1})
+    code, out, make_config = _serve(tmp_path, monkeypatch, capsys)
+    assert code == 2 and make_config is not None, out
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"review_seats": 5}), encoding="utf-8")
+    cfg = make_config((), (), ())
+    assert cfg.review_seats == 5 and cfg.high_risk_mode is False, "the live file is what is read"
+    path.write_text("{not json", encoding="utf-8")
+    with pytest.raises(cli.CliError) as raised:
+        make_config((), (), ())
+    assert "settings" in str(raised.value) and "not started" in str(raised.value)
+    # Through the runner, as the console shows it: the walk stops and says why.
+    monkeypatch.undo()          # `_serve` swapped the real `Runner` for a catcher
+    runner = server.Runner(walk=lambda cfg: engine.RunReport(), make_config=make_config)
+    snapshot = runner.start("do it", 0)
+    assert snapshot["state"] == engine.STOPPED and "not started" in snapshot["error"], snapshot

@@ -2867,8 +2867,8 @@ def test_every_key_of_the_node_config_route_is_named_by_the_console_or_written_d
 def test_no_fold_named_in_the_node_config_inventory_is_absent_from_the_route_or_the_page():
     """**A reason a reader cannot check is not a reason.**
 
-    Two of the four entries above do not say *"nothing sees this"* — they say the content reaches
-    the page under another key. That is the one claim in the inventory a test can hold, so it is
+    Entries in the inventory above can say *"nothing sees this"* or that the content reaches the
+    page under another key (the inventory is empty now, CHG-20261005-03, and this returns early). That is the one claim in the inventory a test can hold, so it is
     held, the way `test_no_exclusion_is_justified_by_a_flag_the_runner_does_not_have` holds the
     `--json` that was never a flag: a carrier named in a reason must be a key of the **same
     response** and must be named on the page. Both halves matter — a typo'd carrier is not a key,
@@ -2881,9 +2881,9 @@ def test_no_fold_named_in_the_node_config_inventory_is_absent_from_the_route_or_
     and `drawModels` draws both as `use.nodes` and `use.seats` — but that relationship is what the
     reason asserts, not what this proves.
 
-    What no test here can check at all is the other two reasons: whether any client outside this
-    repository reads `assignable`, and where the fact `source` carries does and does not go. Those
-    are claims about the world, and an inventory is what a repository has instead of a test for one.
+    What no test here can check at all is a reason that is a claim about the world, such as whether
+    a client outside this repository reads a key; an inventory is what a repository has instead of
+    a test for one.
     """
     page = _console_code()
     keys = _config_nodes_keys()
@@ -2940,9 +2940,9 @@ def test_the_page_documents_this_route_and_promises_no_reader_it_does_not_have()
     **This holds words, not meaning, and that is the whole of what a test over prose can do.** The
     denials are listed above so a writer changes them deliberately rather than discovering the guard
     by turning it red. What cannot be checked here at all is the other direction - whether some
-    client outside this repository reads `assignable`, and whether `source` really reaches only the
-    terminal. Those are the reasons in `CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE`, and an inventory is
-    what a repository has instead of a test for a claim about the world.
+    client outside this repository reads a key `GET /config/nodes` sends. That is the kind of reason
+    `CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE` holds (it is empty since CHG-20261005-03), and an
+    inventory is what a repository has instead of a test for a claim about the world.
     """
     section = _config_nodes_section()
     sketch = section.split("```jsonc")[1].split("```")[0]

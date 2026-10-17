@@ -3466,8 +3466,8 @@ MUTATIONS: List[Mutation] = [
     # with no per-node configure control for a fortnight and nothing could have said so.
     #
     # **One fix here is deliberately unregistered.** `server.py`'s comment above `"assignable"`
-    # carried the same false claim as the page and is corrected in the same change, and no
-    # mutation of it can be caught: `_console_code()` strips comments from the *console* so a
+    # carried the same false claim as the page and was corrected in the same change (and again in
+    # CHG-20261005-03, when the node panel began to read it), and no mutation of it can be caught: `_console_code()` strips comments from the *console* so a
     # comment cannot satisfy the console rule, and no guard reads `server.py`'s comments at all.
     # Writing a second vocabulary check over source-file prose would pin the wording of a comment
     # and nothing else, which is the class this repository's own records call its recurring defect.
@@ -3475,7 +3475,12 @@ MUTATIONS: List[Mutation] = [
     # CHG-20261005-03 retired six entries of this group: the console's node panel now names every
     # key of `GET /config/nodes`, so the inventory they pin is empty and an edit to it, to the
     # `by_model` carrier, or to the page's "no shipped console reads it" sentences (which no longer
-    # says that) cannot turn a guard red. The three that can still fail one are kept.
+    # say that) cannot turn a guard red. The three that can still fail one are kept.
+    #
+    # **The page reads `by_model` in two places** (`drawModels` and the node panel's coder-default
+    # line), and a mutation of one read left the other satisfying the guard, which looks for the
+    # identifier in executable page text. CHG-20261005-03 review round 1 therefore gave the page a
+    # single read, `byModelOf()`, that both call; the entry below edits that one line.
 
     Mutation(
         "node-config-accounting", "a seventh key joins the route in silence",
@@ -3490,19 +3495,14 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "node-config-accounting", "the console stops naming the one key it draws by name",
         REPO / "src" / "ai_sdlc_runner" / "console" / "index.html",
-        '''  var byModel = assign.by_model || {};''',
-        '''  var byModel = assign.byModel || {};''',
+        '''function byModelOf() { return (assign && assign.by_model) || {}; }''',
+        '''function byModelOf() { return (assign && assign.byModel) || {}; }''',
         "tests/test_server.py::test_every_key_of_the_node_config_route_is_named_by_the_console_or_written_down"),
 
-    # The same edit as "the console stops naming the one key it draws by name", against the other
-    # guard. One console line carries two guarantees — that a named key stays named, and that the
-    # carrier two folds name is one the page still mentions — and reverting it must not look like
-    # reverting only the first. **Named, not drawn**: what these guards prove is that the
-    # identifier occurs in executable page text, and a dead `var schemaNames = ["by_model"]` would
-    # satisfy them while nothing read it. A seat blocked the first draft for saying more than that
-    # and blocked the second for leaving the claim in the prose beside a renamed test.
-    # Separate entries, separate objectors, the way `refusal-routing`
-    # splits its weak rule from its explicit pin.
+    # **Named, not drawn**: what the guard above proves is that the identifier occurs in executable
+    # page text, and a dead `var schemaNames = ["by_model"]` would satisfy it while nothing read it.
+    # A seat blocked the first draft for saying more than that. (The sibling entry that ran the same
+    # edit against the fold guard went with that guard's inventory: it now returns early.)
     Mutation(
         "node-config-accounting", "the page's sketch stops enumerating what the route sends",
         REPO / "docs" / "API.md",

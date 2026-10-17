@@ -1200,6 +1200,26 @@ class Runner:
             return self.state.snapshot()
 
 
+def _refusals_answered(route):
+    """Give a GET route the answers `do_POST` gives (CHG-20261005-03, review round 1).
+
+    A refusal raised while building a read (`GET /config/seats` on a settings file that does not
+    load) must reach the client as a status and a sentence, not as a closed socket the page can only
+    call "Failed to fetch". A dropped connection is left alone: there is no one to answer.
+    """
+    def wrapper(self):
+        try:
+            route(self)
+        except (BrokenPipeError, ConnectionError):
+            raise
+        except ServerError as exc:
+            self._json(409, {"error": str(exc)})
+        except Exception as exc:
+            self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
+    wrapper.__name__ = route.__name__
+    return wrapper
+
+
 def make_handler(runner: Runner, operator: Operator,
                  registry: Optional["models_mod.Registry"] = None,
                  registry_path: Optional[Path] = None,
@@ -1527,6 +1547,7 @@ def make_handler(runner: Runner, operator: Operator,
             pass
 
         # -- routes ------------------------------------------------------------------------
+        @_refusals_answered
         def do_GET(self):                           # noqa: N802 - http.server's spelling
             if not self._guard():
                 return
@@ -1615,16 +1636,14 @@ def make_handler(runner: Runner, operator: Operator,
                     "models": [m.as_dict() for m in reg],
                     # Which source put each assignment there. An override nobody can see is worse
                     # than no override: the plan wins over the store, and a console that showed the
-                    # merged result with no provenance could not say that it had. **The shipped
-                    # console is that console** — it draws `by_model` and no provenance at all
-                    # (CHG-20260907-28). Sent for a client that wants it, and for the view that
-                    # nobody has built yet.
+                    # merged result with no provenance could not say that it had. The node panel
+                    # reads this to say that the plan sets a node or seat and wins
+                    # (CHG-20261005-03); the models list draws `by_model` and no provenance
+                    # (CHG-20260907-28).
                     "source": dict(held.get("source") or {}),
-                    # Which modes do anything with a list, for a client that wants to refuse a node
-                    # before it posts; `POST /config/nodes` refuses the same node anyway. **No
-                    # shipped console reads this.** This comment said the console greys out the rest
-                    # from the day the key shipped, and the console has never had a per-node
-                    # configure control to grey (CHG-20260907-28).
+                    # Which modes do anything with a list, so a client can refuse a node before it
+                    # posts; `POST /config/nodes` refuses the same node anyway. The node panel reads
+                    # this and offers a model editor only for these modes (CHG-20261005-03).
                     "assignable": list(store_mod.MODES_THAT_USE_MODELS),
                 })
             elif path == "/config/seats":

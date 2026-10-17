@@ -2052,11 +2052,15 @@ def cmd_serve(args: argparse.Namespace) -> int:
         # And the settings file, which `POST /config/dimensions` writes (CHG-20261005-03): a
         # review_dimensions choice saved in the console would otherwise change the screen and not
         # the next walk, the defect `current_assignments` already had once.
+        # A file that no longer loads stops the walk. Falling back to `saved` would restore the
+        # startup review settings after they were tightened (high-risk mode off, a seat back, a
+        # vouch revoked), and a walk run under revoked settings cannot be undone. The walk's error
+        # is shown on the console, like any other failed walk.
         try:
             live = settings_mod.load(args.settings)
         except settings_mod.SettingsError as exc:
-            print(f"note: {exc} — this walk uses the settings read at startup")
-            live = saved
+            raise CliError(f"{exc} — this walk is not started; fix the file, or save it again "
+                           f"from the console")
         coder = coder_defaults(current_assignments().get("node_models") or {},
                                store_mod.load_registry(db) or registry, live,
                                agent_command=bool(config.get("agent_command")))

@@ -85,6 +85,8 @@
   .picker .prow .id{font-family:var(--mono)}
   .picker .prow .q{flex-basis:100%}
   .picker .prow.warn{color:var(--wait)}
+  #panel .status{font-size:12px;margin:8px 0 0;font-family:var(--mono)}
+  #panel .status.ok{color:var(--go)}
   button.mv{padding:0 7px;font-size:12px}
   #panel details{margin:6px 0;border-top:1px solid var(--line);padding-top:4px}
   #panel summary{cursor:pointer;font-family:var(--mono);font-size:12px}
@@ -134,10 +136,11 @@
   .mdl{border:1px solid var(--line);border-radius:6px;background:var(--card);margin:0 0 8px;overflow:hidden}
   .mdl .h{display:flex;gap:8px;align-items:baseline;padding:6px 9px;background:var(--soft);font-size:12px}
   .mdl .h .id{font-family:var(--mono);font-size:11.5px;font-weight:600}
-  .mdl .h .reach{margin-left:auto;font-family:var(--mono);font-size:9.5px;padding:1px 6px;border-radius:99px;background:var(--card);border:1px solid var(--line)}
-  .mdl .h .reach.local{color:var(--go)}
-  .mdl .h .reach.internal{color:var(--wait)}
-  .mdl .h .reach.external{color:var(--stop)}
+  .reach{font-family:var(--mono);font-size:9.5px;padding:1px 6px;border-radius:99px;background:var(--card);border:1px solid var(--line)}
+  .mdl .h .reach{margin-left:auto}
+  .reach.local{color:var(--go)}
+  .reach.internal{color:var(--wait)}
+  .reach.external{color:var(--stop)}
   .mdl .u{display:grid;grid-template-columns:62px 1fr;gap:8px;padding:4px 9px;border-top:1px solid var(--line);font-size:11.5px}
   .mdl .u .k{font-family:var(--mono);font-size:10px;color:var(--faint)}
   .mdl .u .v{font-family:var(--mono);font-size:10.5px}
@@ -385,9 +388,9 @@ function drawFlow() {
     if (n.gate) svg("circle", { "class": "gatepin", cx: p.x + W - 9, cy: p.y + 8, r: 2.6 }, g);
     svg("text", { "class": "name", x: p.x + 14, y: p.y + 14 }, g).textContent = n.id;
     // Words for what colour would say: a gate, a halt, and where the run is.
-    var marks = [(n.role || "runner") + " · " + n.mode];
+    var who = (n.role || "runner") + " · " + n.mode;
     var tags = (n.gate ? "gate " : "") + (n.permanent ? "HALT " : "") + (n.id === here ? "HERE" : "");
-    svg("text", { "class": "who", x: p.x + 14, y: p.y + 25 }, g).textContent = marks[0];
+    svg("text", { "class": "who", x: p.x + 14, y: p.y + 25 }, g).textContent = who;
     if (tags) svg("text", { "class": "tag", x: p.x + W - 14, y: p.y + 25,
                             "text-anchor": "end" }, g).textContent = tags.trim();
     function open() { openPanel(n.id); }
@@ -417,7 +420,7 @@ function drawModels() {
   var box = $("#models");
   if (!box || !assign) return;
   box.innerHTML = "";
-  var byModel = assign.by_model || {};
+  var byModel = byModelOf();
   var meta = {};
   (assign.models || []).forEach(function (m) { meta[m.id] = m; });
 
@@ -439,24 +442,7 @@ function drawModels() {
       vendor.className = "muted";
       vendor.textContent = m.vendor + " · " + m.transport;
       h.appendChild(vendor);
-      var reach = document.createElement("span");
-      reach.className = "reach " + m.reach;
-      // The one fact worth never having to infer: does work sent here leave this machine?
-      reach.textContent = m.reach;
-      reach.title = m.leaves_this_machine
-        ? "work orders sent to this model leave this machine"
-        : "runs on this machine; nothing leaves it";
-      // **A guessed reach says so** (CHG-20260903-39). `internal` from a dotless host is a
-      // judgement, and what it buys is the exemption from the refusal that an external endpoint
-      // must name a key variable. `internal_by_guess`'s docstring says the console names these;
-      // measured, its only caller was a stdout footer and this page rendered `reach` as a fact.
-      if (m.reach_guessed) {
-        reach.textContent = m.reach + "?";
-        reach.title = "guessed from a host name with no dot in it, not measured. " +
-          "If this host resolves publicly the grade is wrong, and it is what exempts " +
-          "this model from having to name a key variable. " + reach.title;
-      }
-      h.appendChild(reach);
+      h.appendChild(reachSpan(m));
     } else {
       var gone = document.createElement("span");
       gone.className = "reach external";
@@ -526,13 +512,39 @@ function drawLegend() {
 // can be chosen is which models answer the node, and which review dimensions open on the seat
 // nodes. Every save is a route that already validates; whatever the server refuses is put on
 // screen word for word, and nothing here decides on the server's behalf.
-var picked = null, seatInfo = null, seatInfoError = "";
+var picked = null, seatInfo = null, seatInfoError = "", configOk = false, panelVersion = null;
 
 function el(tag, cls, text) {
   var e = document.createElement(tag);
   if (cls) e.className = cls;
   if (text !== undefined) e.textContent = text;
   return e;
+}
+
+// The one place `by_model` is read: the models list and the node panel both draw from it.
+function byModelOf() { return (assign && assign.by_model) || {}; }
+
+// Where work sent to this model goes, in words (not colour alone) and with the same tooltip
+// everywhere the console shows a model: the models list and every row of the pickers.
+function reachSpan(m) {
+  var reach = document.createElement("span");
+  reach.className = "reach " + m.reach;
+  // The one fact worth never having to infer: does work sent here leave this machine?
+  reach.textContent = m.reach;
+  reach.title = m.leaves_this_machine
+    ? "work orders sent to this model leave this machine"
+    : "runs on this machine; nothing leaves it";
+  // **A guessed reach says so** (CHG-20260903-39). `internal` from a dotless host is a
+  // judgement, and what it buys is the exemption from the refusal that an external endpoint
+  // must name a key variable. `internal_by_guess`'s docstring says the console names these;
+  // measured, its only caller was a stdout footer and this page rendered `reach` as a fact.
+  if (m.reach_guessed) {
+    reach.textContent = m.reach + "?";
+    reach.title = "guessed from a host name with no dot in it, not measured. " +
+      "If this host resolves publicly the grade is wrong, and it is what exempts " +
+      "this model from having to name a key variable. " + reach.title;
+  }
+  return reach;
 }
 
 function modelMeta(id) {
@@ -545,156 +557,235 @@ function effortOf(m) {
                                                     : "no effort control";
 }
 
-// A checkbox list over the registry. What is ticked is a list **in order** — `model_panel` voices
-// and a seat's sessions both are — so a ticked row carries up / down buttons.
-function picker(initial) {
-  var registered = ((assign && assign.models) || []).map(function (m) { return m.id; });
-  var order = initial.filter(function (id) { return registered.indexOf(id) >= 0; });
-  // A seat can hold a bare command line set from the CLI. `POST /config/seats` only takes registry
-  // ids, so saving replaces it; the page says so rather than dropping it unannounced.
-  var foreign = initial.filter(function (id) { return registered.indexOf(id) < 0; });
-  var root = el("div", "picker");
+// An ordered checklist over `all`. What is ticked is a list **in order** — a `model_panel`'s
+// voices, a seat's sessions and the opening review dimensions all are — so a ticked row carries
+// up / down buttons. Every change redraws the rows, so the control the user acted on is found
+// again by its key and given focus back: a keyboard or screen-reader user keeps their place
+// (CHG-20261005-03).
+function checklist(order, all, o) {
+  var root = el("div", "picker"), want = null;
   function draw() {
     root.innerHTML = "";
-    foreign.forEach(function (label) {
-      root.appendChild(el("div", "prow warn",
-        "not in the registry, and saving replaces it: " + label));
-    });
-    var rows = order.concat(registered.filter(function (id) { return order.indexOf(id) < 0; }));
+    var keyed = {};
+    if (o.head) o.head(root);
+    var rows = order.concat(all.filter(function (id) { return order.indexOf(id) < 0; }));
     rows.forEach(function (id) {
-      var m = modelMeta(id), on = order.indexOf(id) >= 0;
-      var row = el("div", "prow");
-      var lab = el("label");
-      var box = el("input"); box.type = "checkbox"; box.checked = on;
-      box.setAttribute("aria-label", id);
+      var on = order.indexOf(id) >= 0, row = el("div", "prow"), lab = el("label");
+      var box = el("input"); box.type = "checkbox"; box.checked = on; box.disabled = !!o.locked;
+      box.setAttribute("aria-label", o.box(id));
       box.onchange = function () {
         if (box.checked) order.push(id); else order.splice(order.indexOf(id), 1);
-        draw();
+        want = "box " + id; draw();
       };
+      keyed["box " + id] = box;
       lab.appendChild(box);
       lab.appendChild(el("span", "id", " " + id));
       row.appendChild(lab);
-      row.appendChild(el("span", "muted", "tier " + tierOf(m) + " · effort: " + effortOf(m)));
-      if (on) {
-        [["↑", -1, "move " + id + " earlier"], ["↓", 1, "move " + id + " later"]]
-          .forEach(function (mv) {
-            var b = el("button", "mv", mv[0]); b.type = "button";
-            b.setAttribute("aria-label", mv[2]);
-            b.onclick = function () {
-              var i = order.indexOf(id), j = i + mv[1];
-              if (j < 0 || j >= order.length) return;
-              order[i] = order[j]; order[j] = id; draw();
-            };
-            row.appendChild(b);
-          });
+      o.fill(row, id);
+      if (on && !o.locked) {
+        [-1, 1].forEach(function (dir) {
+          var b = el("button", "mv", dir < 0 ? "↑" : "↓"); b.type = "button";
+          b.setAttribute("aria-label", o.move(id, dir));
+          b.onclick = function () {
+            var i = order.indexOf(id), j = i + dir;
+            if (j < 0 || j >= order.length) return;
+            order[i] = order[j]; order[j] = id;
+            want = "move " + id + " " + dir; draw();
+          };
+          keyed["move " + id + " " + dir] = b;
+          row.appendChild(b);
+        });
       }
       root.appendChild(row);
     });
-    if (!registered.length) {
-      root.appendChild(el("p", "muted", "No models are registered, so there is nothing to choose."));
-    }
+    if (o.tail) o.tail(root);
+    if (want && keyed[want] && keyed[want].focus) keyed[want].focus();
+    want = null;
   }
   draw();
-  return { root: root, get: function () { return order.slice(); } };
+  return { root: root, get: function () { return order.slice(); },
+           reset: function (ids) { order = ids.slice(); draw(); } };
+}
+
+// The registry as a checklist. `locked` is a node or seat the plan sets: shown, not editable.
+function picker(initial, locked) {
+  var registered = ((assign && assign.models) || []).map(function (m) { return m.id; });
+  // A seat can hold a bare command line set from the CLI. `POST /config/seats` only takes registry
+  // ids, so saving replaces it; the page says so rather than dropping it unannounced.
+  var foreign = [];
+  function known(ids) {
+    foreign = ids.filter(function (id) { return registered.indexOf(id) < 0; });
+    return ids.filter(function (id) { return registered.indexOf(id) >= 0; });
+  }
+  var list = checklist(known(initial), registered, {
+    locked: locked,
+    box: function (id) { return id; },
+    move: function (id, dir) { return "move " + id + (dir < 0 ? " earlier" : " later"); },
+    head: function (root) {
+      foreign.forEach(function (label) {
+        root.appendChild(el("div", "prow warn", locked
+          ? "set by the plan, and not in the registry: " + label
+          : "not in the registry, and saving replaces it: " + label));
+      });
+    },
+    fill: function (row, id) {
+      var m = modelMeta(id);
+      row.appendChild(el("span", "muted", "tier " + tierOf(m) + " · effort: " + effortOf(m)));
+      // Choosing a model is choosing where the work order goes, so the choice shows it: the same
+      // badge as the models list, and a guess said to be a guess (CHG-20260903-39).
+      if (m) {
+        row.appendChild(el("span", "muted", "reach"));
+        row.appendChild(reachSpan(m));
+        if (m.reach_guessed) {
+          row.appendChild(el("span", "muted", "guessed from the host name, not measured"));
+        }
+      }
+    },
+    tail: function (root) {
+      if (!registered.length) {
+        root.appendChild(el("p", "muted",
+          "No models are registered, so there is nothing to choose."));
+      }
+    }
+  });
+  return { root: list.root, get: list.get, reset: function (ids) { list.reset(known(ids)); } };
 }
 
 function panelError(text) { var e = $("#panelerr"); if (e) e.textContent = text || ""; }
 
-// Every save ends here. The server's refusal is shown as it was written; the new version is taken
-// from the answer so a second save does not trip the staleness check it just advanced.
-function save(path, body, then) {
-  panelError("");
-  if (!state) { panelError("the run state has not loaded yet"); return; }
-  body.version = state.version;
+// What happened to the last save, in words: "Saved" or "Not saved", beside the server's own
+// sentence when it refused. A live region, so it is announced, and text, so it is not colour alone.
+function panelStatus(text, ok) {
+  var e = $("#panelok");
+  if (!e) return;
+  e.textContent = text || "";
+  e.className = "status" + (ok ? " ok" : "");
+  if (text && e.scrollIntoView) e.scrollIntoView({ block: "nearest" });
+}
+
+// Every save ends here. It submits the version this panel was **loaded at**, not the latest one
+// streamed since: a second tab's change moves the version, the server refuses the stale write and
+// its sentence is shown, instead of this panel overwriting what it never saw. A save of ours
+// advances that version to the one the server answers with, so the next save in this panel
+// is not mistaken for a stale one. Nothing is rebuilt but what `o.after` redraws, so a save in one
+// section leaves the unsaved edits in the others alone.
+function save(path, body, o) {
+  o = o || { label: "the settings" };
+  panelError(""); panelStatus("");
+  if (panelVersion === null) {
+    panelError("this panel has not loaded the configuration yet");
+    return;
+  }
+  body.version = panelVersion;
   api("POST", path, body).then(function (out) {
-    if (out && typeof out.version === "number") state.version = out.version;
-    return refreshConfig();
-  }).then(function () { if (then) then(); panelError(""); }).catch(function (e) {
+    if (out && typeof out.version === "number") {
+      panelVersion = out.version;
+      if (state) state.version = out.version;
+    }
+    panelStatus("Saved: " + o.label + " (version " + panelVersion + ").", true);
+    return loadConfig(true).then(function () {
+      var again = o.after && o.after();
+      if (again && again.focus) again.focus();
+    }, function (e) {
+      panelError("saved, but the settings could not be read back: " + e.message);
+    });
+  }, function (e) {
+    panelStatus("Not saved: the server refused it.");
     panelError(e.message);
-  });
+  }).catch(function (e) { panelError(e.message); });
 }
 
 function seatDefaults() {
   // A count opens a prefix of the seats that are not opt-in; those open only when named.
-  var all = seatInfo.seats.filter(function (s) { return !s.opt_in; })
+  var open = seatInfo.seats.filter(function (s) { return !s.opt_in; })
     .map(function (s) { return s.name; });
-  return all.slice(0, seatInfo.review_seats || seatInfo.floor);
+  return open.slice(0, seatInfo.review_seats || seatInfo.floor);
 }
 
-function renderSeatEditor(host) {
+function renderDimensions(host) {
+  host.innerHTML = "";
   host.appendChild(el("h3", null, "review dimensions"));
-  if (!seatInfo) {
-    host.appendChild(el("p", "err", seatInfoError || "the seat list is not available"));
-    return;
-  }
   var set = seatInfo.review_dimensions;
   host.appendChild(el("p", "muted", set
     ? "Opening, in this order: " + set.join(", ") + "."
     : "Not chosen: the first " + (seatInfo.review_seats || seatInfo.floor) +
-      " seats open. Choosing here replaces that, and it needs at least " + seatInfo.floor +
-      " unless high-risk mode is on (" + (seatInfo.high_risk_mode ? "it is" : "it is off") + ")."));
-  var order = (set || seatDefaults()).slice();
-  var list = el("div", "picker");
-  function draw() {
-    list.innerHTML = "";
-    var names = seatInfo.seats.map(function (s) { return s.name; });
-    var rows = order.concat(names.filter(function (n) { return order.indexOf(n) < 0; }));
-    rows.forEach(function (name) {
+      " seats that are not opt-in open. Choosing here replaces that, and it needs at least " +
+      seatInfo.floor + " unless high-risk mode is on (" +
+      (seatInfo.high_risk_mode ? "it is" : "it is off") + ")."));
+  var list = checklist((set || seatDefaults()).slice(),
+                       seatInfo.seats.map(function (s) { return s.name; }), {
+    box: function (name) { return "open the " + name + " seat"; },
+    move: function (name, dir) { return "move " + name + (dir < 0 ? " earlier" : " later"); },
+    fill: function (row, name) {
       var s = seatInfo.seats.filter(function (x) { return x.name === name; })[0];
-      var on = order.indexOf(name) >= 0, row = el("div", "prow");
-      var lab = el("label"), box = el("input"); box.type = "checkbox"; box.checked = on;
-      box.setAttribute("aria-label", "open the " + name + " seat");
-      box.onchange = function () {
-        if (box.checked) order.push(name); else order.splice(order.indexOf(name), 1);
-        draw();
-      };
-      lab.appendChild(box);
-      lab.appendChild(el("span", "id", " " + name));
-      row.appendChild(lab);
       row.appendChild(el("span", "muted", s.label +
         (s.veto ? " · veto seat, required unless high-risk mode is on" : "") +
         (s.opt_in ? " · opt-in, open only when ticked" : "")));
       row.appendChild(el("span", "muted q", s.question));
       row.title = s.question;
-      if (on) {
-        [["↑", -1], ["↓", 1]].forEach(function (mv) {
-          var b = el("button", "mv", mv[0]); b.type = "button";
-          b.setAttribute("aria-label", "move " + name + (mv[1] < 0 ? " earlier" : " later"));
-          b.onclick = function () {
-            var i = order.indexOf(name), j = i + mv[1];
-            if (j < 0 || j >= order.length) return;
-            order[i] = order[j]; order[j] = name; draw();
-          };
-          row.appendChild(b);
-        });
-      }
-      list.appendChild(row);
-    });
-  }
-  draw();
-  host.appendChild(list);
+    }
+  });
+  host.appendChild(list.root);
   var row = el("div", "row");
   var go = el("button", "p", "save the review dimensions"); go.type = "button";
   go.onclick = function () {
-    save("/config/dimensions", { review_dimensions: order.slice() });
+    save("/config/dimensions", { review_dimensions: list.get() }, {
+      label: "the review dimensions", after: function () { renderDimensions(host); return host.go; }
+    });
   };
   var clear = el("button", null, "clear (back to the default prefix)"); clear.type = "button";
-  clear.onclick = function () { save("/config/dimensions", { review_dimensions: null }); };
+  clear.onclick = function () {
+    save("/config/dimensions", { review_dimensions: null }, {
+      label: "the review dimensions, cleared",
+      after: function () { renderDimensions(host); return host.clear; }
+    });
+  };
+  host.go = go; host.clear = clear;
   row.appendChild(go); row.appendChild(clear);
   host.appendChild(row);
+}
+
+function planSets(key) { return ((assign && assign.source) || {})[key] === "plan"; }
+
+function renderSeatEditor(host) {
+  if (!seatInfo) {
+    host.appendChild(el("h3", null, "review dimensions"));
+    host.appendChild(el("p", "err", seatInfoError || "the seat list is not available"));
+    return;
+  }
+  var dims = el("div");
+  host.appendChild(dims);
+  renderDimensions(dims);
 
   host.appendChild(el("h3", null, "models on each seat"));
   host.appendChild(el("p", "muted",
     "A seat passes only when every model on it passes. No model means the default backend."));
   seatInfo.seats.forEach(function (s) {
-    var d = el("details"), sum = el("summary", null, s.name);
-    d.appendChild(sum);
-    var chosen = ((assign && assign.seat_models) || {})[s.name] || [];
-    var pk = picker(chosen);
+    // The plan wins over the store for a seat as for a node (`store.resolve`), so a save here
+    // would write a value nothing reads. It is not offered.
+    var fixed = planSets("seat_models." + s.name);
+    var d = el("details");
+    d.appendChild(el("summary", null, s.name + (fixed ? " — set by the plan" : "")));
+    var pk = picker(((assign && assign.seat_models) || {})[s.name] || [], fixed);
+    if (fixed) {
+      d.appendChild(el("p", "muted", "The plan file sets this seat, and the plan wins over " +
+        "anything saved here: a save would change the store and not the next run. Change the " +
+        "seat in the plan file."));
+    }
     d.appendChild(pk.root);
-    var b = el("button", null, "save " + s.name + " models"); b.type = "button";
-    b.onclick = function () { save("/config/seats", { seat: s.name, model_id: pk.get() }); };
-    d.appendChild(b);
+    if (!fixed) {
+      var b = el("button", null, "save " + s.name + " models"); b.type = "button";
+      b.onclick = function () {
+        save("/config/seats", { seat: s.name, model_id: pk.get() }, {
+          label: "the models on " + s.name,
+          after: function () {
+            pk.reset(((assign && assign.seat_models) || {})[s.name] || []);
+            return b;
+          }
+        });
+      };
+      d.appendChild(b);
+    }
     host.appendChild(d);
   });
 }
@@ -716,6 +807,14 @@ function renderPanel() {
   head.appendChild(x);
   box.appendChild(head);
 
+  // Both lines sit under the title, where the result of a save is seen, not at the foot of a
+  // fifteen-seat list. They exist before anything is fetched, so a refusal has a place to go.
+  var status = el("p", "status"); status.id = "panelok";
+  status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
+  box.appendChild(status);
+  var err = el("p", "err"); err.id = "panelerr"; err.setAttribute("role", "alert");
+  box.appendChild(err);
+
   // Read-only: what the node is. Governance lives in policy.py and graph.py, not here.
   var dl = el("dl", "facts");
   function fact(k, v) { dl.appendChild(el("dt", null, k)); dl.appendChild(el("dd", null, v)); }
@@ -730,9 +829,10 @@ function renderPanel() {
       }).join(" · ")
     : "no role, so nothing is carried");
   // CHG-20261005-01: a node with no assignment may still be built by the coding role default.
-  // Shown as a default, never as an assignment: it is not in node_models, and saving does not make it one.
+  // Shown as a default, never as an assignment: it is not in node_models, and saving does not
+  // make it one.
   var defaults = [];
-  var byModel = (assign && assign.by_model) || {};
+  var byModel = byModelOf();
   Object.keys(byModel).sort().forEach(function (mid) {
     ((byModel[mid] || {}).nodes || []).forEach(function (u) {
       if (u.node_id === n.id && u.default) defaults.push(mid);
@@ -749,38 +849,59 @@ function renderPanel() {
 
   var editor = el("div", "editor");
   var assignable = (assign && assign.assignable) || [];
-  if (n.mode === "seat_panel" || n.mode === "survey") {
+  if (!configOk) {
+    editor.appendChild(el("p", "muted", "The model and seat settings are not loaded."));
+  } else if (n.mode === "seat_panel" || n.mode === "survey") {
     renderSeatEditor(editor);
   } else if (assignable.indexOf(n.mode) >= 0) {
     editor.appendChild(el("h3", null, "models for " + n.id));
-    var src = ((assign && assign.source) || {})["node_models." + n.id];
-    if (src === "plan") {
-      editor.appendChild(el("p", "muted",
-        "The plan file sets this node, and the plan wins over what is saved here."));
+    var fixed = planSets("node_models." + n.id);
+    if (fixed) {
+      editor.appendChild(el("p", "muted", "The plan file sets this node, and the plan wins over " +
+        "anything saved here, so no save is offered. Change the node in the plan file."));
     }
-    var pk = picker(((assign && assign.node_models) || {})[n.id] || []);
+    var pk = picker(((assign && assign.node_models) || {})[n.id] || [], fixed);
     editor.appendChild(pk.root);
-    var b = el("button", "p", "save the models for " + n.id); b.type = "button";
-    b.onclick = function () { save("/config/nodes", { node_id: n.id, models: pk.get() }); };
-    editor.appendChild(b);
+    if (!fixed) {
+      var b = el("button", "p", "save the models for " + n.id); b.type = "button";
+      b.onclick = function () {
+        save("/config/nodes", { node_id: n.id, models: pk.get() }, {
+          label: "the models for " + n.id,
+          after: function () {
+            pk.reset(((assign && assign.node_models) || {})[n.id] || []);
+            return b;
+          }
+        });
+      };
+      editor.appendChild(b);
+    }
   } else {
     editor.appendChild(el("p", "muted",
       "A " + n.mode + " node takes no model list, so there is nothing to choose here."));
   }
   box.appendChild(editor);
-  var err = el("p", "err"); err.id = "panelerr"; err.setAttribute("role", "alert");
-  box.appendChild(err);
   if (title.scrollIntoView) title.scrollIntoView({ block: "nearest" });
 }
 
-function refreshConfig() {
+// Reads the configuration the panel and the models list draw from. `panelVersion` is the run
+// version read **before** the fetch, so a change landing during it makes the next save stale and
+// refused rather than silently included. A save passes `keep`: its own answer already set the
+// version, and the unsaved editors beside it were drawn from the older one.
+function loadConfig(keep) {
+  var at = state ? state.version : null;
   return api("GET", "/config/nodes").then(function (a) {
     assign = a;
     return api("GET", "/config/seats").then(function (s) {
       seatInfo = s; seatInfoError = "";
     }, function (e) { seatInfo = null; seatInfoError = e.message; });
-  }).then(function () { drawModels(); renderPanel(); });
+  }).then(function () {
+    configOk = true;
+    if (!keep) panelVersion = at;
+    drawModels();
+  });
 }
+
+function refreshConfig() { return loadConfig().then(renderPanel); }
 
 // The panel opens beside the flow, not under it: with the flow expanded to the page width the panel
 // would sit below the chart and the node that opened it would scroll away, so opening one narrows it.
@@ -789,18 +910,21 @@ function setExpanded(on) {
   app.className = on ? "wide" : "";
   b.setAttribute("aria-pressed", on ? "true" : "false");
   b.textContent = on ? "collapse" : "expand";
-  b.setAttribute("aria-label", on ? "return the flow to its column" : "expand the flow to the full page width");
+  b.setAttribute("aria-label", on ? "return the flow to its column"
+                                 : "expand the flow to the full page width");
   drawFlow();
 }
 
 function openPanel(id) {
-  picked = id;
+  picked = id; configOk = false; panelVersion = null;
   if ($("#app").className === "wide") setExpanded(false);
   drawFlow();
   var again = document.querySelector('[data-node="' + id + '"]');
   if (again && again.focus) again.focus();
   if (again && again.scrollIntoView) again.scrollIntoView({ block: "nearest", inline: "nearest" });
-  refreshConfig().catch(function (e) { panelError(e.message); });
+  // The panel is drawn before the fetch, so a refusal of `GET /config/nodes` has a line to land on.
+  renderPanel();
+  loadConfig().then(renderPanel, function (e) { panelError(e.message); });
 }
 
 function closePanel() {
