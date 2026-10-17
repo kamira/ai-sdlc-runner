@@ -1033,3 +1033,55 @@ def test_every_text_mode_subprocess_run_names_its_encoding():
         names = {k.arg for k in call.keywords}
         if names & {"text", "universal_newlines"}:
             assert "encoding" in names, f"line {call.lineno}: subprocess.run(text=True) names no encoding"
+
+
+def test_a_save_goes_through_a_temp_file_and_replace_and_never_truncates_the_target(
+        tmp_path, monkeypatch):
+    """A reader racing the writer sees the old file or the new one, never a partial or empty one
+    (round 4). The write is paused between the temp file's creation and the rename, and the target
+    is read there.
+
+    *cut*: write the target directly (`paths.write_text(p, ...)`) in `settings.save` and the target
+    is empty at the pause.
+    """
+    from ai_sdlc_runner import paths
+    target = tmp_path / "settings.json"
+    settings.save(settings.Settings(high_risk_mode=True, review_dimensions=None), str(target))
+    old = target.read_text(encoding="utf-8")
+    seen = {}
+    real_replace = paths.replace
+
+    def paused(src, dst):
+        seen["target"] = target.read_text(encoding="utf-8")
+        seen["loaded"] = settings.load(str(target))
+        seen["staging_exists"] = pathlib.Path(src).exists() and pathlib.Path(src) != target
+        real_replace(src, dst)
+
+    monkeypatch.setattr(paths, "replace", paused)
+    settings.save(settings.Settings(high_risk_mode=False), str(target))
+    assert seen["target"] == old and seen["target"].strip(), seen
+    assert seen["loaded"].high_risk_mode is True
+    assert seen["staging_exists"]
+    assert settings.load(str(target)).high_risk_mode is False
+    assert [p.name for p in tmp_path.iterdir()] == ["settings.json"], "a temp file was left behind"
+
+
+def test_an_existing_empty_settings_file_stops_the_walk_and_does_not_run_on_defaults(
+        tmp_path, monkeypatch, capsys):
+    """*cut*: put `return Settings()` back for an empty file in `settings.load` and `make_config`
+    returns instead of raising."""
+    from test_model_tier_effort import TEMPLATE, _project
+    _project(tmp_path, [dict(id="a", vendor="v", name="n", transport="cli", **TEMPLATE)])
+    _, _, make_config = _serve_for_console(tmp_path, monkeypatch, capsys)
+    for body in ("", "  \n"):
+        (tmp_path / "settings.json").write_text(body, encoding="utf-8")
+        with pytest.raises(cli.CliError) as raised:
+            make_config((), (), ())
+        assert "empty" in str(raised.value) and "this walk is not started" in str(raised.value)
+    with pytest.raises(settings.SettingsError):
+        settings.load(str(tmp_path / "settings.json"))
+
+
+def test_a_missing_settings_file_still_means_the_defaults(tmp_path):
+    """*cut*: make `load` raise for a missing file and this fails."""
+    assert settings.load(str(tmp_path / "nope.json")) == settings.Settings()

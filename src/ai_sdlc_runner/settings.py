@@ -227,16 +227,20 @@ class Settings:
 def load(path: str = DEFAULT_PATH) -> Settings:
     """Read the settings file, or the defaults.
 
-    A missing file is the defaults, and so is an empty one. A file that **exists and is malformed**
-    is an error rather than the defaults: silently falling back would make a typo indistinguishable
-    from a deliberate choice, and two of the six settings here relax a refusal.
+    A missing file is the defaults. A file that **exists and is malformed** is an error rather than
+    the defaults: silently falling back would make a typo indistinguishable from a deliberate
+    choice, and two of the six settings here relax a refusal. **An existing file that is empty is
+    malformed** (CHG-20261005-03, round 4): it is what an interrupted in-place write leaves, and
+    reading it as the defaults would run a walk that cannot be undone with `high_risk_mode` off and
+    the operator's seats gone.
     """
     p = Path(path)
     if not p.is_file():
         return Settings()
     text = p.read_text(encoding="utf-8").strip()
     if not text:
-        return Settings()
+        raise SettingsError(f"{path} exists but is empty. Fix it or delete it — an empty file is "
+                            f"not the defaults; this runner will not guess what it meant.")
     try:
         raw = json.loads(text)
     except json.JSONDecodeError as exc:
@@ -376,7 +380,11 @@ def save(settings: Settings, path: str = DEFAULT_PATH) -> None:
     _check_dimensions(settings.review_dimensions, settings.high_risk_mode, where=path)
     p = Path(path)
     paths.makedirs(p.parent)
-    paths.write_text(p, json.dumps(settings.as_dict(), indent=2, sort_keys=True) + "\n")
+    # Written beside the file and moved onto it: `paths.write_text` truncates first, and a walk
+    # re-reads this file without the runner's lock (CHG-20261005-03, round 4).
+    staging = p.with_name(p.name + ".writing")
+    paths.write_text(staging, json.dumps(settings.as_dict(), indent=2, sort_keys=True) + "\n")
+    paths.replace(staging, p)
 
 
 def edit(settings: Settings, *, input_fn=input, stream_out=None) -> Optional[Settings]:

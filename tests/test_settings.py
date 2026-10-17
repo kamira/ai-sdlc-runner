@@ -228,10 +228,13 @@ def test_a_missing_file_is_the_defaults(tmp_path):
     assert settings_mod.load(str(tmp_path / "nope.json")) == settings_mod.Settings()
 
 
-def test_an_empty_file_is_the_defaults(tmp_path):
+def test_an_empty_file_is_an_error_not_the_defaults(tmp_path):
+    """Changed in CHG-20261005-03 round 4: an empty file is what an interrupted in-place write
+    leaves, and reading it as the defaults would drop `high_risk_mode` and the operator's seats."""
     path = tmp_path / "settings.json"
     path.write_text("", encoding="utf-8")
-    assert settings_mod.load(str(path)) == settings_mod.Settings()
+    with pytest.raises(settings_mod.SettingsError, match="empty"):
+        settings_mod.load(str(path))
 
 
 def test_a_corrupt_file_is_an_error_not_the_defaults(tmp_path):
