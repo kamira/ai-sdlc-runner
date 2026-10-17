@@ -1185,3 +1185,31 @@ def test_the_usage_panel_is_in_the_page_and_reads_only_the_servers_route():
     assert 'id="usage"' in code and "用量" in code
     assert 'api("GET", "/usage")' in code
     assert "setInterval" not in code, "a tight poll; the panel refreshes when the run changes"
+
+
+@needs_node
+def test_an_open_page_marks_a_window_stale_once_its_reset_passes_without_a_new_ask(console):
+    """*cut*: drop `isStale`'s clock comparison, or the redraw of the last body in `refreshUsage`."""
+    data = _summary(
+        {"gpt-6": {"asks": 1, "asks_unreported": 0, "cost_usd": None, "tokens": TOKENS}},
+        [_window("primary", 42.0, 300, resets_at="2026-10-06T15:00:00+00:00")])
+    before_reset = int(1791290000 * 1000)                      # 2026-10-06T12:33:20Z
+    after_reset = int(1791300000 * 1000) + 60000
+    kept = console.harness("usage_clock", data=data, first=before_reset, later=before_reset)
+    assert kept["after"] == kept["before"] and "58% remaining (42% used)" in kept["after"]
+    out = console.harness("usage_clock", data=data, first=before_reset, later=after_reset)
+    assert "58% remaining" in out["before"] and out["barsBefore"] == 1
+    assert "reading is from before the window reset; remaining unknown" in out["after"]
+    assert "58%" not in out["after"] and out["barsAfter"] == 0
+    assert out["fetched"] == 1, "re-judged from the body already held, not a poll"
+
+
+def test_the_usage_panel_always_says_what_it_reads_in_words():
+    """*cut*: drop the `usage-source` line; the record's disclosure claim would be false."""
+    code = _code()
+    start = code.index('id="usage-source"')
+    line = " ".join(code[start:code.index("</p>", start)].split())
+    assert "codex's local session log" in line
+    assert "the thread this runner itself opened" in line
+    assert "only the rate-limit windows and their timestamp are kept" in line
+    assert "hidden" not in code[code.rindex("<", 0, start):start], "always visible"

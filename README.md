@@ -462,10 +462,12 @@ walked) is drawn thicker and named for a screen reader.
 The **用量 / usage** panel shows, per model, how many asks ran, their cost (claude's API-equivalent
 USD, not a bill on a subscription) and tokens, and — only where a backend states it — the quota
 remaining: codex's rate-limit windows as a percentage with the window length, reset time and when it
-was read. A window past its reset says the reading is stale instead of showing the old figure, and a
+was read. A window past its reset (judged when the panel is read, and again on each redraw of an open
+page) says the reading is stale instead of showing the old figure, and a
 backend that reports nothing says *not reported* rather than showing zero. Codex's remaining quota is
 read from its local session log for the thread the runner itself just opened (`$CODEX_HOME`, default
-`~/.codex`), read-only. The same data is `GET /usage`.
+`~/.codex`), read-only; the panel says so in a line of its own, with what is kept (only the rate-limit windows
+and their timestamp). The same data is `GET /usage`.
 
 A run in progress can be added to: type more and press *add to the brief*, or attach a spec. Every
 work order from then on carries all of it, numbered, so a reviewer can see that something **arrived
@@ -602,7 +604,8 @@ the order runs. What `reply.schema` requires:
 | anything else | `required: []` — nothing in the answer is acted on; `why` is still read by a person |
 
 The work order arrives as JSON on **stdin**; the answer goes to **stdout** as one JSON object. A
-non-zero exit is a failed attempt.
+non-zero exit is a failed attempt. (claude's and codex's JSON output modes wrap the answer in an
+envelope; the runner reads the answer from inside it. See `docs/MODELS.md`.)
 
 `decisions.next_module` may be `"frontier"`, which reads two recorded facts — what the PM most
 recently planned, and what the engineers have built — instead of a list written before the first
@@ -878,7 +881,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 3019 tests
+pytest -q          # 3038 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

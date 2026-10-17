@@ -3341,7 +3341,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                                       node_id=node.id, answered=already, model=model,
                                       asked_before=asked_before,
                                       conversation=cfg.conversation, role=node.role, resumed=report.resumed,
-                                  usage=report.usage,
+                                      usage=report.usage,
                                   workspace=_workspace(node, build_cycles),
                                   heard=lambda a, _n=node: _heard(_n, MODELS, a))
                         report.asks.append(Ask(node.id, node.role, None, result, model=model))
@@ -3415,7 +3415,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                             journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                             answered=already, asked_before=asked_before,
                             conversation=cfg.conversation, role=node.role, resumed=report.resumed,
-                                  usage=report.usage,
+                            usage=report.usage,
                                       workspace=_workspace(node, build_cycles),
                                       heard=lambda a, _n=node: _heard(_n, SURVEY, a),
                                       position=position, voice=label,
@@ -3480,7 +3480,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                             opened, journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                             answered=already, asked_before=asked_before,
                             conversation=cfg.conversation, role=node.role, resumed=report.resumed,
-                                  usage=report.usage,
+                            usage=report.usage,
                                   workspace=_workspace(node, build_cycles),
                             accept=lambda a, _for=aspect: intake_mod.read_options(a, _for))
                         report.asks.append(Ask(node.id, node.role, None, answer))
@@ -3533,7 +3533,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                             ask_id=_seat_ask_id(report, node, seat, position, len(voices)),
                             asked_before=asked_before,
                             conversation=cfg.conversation, role=node.role, resumed=report.resumed,
-                                  usage=report.usage,
+                            usage=report.usage,
                                       workspace=_workspace(node, build_cycles),
                                       heard=lambda a, _n=node: _heard(_n, SEATS, a),
                                       position=position, voice=label,
@@ -3570,7 +3570,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                     ask_id=ask_id, node_id=node.id, answered=already, model=model,
                     asked_before=asked_before,
                     conversation=cfg.conversation, role=node.role, resumed=report.resumed,
-                                  usage=report.usage,
+                    usage=report.usage,
                                   workspace=_workspace(node, build_cycles),
                                   heard=lambda a, _n=node: _heard(_n, ONE, a),
                                   accept=_accept_for(node, cfg, report),

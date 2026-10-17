@@ -4,8 +4,10 @@ Read from what the backend itself printed, never estimated. A backend that print
 recorded as ``unreported`` with ``None`` fields, never as zero: a zero reads afterwards as "this ask
 was free", and the runner has no way to know that (KN-15: unknown is not safe).
 
-Nothing here may affect an answer, a verdict or routing, so every function returns a record and none
-raises on malformed input — a reply the parser cannot read is the ordinary case for a stub or an
+Nothing here may affect an answer, a verdict or routing: this module only reads what a backend
+printed and never decides what the agent said (the code that unwraps an answer from a CLI's JSON
+envelope is in ``cli.py``, on the answer path). Every function returns a record and none raises on
+malformed input — a reply the parser cannot read is the ordinary case for a stub or an
 ``ollama run`` wrapper, not an error.
 
 The one read outside the runner's own files is codex's local session log, and only for the thread id
@@ -18,7 +20,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from . import paths
 
@@ -92,7 +94,7 @@ def _claude(parsed: dict) -> Optional[dict]:
                     "this backend reports no remaining quota"}
 
 
-def _codex_events(stdout: str) -> List[dict]:
+def codex_events(stdout: str) -> List[dict]:
     events = []
     for line in stdout.splitlines():
         line = line.strip()
@@ -124,6 +126,7 @@ def _windows(limits: dict, as_of: Optional[str], now: float) -> List[dict]:
             "remaining_percent": max(0.0, 100.0 - used), "resets_at": resets, "as_of": as_of,
             # A window past its reset says nothing about the new one: the old percentage must not
             # be shown as current. No `resets_at` means no claim either way, so it is not stale.
+            # This is the verdict at the time of the ask; `judge` redoes it at the time of reading.
             "stale": bool(resets is not None and reset_at is not None and reset_at < now)})
     return windows
 
@@ -218,42 +221,10 @@ def from_reply(stdout: str, codex_home: Optional[Path] = None, now: Optional[flo
                 record = _claude(parsed)
                 if record is not None:
                     return record
-        record = _codex(_codex_events(text), home, when) if stripped else None
+        record = _codex(codex_events(text), home, when) if stripped else None
         return record if record is not None else _unreported()
     except Exception:          # noqa: BLE001 - reporting must never touch the answer
         return _unreported()
-
-
-def unwrap(stdout: str) -> Optional[Tuple[str, bool]]:
-    """`(text, is_error)` when `stdout` is a claude or codex JSON envelope, else None.
-
-    With the json output flags, which is what makes those CLIs print usage at all, the agent's own
-    answer is no longer stdout: it is the string in claude's ``result`` or in codex's last
-    ``agent_message``. Recognised narrowly: an agent's own JSON that is not exactly one of these
-    shapes is its answer, and is left alone. Never raises.
-    """
-    try:
-        text = stdout if isinstance(stdout, str) else ""
-        stripped = text.strip()
-        if stripped.startswith("{"):
-            try:
-                parsed = json.loads(stripped)
-            except ValueError:
-                parsed = None
-            if (isinstance(parsed, dict) and parsed.get("type") == "result"
-                    and isinstance(parsed.get("result"), str)):
-                return parsed["result"], parsed.get("is_error") is True
-        events = _codex_events(text)
-        if any(e.get("type") == "thread.started" for e in events):
-            said = [e["item"]["text"] for e in events
-                    if e.get("type") == "item.completed" and isinstance(e.get("item"), dict)
-                    and e["item"].get("type") == "agent_message"
-                    and isinstance(e["item"].get("text"), str)]
-            if said:
-                return said[-1], False
-    except Exception:          # noqa: BLE001 - recognising an envelope must never touch the answer
-        pass
-    return None
 
 
 def _later(a: Optional[str], b: Optional[str]) -> bool:
@@ -264,12 +235,36 @@ def _later(a: Optional[str], b: Optional[str]) -> bool:
     return when_a is not None and when_a >= when_b
 
 
-def summarize(records: list) -> dict:
+def judge(records: list, now: Optional[float] = None) -> list:
+    """Copies of `records` with every window's ``stale`` judged against `now` (default: the clock).
+
+    ``stale`` stored at ask time goes out of date as soon as a reset passes, so whoever serves a
+    reading judges it again. A window with no readable ``resets_at`` keeps the flag it has.
+    """
+    when = time.time() if now is None else now
+    judged = []
+    for record in records or []:
+        if not isinstance(record, dict):
+            judged.append(record)
+            continue
+        windows = []
+        for window in record.get("remaining") or []:
+            if isinstance(window, dict):
+                reset = _parse_iso(window.get("resets_at"))
+                if reset is not None:
+                    window = {**window, "stale": reset.timestamp() < when}
+            windows.append(window)
+        judged.append({**record, "remaining": windows} if "remaining" in record else dict(record))
+    return judged
+
+
+def summarize(records: list, now: Optional[float] = None) -> dict:
     """Per model: asks, cost, tokens; and the latest reading of each remaining window.
 
     A sum is ``None`` when no ask of that model reported the figure, so "nobody said" never shows
-    as a total of zero.
+    as a total of zero. Staleness is judged against `now` (default: the clock), not the ask's time.
     """
+    records = judge(records, now)
     models: Dict[str, dict] = {}
     latest: Dict[str, dict] = {}
     for record in records or []:

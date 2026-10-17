@@ -179,6 +179,9 @@
     <h2 style="margin-top:22px">the models, and where they are used</h2>
     <div id="models"></div>
     <h2 style="margin-top:22px">用量 / usage</h2>
+    <p class="muted" id="usage-source">Where this comes from: what each backend printed for its
+      own ask. For codex, the remaining quota is read from codex's local session log, only for the
+      thread this runner itself opened; only the rate-limit windows and their timestamp are kept.</p>
     <div id="usage"><p class="muted">no run yet</p></div>
   </aside>
   <section>
@@ -1331,12 +1334,24 @@ function windowName(minutes) {
 
 function pct(n) { return (Math.round(n * 10) / 10) + "%"; }
 
+// The clock the panel judges a window against; the page's tests replace it to move time.
+var nowMs = function () { return Date.now(); };
+
+// A reading is stale once its window's reset has passed *now*, whatever the server judged when it
+// was served: an open page outlives the reset.
+function isStale(w) {
+  if (w.stale) return true;
+  var reset = w.resets_at ? Date.parse(w.resets_at) : NaN;
+  return !isNaN(reset) && reset < nowMs();
+}
+
 function drawWindow(w) {
   var box = el("div", "u"); box.setAttribute("data-window", w.window);
   var len = windowName(w.window_minutes);
   box.appendChild(el("span", "k", w.window + (len ? " " + len : "")));
   var v = el("span", "v");
-  if (w.stale) {
+  var stale = isStale(w);
+  if (stale) {
     // Past its reset, the old percentage describes a window that no longer exists.
     v.textContent = "reading is from before the window reset; remaining unknown";
   } else {
@@ -1354,7 +1369,7 @@ function drawWindow(w) {
     v.appendChild(el("div", "", pct(w.remaining_percent) + " remaining (" + pct(w.used_percent) + " used)"));
   }
   var when = [];
-  if (w.resets_at) when.push("resets " + new Date(w.resets_at).toLocaleString());
+  if (w.resets_at) when.push((stale ? "reset " : "resets ") + new Date(w.resets_at).toLocaleString());
   if (w.as_of) when.push("as of " + new Date(w.as_of).toLocaleString());
   if (w.model) when.push(w.model);
   if (when.length) v.appendChild(el("div", "muted", when.join(" · ")));
@@ -1362,9 +1377,11 @@ function drawWindow(w) {
   return box;
 }
 
+var lastUsage = null;
 function drawUsage(data) {
   var box = $("#usage");
   if (!box) return;
+  lastUsage = data;
   box.innerHTML = "";
   var run = data && data.run;
   if (!run) { box.appendChild(el("p", "muted", "no run yet")); return; }
@@ -1412,7 +1429,11 @@ function drawUsage(data) {
 var usageKey = null;
 function refreshUsage(force) {
   var key = state ? [state.state, (state.log || []).length, (state.visited || []).length].join("|") : "";
-  if (!force && key === usageKey) return Promise.resolve();
+  if (!force && key === usageKey) {
+    // No new ask, but time has passed: judge the windows again against the clock, no fetch.
+    if (lastUsage) drawUsage(lastUsage);
+    return Promise.resolve();
+  }
   usageKey = key;
   return api("GET", "/usage").then(drawUsage, function (e) {
     var box = $("#usage");

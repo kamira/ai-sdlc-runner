@@ -125,7 +125,9 @@ made are listed even when the run stopped on an error and no report came back.
 `cost_usd` is the API-equivalent figure `claude` prints, not a bill on a subscription. Remaining quota
 is stated only by codex, from its local session log (`$CODEX_HOME/sessions/…/rollout-*-<thread id>.jsonl`)
 for the thread the runner itself just opened — read-only, and only `rate_limits` is kept. A window
-whose `resets_at` has passed is `stale: true`: the reading is from before the reset.
+whose `resets_at` has passed is `stale: true`: the reading is from before the reset. `stale` is
+judged against the time of the request, not of the ask, in both `run.remaining` and `asks`: a
+window that reset after the run finished is stale when it is read.
 
 ### `GET /attachments`
 ```jsonc

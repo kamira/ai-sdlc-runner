@@ -45,6 +45,7 @@ import queue
 import socket
 import secrets
 import threading
+import time
 from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
@@ -102,6 +103,11 @@ LOOPBACK = ("127.0.0.1",)
 #: Written on the test side by CHG-20260907-21, which said the record deriving `LOOPBACK_HOSTS` is
 #: what would lift it across the line. This is that record (CHG-20260907-24).
 RESOLVER_FIXED = frozenset({"localhost"})
+
+
+def _clock() -> float:
+    """The time `GET /usage` judges a quota window against; a test replaces it to move time."""
+    return time.time()
 
 
 def _authority(addr: str) -> str:
@@ -1596,8 +1602,11 @@ def make_handler(runner: Runner, operator: Operator,
                 # instead of drawing zeros. A copy of the list: the engine appends to it from the
                 # run's thread while this one serializes.
                 report = runner.state.report
-                asks = list(runner.state.usage)
-                self._json(200, {"run": usage_mod.summarize(asks) if report or asks else None,
+                # Judged against the time of this reading, not of the ask: a window that reset since
+                # the run finished is stale now, whatever it was when the backend printed it.
+                now = _clock()
+                asks = usage_mod.judge(list(runner.state.usage), now)
+                self._json(200, {"run": usage_mod.summarize(asks, now) if report or asks else None,
                                  "asks": asks})
             elif path == "/models":
                 # The console is local only; the models need not be, and the operator should never

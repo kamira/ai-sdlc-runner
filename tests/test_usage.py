@@ -418,15 +418,15 @@ def test_a_codex_envelope_is_unwrapped_to_route_with_tokens_and_remaining(tmp_pa
 
 
 def test_unwrap_recognises_only_the_two_envelopes():
-    assert usage.unwrap(json.dumps({"type": "result", "result": '{"a": 1}'})) == ('{"a": 1}', False)
-    assert usage.unwrap(json.dumps({"type": "result", "result": "x", "is_error": True})) == ("x", True)
+    assert cli._unwrap_envelope(json.dumps({"type": "result", "result": '{"a": 1}'})) == ('{"a": 1}', False)
+    assert cli._unwrap_envelope(json.dumps({"type": "result", "result": "x", "is_error": True})) == ("x", True)
     # not a string result, or no `type: result`: the agent's own answer
-    assert usage.unwrap(json.dumps({"type": "result", "result": {"verdict": "fail"}})) is None
-    assert usage.unwrap(json.dumps({"verdict": "pass", "result": "x"})) is None
+    assert cli._unwrap_envelope(json.dumps({"type": "result", "result": {"verdict": "fail"}})) is None
+    assert cli._unwrap_envelope(json.dumps({"verdict": "pass", "result": "x"})) is None
     # codex events with no thread.started are not an envelope
-    assert usage.unwrap(_codex_stdout().replace("thread.started", "other")) is None
-    assert usage.unwrap(_codex_stdout()) == ("hi", False)
-    assert usage.unwrap("") is None and usage.unwrap(None) is None
+    assert cli._unwrap_envelope(_codex_stdout().replace("thread.started", "other")) is None
+    assert cli._unwrap_envelope(_codex_stdout()) == ("hi", False)
+    assert cli._unwrap_envelope("") is None and cli._unwrap_envelope(None) is None
 
 
 def _ask(tmp_path, stdout):
@@ -487,3 +487,157 @@ def test_usage_lists_asks_already_made_when_the_run_stops_on_an_error(tmp_path):
         httpd.server_close()
     assert body["asks"] and body["run"] is not None
     assert body["asks"][0]["cost_usd"] == 0.125
+
+
+# ── staleness is judged when the reading is read, not when the ask ran (review round 1) ───────
+
+def _read_log_at(tmp_path, ask_time):
+    """A codex ask made at `ask_time`: its 5 h window resets at epoch 1791300000."""
+    home = tmp_path / "home"
+    _rollout(home, THREAD, _count("2026-10-06T13:50:00.000Z", _limits(42.0, 95.0)))
+    return usage.from_reply(_codex_stdout(), home, ask_time)
+
+
+def test_a_window_that_resets_after_the_ask_is_stale_when_read_after_the_reset(tmp_path):
+    """*cut*: make `summarize` / `judge` copy the stored flag, and the later reading stays fresh."""
+    record = _rec("gpt-6", **_read_log_at(tmp_path, NOW))
+    assert record["remaining"][0]["stale"] is False        # fresh when the backend printed it
+    resets = 1791300000
+    soon = usage.summarize([record], now=resets - 1)["remaining"][0]
+    later = usage.summarize([record], now=resets + 1)["remaining"][0]
+    assert soon["stale"] is False and later["stale"] is True
+    assert later["used_percent"] == 42.0, "the reading itself, and its own as_of, are kept"
+    assert later["as_of"] == record["remaining"][0]["as_of"]
+    assert record["remaining"][0]["stale"] is False, "judging copies; the stored record is not edited"
+    assert usage.judge([record], now=resets + 1)[0]["remaining"][0]["stale"] is True
+
+
+def test_judge_leaves_a_window_without_a_reset_and_non_dict_records_alone():
+    bare = _rec("m", remaining=[_win("primary", 10.0, None)])
+    assert usage.judge([bare, "x"], now=1e12) == [bare, "x"]
+
+
+def test_get_usage_judges_staleness_against_the_time_it_is_served(served, tmp_path, monkeypatch):
+    """*cut*: serve `list(runner.state.usage)` unjudged in the `/usage` branch."""
+    get, runner = served
+    runner.state.report = engine.RunReport()
+    runner.state.usage.append(_rec("gpt-6", **_read_log_at(tmp_path, NOW)))
+    monkeypatch.setattr(server, "_clock", lambda: NOW)
+    body = get("/usage")[1]
+    assert body["run"]["remaining"][0]["stale"] is False
+    assert body["asks"][0]["remaining"][0]["stale"] is False
+    monkeypatch.setattr(server, "_clock", lambda: 1791300000 + 60.0)
+    body = get("/usage")[1]
+    assert [w["stale"] for w in body["run"]["remaining"]] == [True, False]
+    assert body["asks"][0]["remaining"][0]["stale"] is True
+    assert body["run"]["remaining"][0]["remaining_percent"] == 58.0
+
+
+# ── every ask records its usage, on every path (review round 1) ───────────────────────────────
+
+def test_every_ask_call_in_the_engine_passes_usage():
+    """A new `_ask(...)` call that forgets `usage=` records nothing; this makes that red at once."""
+    import ast
+
+    tree = ast.parse(Path(engine.__file__).read_text(encoding="utf-8"))
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Name) and n.func.id == "_ask"]
+    assert len(calls) >= 6
+    missing = [c.lineno for c in calls if "usage" not in {k.arg for k in c.keywords}]
+    assert not missing, f"_ask called without usage= at engine.py lines {missing}"
+
+
+COST = {"opus": 0.5, "codex": 0.25, "plain": 0.125}
+
+
+def _costed(model_costs, answers):
+    """A factory of in-process sessions that answer with `answers` and report a model-keyed cost."""
+    def factory(seat=None, model=None):
+        class Session(engine.Session):
+            def ask(self, order):
+                # What `from_reply` returns: no identity keys, the engine adds those.
+                self.usage = {"kind": "claude", "cost_usd": model_costs.get(model, 0.125),
+                              "tokens": None, "remaining": [], "note": ""}
+                return answers(order, seat, model)
+
+            def close(self):
+                pass
+        return Session()
+    return factory
+
+
+def _answer(order, seat, model, panel=None, survey=None, options=None):
+    node = order["node_id"]
+    if seat:
+        if node == "intake_review":
+            return survey or {"problems": [], "missing": [], "unsafe": []}
+        return {"verdict": "pass"}
+    if node == "intake_review":
+        return {"options": ["a", "b", "c"]}
+    if panel and node == panel[0]:
+        return {"verdict": "fail" if model == panel[1] else "pass"}
+    branch = {"pm_confirm": "yes", "pm_signoff": "yes", "lead_task_review": "pass",
+              "re_review": "pass", "qa_accept": "pass"}.get(node)
+    return {"verdict": branch} if branch else {"ok": True}
+
+
+def test_a_model_panel_with_a_reasked_round_records_one_usage_per_ask_by_its_model():
+    """*cut*: drop `usage=report.usage` from the first-round or the re-asked-round `_ask`."""
+    factory = _costed(COST, lambda o, s, m: _answer(o, s, m, panel=("lead_task_review", "codex")))
+    cfg = engine.RunConfig(
+        node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+        decisions={"next_module": ["module", "none"], "feedback": "done"},
+        risk="low", undeclared="allow", panel_reruns=1,
+        node_models={"lead_task_review": ["opus", "codex"]})
+    report = engine.walk(cfg, factory, enabled=True)
+    assert report.panel_rounds, "the tie was not put to the panel again; this exercises one round"
+    assert len(report.usage) == len(report.asks)
+    panel = [u for u in report.usage if u["node_id"] == "lead_task_review"]
+    assert sorted(u["ask_id"].endswith("-r2") for u in panel) == [False, False, True, True]
+    assert sorted(u["model"] for u in panel) == ["codex", "codex", "opus", "opus"]
+    assert all(u["cost_usd"] == COST[u["model"]] for u in panel), \
+        "each record is credited to the model whose session reported it"
+
+
+def test_an_incomplete_survey_records_usage_for_the_options_ask():
+    """*cut*: drop `usage=report.usage` from the options `_ask`."""
+    survey = {"missing": ["flow"], "problems": [], "unsafe": []}
+    factory = _costed({}, lambda o, s, m: _answer(o, s, m, survey=survey))
+    cfg = engine.RunConfig(
+        node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
+        decisions={"next_module": engine.FRONTIER, "feedback": "done"},
+        risk="low", undeclared="allow", intake_history=[{"missing": ["flow"]}] * 3)
+    report = engine.walk(cfg, factory, enabled=True)
+    assert report.state == engine.SUSPENDED and report.options.get("flow") == ["a", "b", "c"]
+    assert len(report.usage) == len(report.asks)
+    assert [u for u in report.usage if u["ask_id"].endswith("-options-flow")], \
+        "the options ask is an ask like any other and says what it used"
+
+
+# ── the envelope unwrap fails safe: what it cannot read is the answer, as before ──────────────
+
+def test_the_unwrap_lives_with_the_answer_path_not_in_the_reporting_module():
+    assert not hasattr(usage, "unwrap") and callable(cli._unwrap_envelope)
+
+
+@pytest.mark.parametrize("stdout", [
+    '{"type": "result", "result": ', '{"type": "result"}', '{"type": "result", "result": 5}',
+    "not json at all", '{"verdict": "pass"', "[1, 2]", "", "\n",
+    '{"type": "thread.started"\n{"type": "item.completed"}'])
+def test_a_reply_that_is_not_an_envelope_is_left_exactly_as_it_was(tmp_path, stdout):
+    assert cli._unwrap_envelope(stdout) is None
+    answer = _ask(tmp_path, stdout)
+    assert answer["stdout"] == stdout and answer["exit_code"] == 0
+    try:
+        merged = json.loads(stdout)
+    except ValueError:
+        merged = None
+    # As before the unwrap existed: a JSON object's own keys are merged in, nothing else is added.
+    assert set(answer) == {"exit_code", "stdout", "stderr"} | (
+        set(merged) if isinstance(merged, dict) else set())
+
+
+def test_a_codex_stream_with_no_message_is_not_unwrapped():
+    stream = "\n".join(json.dumps(e) for e in (
+        {"type": "thread.started", "thread_id": THREAD}, {"type": "turn.completed"}))
+    assert cli._unwrap_envelope(stream) is None

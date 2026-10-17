@@ -178,6 +178,17 @@ async function boot() {
     out.afterSame = sent.filter((s) => s.path === "/usage").length;
     run("apply(Object.assign({}, state, { state: 'running' }))"); await settle();
     out.afterChange = sent.filter((s) => s.path === "/usage").length;
+  } else if (scenario === "usage_clock") {         // an open page: time passes, no new ask
+    run("apply(state)"); await settle();
+    run("nowMs = function () { return " + args.first + "; }");
+    run("drawUsage(" + JSON.stringify(args.data) + ")");
+    out.before = text("#usage");
+    out.barsBefore = byId["#usage"].all((c) => c.attrs.role === "progressbar").length;
+    run("nowMs = function () { return " + args.later + "; }");
+    run("apply(state)"); await settle();
+    out.after = text("#usage");
+    out.barsAfter = byId["#usage"].all((c) => c.attrs.role === "progressbar").length;
+    out.fetched = sent.filter((s) => s.path === "/usage").length;
   } else if (scenario === "models") {
     run("drawModels()");
     out.models = text("#models");

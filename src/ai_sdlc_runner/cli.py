@@ -262,12 +262,14 @@ class _Process(engine.Session):
                     f"retrying")
         del last
         # Read beside the answer and never into it: a usage figure that could change what the node
-        # said would make a reporting field a routing input. `from_reply` does not raise.
+        # said would make a reporting field a routing input. `from_reply` does not raise. The
+        # unwrapping below is the one thing here that does decide the answer, and it lives in this
+        # file for that reason.
         home = os.environ.get("CODEX_HOME")
         self.usage = usage_mod.from_reply(proc.stdout, Path(home) if home else None)
         answer = {"exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
         said = proc.stdout
-        wrapped = usage_mod.unwrap(proc.stdout)
+        wrapped = _unwrap_envelope(proc.stdout)
         if wrapped is not None:
             # The json output flags wrap the agent's answer in the CLI's own envelope. The answer is
             # the text inside; an error envelope is a failed answer, like a reply that is not JSON.
@@ -284,6 +286,39 @@ class _Process(engine.Session):
 
     def close(self):
         pass
+
+
+def _unwrap_envelope(stdout: str) -> Optional[tuple]:
+    """`(text, is_error)` when `stdout` is a claude or codex JSON envelope, else None.
+
+    With the json output flags, which is what makes those CLIs print usage at all, the agent's own
+    answer is no longer stdout: it is the string in claude's ``result`` or in codex's last
+    ``agent_message``. Recognised narrowly: an agent's own JSON that is not exactly one of these
+    shapes is its answer, and is left alone. Never raises; anything unreadable is None, which
+    leaves stdout as it was before this existed.
+    """
+    try:
+        text = stdout if isinstance(stdout, str) else ""
+        stripped = text.strip()
+        if stripped.startswith("{"):
+            try:
+                parsed = json.loads(stripped)
+            except ValueError:
+                parsed = None
+            if (isinstance(parsed, dict) and parsed.get("type") == "result"
+                    and isinstance(parsed.get("result"), str)):
+                return parsed["result"], parsed.get("is_error") is True
+        events = usage_mod.codex_events(text)
+        if any(e.get("type") == "thread.started" for e in events):
+            said = [e["item"]["text"] for e in events
+                    if e.get("type") == "item.completed" and isinstance(e.get("item"), dict)
+                    and e["item"].get("type") == "agent_message"
+                    and isinstance(e["item"].get("text"), str)]
+            if said:
+                return said[-1], False
+    except Exception:          # noqa: BLE001 - recognising an envelope must never touch the answer
+        pass
+    return None
 
 
 def check_seat_models(seat_models: Dict[str, object],
