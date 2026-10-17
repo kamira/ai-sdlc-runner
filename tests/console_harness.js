@@ -90,8 +90,11 @@ let inflight = 0;
 const sent = [];
 const refusing = {};          // "METHOD path" or path -> sentence: the fake answer for a route, 409
 const holds = {};             // "METHOD path" -> promise: the next such request waits for it first
+const timers = { next: 1, pending: {}, cleared: 0 };   // the page's timers: fake, fired by hand
 const context = vm.createContext({
-  document, console, JSON, Math, Object, Array, String, Number, Error, Promise, setTimeout,
+  document, console, JSON, Math, Object, Array, String, Number, Error, Promise,
+  setTimeout: (fn, ms) => { const id = timers.next++; timers.pending[id] = { fn, ms }; return id; },
+  clearTimeout: (id) => { if (timers.pending[id]) { delete timers.pending[id]; timers.cleared++; } },
   location: { hash: "#token=" + token, pathname: "/", host: base.replace("http://", "") },
   history: { replaceState() {} },
   sessionStorage: (() => { const s = {}; return { getItem: (k) => s[k] || null, setItem: (k, v) => { s[k] = v; } }; })(),
@@ -188,6 +191,20 @@ async function boot() {
     run("apply(state)"); await settle();
     out.after = text("#usage");
     out.barsAfter = byId["#usage"].all((c) => c.attrs.role === "progressbar").length;
+    out.fetched = sent.filter((s) => s.path === "/usage").length;
+  } else if (scenario === "usage_idle") {          // no run events: only the page's timer can redraw
+    out.steps = [];
+    for (const step of args.steps) {
+      run("nowMs = function () { return " + step.now + "; }");
+      if (step.draw) run("drawUsage(" + JSON.stringify(args.data) + ")");
+      if (step.fire) {
+        const ids = Object.keys(timers.pending);
+        if (ids.length) { const t = timers.pending[ids[0]]; delete timers.pending[ids[0]]; t.fn(); }
+      }
+      out.steps.push({ text: text("#usage"),
+                       bars: byId["#usage"].all((c) => c.attrs.role === "progressbar").length,
+                       pending: Object.values(timers.pending).map((t) => t.ms) });
+    }
     out.fetched = sent.filter((s) => s.path === "/usage").length;
   } else if (scenario === "models") {
     run("drawModels()");

@@ -1355,18 +1355,19 @@ function drawWindow(w) {
     // Past its reset, the old percentage describes a window that no longer exists.
     v.textContent = "reading is from before the window reset; remaining unknown";
   } else {
-    var bar = el("div", "bar" + (w.remaining_percent < 10 ? " low" : ""));
+    var low = w.remaining_percent < 10 ? " (low)" : "";
+    var bar = el("div", "bar" + (low ? " low" : ""));
     bar.setAttribute("role", "progressbar");
     bar.setAttribute("aria-label", w.window + " window " + (len ? len + " " : "") + "remaining");
     bar.setAttribute("aria-valuemin", "0");
     bar.setAttribute("aria-valuemax", "100");
     bar.setAttribute("aria-valuenow", String(Math.round(w.remaining_percent)));
-    bar.setAttribute("aria-valuetext", pct(w.remaining_percent) + " remaining");
+    bar.setAttribute("aria-valuetext", pct(w.remaining_percent) + " remaining" + low);
     var fill = el("div", "fill");
     fill.style.width = Math.max(0, Math.min(100, w.remaining_percent)) + "%";
     bar.appendChild(fill);
     v.appendChild(bar);
-    v.appendChild(el("div", "", pct(w.remaining_percent) + " remaining (" + pct(w.used_percent) + " used)"));
+    v.appendChild(el("div", "", pct(w.remaining_percent) + " remaining (" + pct(w.used_percent) + " used)" + low));
   }
   var when = [];
   if (w.resets_at) when.push((stale ? "reset " : "resets ") + new Date(w.resets_at).toLocaleString());
@@ -1378,7 +1379,38 @@ function drawWindow(w) {
 }
 
 var lastUsage = null;
+var usageTimer = null;
+var USAGE_TIMER_MAX_MS = 60 * 60 * 1000;   // far-off resets are re-armed hourly; setTimeout overflows near 2^31 ms
+
+function clearUsageTimer() {
+  if (usageTimer !== null) { clearTimeout(usageTimer); usageTimer = null; }
+}
+
+// An idle page gets no run events, so nothing would redraw it when the reset of a window passes. Wake
+// once, just after the earliest reset still ahead of us among the windows shown, and redraw from the
+// body already held (no fetch). Each redraw re-arms for the next window; none ahead, no timer.
+function armUsageTimer() {
+  clearUsageTimer();
+  if (!lastUsage || !lastUsage.run) return;
+  var now = nowMs(), next = null;
+  (lastUsage.run.remaining || []).forEach(function (w) {
+    if (isStale(w) || !w.resets_at) return;
+    var t = Date.parse(w.resets_at);
+    if (!isNaN(t) && t >= now && (next === null || t < next)) next = t;
+  });
+  if (next === null) return;
+  usageTimer = setTimeout(function () {
+    usageTimer = null;
+    if (lastUsage) drawUsage(lastUsage);
+  }, Math.min(next - now + 1, USAGE_TIMER_MAX_MS));
+}
+
 function drawUsage(data) {
+  drawUsageBody(data);
+  armUsageTimer();
+}
+
+function drawUsageBody(data) {
   var box = $("#usage");
   if (!box) return;
   lastUsage = data;
@@ -1424,7 +1456,7 @@ function drawUsage(data) {
   });
 }
 
-// Refreshed when the run changes, not on a timer: the state, the log length and the visited count
+// Fetched when the run changes, not on a timer (the redraw timer above does not fetch): the state, the log length and the visited count
 // move exactly when an ask can have finished.
 var usageKey = null;
 function refreshUsage(force) {
@@ -1437,6 +1469,7 @@ function refreshUsage(force) {
   usageKey = key;
   return api("GET", "/usage").then(drawUsage, function (e) {
     var box = $("#usage");
+    clearUsageTimer();
     if (box) { box.innerHTML = ""; box.appendChild(el("p", "err", "usage unavailable: " + e.message)); }
   });
 }

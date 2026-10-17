@@ -462,8 +462,9 @@ walked) is drawn thicker and named for a screen reader.
 The **用量 / usage** panel shows, per model, how many asks ran, their cost (claude's API-equivalent
 USD, not a bill on a subscription) and tokens, and — only where a backend states it — the quota
 remaining: codex's rate-limit windows as a percentage with the window length, reset time and when it
-was read. A window past its reset (judged when the panel is read, and again on each redraw of an open
-page) says the reading is stale instead of showing the old figure, and a
+was read. A window past its reset (judged when the panel is read, and again on an open page by a timer set for
+the earliest reset still ahead, with no fetch) says the reading is stale instead of showing the old
+figure, and a
 backend that reports nothing says *not reported* rather than showing zero. Codex's remaining quota is
 read from its local session log for the thread the runner itself just opened (`$CODEX_HOME`, default
 `~/.codex`), read-only; the panel says so in a line of its own, with what is kept (only the rate-limit windows
@@ -881,7 +882,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 3038 tests
+pytest -q          # 3040 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

@@ -1204,6 +1204,52 @@ def test_an_open_page_marks_a_window_stale_once_its_reset_passes_without_a_new_a
     assert out["fetched"] == 1, "re-judged from the body already held, not a poll"
 
 
+STALE_TEXT = "reading is from before the window reset; remaining unknown"
+HOUR_MS = 3600 * 1000
+HELD = {"gpt-6": {"asks": 1, "asks_unreported": 0, "cost_usd": None, "tokens": TOKENS}}
+
+
+@needs_node
+def test_an_idle_page_flips_a_window_to_stale_on_its_own_timer_and_re_arms_for_the_next(console):
+    """*cut*: drop `armUsageTimer` (or its call in `drawUsage`); no run event ever redraws an idle page."""
+    data = _summary(HELD, [
+        _window("primary", 42.0, 300, resets_at="2026-10-06T15:00:00+00:00"),
+        _window("secondary", 95.0, 10080, resets_at="2026-10-08T00:00:00+00:00")])
+    first_reset = 1791298800 * 1000                            # 2026-10-06T15:00:00Z
+    second_reset = 1791417600 * 1000                           # 2026-10-08T00:00:00Z
+    t0 = first_reset - 10 * 60 * 1000                          # ten minutes before the first
+    out = console.harness("usage_idle", data=data, steps=[
+        {"now": t0, "draw": True},
+        {"now": first_reset + 5000, "fire": True},
+        {"now": second_reset + 5000, "fire": True}])
+    drawn, mid, late = out["steps"]
+    assert drawn["bars"] == 2 and STALE_TEXT not in drawn["text"]
+    assert drawn["pending"] == [first_reset - t0 + 1], "armed just after the earliest reset"
+    assert mid["bars"] == 1 and mid["text"].count(STALE_TEXT) == 1 and "5% remaining (95% used) (low)" in mid["text"]
+    assert mid["pending"] == [HOUR_MS], "re-armed for the next window (a day away, clamped to an hour)"
+    assert late["bars"] == 0 and late["text"].count(STALE_TEXT) == 2
+    assert late["pending"] == [], "no timer left once no reset is ahead"
+    assert out["fetched"] == 0, "redrawn from the body held, not fetched"
+
+
+@needs_node
+def test_the_usage_timer_is_replaced_by_a_redraw_and_absent_without_a_future_reset(console):
+    """*cut*: drop `clearUsageTimer()` from `armUsageTimer`; each redraw would leave a timer behind."""
+    t0 = 1791290000 * 1000
+    soon = _window("primary", 42.0, 300, resets_at="2026-10-06T15:00:00+00:00")
+    out = console.harness("usage_idle", data=_summary(HELD, [soon]), steps=[
+        {"now": t0, "draw": True}, {"now": t0 + 1000, "draw": True}])
+    assert [len(s["pending"]) for s in out["steps"]] == [1, 1]
+    none = console.harness("usage_idle", data=_summary({}, []), steps=[{"now": t0, "draw": True}])
+    assert none["steps"][0]["pending"] == []
+    past = _window("primary", 42.0, 300, resets_at="2026-10-06T10:00:00+00:00")
+    gone = console.harness("usage_idle", data=_summary(HELD, [past]), steps=[{"now": t0, "draw": True}])
+    assert gone["steps"][0]["pending"] == [] and gone["steps"][0]["bars"] == 0
+    far = console.harness("usage_idle", data=_summary(HELD, [_window("primary", 1.0, 300)]),
+                          steps=[{"now": t0, "draw": True}])
+    assert far["steps"][0]["pending"] == [HOUR_MS], "a reset years away is clamped, not overflowed"
+
+
 def test_the_usage_panel_always_says_what_it_reads_in_words():
     """*cut*: drop the `usage-source` line; the record's disclosure claim would be false."""
     code = _code()
