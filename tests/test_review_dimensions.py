@@ -923,10 +923,10 @@ def test_a_journal_entry_with_no_voice_is_asked_again(tmp_path):
     first = _real_factory({})
     _journaled_walk(tmp_path, None, resume=False, factory=first)
     for path in (tmp_path / "journal").glob("*conformance*.json"):
-        entry = json.loads(path.read_text())
+        entry = json.loads(path.read_text(encoding="utf-8"))
         assert entry["voice"] == {"model": None, "argv": ["default-x"]}
         del entry["voice"]
-        path.write_text(json.dumps(entry))
+        path.write_text(json.dumps(entry), encoding="utf-8")
     second = _real_factory({})
     _journaled_walk(tmp_path, None, resume=True, factory=second)
     assert _conformance_opened(second), "the legacy entries were not reused"
