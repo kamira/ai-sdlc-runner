@@ -114,11 +114,12 @@ The review seats a user may open, and what the settings file chooses now (CHG-20
 from the settings file on every call. A server started without one answers `409`.
 
 ```jsonc
-{ "seats": [ { "name", "label", "question", "veto", "enabled_by_default" } ],   // policy.SEATS, in order
+{ "seats": [ { "name", "label", "question", "veto", "opt_in" } ],   // policy.SEATS, in order; only conformance vetoes
   "review_dimensions": [ "<seat>", … ] | null,    // null: the first `review_seats` (or the floor) open
   "review_seats": 4 | null,
   "high_risk_mode": false,
-  "floor": 3 }
+  "floor": 3,
+  "max_seat_count": 12 }                          // policy.MAX_SEAT_COUNT; a count opens no opt-in seat
 ```
 
 ### `GET /config/nodes`

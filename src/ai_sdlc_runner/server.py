@@ -1334,13 +1334,14 @@ def make_handler(runner: Runner, operator: Operator,
         current = _load_settings() if settings_path is not None else settings_mod.Settings()
         return {
             "seats": [{"name": s.name, "label": s.label, "question": s.question,
-                       "veto": s.veto, "enabled_by_default": s.enabled_by_default}
+                       "veto": s.veto, "opt_in": s.opt_in}
                       for s in policy.SEATS],
             "review_dimensions": (list(current.review_dimensions)
                                   if current.review_dimensions is not None else None),
             "review_seats": current.review_seats,
             "high_risk_mode": current.high_risk_mode,
             "floor": policy.SEAT_FLOOR,
+            "max_seat_count": policy.MAX_SEAT_COUNT,
         }
 
     def _set_dimensions(body):

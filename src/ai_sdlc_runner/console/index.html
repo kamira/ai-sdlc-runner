@@ -83,6 +83,7 @@
   #panel dl.facts dd{margin:0}
   .picker .prow{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;padding:3px 0;border-top:1px solid var(--line);font-size:12px}
   .picker .prow .id{font-family:var(--mono)}
+  .picker .prow .q{flex-basis:100%}
   .picker .prow.warn{color:var(--wait)}
   button.mv{padding:0 7px;font-size:12px}
   #panel details{margin:6px 0;border-top:1px solid var(--line);padding-top:4px}
@@ -614,7 +615,9 @@ function save(path, body, then) {
 }
 
 function seatDefaults() {
-  var all = seatInfo.seats.map(function (s) { return s.name; });
+  // A count opens a prefix of the seats that are not opt-in; those open only when named.
+  var all = seatInfo.seats.filter(function (s) { return !s.opt_in; })
+    .map(function (s) { return s.name; });
   return all.slice(0, seatInfo.review_seats || seatInfo.floor);
 }
 
@@ -648,8 +651,10 @@ function renderSeatEditor(host) {
       lab.appendChild(box);
       lab.appendChild(el("span", "id", " " + name));
       row.appendChild(lab);
-      row.appendChild(el("span", "muted", s.label + (s.veto ? " · veto" : "") +
-                         (s.enabled_by_default ? "" : " · opt-in")));
+      row.appendChild(el("span", "muted", s.label +
+        (s.veto ? " · veto seat, required unless high-risk mode is on" : "") +
+        (s.opt_in ? " · opt-in, open only when ticked" : "")));
+      row.appendChild(el("span", "muted q", s.question));
       row.title = s.question;
       if (on) {
         [["↑", -1], ["↓", 1]].forEach(function (mv) {

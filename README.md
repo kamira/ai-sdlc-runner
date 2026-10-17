@@ -439,8 +439,10 @@ whose mode carries models (`single`, `model_panel`, `pool`) the registry's model
 and effort template, in order; for the review-seat nodes (`lead_review`, `intake_review`) which
 review dimensions open, in what order, and which models sit on each seat. Saving goes through
 `POST /config/nodes`, `/config/seats` and `/config/dimensions`, and whatever the server refuses —
-a seat that does not exist, a panel below the floor of three without high-risk mode — is printed in
-the panel, in the server's words. A dimension choice is written to the settings file and the next
+a seat that does not exist, a panel below the floor of three without high-risk mode, a list without
+`conformance` (the veto seat, marked as required unless high-risk mode is on), a model listed twice
+or not in the registry — is printed in the panel, in the server's words. The three opt-in seats are
+marked and open only when ticked; each seat's question is shown. A dimension choice is written to the settings file and the next
 walk reads it. The **models list** shows each model's tier, its effort template, and every node
 (with its role) and seat it answers, or says it is used nowhere. The diagram is drawn in the browser
 from `GET /flow`, with no library and nothing fetched from outside this machine; shapes (rectangle
@@ -857,7 +859,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 2937 tests
+pytest -q          # 2945 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

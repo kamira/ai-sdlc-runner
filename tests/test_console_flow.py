@@ -125,6 +125,14 @@ def test_the_seats_route_lists_every_seat_and_what_is_chosen(console):
     assert [s["name"] for s in out["seats"]] == [s.name for s in policy.SEATS]
     assert len(out["seats"]) == 15
     assert out["review_dimensions"] is None and out["floor"] == policy.SEAT_FLOOR
+    # CHG-20261005-02: the flag is `opt_in` (the old `enabled_by_default`, inverted), the veto seat
+    # is marked, and the cap on a seat count is sent.
+    assert all("enabled_by_default" not in s for s in out["seats"])
+    assert [s["name"] for s in out["seats"] if s["opt_in"]] == [
+        s.name for s in policy.SEATS if s.opt_in]
+    assert [s["name"] for s in out["seats"] if s["veto"]] == ["conformance"]
+    assert all(s["question"] for s in out["seats"])
+    assert out["max_seat_count"] == policy.MAX_SEAT_COUNT == 12
 
 
 def test_choosing_dimensions_is_saved_in_order_and_read_back(console):
@@ -146,6 +154,8 @@ def test_choosing_dimensions_is_saved_in_order_and_read_back(console):
     (["defect", "defect", "risk"], "named more than once"),
     (["defect", "risk"], "below the floor of 3"),
     ([], "at least one seat"),
+    # CHG-20261005-02 round 1: a named list that leaves out the veto seat is refused, floor met.
+    (["defect", "risk", "security"], "leaves out conformance, the veto seat"),
 ])
 def test_dimensions_refusals_are_the_settings_ones(console, bad, said):
     """The same refusals `runner settings` gives, because the route saves through `settings.save`.
@@ -167,6 +177,38 @@ def test_the_floor_can_be_crossed_only_with_high_risk_mode(console):
     console.settings_path.write_text(json.dumps({"high_risk_mode": True}), encoding="utf-8")
     code, out = console.post("/config/dimensions", {"review_dimensions": ["defect", "risk"]})
     assert code == 200 and out["review_dimensions"] == ["defect", "risk"], out
+
+
+def test_without_the_veto_seat_is_allowed_only_in_high_risk_mode(console):
+    """The veto seat is required unless high-risk mode is on (CHG-20261005-02, round 1).
+
+    Would fail if `_set_dimensions` skipped `settings.save` (the first answer would be 200).
+    """
+    chosen = ["defect", "risk", "security"]
+    code, out = console.post("/config/dimensions", {"review_dimensions": chosen})
+    assert code == 409 and "veto seat" in out["error"], out
+    console.settings_path.write_text(json.dumps({"high_risk_mode": True}), encoding="utf-8")
+    code, out = console.post("/config/dimensions", {"review_dimensions": chosen})
+    assert code == 200 and out["review_dimensions"] == chosen, out
+
+
+def test_opt_in_seats_open_only_when_named(console):
+    opt_in = [s.name for s in policy.SEATS if s.opt_in]
+    chosen = ["conformance", "defect", "risk", *opt_in]
+    code, out = console.post("/config/dimensions", {"review_dimensions": chosen})
+    assert code == 200 and out["review_dimensions"] == chosen, out
+
+
+def test_seat_models_are_distinct_registered_ids_and_the_refusal_is_the_servers(console):
+    """A duplicate and an unknown id are refused by the store (409) and nothing is written."""
+    code, out = console.post("/config/seats", {"seat": "risk", "model_id": ["opus", "opus"]})
+    assert code == 409 and "listed more than once" in out["error"], out
+    code, out = console.post("/config/seats", {"seat": "risk", "model_id": ["opus", "missing"]})
+    assert code == 409 and "'missing'" in out["error"], out
+    assert console.call("/config/nodes")[1]["seat_models"] == {}
+    code, _ = console.post("/config/seats", {"seat": "risk", "model_id": ["opus", "local"]})
+    assert code == 200
+    assert console.call("/config/nodes")[1]["seat_models"] == {"risk": ["opus", "local"]}
 
 
 def test_dimensions_refuses_what_is_not_a_list_and_a_stale_version(console):
@@ -493,6 +535,53 @@ def test_a_refused_dimension_choice_shows_the_servers_words_and_writes_nothing(c
     out = console.harness("save_dimensions", node=survey.id, steps=[{"untick": "risk"}],
                           press="clear (back to the default prefix)")
     assert out["error"] == "" and out["sent"][0]["body"]["review_dimensions"] is None
+
+
+@needs_node
+def test_the_chooser_marks_the_veto_seat_and_the_opt_in_seats_and_shows_each_question(console):
+    """Would fail if the page read `enabled_by_default` again, or dropped
+    a question or the veto wording.
+    """
+    seat_node = next(n for n in graph.NODES if n.mode == graph.SEAT_PANEL)
+    text = console.harness("panel", ids=[seat_node.id])["panels"][seat_node.id]["text"]
+    assert "veto seat, required unless high-risk mode is on" in text
+    assert text.count("opt-in, open only when ticked") == sum(s.opt_in for s in policy.SEATS)
+    assert all(s.question in text for s in policy.SEATS)
+
+
+@needs_node
+def test_a_default_choice_opens_no_opt_in_seat(console):
+    """Saving the untouched chooser sends the first three seats that are not opt-in."""
+    seat_node = next(n for n in graph.NODES if n.mode == graph.SEAT_PANEL)
+    out = console.harness("save_dimensions", node=seat_node.id, steps=[])
+    assert out["error"] == ""
+    assert out["sent"][0]["body"]["review_dimensions"] == [
+        s.name for s in policy.PREFIX_SEATS][:policy.SEAT_FLOOR]
+
+
+@needs_node
+def test_dropping_the_veto_seat_shows_the_servers_refusal_and_writes_nothing(console):
+    """Would fail if `panelError(e.message)` were dropped or `_set_dimensions` skipped the veto
+    rule."""
+    seat_node = next(n for n in graph.NODES if n.mode == graph.SEAT_PANEL)
+    out = console.harness("save_dimensions", node=seat_node.id, steps=[
+        {"untick": "conformance"}, {"tick": "security"}])
+    assert "leaves out conformance, the veto seat" in out["error"], out
+    assert "enable high-risk mode" in out["error"]
+    assert not console.settings_path.exists()
+
+
+@needs_node
+def test_a_duplicate_or_unknown_seat_model_shows_the_servers_words(console):
+    """Forced past the page's checkboxes, which cannot tick one model twice."""
+    seat_node = next(n for n in graph.NODES if n.mode == graph.SEAT_PANEL)
+    for ids, said in ((["opus", "opus"], "listed more than once"), (["nobody"], "'nobody'")):
+        body = {"seat": "risk", "model_id": ids}
+        shown = console.harness("drive_save", node=seat_node.id, path="/config/seats",
+                                body=body)["error"]
+        code, refusal = console.post("/config/seats", body)
+        assert code == 409 and shown == refusal["error"] and said in shown, shown
+    assert console.call("/config/nodes")[1]["seat_models"] == {}
 
 
 @needs_node
