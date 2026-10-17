@@ -702,8 +702,8 @@ function save(path, body, o) {
     panelStatus("Saved: " + o.label + " (version " + panelVersion + ").", true);
     return loadConfig(true).then(function (fresh) {
       if (!fresh) return;
-      // The read of the seats can be refused after a write that went through (the seats route
-      // does not read the settings file, the read does). It is said here, since nothing else
+      // The read of the seats can be refused after a write that went through (`POST /config/seats`
+      // does not read the settings file; `GET /config/seats` does). It is said here, since nothing else
       // redraws the part of the panel that would show it.
       if (seatInfoError) panelError(seatInfoError);
       var again = o.after && o.after();

@@ -73,14 +73,15 @@ This module already guarded that field — `policy.py` records that `load` refus
 commands in `ordinary_commands` *"so the operator finds out while configuring"*. A guard
 existed for the field whose existence the paragraph above it denied.
 
-A file that is missing or empty yields the **defaults** — floor enforced, high-risk mode off. A file
-that **exists and is malformed is an error**, not the defaults: falling back would make a typo
-indistinguishable from a deliberate choice, and **two of the six settings here relax a
-refusal**.
-(This paragraph has now been corrected twice for the same class of error. It once said "or
+A file that is **missing** yields the **defaults** — floor enforced, high-risk mode off. A file
+that **exists and is empty (or only whitespace), or is malformed, is an error**, not the
+defaults: falling back would make a typo indistinguishable from a deliberate choice, and **two of
+the six settings here relax a refusal**.
+(This paragraph has now been corrected three times for the same class of error. It once said "or
 corrupt yields the defaults" and contradicted `load()` directly below it; a verifier caught
 that, and the code was right. It then said *two* settings while `FIELDS` held three, and a
-seat caught that. A paragraph that counts the file it is in should be read against the file.)
+seat caught that. It then said an empty file yields the defaults after `load()` began refusing
+one, and a seat caught that. A paragraph that counts the file it is in should be read against the file.)
 """
 from __future__ import annotations
 

@@ -2060,7 +2060,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
             live = settings_mod.load(args.settings)
         except settings_mod.SettingsError as exc:
             raise CliError(f"{exc} — this walk is not started; fix the settings file, then "
-                           f"start the run again")
+                           f"start the run again") from exc
         coder = coder_defaults(current_assignments().get("node_models") or {},
                                store_mod.load_registry(db) or registry, live,
                                agent_command=bool(config.get("agent_command")))

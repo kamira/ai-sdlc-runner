@@ -142,7 +142,7 @@ This said *"Two fields, both about the seat floor"* over a table of two until CH
 floor — it is about what a permanent-halt check reads, which is a different subject in the same
 file.
 
-Missing or empty → the defaults. **Malformed → an error**, not the defaults: a typo must not be
+Missing → the defaults. **Empty or whitespace-only, or malformed → an error**, not the defaults: a typo must not be
 indistinguishable from a deliberate choice when two of the three settings, taken together, are a safety bypass. An
 unknown key is refused rather than ignored, because a setting nobody reads looks exactly like one
 that works.

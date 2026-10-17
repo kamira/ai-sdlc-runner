@@ -1068,8 +1068,8 @@ def test_a_save_goes_through_a_temp_file_and_replace_and_never_truncates_the_tar
 
 def test_an_existing_empty_settings_file_stops_the_walk_and_does_not_run_on_defaults(
         tmp_path, monkeypatch, capsys):
-    """*cut*: put `return Settings()` back for an empty file in `settings.load` and `make_config`
-    returns instead of raising."""
+    """*cut*: make `settings.load` return `Settings()` for an empty file; then `make_config` returns
+    instead of raising."""
     from test_model_tier_effort import TEMPLATE, _project
     _project(tmp_path, [dict(id="a", vendor="v", name="n", transport="cli", **TEMPLATE)])
     _, _, make_config = _serve_for_console(tmp_path, monkeypatch, capsys)
