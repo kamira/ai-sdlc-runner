@@ -230,9 +230,15 @@ nothing else moves. `_verify_or_refuse` accepts the two-column table below schem
 three-column one from then on. `store.seat_models` returns `{seat: [model_id, …]}`.
 **Schema 6 (CHG-20261016-01) adds `seat_specs`**, the user's role and spec per seat. A new table, so
 a schema-5 store reads back exactly as it was; the migration verifies the shape of what is there,
-creates the table and stamps the version in one transaction, like the others. Forward-only: a store
-opened by this runner is at 6 and an earlier runner refuses it, so back the store file up before
-upgrading. No foreign key on `model` (the empty string is a level, not a model):
+creates the table and stamps the version in one transaction, like the others. Forward-only, for the
+store and for the settings file. Opening the store with this runner stamps it 6, and the previous
+runner refuses a higher version ("upgrade the runner rather than opening it"); this happens with
+the table empty. `Settings.as_dict` writes `"seat_specs": []` into every settings file this runner
+saves, as it does `review_dimensions` and `coder_model` when unset, and the previous runner refuses
+a settings file with a key it does not read. Back up `config.sqlite` and the settings file before
+upgrading. To go back, restore both, or edit by hand: `DROP TABLE seat_specs;`
+`PRAGMA user_version = 5;` and remove the `seat_specs` key from the settings file. No foreign key
+on `model` (the empty string is a level, not a model):
 `store.set_seat_spec` checks a model-level entry's id against `models`, and refuses to drop a model
 that still has one (`_assigned_to`). `store.seat_specs` returns the entries, shared first. The
 settings file carries the same entries as `seat_specs`, and wins per level (`seatspec.merge`).

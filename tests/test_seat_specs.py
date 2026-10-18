@@ -558,10 +558,65 @@ def test_the_report_lists_every_session_and_says_no_role_no_spec_for_an_empty_on
     assert report.as_dict()["seat_briefs"] == [dict(b) for b in report.seat_briefs]
 
 
-def test_the_report_without_a_journal_still_lists_the_briefs_with_no_file():
+def test_a_library_walk_with_neither_journal_nor_store_keeps_no_file_and_says_so():
     _, report = walk([entry(seat="defect", role=AUDITOR)])
     assert report.seat_briefs and all(b["file"] is None for b in report.seat_briefs)
     assert all(b["sha256"] for b in report.seat_briefs)
+
+
+def test_a_walk_with_a_brief_store_and_no_journal_keeps_every_brief_and_links_it(tmp_path, repo):
+    """Cut: drop `brief_store=cfg.brief_store` from the seat `_ask` calls, or the fallback."""
+    store_dir = tmp_path / "briefs-only"
+    panel, report = walk([entry(seat="defect", role=AUDITOR, path="docs/device.md")],
+                         panel=Rec(seat_models={"defect": ["opus", "codex"]}),
+                         brief_store=engine.BriefStore(store_dir))
+    assert len(report.seat_briefs) == 2 * 4
+    for brief in report.seat_briefs:
+        stored = Path(brief["file"])
+        assert stored.parent == store_dir.resolve() and stored.name == f"{brief['ask_id']}.json"
+        data = stored.read_bytes()
+        assert hashlib.sha256(data).hexdigest() == brief["sha256"]
+        label = brief["model"] if brief["model"] in ("opus", "codex") else None
+        received = [o for s, lb, n, o in panel.orders
+                    if (s, lb, n) == (brief["seat"], label, brief["node_id"])]
+        assert data in [workorder.to_json(o).encode("utf-8") for o in received]
+    assert len(list(store_dir.glob("*.json"))) == len(report.seat_briefs)
+    assert not any(b["file"] is None for b in report.seat_briefs)
+
+
+def test_a_brief_store_is_not_made_when_no_seat_is_asked(tmp_path):
+    engine.BriefStore(tmp_path / "never")
+    assert not (tmp_path / "never").exists()
+
+
+def test_a_plain_run_with_no_journal_leaves_one_brief_per_session_equal_to_what_was_sent(
+        tmp_path, py_stub, capsys, repo):
+    """Cut: drop `brief_store=` from `cmd_run`'s config, or the seat `_ask` calls' `brief_store`."""
+    config, settings_file, plan_file, log = _shipped_with_log(
+        tmp_path, py_stub, seat_specs=[{"seat": "defect", "role": AUDITOR,
+                                        "spec": {"kind": "text", "path": "docs/device.md"}}],
+        review_dimensions=["conformance", "defect", "risk"])
+    code = cli.main(["--config", config, "--settings", settings_file, "run", "--undeclared",
+                     "allow", "--plan", plan_file, "--confirm", "merge"])
+    out = capsys.readouterr().out
+    assert code == 0, out
+    runs = list((repo / ".runner" / "briefs").iterdir())
+    assert len(runs) == 1, "one directory for this run"
+    stored = sorted(runs[0].glob("*.json"))
+    # Three seats at two nodes, one model each (the default backend).
+    assert len(stored) == 3 * 2
+    sent = [o for o in (json.loads(line) for line in log.read_text(encoding="utf-8").splitlines())
+            if o.get("seat")]
+    assert len(sent) == len(stored)
+    assert sorted(p.read_bytes() for p in stored) == sorted(
+        workorder.to_json(o).encode("utf-8") for o in sent)
+    # The report links each stored file, and `file` is never null for a session that was asked.
+    printed = [line for line in out.splitlines() if line.startswith("seat brief:")]
+    assert len(printed) == len(stored)
+    for path in stored:
+        assert str(path.resolve()) in out
+    assert "None" not in "".join(printed)
+    assert not (repo / ".runner" / "asks").exists() and not any(repo.glob("**/briefs/briefs"))
 
 
 def test_the_command_line_prints_each_brief_and_names_the_spec_file(tmp_path, py_stub, capsys,

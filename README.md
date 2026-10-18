@@ -199,15 +199,17 @@ text has a cap (role 500 characters, spec 8000, a file 32768 bytes), a spec file
 directory you start the runner from (no `..`, no link out), and one that cannot be read stops the
 run before any seat is asked. A spec file is sent to the model answering that seat, under the same
 `reach` the model has, and the report names the file. **Every seat's brief is recorded.** For each
-(seat, model) session the exact brief sent is kept in `briefs/` beside the ask journal with its
-sha256, the journal entry records the role, the spec (kind, source, the text as sent, its hash) and
+(seat, model) session the exact brief sent is kept with its sha256 — in `briefs/` beside the ask
+journal, or, for a `run` with no `--ask-journal`, in `.runner/briefs/<UTC time>-<id>/` — the
+journal entry records the role, the spec (kind, source, the text as sent, its hash) and
 the level each came from, and the run report lists them — "no role, no spec" for a seat with
 neither. A resume re-asks a session whose brief changed and reuses one that did not. What this costs
 and what it is not: a role narrows a seat's focus; a spec is text the model reasons from, **not**
 something measured on a device; a wrong spec misleads with confidence and its correctness is yours
 (the runner checks size and place, not content); a spec file in the repository is a way to plant
 instructions, which the labelling and the hash make visible and do not prevent; and it is another
-schema bump (6; back the store up before upgrading). The spec has a `kind` field and only `text`
+schema bump (6; forward-only for the store and the settings file: back both up before
+upgrading, rollback is in `docs/DATABASE.md`). The spec has a `kind` field and only `text`
 exists: [`docs/MODELS.md`](docs/MODELS.md) says what a later kind would need.
 
 Adjudication is **veto → majority → a tie decides nothing**. The veto seat's subject is a matter of
@@ -910,7 +912,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 3109 tests
+pytest -q          # 3112 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

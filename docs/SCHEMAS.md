@@ -231,7 +231,8 @@ design**, and it overwrites.
 **`brief` is what a seat session was sent** (CHG-20261016-01). The brief is the work order exactly
 as the process receives it, `workorder.to_json(order)` as UTF-8, kept byte for byte in
 `briefs/<ask_id>.json` beside the entries (a subdirectory, so it is never read as an ask) with its
-sha256 in the entry. `file` is `null` and nothing is kept when the run has no ask journal. `role`
+sha256 in the entry. A run with no ask journal keeps the same file in its own directory instead
+(`runner run`: `.runner/briefs/<UTC time>-<id>/<ask_id>.json`), but writes no entry. `role`
 and `spec` are the user's text in that brief with the level each came from, or `null`; both `null`
 is a seat asked its own question and nothing more. `spec.text` is the text **copied when the walk
 started**, so a spec file edited later leaves this entry as it was; `spec.sha256` is that text's
@@ -451,12 +452,13 @@ is its registry id, or its argv joined by spaces for a command; a seat nobody ro
 while one of its models named no verdict adds `unreached` (`{seat: ["seat (model)", …]}`).
 
 `seat_briefs` (CHG-20261016-01) is one entry per seat session, in the order asked, for
-`seat_briefs` (CHG-20261016-01) is one entry per seat session, in the order asked, for
 `intake_review` and `lead_review`: `{ask_id, node_id, seat, model, position, summary, sha256, file,
 role, spec, reused}`. `summary` reads "no role, no spec" for a seat with neither, so an empty one is
 visible and not missing, and otherwise names the level each text came from and, for a file, its path
 (a spec file is sent to that seat's model, under the same `reach` the model has). `file` links the
-stored brief (the absolute path), `null` without an ask journal; `sha256` is the brief's; `role` and
+stored brief (the absolute path, in the journal's `briefs/` or in the run's own brief directory;
+`null` only for a caller of `engine.walk` that gave neither a journal nor a `brief_store`);
+`sha256` is the brief's; `role` and
 `spec` are the journal's records (the spec text as sent, with its kind, source and hash); `reused`
 is true when a resume answered the session from the journal. The verdict was reasoned from the
 spec's text, not measured on a device.

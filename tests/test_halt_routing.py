@@ -283,7 +283,11 @@ def test_both_ways_to_start_a_run_take_the_same_governance():
     # CHG-20260901-16 recorded that as a gap it did not close, and CHG-20260903-22 closed it, so the
     # exemptions came out with the flag going in. An exemption that outlives its reason is a
     # permission nobody re-reads.
-    only_on_run = {}
+    only_on_run = {
+        # CHG-20261016-01, round 1: `serve` always has an ask journal (`--ask-journal` or
+        # `<token-dir>/asks`), which keeps the briefs; only `run` can be without one.
+        "brief_store": "serve always has an ask journal, which keeps the briefs",
+    }
     # Three things the console collects from a browser and a command line cannot: files handed
     # over, extra instructions typed mid-run, and a refusal with a reason. `intake_history` was a
     # fourth entry here until CHG-20260901-17 — and it had no reason, because it is not a console

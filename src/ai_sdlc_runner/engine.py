@@ -112,6 +112,27 @@ def _as_factory(dispatch) -> SessionFactory:
     return (lambda: _OneShot(dispatch)) if len(required) == 1 else dispatch
 
 
+class BriefStore:
+    """Where a run with no ask journal keeps each seat session's brief (CHG-20261016-01, round 1).
+
+    One file per ask id, byte for byte what was sent. The directory is made when the first brief is
+    written, so a run that asks no seat leaves nothing behind. `AskJournal` has the same two
+    methods, keeping its briefs under `briefs/` beside the entries.
+    """
+
+    def __init__(self, directory: str | Path):
+        self.dir = Path(directory)
+
+    def brief_path(self, ask_id: str) -> Path:
+        return self.dir / f"{ask_id}.json"
+
+    def record_brief(self, ask_id: str, sent: bytes) -> str:
+        """Keep the brief that was sent; return its file name, relative to the directory."""
+        paths.makedirs(self.dir)
+        paths.write_bytes(self.brief_path(ask_id), sent)
+        return f"{ask_id}.json"
+
+
 class AskJournal:
     """Write the question down before asking it, so a lost session costs only the answer."""
 
@@ -822,6 +843,10 @@ class RunConfig:
     rulings: Sequence["Ruling"] = ()
     max_steps: int = 200
     journal: Optional[AskJournal] = None
+    #: Where seat briefs are kept when there is no journal (CHG-20261016-01, round 1). With a
+    #: journal they sit beside its entries and this is not read. `None` keeps none, which is only
+    #: a library caller's choice: `runner run` always sets one.
+    brief_store: Optional[BriefStore] = None
     #: Where every turn of this run is written down as it happens — see `conversations.py`.
     #:
     #: **Not the journal, and not derived from it.** Both review seats refused that design: the
@@ -1372,7 +1397,8 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
          position: Optional[int] = None, voice: Optional[str] = None,
          identity: Optional[Mapping[str, object]] = None,
          brief: Optional[Mapping[str, object]] = None,
-         briefs: Optional[List[Dict[str, object]]] = None):
+         briefs: Optional[List[Dict[str, object]]] = None,
+         brief_store: Optional[BriefStore] = None):
     """Open a session, ask once, close it — the close guaranteed even if the ask raises.
 
     ``seen`` holds the session **objects**, not their ``id()``: an id is not an identity once the
@@ -1384,6 +1410,8 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
     previous version did not do: it wrote the record, then re-asked everything anyway.
     """
     sha = ""
+    # Beside the journal when there is one, else in the run's own brief directory.
+    keeper = journal if journal is not None else brief_store
     if seat is not None:
         # The brief is the order as it goes out: `workorder.to_json` is what a process is given on
         # its stdin. Its hash is part of the voice when the user set a role or a spec, so an answer
@@ -1398,7 +1426,7 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
         if briefs is None or seat is None:
             return
         kept = dict(record) if record else _brief_record(brief, sha)
-        file = journal.brief_path(ask_id).resolve() if kept.get("file") and journal and ask_id \
+        file = keeper.brief_path(ask_id).resolve() if kept.get("file") and keeper and ask_id \
             else None
         briefs.append({
             "ask_id": ask_id or "", "node_id": node_id, "seat": seat,
@@ -1455,9 +1483,9 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
             if journal is not None and ask_id is not None:
                 journal.forget_after(ask_id)
     kept = None
+    if seat is not None and keeper is not None and ask_id is not None:
+        kept = _brief_record(brief, sha, keeper.record_brief(ask_id, sent))
     if journal is not None and ask_id is not None:
-        if seat is not None:
-            kept = _brief_record(brief, sha, journal.record_brief(ask_id, sent))
         journal.record(ask_id, node_id, seat, order, voice=identity, brief=kept)
     _listed(kept, False)
     # The conversation gets the model by name. The journal keeps a seat ask's `voice` (model and
@@ -3523,7 +3551,8 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                                       heard=lambda a, _n=node: _heard(_n, SURVEY, a),
                                       position=position, voice=label,
                                       identity=_seat_identity(factory, seat, position, label),
-                                      brief=brief, briefs=report.seat_briefs)
+                                      brief=brief, briefs=report.seat_briefs,
+                                      brief_store=cfg.brief_store)
                         report.asks.append(Ask(node.id, node.role, seat, result,
                                                model=label, position=position))
                         _record_seat_model(report, node, seat, label)
@@ -3644,7 +3673,8 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                                       heard=lambda a, _n=node: _heard(_n, SEATS, a),
                                       position=position, voice=label,
                                       identity=_seat_identity(factory, seat, position, label),
-                                      brief=brief, briefs=report.seat_briefs)
+                                      brief=brief, briefs=report.seat_briefs,
+                                      brief_store=cfg.brief_store)
                         report.asks.append(Ask(node.id, node.role, seat, result,
                                                model=label, position=position))
                         _record_seat_model(report, node, seat, label)

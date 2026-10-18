@@ -309,6 +309,9 @@ A spec file is part of what is sent to that seat's model, so it travels under th
 spec read by an `external` model leaves the machine, and the report names the file. The brief sent
 to each (seat, model) session is stored whole with its sha256 (`docs/SCHEMAS.md` §7).
 
+A spec file that the change under review can edit is a weaker spec than one it cannot: it is read
+when each run starts, and an edit is visible by its hash and by the session being asked again.
+
 *The `kind` of a spec is reserved.* Only `text` exists: the seat reads words and reasons from them,
 and nothing runs on, or emulates, a device — "2 GB RAM" in a spec is a sentence a model can
 misjudge, not a measurement. A later kind would hand a seat evidence from a real or emulated run

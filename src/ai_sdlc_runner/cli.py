@@ -23,6 +23,8 @@ import json
 import os
 import subprocess
 import sys
+import time
+import uuid
 from dataclasses import replace
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
@@ -1581,6 +1583,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         undeclared=args.undeclared,
         resume=bool(args.resume),
         journal=journal,
+        # A run with no ask journal has no directory of its own, and its briefs are recorded all
+        # the same (CHG-20261016-01, round 1): `.runner/briefs/<UTC time>-<id>/`, next to the
+        # `.runner/config.sqlite` it reads by default, one directory per run. Made when the first
+        # seat is asked. With a journal the briefs sit beside it and this is not used.
+        brief_store=None if journal else engine.BriefStore(
+            Path(".runner") / "briefs"
+            / f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{uuid.uuid4().hex[:8]}"),
         # How many times this run has already stopped asking for each aspect. `serve` has passed
         # this since intake shipped; `run` never did, so it was `()` on every invocation and
         # `intake.times_asked` was hard-wired to 0 — which meant the escalation to options could
