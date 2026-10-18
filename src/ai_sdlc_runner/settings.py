@@ -25,7 +25,7 @@ a file rather than a habit nobody wrote down.
 adjudication rule** — `policy.GATES`, `policy.PERMANENT_HALT_KINDS` and `policy.adjudicate` own
 those and take no input from here.
 
-**Two of the six fields do change whether a stop happens**, and this paragraph used to deny it
+**Two of the seven fields do change whether a stop happens**, and this paragraph used to deny it
 (CHG-20260903-47, defect seat L-13). Measured:
 
 - `review_seats=1` makes `undecided` **unreachable**: one seat cannot split, and `undecided` is the
@@ -76,7 +76,7 @@ existed for the field whose existence the paragraph above it denied.
 A file that is **missing** yields the **defaults** — floor enforced, high-risk mode off. A file
 that **exists and is empty (or only whitespace), or is malformed, is an error**, not the
 defaults: falling back would make a typo indistinguishable from a deliberate choice, and **two of
-the six settings here relax a refusal**.
+the seven settings here relax a refusal**.
 (This paragraph has now been corrected three times for the same class of error. It once said "or
 corrupt yields the defaults" and contradicted `load()` directly below it; a verifier caught
 that, and the code was right. It then said *two* settings while `FIELDS` held three, and a
@@ -90,7 +90,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from . import models, paths, policy, tui
+from . import models, paths, policy, seatspec, tui
 
 DEFAULT_PATH = "config/settings.json"
 
@@ -98,7 +98,7 @@ DEFAULT_PATH = "config/settings.json"
 #: setting nobody reads looks identical to a setting that works, and the whole point of this file is
 #: that a relaxation is visible.
 FIELDS: Tuple[str, ...] = ("review_seats", "high_risk_mode", "ordinary_commands",
-                           "coder_model", "coder_effort", "review_dimensions")
+                           "coder_model", "coder_effort", "review_dimensions", "seat_specs")
 
 #: The efforts `coder_effort` may name. The runner passes the word through a model's own
 #: `effort_argv` template and knows nothing more about it.
@@ -151,6 +151,11 @@ class Settings:
     #: that prefix and `review_seats` is ignored — `describe()` says so. The floor applies to its
     #: length, and only high-risk mode lowers it.
     review_dimensions: Optional[Tuple[str, ...]] = None
+    #: The user's role and spec for a seat, at three levels (CHG-20261016-01): one model on a seat,
+    #: the whole seat, or every open seat. Added to the seat's brief below its question; never read
+    #: by a vote, a veto or the adjudication. Empty is today's brief, byte for byte. The console
+    #: stores its own in the assignment store; the entries here win per level (`seatspec.merge`).
+    seat_specs: Tuple["seatspec.SeatSpec", ...] = ()
 
     def seats(self) -> int:
         """The seat count a run would actually open.
@@ -190,7 +195,8 @@ class Settings:
                 "ordinary_commands": list(self.ordinary_commands),
                 "coder_model": self.coder_model, "coder_effort": self.coder_effort,
                 "review_dimensions": (list(self.review_dimensions)
-                                      if self.review_dimensions is not None else None)}
+                                      if self.review_dimensions is not None else None),
+                "seat_specs": [e.as_dict() for e in self.seat_specs]}
 
     def describe(self) -> str:
         seats = self.seats()
@@ -222,6 +228,9 @@ class Settings:
                  f"  |  coder model: {self.coder_model}" if self.coder_model
                  else "  |  coder model: the registry's only mid-tier model, if there is one")
         line += f"  |  coder effort: {self.coder_effort}"
+        if self.seat_specs:
+            line += (f"  |  seat specs: {len(self.seat_specs)} "
+                     f"({'; '.join(seatspec.describe_key(e.key) for e in self.seat_specs)})")
         return line
 
 
@@ -230,7 +239,7 @@ def load(path: str = DEFAULT_PATH) -> Settings:
 
     A missing file is the defaults. A file that **exists and is malformed** is an error rather than
     the defaults: silently falling back would make a typo indistinguishable from a deliberate
-    choice, and two of the six settings here relax a refusal. **An existing file that is empty is
+    choice, and two of the seven settings here relax a refusal. **An existing file that is empty is
     malformed** (CHG-20261005-03, round 4): it is what an interrupted in-place write leaves, and
     reading it as the defaults would run a walk that cannot be undone with `high_risk_mode` off and
     the operator's seats gone.
@@ -272,6 +281,7 @@ def load(path: str = DEFAULT_PATH) -> Settings:
     coder_model = _check_coder_model(raw.get("coder_model", ""), where=path)
     coder_effort = _check_effort(raw.get("coder_effort", DEFAULT_EFFORT), where=path)
     dimensions = _check_dimensions(raw.get("review_dimensions"), high_risk, where=path)
+    specs = _check_seat_specs(raw.get("seat_specs"), where=path)
 
     # **Stored as it was validated** (CHG-20260904-17). The checks below strip and `recognise`
     # casefolds without stripping, so `"  npm  "` loaded clean, appeared in `describe()`, and
@@ -280,7 +290,19 @@ def load(path: str = DEFAULT_PATH) -> Settings:
     return Settings(review_seats=seats, high_risk_mode=high_risk,
                     ordinary_commands=_check_vouched(commands, where=path),
                     coder_model=coder_model, coder_effort=coder_effort,
-                    review_dimensions=dimensions)
+                    review_dimensions=dimensions, seat_specs=specs)
+
+
+def _check_seat_specs(value, *, where: str = "settings") -> Tuple["seatspec.SeatSpec", ...]:
+    """The seat specs as a tuple, or a `SettingsError` with the validator's own sentence.
+
+    The same `seatspec.parse` the store and the console use, so a role that the console refuses is
+    refused here, and the screen cannot write what `load` will not open.
+    """
+    try:
+        return seatspec.parse(value, where=f"{where}: seat_specs")
+    except seatspec.SeatSpecError as exc:
+        raise SettingsError(str(exc)) from exc
 
 
 def _check_dimensions(value, high_risk_mode: bool, *, where: str = "settings"):
@@ -379,6 +401,7 @@ def save(settings: Settings, path: str = DEFAULT_PATH) -> None:
     _check_coder_model(settings.coder_model, where=path)
     _check_effort(settings.coder_effort, where=path)
     _check_dimensions(settings.review_dimensions, settings.high_risk_mode, where=path)
+    _check_seat_specs(settings.seat_specs, where=path)
     p = Path(path)
     paths.makedirs(p.parent)
     # Written beside the file and moved onto it: `paths.write_text` truncates first, and a walk
@@ -458,6 +481,10 @@ def _screen(current: Settings):
          _edit_coder_model),
         ("Coder effort", f"currently {current.coder_effort}; engineer_build and what follows it",
          _edit_coder_effort),
+        ("Seat specs",
+         "; ".join(seatspec.describe_key(e.key) for e in current.seat_specs) if current.seat_specs
+         else "none — every seat is asked its own question and nothing more",
+         _edit_seat_specs),
         ("Save and close", "write the choices above to the settings file", _SAVE),
         ("Discard", "leave everything as it was", _DISCARD),
     ]
@@ -594,6 +621,47 @@ def _edit_coder_effort(current: Settings, *, input_fn, stream_out, notes=None) -
     if choice is None:
         return current
     return replace(current, coder_effort=rows[choice][2])
+
+
+def _edit_seat_specs(current: Settings, *, input_fn, stream_out, notes=None) -> Settings:
+    """Add, replace or remove the user's role and spec for a seat (CHG-20261016-01).
+
+    One level at a time: shared, a seat, or one model on a seat. Every text goes through
+    `seatspec.parse_entry`, the validator `load` uses, so a refusal here is the one the file would
+    give and nothing is written that the file will not open.
+    """
+    rows = [("Add or replace one",
+             "the role and spec for the shared level, a seat or a model", None)]
+    for entry in current.seat_specs:
+        rows.append((f"Remove {seatspec.describe_key(entry.key)}",
+                     "stop adding its text to the brief", entry.key))
+    choice = tui.select("Seat specs", [row[:2] for row in rows],
+                        input_fn=input_fn, stream_out=stream_out)
+    if choice is None:
+        return current
+    if rows[choice][2] is not None:
+        return replace(current, seat_specs=tuple(
+            e for e in current.seat_specs if e.key != rows[choice][2]))
+    ask = lambda prompt: str(input_fn(prompt) or "").strip()      # noqa: E731
+    seat = ask("Seat (blank for every open seat; one of "
+               f"{', '.join(policy.BY_SEAT)}): ")
+    model = ask("Model id on that seat (blank for the whole seat): ") if seat else ""
+    role = ask("Review as (the role; blank for none): ")
+    where = ask("Spec as `text` or `path` (blank for none): ").casefold()
+    spec = None
+    if where in ("text", "path"):
+        spec = {"kind": "text", where: ask(f"Spec {where}: ")}
+    elif where:
+        _refused(f"not kept: spec is `text` or `path`, got {where!r}", notes, stream_out)
+        return current
+    try:
+        entry = seatspec.parse_entry({"seat": seat, "model": model, "role": role, "spec": spec})
+        merged = tuple(e for e in current.seat_specs if e.key != entry.key) + (entry,)
+        _check_seat_specs([e.as_dict() for e in merged])
+    except (seatspec.SeatSpecError, SettingsError) as refused:
+        _refused(f"not kept: {refused}", notes, stream_out)
+        return current
+    return replace(current, seat_specs=merged)
 
 
 def _toggle_high_risk(current: Settings, *, input_fn, stream_out, notes=None) -> Settings:

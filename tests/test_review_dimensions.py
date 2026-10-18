@@ -578,8 +578,10 @@ def test_a_real_v4_store_migrates_to_5_and_keeps_every_single_assignment(tmp_pat
     path = tmp_path / "v4.sqlite"
     _v4_store(path)
     db = store.connect(path)
-    assert store.SCHEMA_VERSION == 5
-    assert db.execute("PRAGMA user_version").fetchone()[0] == 5
+    # Schema 5 is where `seat_assignments` became a list; a later bump (6, CHG-20261016-01) goes
+    # on through it, so what is checked is that the store reaches the current version.
+    assert store.SCHEMA_VERSION >= 5
+    assert db.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
     assert [r[1] for r in db.execute("PRAGMA table_info(seat_assignments)")] == [
         "seat", "position", "model_id"]
     assert store.seat_models(db) == {"defect": ["opus"], "risk": ["codex"]}

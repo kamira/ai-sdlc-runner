@@ -617,15 +617,15 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "contradiction", "a section heading may contradict the row it heads again",
         REPO / "docs" / "SCHEMAS.md",
-        '''## 14 · SQLite DDL — six of six tables built''',
+        '''## 14 · SQLite DDL — seven of seven tables built''',
         '''## 14 · SQLite DDL — three of five tables built''',
         "tests/test_documented_numbers.py"),
 
     Mutation(
         "contradiction", "a route count may disagree with the server again",
         REPO / "docs" / "SCHEMAS.md",
-        '''Twenty-two routes, ten `GET` and twelve `POST`, every one crossing''',
-        '''Twenty-two routes, ten `GET` and nine `POST`, every one crossing''',
+        '''Twenty-three routes, ten `GET` and thirteen `POST`, every one crossing''',
+        '''Twenty-three routes, ten `GET` and nine `POST`, every one crossing''',
         "tests/test_documented_numbers.py"),
 
     Mutation(
@@ -651,8 +651,8 @@ MUTATIONS: List[Mutation] = [
     Mutation(
         "claim-referent", "a field count may stop saying what it counts again",
         REPO / "docs" / "structure" / "design.md",
-        '''**Six fields, listed in `settings.FIELDS`.**''',
-        '''**Six fields.**''',
+        '''**Seven fields, listed in `settings.FIELDS`.**''',
+        '''**Seven fields.**''',
         "tests/test_documented_numbers.py"),
 
     Mutation(

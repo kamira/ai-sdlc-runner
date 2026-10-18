@@ -301,6 +301,33 @@ read as a command. The plan accepts a string or a non-empty list of strings, che
 and `serve` against the registry before a run; the store holds ids only; `POST /config/seats` takes
 `model_id` as a string or a list of ids.
 
+**A role and a spec on a seat (CHG-20261016-01).** `seat_specs` adds the user's text to what a
+seat's model is asked and chooses no model: see [`seatspec.py`](../src/ai_sdlc_runner/seatspec.py).
+Three levels, most specific first — one model on one seat, the whole seat, every open seat — and
+each text (role, spec) comes from the most specific level that sets it; two roles are never joined.
+A spec file is part of what is sent to that seat's model, so it travels under the model's `reach`: a
+spec read by an `external` model leaves the machine, and the report names the file. The brief sent
+to each (seat, model) session is stored whole with its sha256 (`docs/SCHEMAS.md` §7).
+
+*The `kind` of a spec is reserved.* Only `text` exists: the seat reads words and reasons from them,
+and nothing runs on, or emulates, a device — "2 GB RAM" in a spec is a sentence a model can
+misjudge, not a measurement. A later kind would hand a seat evidence from a real or emulated run
+instead of only words: a CI matrix entry, an emulator or container profile, a remote device, a
+measured benchmark. Each is its own change, and would have to say **what runs, where, and what
+leaves the machine**, how its evidence is attached to the brief (logs, measurements) and recorded in
+the same journal fields, and how a changed environment is told from an unchanged one on resume.
+Until then a `kind` other than `text` is refused rather than ignored.
+
+*What it costs.* A role narrows a seat's focus (it is added below the seat's question and never
+replaces it). The verdict was reasoned from the text, not measured. A wrong or loose spec misleads
+with confidence: the runner checks size and place, never content, and the spec's correctness is the
+user's. Prompt injection through a spec file in the repository is lowered, not removed: the text is
+labelled as the user's, kept apart from the seat's instructions, its hash is in the record, and it
+cannot change a vote, a veto or the adjudication. A spec file is sent to a model and adds to every
+round's cost, so each text has a size cap. Three levels with replace-not-merge can hide which one
+applied, so the report and the console show the level used per (seat, model). The store schema is
+bumped to 6, forward-only.
+
 **The one legacy form** is a flat argv list — `--seat-model SEAT="python3 agent.py"`, or
 `session_factory(seat_models={"conformance": ["python3", "agent.py"]})`. `cli.session_factory`
 alone reads it, and only when the list's first word is not a registry model id (or there is no

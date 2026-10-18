@@ -44,11 +44,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
-from . import graph, models as models_mod, paths, policy
+from . import graph, models as models_mod, paths, policy, seatspec
 
 #: Bumped when the tables change. Read and compared at open — a version nobody consults is a number,
 #: not a mechanism, which is what an earlier draft of the design was pulled up for.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 #: The modes that do **something** with a list of models. The other four ignore it entirely, and
 #: assigning to them is refused rather than stored: a setting that looks configured and does nothing
@@ -267,6 +267,15 @@ def _migrate(db: sqlite3.Connection) -> None:
                            "SELECT seat, 0, model_id FROM seat_assignments_v4")
                 db.execute("DROP TABLE seat_assignments_v4")
             db.execute("PRAGMA user_version = 5")
+    if found < 6:
+        # Schema 6 adds the user's role and spec per seat (CHG-20261016-01): a new table, so an
+        # older store reads back exactly as it was. Same rules as the blocks above.
+        _verify_or_refuse(db, before=5)
+        with _locked(db), db:
+            db.execute("BEGIN")            # see schema 1: DDL does not open one by itself
+            for statement in _SCHEMA_6:
+                db.execute(statement)
+            db.execute("PRAGMA user_version = 6")
     db.commit()
 
 
@@ -368,6 +377,24 @@ _SEAT_ASSIGNMENTS_5 = """CREATE TABLE seat_assignments (
          PRIMARY KEY (seat, position)
        )"""
 
+#: Schema 6: the user's role and spec for a seat. `seat` empty is the level shared by every open
+#: seat, `model` empty is the whole seat; (seat, model) is the key, so one level holds one entry.
+#: No foreign key on `model`: the empty string is a level, not a model, and `set_seat_spec` checks
+#: the id against `models` itself. `spec_kind` is reserved (only `text` exists); an entry has either
+#: `spec_text` (inline) or `spec_path` (a file in the repository), and the text is never stored for
+#: a path -- the file is read when the run starts.
+_SCHEMA_6 = (
+    """CREATE TABLE IF NOT EXISTS seat_specs (
+         seat      TEXT NOT NULL,
+         model     TEXT NOT NULL,
+         role      TEXT NOT NULL DEFAULT '',
+         spec_kind TEXT NOT NULL DEFAULT '',
+         spec_text TEXT NOT NULL DEFAULT '',
+         spec_path TEXT NOT NULL DEFAULT '',
+         PRIMARY KEY (seat, model)
+       )""",
+)
+
 #: `models` as schema 1 created it. A store below schema 4 must hold exactly this, because the
 #: columns the schema-4 block adds are not there yet.
 _MODELS_BEFORE_4 = ("id", "vendor", "name", "transport", "command_json", "endpoint", "key_env",
@@ -378,6 +405,7 @@ _EXPECTED = {
     "models": _MODELS_BEFORE_4 + ("tier", "effort_argv", "declared_reach"),
     "node_assignments": ("node_id", "ordinal", "model_id"),
     "seat_assignments": ("seat", "position", "model_id"),
+    "seat_specs": ("seat", "model", "role", "spec_kind", "spec_text", "spec_path"),
     "conversations": ("conversation_id", "project_id", "project_name", "schema", "run_json"),
     "turns": ("conversation_id", "seq", "kind", "at", "body_json"),
 }
@@ -471,7 +499,11 @@ def _assigned_to(db: sqlite3.Connection, model_id: str) -> List[str]:
     seats = [f"seat {row[0]!r}" for row in db.execute(
         "SELECT DISTINCT seat FROM seat_assignments WHERE model_id = ? ORDER BY seat",
         (model_id,))]
-    return nodes + seats
+    # A spec written for this model on a seat is a standing setting about it, and nothing else would
+    # say it was still there (CHG-20261016-01).
+    specs = [f"the spec for it on seat {row[0]!r}" for row in db.execute(
+        "SELECT seat FROM seat_specs WHERE model = ? ORDER BY seat", (model_id,))]
+    return nodes + seats + specs
 
 
 def stored_model_ids(path: "str | Path") -> frozenset:
@@ -604,6 +636,54 @@ def set_seat_model(db: sqlite3.Connection, seat: str,
             except sqlite3.IntegrityError:
                 raise StoreError(
                     f"no model {model_id!r} in this store; assign one the registry has") from None
+
+
+def set_seat_spec(db: sqlite3.Connection, entry: Mapping[str, object],
+                  root: "str | Path | None" = None) -> None:
+    """Set one level's role and spec, or clear that level when both are empty.
+
+    `entry` is the object `seatspec.parse_entry` reads (`seat`, `model`, `role`, `spec`), checked by
+    it, so the store refuses exactly what the settings file and the console refuse. A model-level
+    entry must name a model in this store: an id nobody has would look configured and do nothing.
+    """
+    role, spec = entry.get("role"), entry.get("spec")
+    # Empty means "clear this level": no role (or a blank one) and no spec. A role that is not text
+    # is not empty, and goes to the validator to be refused.
+    if (role is None or (isinstance(role, str) and not role.strip())) and not spec:
+        # Nothing to set: clear that level. Its seat and model are still checked, with a stand-in
+        # role, so a typo in the level does not "clear" something that was never there.
+        try:
+            level = seatspec.parse_entry({"seat": entry.get("seat"), "model": entry.get("model"),
+                                          "role": "-"}, root, where="seat spec")
+        except seatspec.SeatSpecError as exc:
+            raise StoreError(str(exc)) from exc
+        with _locked(db), db:
+            db.execute("DELETE FROM seat_specs WHERE seat = ? AND model = ?", level.key)
+        return
+    try:
+        parsed = seatspec.parse_entry(entry, root, where="seat spec")
+    except seatspec.SeatSpecError as exc:
+        raise StoreError(str(exc)) from exc
+    with _locked(db), db:
+        if parsed.model and not db.execute("SELECT 1 FROM models WHERE id = ?",
+                                           (parsed.model,)).fetchone():
+            raise StoreError(f"no model {parsed.model!r} in this store; a spec for a model on a "
+                             f"seat needs a model the registry has")
+        db.execute("DELETE FROM seat_specs WHERE seat = ? AND model = ?", parsed.key)
+        db.execute(
+            "INSERT INTO seat_specs (seat, model, role, spec_kind, spec_text, spec_path) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (parsed.seat, parsed.model, parsed.role, parsed.kind, parsed.text, parsed.path))
+
+
+def seat_specs(db: sqlite3.Connection) -> Tuple["seatspec.SeatSpec", ...]:
+    """The stored role and spec entries, shared first, then by seat and model."""
+    with _locked(db):
+        rows = db.execute(
+            "SELECT seat, model, role, spec_kind, spec_text, spec_path FROM seat_specs "
+            "ORDER BY seat != '', seat, model != '', model").fetchall()
+    return tuple(seatspec.SeatSpec(seat=r[0], model=r[1], role=r[2], kind=r[3], text=r[4],
+                                   path=r[5]) for r in rows)
 
 
 def set_halt_recipient(db: sqlite3.Connection, kind: str, recipient: Optional[str]) -> None:

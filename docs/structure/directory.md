@@ -37,17 +37,18 @@ ai-sdlc-runner/
 │   ├── sandbox.py             # what a run is permitted to reach, and what it records when it cannot
 │   ├── cli.py                 # flow / policy / run
 │   ├── settings.py            # what the user sets on a screen: seats, high-risk mode, the coder
+│   ├── seatspec.py            # the user's role and spec for a seat: validation, levels, the brief
 │   ├── detect.py              # which model CLIs are installed, for `runner setup`
 │   ├── usage.py               # what each ask used, and the quota a backend says remains
 │   └── tui.py                 # the interactive selector, and the high-risk-mode toggle
-│                              #   All twenty-one are listed. This tree held ten, and the README's
+│                              #   All twenty-two are listed. This tree held ten, and the README's
 │                              #   own list held twelve — two documents disagreeing about what
 │                              #   the package is, with nothing comparing either to `src/`
 │                              #   (CHG-20260905-05). `test_documented_numbers` now does.
 ├── docs/ARCHITECTURE.md       # the overview; the structure docs below carry the detail
 ├── config/
 │   ├── runner.yaml            # dispatch settings only — no skill path, because there is no skill
-│   └── settings.json          # written by `runner settings`; six keys, and NOT in the
+│   └── settings.json          # written by `runner settings`; seven keys, and NOT in the
 │                              #   repository — per-operator state, `.gitignore`d, because
 │                              #   committing it makes one person's bypass everyone's default
 └── docs/

@@ -55,6 +55,7 @@ from typing import Callable, Dict, FrozenSet, Iterable, List, Mapping, Optional
 from . import attachments as attach_mod
 from . import paths
 from . import engine, graph, intake as intake_mod, models as models_mod, policy, store as store_mod
+from . import seatspec
 from . import settings as settings_mod
 from . import usage as usage_mod
 
@@ -1301,7 +1302,7 @@ def make_handler(runner: Runner, operator: Operator,
         held["source"] = source
         return {**merged, "source": source}
 
-    def _config_edit(body, write):
+    def _config_edit(body, write, answer=None):
         """Check the version, write, and advance it — **without letting go in between.**
 
         The first correction did all three and released the lock between each, which is a
@@ -1333,7 +1334,10 @@ def make_handler(runner: Runner, operator: Operator,
                     write()
                 except store_mod.StoreError as exc:
                     raise ServerError(str(exc))
-                return _reassign()
+                out = _reassign()
+                # What the route answers when it is not the assignment: `/config/seat_specs`
+                # answers the seats shape, as `/config/dimensions` does.
+                return out if answer is None else answer()
 
         out, produced = runner.edit_versioned(body.get("version"), under_lock)
         return {**out, "version": produced}
@@ -1356,6 +1360,25 @@ def make_handler(runner: Runner, operator: Operator,
             raise ServerError("`model_id` is a model id or a list of them — empty clears the seat")
         return _config_edit(body, lambda: store_mod.set_seat_model(db, seat, model_id or None))
 
+    def _set_seat_spec(body):
+        """Set (or clear) the user's role and spec for one level of one seat (CHG-20261016-01).
+
+        Goes through `store.set_seat_spec`, so the refusals are the ones the settings file gives:
+        size, a path outside the repository, an unknown seat or kind. A level the settings file
+        already sets is refused by name: it wins at run time, so a save here would look kept and do
+        nothing.
+        """
+        entry = {k: body[k] for k in ("seat", "model", "role", "spec") if k in body}
+        key = (str(entry.get("seat") or "").strip(), str(entry.get("model") or "").strip())
+        from_file = {e.key for e in _load_settings().seat_specs} if settings_path else set()
+        if key in from_file:
+            raise ServerError(
+                f"{seatspec.describe_key(key)} is set by the settings file {settings_path}, and "
+                f"the file wins over the console. Edit it there (`runner settings`) or remove it "
+                f"from the file first.")
+        return _config_edit(body, lambda: store_mod.set_seat_spec(db, entry),
+                            answer=_seat_choices)
+
     def _load_settings():
         if settings_path is None:
             raise ServerError("this runner was started without a settings file, so there is "
@@ -1365,6 +1388,22 @@ def make_handler(runner: Runner, operator: Operator,
         except settings_mod.SettingsError as exc:
             raise ServerError(str(exc))
 
+    def _applied(in_force):
+        """`{seat: [{"model": id or "", "role": level, "spec": level}]}`, per model on each seat."""
+        out = {}
+        for seat in policy.SEATS:
+            routed = (held["assignments"].get("seat_models") or {}).get(seat.name)
+            try:
+                labels = ([models_mod.entry_label(e)
+                           for e in models_mod.seat_entries(routed, held["registry"])]
+                          if routed else [])
+            except models_mod.ModelError:
+                labels = [str(m) for m in routed] if isinstance(routed, (list, tuple)) else \
+                    [str(routed)]
+            out[seat.name] = [{"model": label, **seatspec.levels(in_force, seat.name, label)}
+                              for label in (labels or [""])]
+        return out
+
     def _seat_choices():
         """The seats a user may open, and what is chosen now (CHG-20261005-03).
 
@@ -1373,7 +1412,22 @@ def make_handler(runner: Runner, operator: Operator,
         run does not open.
         """
         current = _load_settings() if settings_path is not None else settings_mod.Settings()
+        stored = store_mod.seat_specs(db) if db is not None else ()
+        in_force, origin = seatspec.merge(current.seat_specs, stored)
         return {
+            # The role and spec entries in force and which source set each, with the caps a text is
+            # held to and the one kind there is (CHG-20261016-01).
+            "seat_specs": {
+                "entries": [{**e.as_dict(), "source": origin[e.key]} for e in in_force],
+                # Per seat, per model on it (or `""` for the seat's default backend): which level
+                # its role and its spec come from. The console shows this, so three levels with
+                # replace-not-merge do not hide which one applied.
+                "applies": _applied(in_force),
+                "limits": {"role_chars": seatspec.MAX_ROLE_CHARS,
+                           "spec_chars": seatspec.MAX_SPEC_CHARS,
+                           "spec_file_bytes": seatspec.MAX_SPEC_FILE_BYTES,
+                           "kinds": list(seatspec.KINDS)},
+            },
             "seats": [{"name": s.name, "label": s.label, "question": s.question,
                        "veto": s.veto, "opt_in": s.opt_in}
                       for s in policy.SEATS],
@@ -1749,6 +1803,8 @@ def make_handler(runner: Runner, operator: Operator,
                     out = _assign_seat(body)
                 elif self.path == "/config/dimensions":
                     out = _set_dimensions(body)
+                elif self.path == "/config/seat_specs":
+                    out = _set_seat_spec(body)
                 elif self.path == "/config/halts":
                     out = _route_halt(body)
                 elif self.path == "/run/decide":

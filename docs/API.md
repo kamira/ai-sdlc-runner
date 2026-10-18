@@ -1,8 +1,8 @@
 # The server's HTTP API
 
-The console's back end. **Twenty-two routes** — ten `GET`, twelve `POST` — every one crossing a process
-boundary to a browser, and until now none of them written down. An independent seat called this the
-largest omission in [`SCHEMAS.md`](SCHEMAS.md); this is that entry.
+The console's back end. **Twenty-three routes** — ten `GET`, thirteen `POST` — every one crossing a
+process boundary to a browser, and until now none of them written down. An independent seat called
+this the largest omission in [`SCHEMAS.md`](SCHEMAS.md); this is that entry.
 
 Defined by [`server.py`](../src/ai_sdlc_runner/server.py). That file is authoritative; this is a map,
 and [`tests/test_api_schema.py`](../tests/test_api_schema.py) pins it so it cannot rot the way the
@@ -150,8 +150,22 @@ loader's sentence.
   "review_seats": 4 | null,
   "high_risk_mode": false,
   "floor": 3,
-  "max_seat_count": 12 }                          // policy.MAX_SEAT_COUNT; a count opens no opt-in seat
+  "max_seat_count": 12,                  // policy.MAX_SEAT_COUNT; a count opens no opt-in seat
+  "seat_specs": {                        // the user's role and spec (CHG-20261016-01)
+    "entries": [ { "seat"?: "<seat>", "model"?: "<id>", "role"?: "…",
+                   "spec"?: { "kind": "text", "text": "…" }
+                          | { "kind": "text", "path": "docs/x.md" },
+                   "source": "settings" | "store" } ],   // in force; no `seat` = shared
+    "applies": { "<seat>": [ { "model": "<id>" | "",   // the level each text came from:
+                               "role": "model"|"seat"|"shared"|null,
+                               "spec": "model"|"seat"|"shared"|null } ] },
+    "limits": { "role_chars": 500, "spec_chars": 8000, "spec_file_bytes": 32768,
+                "kinds": ["text"] } } }
 ```
+`seat_specs.entries` merges the settings file and the store per level: an entry in the settings
+file wins over the store's for the same level (`seatspec.merge`), and says `"source": "settings"`.
+`applies` is the answer to *which level did this (seat, model) use*, with `model` `""` for a seat
+routed to no model. A spec file is not read by this route, only named.
 
 ### `GET /config/nodes`
 Where each model is actually **used** — a model listed and used nowhere looks configured, and a model
@@ -238,14 +252,15 @@ If the version does not match the run's current one:
                 before answering again." }
 ```
 
-**Every POST under `/run` and `/attachments` returns the run snapshot**
-([§3](#3--the-run-snapshot)) with `200`. `POST /models` does not, and neither do the four
-`/config/*` writes. Three of them (`nodes`, `seats`, `halts`) go through one function
-(`server.py`'s `_config_edit`) and answer the merged assignment with its provenance and the new
-version; `POST /config/dimensions` goes through `Runner.edit_versioned` directly and answers the
-`GET /config/seats` shape plus `version`. In both, **`version` is the one that edit itself
-produced**, read inside the same lock that checked and advanced it, so another tab's commit
-landing a moment later is not reported as this edit's. The merged-assignment shape is —
+**Every POST under `/run` and `/attachments` returns the run snapshot** ([§3](#3--the-run-snapshot))
+with `200`. `POST /models` does not, and neither do the four `/config/*` writes. Three of them
+(`nodes`, `seats`, `halts`) go through one function (`server.py`'s `_config_edit`) and answer the
+merged assignment with its provenance and the new version; `POST /config/dimensions` goes through
+`Runner.edit_versioned` directly and answers the `GET /config/seats` shape plus `version`, and so
+does `POST /config/seat_specs` (through `_config_edit`, with the seats shape as its answer). In
+both, **`version` is the one that edit itself produced**, read inside the same lock that checked and
+advanced it, so another tab's commit landing a moment later is not reported as this edit's. The
+merged-assignment shape is —
 
 ```jsonc
 { "node_models": { "<node id>": ["<model id>", …] },
@@ -273,6 +288,7 @@ snapshot"* the whole time the sentence above said it was one.
 | `POST /config/nodes` | `{version, node_id, models: [...]}` | no such node; a node whose **mode ignores** a model list; a model the registry does not have; `models` not a list |
 | `POST /config/seats` | `{version, seat, model_id}` — `model_id` a model id **or a list of them**, in order; empty clears | no such seat; a model the registry does not have; a model listed twice; `model_id` neither a string nor a list of strings |
 | `POST /config/dimensions` | `{version, review_dimensions}` — a list of seat names, **in the order they open**, or `null` to clear | the refusals `runner settings` gives, because it saves through `settings.save`: an unknown seat, a seat named twice, an empty list, fewer than the floor (3) without high-risk mode, a list without `conformance` (the veto seat) outside high-risk mode; not a list or `null`; a server started without a settings file. Answers the `GET /config/seats` shape plus `version`, and the **next walk** reads the file, so the choice reaches the next run |
+| `POST /config/seat_specs` | `{version, seat?, model?, role?, spec?}` — one level: no `seat` is shared by every open seat, a `seat` alone is the whole seat, with a `model` it is that model on that seat. `spec` is `{kind: "text", text}` or `{kind: "text", path}`; a blank `role` and no `spec` clears the level | the validator the settings file uses: an unknown seat or `kind`, a `model` with no `seat`, a role over 500 characters or spec text over 8000, a `path` with `..` in it or one that resolves outside the repository (a symlink out included), both or neither of `text` and `path`, an unknown key; a model the store does not have; **a level the settings file already sets** (the file wins, so the save would do nothing). Answers the `GET /config/seats` shape plus `version`. The path is checked here and read when the run starts |
 | `POST /config/halts` | `{version, kind, recipient?}` | a `kind` that is not one of the six permanent halts. A `recipient` is **never** refused — an organisation names its own functions, and an unrecognised one still reaches somebody because the operator is on every halt. A blank or missing `recipient` clears the route |
 | `POST /run/instruct` | `{version, instruction}` | the instruction is empty — *"an empty instruction says nothing"* |
 | `POST /attachments` | `{version, filename, data}` — `data` is **base64** | the base64 is invalid, or `attachments.py` refuses the type or size |

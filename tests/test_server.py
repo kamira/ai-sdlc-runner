@@ -2547,6 +2547,10 @@ NOT_ON_THE_CONSOLE = {
     "change_class": "which class governed the run, as a sentence for a person",
     "class_authorised_by": "who declared it, as a name",
     "effort_not_applied": "asks whose backend could not be told the effort — reaches the terminal only",
+    # CHG-20261016-01. The seat editor shows the level each (seat, model) used, from `GET
+    # /config/seats`; the brief itself, its hash and the stored file are the report's and the
+    # journal's.
+    "seat_briefs": "the brief each seat session was sent, with its role, spec, level and hash; reaches the report and the journal",
     # The usage panel draws it, but from `GET /usage` (`run`), which is `usage.summarize` over the
     # report's `usage` list — the same value under another key, so the token never appears here.
     "usage_summary": "per-model usage and the latest remaining windows; the console reads it from `GET /usage`",
@@ -2709,7 +2713,8 @@ def test_the_inventory_is_exact_and_the_two_renamed_ones_are_not_in_it():
     page = _console()
     # 18 → 17 in CHG-20261005-03, which took `seat_models` off the list (see the note there);
     # 17 → 18 in CHG-20261006-01, which added `usage_summary` (drawn from `GET /usage`, not the report).
-    assert len(NOT_ON_THE_CONSOLE) == 18, (
+    # 18 → 19 in CHG-20261016-01, which added `seat_briefs` (the report's and the journal's).
+    assert len(NOT_ON_THE_CONSOLE) == 19, (
         f"the inventory is {len(NOT_ON_THE_CONSOLE)} entries; if the console grew a view, delete "
         f"the entry rather than leaving it — the test above already refuses a listed-and-rendered "
         f"field, and this number is what a reader checks the record against")

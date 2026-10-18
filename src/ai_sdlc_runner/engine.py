@@ -30,6 +30,7 @@ question is how a rerun quietly stops being a rerun.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -39,7 +40,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from . import conversations as conversations_mod
 from . import paths
 from . import effects as effects_mod
-from . import graph, intake as intake_mod, models as models_mod, policy, workorder
+from . import graph, intake as intake_mod, models as models_mod, policy, seatspec, workorder
 from . import usage as usage_mod
 from . import worktree
 
@@ -114,18 +115,47 @@ def _as_factory(dispatch) -> SessionFactory:
 class AskJournal:
     """Write the question down before asking it, so a lost session costs only the answer."""
 
+    #: Where each seat session's brief is kept, one file per ask id, beside the entries
+    #: (CHG-20261016-01). A subdirectory, so `entries()` and `forget_after` never mistake one for an
+    #: ask.
+    BRIEFS = "briefs"
+
     def __init__(self, directory: str | Path):
         self.dir = Path(directory)
         paths.makedirs(self.dir)
+
+    def brief_path(self, ask_id: str) -> Path:
+        return self.dir / self.BRIEFS / f"{ask_id}.json"
+
+    def record_brief(self, ask_id: str, sent: bytes) -> str:
+        """Keep the brief that was sent, byte for byte; return where, relative to the journal."""
+        paths.makedirs(self.dir / self.BRIEFS)
+        paths.write_bytes(self.brief_path(ask_id), sent)
+        return f"{self.BRIEFS}/{ask_id}.json"
+
+    def brief_of(self, ask_id: str) -> Optional[Dict[str, object]]:
+        """The brief record journaled with ``ask_id`` (hash, file, role, spec), or `None`."""
+        try:
+            payload = json.loads(paths.read_text(self._path(ask_id), encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        brief = payload.get("brief") if isinstance(payload, dict) else None
+        return dict(brief) if isinstance(brief, dict) else None
 
     def _path(self, ask_id: str) -> Path:
         return self.dir / f"{ask_id}.json"
 
     def record(self, ask_id: str, node_id: str, seat: Optional[str],
                order: Mapping[str, object],
-               voice: Optional[Mapping[str, object]] = None) -> str:
+               voice: Optional[Mapping[str, object]] = None,
+               brief: Optional[Mapping[str, object]] = None) -> str:
         payload = {"ask_id": ask_id, "node_id": node_id, "seat": seat,
                    "status": "pending", "order": dict(order)}
+        if brief is not None:
+            # What a seat session was sent and why: the hash and file of the brief, and the role and
+            # spec in it with their source and level, the spec text as copied for this ask
+            # (CHG-20261016-01). The file edited later does not change this.
+            payload["brief"] = dict(brief)
         if voice is not None:
             # Which model this ask was put to, and the command it resolved to. A journaled answer
             # is the answer of *that* model: a resume under another assignment must not hand it to
@@ -137,14 +167,14 @@ class AskJournal:
     def voice_of(self, ask_id: str) -> Optional[Dict[str, object]]:
         """The model identity journaled with ``ask_id``, or `None` if none was (an older entry)."""
         try:
-            payload = json.loads(paths.read_text(self._path(ask_id)))
+            payload = json.loads(paths.read_text(self._path(ask_id), encoding="utf-8"))
         except (OSError, ValueError):
             return None
         voice = payload.get("voice") if isinstance(payload, dict) else None
         return dict(voice) if isinstance(voice, dict) else None
 
     def answered(self, ask_id: str, result: Mapping[str, object]) -> None:
-        payload = json.loads(paths.read_text(self._path(ask_id)))
+        payload = json.loads(paths.read_text(self._path(ask_id), encoding="utf-8"))
         payload["status"] = "answered"
         payload["result"] = dict(result)
         self._write(ask_id, payload)
@@ -162,7 +192,7 @@ class AskJournal:
         usable, and a record that says only "refused" cannot be read by the person deciding
         whether the model or the question was wrong.
         """
-        payload = json.loads(paths.read_text(self._path(ask_id)))
+        payload = json.loads(paths.read_text(self._path(ask_id), encoding="utf-8"))
         payload["status"] = "refused"
         payload["reason"] = reason
         # Written here rather than relying on `answered` having run: it has not. `_ask` validates
@@ -199,6 +229,10 @@ class AskJournal:
             if at is not None and at > cut:
                 paths.unlink(self.dir / name)
                 gone.append(name[:-len(".json")])
+                # And the brief kept for it: a forgotten ask must not leave a brief that no entry
+                # explains.
+                if paths.exists(self.brief_path(name[:-len(".json")])):
+                    paths.unlink(self.brief_path(name[:-len(".json")]))
         return sorted(gone)
 
     def pending(self) -> List[Dict[str, object]]:
@@ -466,6 +500,11 @@ class RunReport:
     #: (CHG-20261005-02). A seat nobody routed is answered by `DEFAULT_BACKEND`. The disclosure that
     #: the panel was cross-model is this and `single_model_panels` together.
     seat_models: Dict[str, Dict[str, List[str]]] = field(default_factory=dict)
+    #: The brief each seat session was sent (CHG-20261016-01): one entry per (node, seat, model)
+    #: ask with the role and spec it carried, the level each came from, and the brief's sha256 and
+    #: stored file. A seat with neither says "no role, no spec", so an empty one is visible. A spec
+    #: is text the seat reasoned from; nothing was measured on a device.
+    seat_briefs: List[Dict[str, object]] = field(default_factory=list)
     #: What each node's effects did — applied, already met, and anything found true out of order.
     effects: Dict[str, Dict[str, object]] = field(default_factory=dict)
     #: Asks answered from the journal rather than by opening a session, on a resumed run.
@@ -580,6 +619,7 @@ class RunReport:
             "single_model_panels": list(self.single_model_panels),
             "seat_models": {n: {s: list(m) for s, m in seats.items()}
                             for n, seats in self.seat_models.items()},
+            "seat_briefs": [dict(b) for b in self.seat_briefs],
             "effects": {k: dict(v) for k, v in self.effects.items()},
             "resumed": list(self.resumed),
             "intake_asked_somebody": self.intake_asked_somebody,
@@ -629,6 +669,14 @@ class RunConfig:
     #: The seats the user named, in opening order (CHG-20261005-02). When set it replaces the
     #: `review_seats` prefix, which is then ignored; `None` is today's behaviour exactly.
     review_dimensions: Optional[Tuple[str, ...]] = None
+    #: The user's role and spec per seat, as `seatspec.SeatSpec` entries already merged from the
+    #: settings file and the store (CHG-20261016-01). Files are read once when the walk starts, for
+    #: the seats it opens; an unreadable one stops the walk before any seat is asked. Empty is
+    #: today's brief for every seat.
+    seat_specs: Tuple["seatspec.SeatSpec", ...] = ()
+    #: The directory spec file paths are relative to and may not leave. `""` is the working
+    #: directory when the walk starts.
+    spec_root: str = ""
     #: A list the walk appends each ask's usage record to, instead of one of its own. The server's
     #: run state owns it, so the usage of asks already made survives a walk that raises before it
     #: can return a report (CHG-20261006-01). `None` is the ordinary case: the report's own list.
@@ -1090,7 +1138,7 @@ def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
                seat: Optional[str] = None,
                carried: Optional[Sequence[Mapping[str, str]]] = None,
                sent_back: Optional[Mapping[str, str]] = None, *,
-               voices: str) -> Dict[str, object]:
+               voices: str, brief: Optional[Mapping[str, object]] = None) -> Dict[str, object]:
     spec = cfg.node_specs.get(node.id)
     if spec is None:
         raise EngineError(
@@ -1144,7 +1192,21 @@ def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
         spec["instructions"] = (
             joiner.join([own] + said) if isinstance(own, str) else list(own) + said)
     return workorder.render(node, spec, verdict, seat=seat,
-                            answer_schema=_answer_schema(node, cfg, voices))
+                            answer_schema=_answer_schema(node, cfg, voices),
+                            seat_text=seatspec.render(brief) if seat is not None else "")
+
+
+def _brief_record(brief: Optional[Mapping[str, object]], sha: str,
+                  file: Optional[str] = None) -> Dict[str, object]:
+    """What the journal keeps about a seat session's brief (CHG-20261016-01).
+
+    The sha256 and file of the exact brief sent; the role text; the spec's kind, source (inline, or
+    the repository path), the text as sent and its sha256; and the level each came from. A session
+    with neither role nor spec is recorded too, with both `None`.
+    """
+    brief = brief or {}
+    return {"sha256": sha, "file": file, "role": dict(brief["role"]) if brief.get("role") else None,
+            "spec": dict(brief["spec"]) if brief.get("spec") else None}
 
 
 def _workspace(node: graph.Node, cycle: int) -> str:
@@ -1308,7 +1370,9 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
          effort: str = "", effort_not_applied: Optional[List[str]] = None,
          usage: Optional[List[dict]] = None,
          position: Optional[int] = None, voice: Optional[str] = None,
-         identity: Optional[Mapping[str, object]] = None):
+         identity: Optional[Mapping[str, object]] = None,
+         brief: Optional[Mapping[str, object]] = None,
+         briefs: Optional[List[Dict[str, object]]] = None):
     """Open a session, ask once, close it — the close guaranteed even if the ask raises.
 
     ``seen`` holds the session **objects**, not their ``id()``: an id is not an identity once the
@@ -1319,6 +1383,30 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
     at all**, which is the point of writing the question down before asking it — and which the
     previous version did not do: it wrote the record, then re-asked everything anyway.
     """
+    sha = ""
+    if seat is not None:
+        # The brief is the order as it goes out: `workorder.to_json` is what a process is given on
+        # its stdin. Its hash is part of the voice when the user set a role or a spec, so an answer
+        # given to other instructions is not reused (CHG-20261016-01). An unset seat keeps the
+        # voice it always had, which is what lets a journal from before this change be resumed.
+        sent = workorder.to_json(order).encode("utf-8")
+        sha = hashlib.sha256(sent).hexdigest()
+        if brief and identity is not None:
+            identity = {**identity, "brief_sha256": sha}
+
+    def _listed(record: Optional[Mapping[str, object]], reused: bool) -> None:
+        if briefs is None or seat is None:
+            return
+        kept = dict(record) if record else _brief_record(brief, sha)
+        file = journal.brief_path(ask_id).resolve() if kept.get("file") and journal and ask_id \
+            else None
+        briefs.append({
+            "ask_id": ask_id or "", "node_id": node_id, "seat": seat,
+            "model": model or voice or DEFAULT_BACKEND, "position": position,
+            "summary": seatspec.summary(kept), "sha256": kept.get("sha256"),
+            "file": str(file) if file else None, "role": kept.get("role"),
+            "spec": kept.get("spec"), "reused": reused})
+
     if answered and ask_id in answered:
         # Reuse the answer only if the question is the same one. Anything else is answering the new
         # brief with words said about the old one.
@@ -1348,6 +1436,7 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
             # the thing it was meant to identify (CHG-20260901-14).
             if resumed is not None and ask_id is not None:
                 resumed.append(ask_id)
+            _listed(journal.brief_of(ask_id) if journal and ask_id else None, True)
             return answered[ask_id]
         if same:
             # **Asked the same and answered with what the walk refuses: nothing after it is reused
@@ -1365,8 +1454,12 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
             answered.clear()
             if journal is not None and ask_id is not None:
                 journal.forget_after(ask_id)
+    kept = None
     if journal is not None and ask_id is not None:
-        journal.record(ask_id, node_id, seat, order, voice=identity)
+        if seat is not None:
+            kept = _brief_record(brief, sha, journal.record_brief(ask_id, sent))
+        journal.record(ask_id, node_id, seat, order, voice=identity, brief=kept)
+    _listed(kept, False)
     # The conversation gets the model by name. The journal keeps a seat ask's `voice` (model and
     # argv) for the resume check, but not a name for every ask, and the conversation is the record
     # that says which model said what -- which is most of what a panel is for.
@@ -2855,6 +2948,14 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
         if cfg.seats_from:
             report.relaxation_authorisers[note] = cfg.seats_from
 
+    # The user's role and spec for these seats, read now and once: a file that cannot be read stops
+    # the walk here, before any seat is asked, and a file edited mid-run cannot give two seats two
+    # texts (CHG-20261016-01). Nothing below looks at a spec but the brief it is added to.
+    try:
+        specs_loaded = seatspec.load(cfg.seat_specs, seat_list, cfg.spec_root or None)
+    except seatspec.SeatSpecError as exc:
+        raise EngineError(f"{exc}. The run was stopped before any seat was asked.") from exc
+
     no_veto = policy.vetoes_missing(seat_list)
     if no_veto:
         # `resolve_dimensions` refuses this unless high-risk mode is on, so reaching here means the
@@ -3409,8 +3510,10 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                     voices = _seat_voices(factory, seat)
                     for position, label in voices:
                         ask_id = _seat_ask_id(report, node, seat, position, len(voices))
+                        brief = seatspec.brief_for(specs_loaded, seat, label)
                         result = _ask(
-                            factory, _order_for(node, cfg, verdict, seat, sent_back=came_back, voices=SURVEY),
+                            factory, _order_for(node, cfg, verdict, seat, sent_back=came_back,
+                                                voices=SURVEY, brief=brief),
                             opened, seat=seat,
                             journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                             answered=already, asked_before=asked_before,
@@ -3419,7 +3522,8 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                                       workspace=_workspace(node, build_cycles),
                                       heard=lambda a, _n=node: _heard(_n, SURVEY, a),
                                       position=position, voice=label,
-                                      identity=_seat_identity(factory, seat, position, label))
+                                      identity=_seat_identity(factory, seat, position, label),
+                                      brief=brief, briefs=report.seat_briefs)
                         report.asks.append(Ask(node.id, node.role, seat, result,
                                                model=label, position=position))
                         _record_seat_model(report, node, seat, label)
@@ -3526,8 +3630,10 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                     # One session per (seat, model), each its own ask and journal entry (KN-7).
                     voices = _seat_voices(factory, seat)
                     for position, label in voices:
+                        brief = seatspec.brief_for(specs_loaded, seat, label)
                         result = _ask(
-                            factory, _order_for(node, cfg, verdict, seat, sent_back=came_back, voices=SEATS),
+                            factory, _order_for(node, cfg, verdict, seat, sent_back=came_back,
+                                                voices=SEATS, brief=brief),
                             opened, seat=seat,
                             journal=cfg.journal, node_id=node.id, answered=already,
                             ask_id=_seat_ask_id(report, node, seat, position, len(voices)),
@@ -3537,7 +3643,8 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                                       workspace=_workspace(node, build_cycles),
                                       heard=lambda a, _n=node: _heard(_n, SEATS, a),
                                       position=position, voice=label,
-                                      identity=_seat_identity(factory, seat, position, label))
+                                      identity=_seat_identity(factory, seat, position, label),
+                                      brief=brief, briefs=report.seat_briefs)
                         report.asks.append(Ask(node.id, node.role, seat, result,
                                                model=label, position=position))
                         _record_seat_model(report, node, seat, label)

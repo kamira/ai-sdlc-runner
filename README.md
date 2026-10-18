@@ -185,6 +185,31 @@ the seat passes only if every one does. The run report says which models answere
 | `security` `ux` `ci` `modularity` `privacy` `performance` `portability` `docs` | the other eight dimensions, each with its own question (`runner policy` lists them) | |
 | `observability` `supply_chain` `i18n` | three more, **opt-in**: only `review_dimensions` opens them, no seat count does | |
 
+**A role and a spec for a seat** (`seat_specs`, CHG-20261016-01). A seat may carry two texts you
+write: a **role** to review as ("a payments-industry security auditor", "a blind user who works only
+with a screen reader") and a **spec** to judge against ("target: Raspberry Pi 4, ARM64, 2 GB RAM",
+"at most $1 of API spend per run"), inline or as a path to a text file inside the repository. It can
+be set for one model on a seat, for the whole seat, or shared by every open seat; the most specific
+replaces the less specific, per text, and nothing is merged. Set in `config/settings.json` (or
+`runner settings`), or in the console's seat editor (which stores it beside `seat_models`; the
+settings file wins per level). The seat's question is unchanged: below it comes the text, delimited
+and labelled as yours ("Review as: …", "Judge against this spec: …"). Unset, a seat is asked today's
+brief byte for byte, and a role or spec **never changes a vote, a veto or the adjudication**. Each
+text has a cap (role 500 characters, spec 8000, a file 32768 bytes), a spec file must sit inside the
+directory you start the runner from (no `..`, no link out), and one that cannot be read stops the
+run before any seat is asked. A spec file is sent to the model answering that seat, under the same
+`reach` the model has, and the report names the file. **Every seat's brief is recorded.** For each
+(seat, model) session the exact brief sent is kept in `briefs/` beside the ask journal with its
+sha256, the journal entry records the role, the spec (kind, source, the text as sent, its hash) and
+the level each came from, and the run report lists them — "no role, no spec" for a seat with
+neither. A resume re-asks a session whose brief changed and reuses one that did not. What this costs
+and what it is not: a role narrows a seat's focus; a spec is text the model reasons from, **not**
+something measured on a device; a wrong spec misleads with confidence and its correctness is yours
+(the runner checks size and place, not content); a spec file in the repository is a way to plant
+instructions, which the labelling and the hash make visible and do not prevent; and it is another
+schema bump (6; back the store up before upgrading). The spec has a `kind` field and only `text`
+exists: [`docs/MODELS.md`](docs/MODELS.md) says what a later kind would need.
+
 Adjudication is **veto → majority → a tie decides nothing**. The veto seat's subject is a matter of
 fact, and counting votes on a fact is how a panel talks itself out of one.
 
@@ -443,21 +468,23 @@ what order, and which models sit on each seat. Saving goes through `POST /config
 exist, a panel below the floor of three without high-risk mode, a list without `conformance` (the
 veto seat, marked as required unless high-risk mode is on), a model listed twice or not in the
 registry — is printed in the panel, in the server's words, including a refusal of the read that
-follows a save. The three opt-in seats are marked and open only when ticked; each seat's question
-is shown. A node or seat the plan file sets is shown as the plan's and offers no save, because the
-plan wins. A save in one section leaves unsaved edits in the others, is checked against the version
-the panel was loaded at (so a second tab's change refuses it, and so does the run moving on, since
-the one version counts both), and says "Saved" or "Not saved" in a live region; a save answered
-after another node's panel opened changes nothing in that panel. Opening a node moves keyboard
-focus to the panel's heading, and closing it returns focus to the node. A dimension choice is
-written to the settings file and the next walk reads it. The **models list** shows each model's
-tier, its effort template, and every node (with its role) and seat it answers, or says it is used
-nowhere; the coder it names is the one the next walk will build with. The diagram is drawn in the
-browser from `GET /flow`, with no library and nothing fetched from outside this machine; shapes
-(rectangle step, hexagon decision, pill loop, dashed pill end) and the words *gate*, *HALT* and
-*HERE* carry what colour would otherwise carry. A visited node also shows a check mark and says
-"visited" in its accessible name; an edge with both ends visited (not necessarily the edge the run
-walked) is drawn thicker and named for a screen reader.
+follows a save. The three opt-in seats are marked and open only when ticked; each seat's question is
+shown. A node or seat the plan file sets is shown as the plan's and offers no save, because the plan
+wins. Under the seats, a **role and spec** form for the shared level, each seat and each model on it
+(through `POST /config/seat_specs`) shows which level each (seat, model) used, shows the server's
+refusal word for word, and locks a level the settings file sets. A save in one section leaves
+unsaved edits in the others, is checked against the version the panel was loaded at (so a second
+tab's change refuses it, and so does the run moving on, since the one version counts both), and says
+"Saved" or "Not saved" in a live region; a save answered after another node's panel opened changes
+nothing in that panel. Opening a node moves keyboard focus to the panel's heading, and closing it
+returns focus to the node. A dimension choice is written to the settings file and the next walk
+reads it. The **models list** shows each model's tier, its effort template, and every node (with its
+role) and seat it answers, or says it is used nowhere; the coder it names is the one the next walk
+will build with. The diagram is drawn in the browser from `GET /flow`, with no library and nothing
+fetched from outside this machine; shapes (rectangle step, hexagon decision, pill loop, dashed pill
+end) and the words *gate*, *HALT* and *HERE* carry what colour would otherwise carry. A visited node
+also shows a check mark and says "visited" in its accessible name; an edge with both ends visited
+(not necessarily the edge the run walked) is drawn thicker and named for a screen reader.
 
 The **用量 / usage** panel shows, per model, how many asks ran, their cost (claude's API-equivalent
 USD, not a bill on a subscription) and tokens, and — only where a backend states it — the quota
@@ -696,6 +723,7 @@ src/ai_sdlc_runner/
   worktree.py     per-module isolation, and what a halted run keeps
   sandbox.py      what a run may reach, and what it records when it cannot be bounded
   settings.py     what an operator sets on a screen: seats, high-risk mode, the vouch, the coder
+  seatspec.py     the user's role and spec for a review seat, and the brief they are added to
   detect.py       which model CLIs are installed, for `runner setup`
   usage.py        what each ask used, and the quota a backend says remains
   tui.py          the interactive selector
@@ -703,7 +731,7 @@ src/ai_sdlc_runner/
   cli.py          flow · policy · settings · setup · run · serve · conversations · export
 docs/
   SCHEMAS.md      all sixteen schemas, and which a machine enforces
-  API.md          the twenty-two HTTP routes, and the guard that runs before every one
+  API.md          the twenty-three HTTP routes, and the guard that runs before every one
   DATABASE.md     the SQLite schema, and every column that is deliberately not in it
   MODELS.md       the rules that govern a model: refusals, reach, assignment
   changes/        one record per change, with done-whens and what is not claimed
@@ -724,8 +752,8 @@ SQLite DDL, and the server's HTTP API. **Five** are closed schemas — the plan 
 the work order, the model registry and the settings: a field outside them is refused rather than
 ignored.
 
-Three have pages of their own — [`docs/API.md`](docs/API.md) for the **twenty-two** HTTP routes,
-[`docs/DATABASE.md`](docs/DATABASE.md) for the SQLite schema (**six of its six tables are
+Three have pages of their own — [`docs/API.md`](docs/API.md) for the **twenty-three** HTTP routes,
+[`docs/DATABASE.md`](docs/DATABASE.md) for the SQLite schema (**seven of its seven tables are
 built**), and [`docs/MODELS.md`](docs/MODELS.md) for the rules that govern models: every refusal,
 how reach is computed, and how a model reaches an ask.
 
@@ -882,7 +910,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 3040 tests
+pytest -q          # 3109 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

@@ -37,7 +37,11 @@ class El {
     this.className = ""; this._text = ""; this._html = ""; this.style = {}; this.hidden = false;
     this.id = ""; this.disabled = false; this.value = ""; this.checked = false;
   }
-  appendChild(c) { this.children.push(c); return c; }
+  appendChild(c) { c.parentNode = this; this.children.push(c); return c; }
+  replaceChild(fresh, old) {
+    const i = this.children.indexOf(old);
+    fresh.parentNode = this; this.children[i] = fresh; old.parentNode = null; return old;
+  }
   insertBefore(c, ref) {
     const i = this.children.indexOf(ref);
     this.children.splice(i < 0 ? this.children.length : i, 0, c); return c;
@@ -379,6 +383,25 @@ async function boot() {
     out.edges = byId["#flow"].all((c) => c.tagName === "path" && c.attrs["data-from"] !== undefined)
       .map((c) => ({ from: c.attrs["data-from"], to: c.attrs["data-to"],
                      cls: c.attrs["class"], label: c.attrs["aria-label"] || null }));
+  } else if (scenario === "seat_specs") {         // the role and spec forms (CHG-20261016-01)
+    run("openPanel(" + JSON.stringify(args.node) + ")"); await settle();
+    const field = (label) => find(byId["#panel"], (c) => c.attrs["aria-label"] === label);
+    for (const step of args.steps || []) {
+      const f = field(step.field);
+      f.value = step.value;
+      if (f.onchange) f.onchange();
+    }
+    if (args.press) button(byId["#panel"], args.press).onclick();
+    await settle();
+    const p = byId["#panel"];
+    out.error = text("#panelerr"); out.status = text("#panelok");
+    out.text = text("#panel");
+    out.buttons = p.all((c) => c.tagName === "button").map((x) => x._text);
+    out.sent = sent.filter((s) => s.method === "POST");
+    out.disabled = p.all((c) => c.disabled && c.attrs["aria-label"] &&
+      / for /.test(c.attrs["aria-label"])).map((c) => c.attrs["aria-label"]);
+    out.value = args.read ? field(args.read).value : null;
+    out.focus = who(active);
   } else if (scenario === "plan_seat") {           // a seat the plan sets
     run("openPanel(" + JSON.stringify(args.node) + ")"); await settle();
     const p = byId["#panel"];
