@@ -20,11 +20,12 @@ two writes leaves the question on disk exactly as it was asked.
 
 | Field | Type | Constraint | Description |
 |-------|------|------------|-------------|
-| `ask_id` | str | required, unique | `<sequence>-<node_id>[-<seat>]` — sorts into flow order |
+| `ask_id` | str | required, unique | `<sequence>-<node_id>[-<seat>[-m<N>]]` — sorts into flow order; `-m<N>` is added when a seat has several models, `N` the model's position |
 | `node_id` | str | required | Which node asked |
 | `status` | str (enum) | `pending` \| `answered` \| `refused` | `pending` is written first; `answered` replaces it, or `refused` when the ask's own check would not take the answer (the answer is kept) |
 | `order` | object | required | The work order verbatim — the question itself, not a summary of it |
 | `result` | object | present when answered or refused | Whatever the backend replied |
+| `voice` | object | present on a seat ask; absent on any other | `{model, argv}`: the model id the seat session was put to (`null` for the default backend) and the argv the factory resolves for it. A resume reuses the answer only if this equals the voice about to be asked; an entry with no `voice` is asked again |
 
 A reconstructed approximation of a question is not the question. The order is stored whole so a
 resumed run re-asks the same thing rather than something like it.
@@ -110,31 +111,38 @@ because it is the only one that is a fact rather than a claim.
 | `kind` | str (enum) | **required** | One of the six red lines, or `ordinary`. Absent → refused |
 | `targets` | list[str] | optional | The commands, paths and URLs it will act on. Each is **red**, **recognised-ordinary**, or **unrecognised**; a red one overrules a `kind` of `ordinary`, and an unrecognised one is not evidence of anything. A bare string is refused — joined into one blob, the boundary between two targets can hide a third |
 - **role**: `pm | lead | engineer | qa | seat`
-- **seat**: `conformance` (veto) `| defect | risk | idiom`
+- **seat**: `conformance` (veto) `| defect | risk | idiom | security | ux | ci | modularity | privacy | performance | portability | docs`, and the opt-in `observability | supply_chain | i18n` (fifteen, `policy.SEATS`)
 - **gate phase**: `before | after`
 - **node kind**: `step | decision | loop | terminal`
 - **ask status**: `pending | answered | refused`
 
 ### config/settings.json
 
-What the user set, and the only file this runner writes on their behalf. **Three fields, listed in `settings.FIELDS`.** They
+What the user set, and the only file this runner writes on their behalf. **Six fields, listed in `settings.FIELDS` (the table below has all six).** They
 cannot change what a gate verdict is, which kinds are permanent halts, or the adjudication rule —
 `policy` owns those and takes nothing from here. Two of them do change **whether a stop happens**:
 `review_seats=1` makes the `undecided` outcome unreachable, and `ordinary_commands` decides whether
-the `unrecognised-target` halt trips (CHG-20260903-47).
+the `unrecognised-target` halt trips (CHG-20260903-47). `coder_model` and
+`coder_effort` choose a backend and touch no verdict (CHG-20261005-01). `review_dimensions`
+names the review seats that open, in order, and replaces the `review_seats` count while it is set;
+the floor applies to its length, and it must include the veto seat `conformance` unless high-risk
+mode is on (CHG-20261005-02).
 
 | Field | Type | Constraint | Description |
 |-------|------|------------|-------------|
-| `review_seats` | int \| null | 1 … `len(policy.SEATS)`, or absent | How many seats open. `null` means the floor, and a count above the seats this runner defines is refused at load rather than raised when something renders it |
+| `review_seats` | int \| null | 1 … `policy.MAX_SEAT_COUNT` (12), or absent | How many seats open. `null` means the floor, and a count above the twelve seats that are not opt-in is refused at load rather than raised when something renders it |
+| `review_dimensions` | list[str] \| null | seat names from `policy.SEATS`, no repeats; the floor applies to its length; must include `conformance` unless `high_risk_mode` is on; absent → `null` | The review seats that open, in the order named. While set it replaces the `review_seats` count; the three opt-in seats open only here |
 | `high_risk_mode` | bool | required-ish (defaults false) | Whether the floor may be crossed at all |
 | `ordinary_commands` | list[str] | absent → none; one word each, never an executor | Commands whose **name** stops being unrecognised. The description is still read against the permanent halts — vouching clears `unrecognised-target` and nothing else, which is what the prose four lines above says |
+| `coder_model` | str | absent → empty; not checked against a registry at save time | The registry model `engineer_build` uses when nothing is assigned. Empty means the registry's only `mid` model, if exactly one and no `agent_command` is configured; `none` means no default coder model (a No in `runner setup`), and a model so named is never picked. A set `coder_model` overrides a configured `agent_command`, with a notice. An id the registry lacks is an error when a run resolves it |
+| `coder_effort` | str | `low` \| `medium` \| `high`; absent → `medium` | The effort for `engineer_build` and the nodes that follow it; delivered through the model's `effort_argv` |
 
 This said *"Two fields, both about the seat floor"* over a table of two until CHG-20260902-20.
-`settings.FIELDS` has had three since `ordinary_commands` shipped, and it is not about the seat
+`settings.FIELDS` had three once `ordinary_commands` shipped, and it is not about the seat
 floor — it is about what a permanent-halt check reads, which is a different subject in the same
 file.
 
-Missing or empty → the defaults. **Malformed → an error**, not the defaults: a typo must not be
+Missing → the defaults. **Empty or whitespace-only, or malformed → an error**, not the defaults: a typo must not be
 indistinguishable from a deliberate choice when two of the three settings, taken together, are a safety bypass. An
 unknown key is refused rather than ignored, because a setting nobody reads looks exactly like one
 that works.

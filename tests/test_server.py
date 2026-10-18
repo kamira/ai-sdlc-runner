@@ -2546,6 +2546,14 @@ NOT_ON_THE_CONSOLE = {
     # the class, and what it dissolved
     "change_class": "which class governed the run, as a sentence for a person",
     "class_authorised_by": "who declared it, as a name",
+    "effort_not_applied": "asks whose backend could not be told the effort — reaches the terminal only",
+    # The usage panel draws it, but from `GET /usage` (`run`), which is `usage.summarize` over the
+    # report's `usage` list — the same value under another key, so the token never appears here.
+    "usage_summary": "per-model usage and the latest remaining windows; the console reads it from `GET /usage`",
+    # `seat_models` left this list in CHG-20261005-03: the console's node panel reads a key of that
+    # name from `GET /config/nodes`. That is **not** the report's `seat_models` (which models
+    # answered which seat in a finished run), and this guard searches for the token, so it cannot
+    # tell the two apart — the report field is still not drawn, and nothing here says so any more.
     "relaxations": "the runner's own relaxations — `--undeclared allow` and the like",
     "relaxations_by_class": "the gates a class dissolved, each named",
     "relaxation_authorisers": "who authorised each of those, per note",
@@ -2699,7 +2707,9 @@ def test_the_inventory_is_exact_and_the_two_renamed_ones_are_not_in_it():
 
     """
     page = _console()
-    assert len(NOT_ON_THE_CONSOLE) == 16, (
+    # 18 → 17 in CHG-20261005-03, which took `seat_models` off the list (see the note there);
+    # 17 → 18 in CHG-20261006-01, which added `usage_summary` (drawn from `GET /usage`, not the report).
+    assert len(NOT_ON_THE_CONSOLE) == 18, (
         f"the inventory is {len(NOT_ON_THE_CONSOLE)} entries; if the console grew a view, delete "
         f"the entry rather than leaving it — the test above already refuses a listed-and-rendered "
         f"field, and this number is what a reader checks the record against")
@@ -2735,16 +2745,10 @@ def test_the_inventory_is_exact_and_the_two_renamed_ones_are_not_in_it():
 #: **Four of six is the finding, not a lapse in the inventory.** It is this route's first
 #: accounting; two of the four are honest folds and say so.
 CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE = {
-    "node_models": "folded into `by_model` by the route itself; the page names it at `use.nodes`",
-    "seat_models": "folded into `by_model` by the route itself; the page names it at `use.seats`",
-    "source": "read by nothing. `runner run` and `runner serve` each print an aggregate count of "
-              "the same fact, but they compute it themselves from the store rather than from this "
-              "response — a draft of this line said the field 'reaches the terminal only' and a "
-              "seat refused it: a related fact computed twice is not this value being consumed. "
-              "The per-assignment view is named in CHG-20260907-28 and built by no record yet",
-    "assignable": "for an API client, which can refuse a node before it posts. No shipped console "
-                  "reads it and there is no per-node configure control for it to grey out; the "
-                  "server refuses the same node anyway, in `store._check_node`",
+    # **Empty since CHG-20261005-03.** All four entries (`node_models`, `seat_models`, `source`,
+    # `assignable`) were true of a console with no per-node configure control; the node panel now
+    # reads each of them, and the guard below says an entry must go the day the page names its key.
+    # The mechanism stays: a future key the page does not use is listed here with its reason.
 }
 
 
@@ -2867,8 +2871,8 @@ def test_every_key_of_the_node_config_route_is_named_by_the_console_or_written_d
 def test_no_fold_named_in_the_node_config_inventory_is_absent_from_the_route_or_the_page():
     """**A reason a reader cannot check is not a reason.**
 
-    Two of the four entries above do not say *"nothing sees this"* — they say the content reaches
-    the page under another key. That is the one claim in the inventory a test can hold, so it is
+    Entries in the inventory above can say *"nothing sees this"* or that the content reaches the
+    page under another key (the inventory is empty now, CHG-20261005-03, and this returns early). That is the one claim in the inventory a test can hold, so it is
     held, the way `test_no_exclusion_is_justified_by_a_flag_the_runner_does_not_have` holds the
     `--json` that was never a flag: a carrier named in a reason must be a key of the **same
     response** and must be named on the page. Both halves matter — a typo'd carrier is not a key,
@@ -2881,9 +2885,9 @@ def test_no_fold_named_in_the_node_config_inventory_is_absent_from_the_route_or_
     and `drawModels` draws both as `use.nodes` and `use.seats` — but that relationship is what the
     reason asserts, not what this proves.
 
-    What no test here can check at all is the other two reasons: whether any client outside this
-    repository reads `assignable`, and where the fact `source` carries does and does not go. Those
-    are claims about the world, and an inventory is what a repository has instead of a test for one.
+    What no test here can check at all is a reason that is a claim about the world, such as whether
+    a client outside this repository reads a key; an inventory is what a repository has instead of
+    a test for one.
     """
     page = _console_code()
     keys = _config_nodes_keys()
@@ -2891,6 +2895,10 @@ def test_no_fold_named_in_the_node_config_inventory_is_absent_from_the_route_or_
     folds = {key: re.findall(r"folded into `([^`]+)`", why)
              for key, why in CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE.items()}
     folds = {key: carriers for key, carriers in folds.items() if carriers}
+    if not CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE:
+        # Nothing is folded away any more (CHG-20261005-03): every key is named by the page, which
+        # `test_every_key_of_the_node_config_route_is_named_by_the_console_or_written_down` holds.
+        return
     assert folds, "no reason claims a fold, so this guard is checking nothing"
 
     absent = sorted(f"{carrier} (the carrier claimed for {key})"
@@ -2936,9 +2944,9 @@ def test_the_page_documents_this_route_and_promises_no_reader_it_does_not_have()
     **This holds words, not meaning, and that is the whole of what a test over prose can do.** The
     denials are listed above so a writer changes them deliberately rather than discovering the guard
     by turning it red. What cannot be checked here at all is the other direction - whether some
-    client outside this repository reads `assignable`, and whether `source` really reaches only the
-    terminal. Those are the reasons in `CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE`, and an inventory is
-    what a repository has instead of a test for a claim about the world.
+    client outside this repository reads a key `GET /config/nodes` sends. That is the kind of reason
+    `CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE` holds (it is empty since CHG-20261005-03), and an
+    inventory is what a repository has instead of a test for a claim about the world.
     """
     section = _config_nodes_section()
     sketch = section.split("```jsonc")[1].split("```")[0]
@@ -2959,7 +2967,7 @@ def test_the_page_documents_this_route_and_promises_no_reader_it_does_not_have()
                 f"the paragraph introducing `{key}` talks about the console, and no shipped "
                 f"console names that key. Say what it does not do, or delete the entry in "
                 f"CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE because a reader arrived: {flat[:160]}")
-    assert examined, (
+    assert examined or not CONFIG_NODES_NOT_NAMED_BY_THE_CONSOLE, (
         "no paragraph on this route both introduces an unnamed key and mentions the console, so "
         "this guard examined nothing. If the page stopped explaining these keys, that is the "
         "finding")

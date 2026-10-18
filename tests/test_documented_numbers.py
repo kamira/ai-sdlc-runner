@@ -132,6 +132,7 @@ NUMBER_WORDS = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
     "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
     "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
+    "twenty-one": 21, "twenty-two": 22,
 }
 
 #: Field counts in prose that name no referent. Each is a **mention** rather than a claim -- a
@@ -164,11 +165,8 @@ FIELD_MENTIONS = {
      'Choosing was the mistake, and it was the same mistake twice: the check first read only `operation["description"]` while the giveaway sat in `instructions`, and then read three fields while the giveaway could sit in `done_criteria` or `acceptance_predicate`.'):
         'the same refused alternative, recorded beside the code that replaced it',
     ('settings.py',
-     '**Two of the three fields do change whether a stop happens**, and this paragraph used to deny it (CHG-20260903-47, defect seat L-13).'):
+     '**Two of the six fields do change whether a stop happens**, and this paragraph used to deny it (CHG-20260903-47, defect seat L-13).'):
         'a real claim, and counted by `test_settings.COUNTS_SETTINGS` -- widened in CHG-20260907-12 to see it, because the pattern said `settings` and this sentence says `fields`',
-    ('settings.py',
-     '`engine.py` refuses an unrecognised target by telling the operator to  , and the screen this repository built for that requirement had no row for it — two of three fields, in the module whose premise is 「在 GUI 上設定」.'):
-        'the same claim, and now counted by the same widened guard',
 }
 
 #: The modules a claim may name. An unknown module is a failure rather than a skip — the whole
@@ -268,7 +266,7 @@ def test_a_count_of_tables_or_routes_matches_the_thing_there_is_one_of():
 
         # "Nineteen routes — eight `GET`, eleven `POST`" and "…, eight `GET` and eleven `POST`",
         # keyed on the sentence so the two punctuations are one rule rather than two regexes.
-        for match in re.finditer(r"\b(\w+) (?:HTTP )?routes\b", body, re.I):
+        for match in re.finditer(r"(?<![\w-])([\w-]+) (?:HTTP )?routes\b", body, re.I):
             if any(a <= match.start() and match.end() <= b for a, b in spans):
                 continue
             if _count(match.group(1)) is None:

@@ -393,7 +393,7 @@ def test_an_empty_seat_assignment_is_refused_the_way_a_node_one_is(tmp_path, val
     path = tmp_path / "plan.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(plan.PlanError, match="one model id per seat"):
+    with pytest.raises(plan.PlanError, match="model id per seat"):
         plan.load(path)
 
 

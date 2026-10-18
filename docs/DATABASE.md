@@ -170,7 +170,10 @@ CREATE TABLE models (
   command_json TEXT NOT NULL DEFAULT '[]',   -- argv as a LIST
   endpoint     TEXT NOT NULL DEFAULT '',     -- api only
   key_env      TEXT NOT NULL DEFAULT '',     -- the NAME of an env var. Never a key.
-  note         TEXT NOT NULL DEFAULT ''
+  note         TEXT NOT NULL DEFAULT '',
+  tier         TEXT NOT NULL DEFAULT '',     -- '' | 'high' | 'mid' | 'low'; a label a person gives (schema 4)
+  effort_argv  TEXT NOT NULL DEFAULT '[]',   -- argv template with {effort}, as a JSON list (schema 4)
+  declared_reach TEXT NOT NULL DEFAULT ''    -- '' (derive it) | 'local' | 'internal' | 'external'; may only raise the derived reach (schema 4)
 );
 
 -- `ordinal`, because the order of a list is load-bearing: a pool's seeded choice and a model
@@ -182,16 +185,34 @@ CREATE TABLE node_assignments (
   PRIMARY KEY (node_id, ordinal)
 );
 
--- One model per seat. A seat is one voice; a list would be a panel inside a panel.
+-- A seat's models, in order (schema 5). Several models on a seat are several sessions, and the
+-- seat passes only when every one passes.
 CREATE TABLE seat_assignments (
-  seat     TEXT PRIMARY KEY,
-  model_id TEXT NOT NULL REFERENCES models(id)
+  seat     TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  model_id TEXT NOT NULL REFERENCES models(id),
+  PRIMARY KEY (seat, position)
 );
 ```
 
 **The five tables in this section** are all built (CHG-20260823-41); `halt_routing` is in §0.2, and the page-wide count is the six of line 3. `models`, `node_assignments` and
 `seat_assignments` arrived at schema 1; `conversations` and `turns` at schema 2, with the
 conversation-store migration this document had been describing for four rounds.
+
+**Schema 4 (CHG-20261005-01) adds three columns to `models`**, `tier`, `effort_argv` and
+`declared_reach`, by
+`ALTER TABLE … ADD COLUMN` with a default of nothing — so a schema-3 store reads back exactly as it
+was. `_verify_or_refuse` still compares columns exactly: below schema 4 the `models` table must be
+the eight-column one (or already the eleven-column one, when a store was half-built from the current DDL;
+the migration skips columns that are present), and the migration adds the other three inside one transaction with the version
+stamp.
+
+**Schema 5 (CHG-20261005-02) gives a seat a list of models.** `seat_assignments` was `(seat PRIMARY
+KEY, model_id)`; SQLite cannot change a primary key, so the migration renames the table, creates the
+three-column one, copies every row in as `position` 0 and drops the old one — inside one transaction
+with the version stamp, so a schema-4 store's single assignments come out as one-model lists and
+nothing else moves. `_verify_or_refuse` accepts the two-column table below schema 5 and the
+three-column one from then on. `store.seat_models` returns `{seat: [model_id, …]}`.
 
 That sentence used to read *"`conversations` and `turns` are not created by any code yet"*, with the
 reason attached: a table nothing reads or writes is a mechanism nobody invokes, and this repository
@@ -217,7 +238,8 @@ Both seats named it. `models.py` says **"Computed, never declared"**, and `save(
 
 `reach` is what the console shows to say **whether a model leaves this machine**. Persisted, one
 endpoint edit that forgets to recompute leaves the console showing `local` about something external.
-It is derived from `(transport, endpoint)` on every read, and `_model_from` would **refuse** a
+It is derived from `(transport, endpoint)` on every read, and raised to `declared_reach` when that is
+higher (never lowered), and `_model_from` would **refuse** a
 payload containing it anyway, with this project's doctrine in the message:
 
 ```

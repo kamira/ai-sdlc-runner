@@ -191,8 +191,8 @@
     enforces. Every figure on this page was read out of the code, not from a document about it.</p>
   <div class="stats">
     <span><b>31</b> nodes</span><span><b>7</b> modes</span><span><b>10</b> gates</span>
-    <span><b>6</b> never-automated kinds</span><span><b>4</b> seats, floor <b>3</b></span>
-    <span><b>10</b> turn kinds</span><span><b>19</b> HTTP routes</span><span><b>1084</b> tests</span>
+    <span><b>6</b> never-automated kinds</span><span><b>15</b> seats, floor <b>3</b></span>
+    <span><b>10</b> turn kinds</span><span><b>22</b> HTTP routes</span><span><b>1084</b> tests</span>
   </div>
 </header>
 
@@ -288,10 +288,14 @@
         <li><span class="k"></span> endpoint <span class="ty">TEXT</span></li>
         <li><span class="k"></span> key_env <span class="ty">TEXT</span></li>
         <li><span class="k"></span> note <span class="ty">TEXT</span></li>
+        <li><span class="k"></span> tier <span class="ty">'' | high | mid | low</span></li>
+        <li><span class="k"></span> effort_argv <span class="ty">TEXT (JSON list)</span></li>
+        <li><span class="k"></span> declared_reach <span class="ty">'' | local | internal | external</span></li>
       </ul>
-      <p class="fk-note"><strong>No <code>reach</code> column.</strong> It is computed from
-        <code>(transport, endpoint)</code> on every read and stripped on save — storing it would let
-        a stale “local” label outlive an endpoint edit.</p>
+      <p class="fk-note"><strong>No <code>reach</code> column.</strong> It is computed on every read
+        from <code>(transport, endpoint)</code>, raised to <code>declared_reach</code> when that is
+        higher (never lowered), and stripped on save — storing it would let a stale “local” label
+        outlive an endpoint edit. The last three columns are schema 4.</p>
     </div>
 
     <div class="tbl">
@@ -321,10 +325,12 @@
       <header><span class="name">seat_assignments</span><span class="chip c-built">built</span></header>
       <ul class="cols">
         <li><span class="k">PK</span> seat <span class="ty">TEXT</span></li>
+        <li><span class="k">PK</span> position <span class="ty">INTEGER</span></li>
         <li><span class="k">FK</span> model_id <span class="ty">→ models.id</span></li>
       </ul>
-      <p class="fk-note">One model per seat. A seat is one voice; a list would be a panel inside a
-        panel.</p>
+      <p class="fk-note">Schema 5: a list of models per seat, keyed by <code>(seat, position)</code>.
+        Each (seat, model) is its own session, and the seat passes only when every one of its models
+        passes. A schema-4 row, one model per seat, migrates to position 0.</p>
     </div>
 
     <div class="tbl designed">

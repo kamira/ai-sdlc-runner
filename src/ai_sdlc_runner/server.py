@@ -38,13 +38,15 @@ from __future__ import annotations
 
 import dataclasses
 import errno
+import functools
 import json
 import os
 import queue
 import socket
 import secrets
 import threading
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 from pathlib import Path
@@ -53,6 +55,8 @@ from typing import Callable, Dict, FrozenSet, Iterable, List, Mapping, Optional
 from . import attachments as attach_mod
 from . import paths
 from . import engine, graph, intake as intake_mod, models as models_mod, policy, store as store_mod
+from . import settings as settings_mod
+from . import usage as usage_mod
 
 #: The only addresses this server will bind. Not a default — a rule. A runner that can merge
 #: branches has no business listening where anything but this machine can reach it, and making that
@@ -99,6 +103,11 @@ LOOPBACK = ("127.0.0.1",)
 #: Written on the test side by CHG-20260907-21, which said the record deriving `LOOPBACK_HOSTS` is
 #: what would lift it across the line. This is that record (CHG-20260907-24).
 RESOLVER_FIXED = frozenset({"localhost"})
+
+
+def _clock() -> float:
+    """The time `GET /usage` judges a quota window against; a test replaces it to move time."""
+    return time.time()
 
 
 def _authority(addr: str) -> str:
@@ -305,6 +314,8 @@ class RunState:
     #: say *when* something was asked for is most of what makes a late change reviewable.
     instructions: List[str] = field(default_factory=list)
     report: Optional[engine.RunReport] = None
+    #: Usage of every ask this run made, appended by the engine as it goes (CHG-20261006-01).
+    usage: List[dict] = field(default_factory=list)
     #: Answers accumulated across suspensions. A resumed walk replays from `intake` carrying these,
     #: which is why they are kept rather than applied and forgotten.
     approvals: List[engine.Approval] = field(default_factory=list)
@@ -753,12 +764,21 @@ class Runner:
         Three separate critical sections is a check-then-act window: two threads validate the same
         version, both write, and the double-submit the version exists to refuse happens anyway.
         """
+        return self.edit_versioned(version, write)[0]
+
+    def edit_versioned(self, version: int, write):
+        """`edit`, and the version **this** edit produced, read before the lock is let go.
+
+        A caller that reads `state.version` after `edit` returns can get another tab's version:
+        its commit can land between the two. The page adopts the number it is answered with as the
+        version its next save submits, so it must be this edit's own (CHG-20261005-03, round 2).
+        """
         with self._lock:
             self._require_version(version)
             out = write()
             self.state.version += 1
             self._publish()
-            return out
+            return out, self.state.version
 
     def publish_config_change(self) -> None:
         """A configuration edit advances the version and wakes every listener."""
@@ -983,8 +1003,11 @@ class Runner:
             # `attach` is the one method that can arrive mid-walk and it does not touch
             # `instructions`. `instructions_at_last_incomplete_stop` is written in one place, one
             # walk at a time. Both operands are therefore fixed for the whole walk.
+            # The usage list is the run state's, not the report's: a walk that raises returns no
+            # report, and the asks it had already made were billed all the same. A new run gets a
+            # new `RunState` and so a new list (CHG-20261006-01).
             cfg = dataclasses.replace(
-                cfg,
+                cfg, usage=self.state.usage,
                 intake_ask_in_flight=(len(self.state.instructions)
                                       > self.state.instructions_at_last_incomplete_stop))
             report = self._walk(cfg)
@@ -1199,13 +1222,40 @@ class Runner:
             return self.state.snapshot()
 
 
+def _refusals_answered(route):
+    """Give a GET route the answers `do_POST` gives (CHG-20261005-03, review round 1).
+
+    A refusal raised while building a read (`GET /config/seats` on a settings file that does not
+    load) must reach the client as a status and a sentence, not as a closed socket the page can only
+    call "Failed to fetch". A dropped connection is left alone: there is no one to answer.
+    """
+    def wrapper(self):
+        try:
+            route(self)
+        except (BrokenPipeError, ConnectionError):
+            raise
+        except ServerError as exc:
+            self._json(409, {"error": str(exc)})
+        except Exception as exc:
+            self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
+    return functools.wraps(route)(wrapper)
+
+
 def make_handler(runner: Runner, operator: Operator,
                  registry: Optional["models_mod.Registry"] = None,
                  registry_path: Optional[Path] = None,
                  assignments: Optional[Mapping[str, object]] = None,
                  db=None, plan_assignments: Optional[Mapping[str, object]] = None,
-                 assignment_source: Optional[Mapping[str, str]] = None):
-    """The HTTP surface. Refuses before it reads, in the order the threat model requires."""
+                 assignment_source: Optional[Mapping[str, str]] = None,
+                 coder_default=None,
+                 settings_path: Optional[str] = None):
+    """The HTTP surface. Refuses before it reads, in the order the threat model requires.
+
+    `coder_default` is a callable returning `{node id: [model ids]}` for the nodes the coding
+    role's default will serve on the next run, or `{}`. It is the caller's own resolution (the one
+    the run applies), passed in rather than recomputed here, so the console cannot show a coder that
+    differs from the one that builds (CHG-20261005-01, review round 2).
+    """
 
     held = {"registry": registry if registry is not None else models_mod.Registry(),
             "assignments": dict(assignments or {}),
@@ -1285,8 +1335,8 @@ def make_handler(runner: Runner, operator: Operator,
                     raise ServerError(str(exc))
                 return _reassign()
 
-        out = runner.edit(body.get("version"), under_lock)
-        return {**out, "version": runner.state.version}
+        out, produced = runner.edit_versioned(body.get("version"), under_lock)
+        return {**out, "version": produced}
 
     def _assign_node(body):
         node_id = str(body.get("node_id") or "")
@@ -1298,9 +1348,68 @@ def make_handler(runner: Runner, operator: Operator,
 
     def _assign_seat(body):
         seat = str(body.get("seat") or "")
+        # A string (the old shape) or a list of ids, one session each (CHG-20261005-02). Anything
+        # else is refused, not stringified: `str(["a", "b"])` is a model id nobody has.
         model_id = body.get("model_id")
-        return _config_edit(
-            body, lambda: store_mod.set_seat_model(db, seat, str(model_id) if model_id else None))
+        if not (model_id is None or isinstance(model_id, str)
+                or (isinstance(model_id, list) and all(isinstance(m, str) for m in model_id))):
+            raise ServerError("`model_id` is a model id or a list of them — empty clears the seat")
+        return _config_edit(body, lambda: store_mod.set_seat_model(db, seat, model_id or None))
+
+    def _load_settings():
+        if settings_path is None:
+            raise ServerError("this runner was started without a settings file, so there is "
+                              "nowhere to read or save review_dimensions; start `serve` with one")
+        try:
+            return settings_mod.load(settings_path)
+        except settings_mod.SettingsError as exc:
+            raise ServerError(str(exc))
+
+    def _seat_choices():
+        """The seats a user may open, and what is chosen now (CHG-20261005-03).
+
+        Read from the settings file on every call, never cached: `POST /config/dimensions` writes
+        that file, and a console showing last minute's choice would be reporting a panel the next
+        run does not open.
+        """
+        current = _load_settings() if settings_path is not None else settings_mod.Settings()
+        return {
+            "seats": [{"name": s.name, "label": s.label, "question": s.question,
+                       "veto": s.veto, "opt_in": s.opt_in}
+                      for s in policy.SEATS],
+            "review_dimensions": (list(current.review_dimensions)
+                                  if current.review_dimensions is not None else None),
+            "review_seats": current.review_seats,
+            "high_risk_mode": current.high_risk_mode,
+            "floor": policy.SEAT_FLOOR,
+            "max_seat_count": policy.MAX_SEAT_COUNT,
+        }
+
+    def _set_dimensions(body):
+        """Choose which review dimensions open, in order; `null` clears the choice.
+
+        Goes through `settings.save`, so every refusal is the one `runner settings` gives — an
+        unknown seat, a repeat, a count under the floor without high-risk mode. Nothing here
+        re-implements a rule; a second copy of the floor is a floor that can drift.
+        """
+        raw = body.get("review_dimensions", False)
+        if raw is not None and not isinstance(raw, list):
+            raise ServerError("`review_dimensions` is a list of seat names, or null to clear it")
+
+        def write():
+            current = _load_settings()
+            try:
+                settings_mod.save(
+                    replace(current, review_dimensions=None if raw is None else tuple(raw)),
+                    settings_path)
+            except settings_mod.SettingsError as exc:
+                raise ServerError(str(exc))
+            return _seat_choices()
+
+        # Not `_config_edit`: this writes the settings file, which needs neither `held_lock` nor
+        # the store's, only the version check and the advance `edit_versioned` makes.
+        out, produced = runner.edit_versioned(body.get("version"), write)
+        return {**out, "version": produced}
 
     def _route_halt(body):
         """Who a permanent halt of one kind reaches first, for this project (CHG-20260827-19).
@@ -1461,6 +1570,7 @@ def make_handler(runner: Runner, operator: Operator,
             pass
 
         # -- routes ------------------------------------------------------------------------
+        @_refusals_answered
         def do_GET(self):                           # noqa: N802 - http.server's spelling
             if not self._guard():
                 return
@@ -1473,7 +1583,12 @@ def make_handler(runner: Runner, operator: Operator,
                      "gate": n.gate, "gate_when": n.gate_when, "mode": n.mode,
                      "main": n.main, "follows": n.follows, "rejects_to": n.rejects_to,
                      "branches": dict(n.branches), "next": n.next,
-                     "permanent": n.permanent}
+                     "permanent": n.permanent,
+                     # Read-only, from `policy.ROLES` (CHG-20261005-03): the console shows what the
+                     # role may do and has no route that changes it. `None` for a node with no
+                     # role — the runner's own steps.
+                     "capabilities": (policy.capabilities(n.role)
+                                      if n.role in policy.BY_ROLE else None)}
                     for n in graph.NODES],
                     "gates": {g: dict(v) for g, v in policy.GATES.items()},
                     "modes": list(graph.MODES)})
@@ -1481,6 +1596,18 @@ def make_handler(runner: Runner, operator: Operator,
                 self._json(200, runner.state.snapshot())
             elif path == "/run/events":
                 self._stream()
+            elif path == "/usage":
+                # What the current or last run's asks used, as each backend reported it
+                # (CHG-20261006-01). `run` is null before any run, so the console says "no run yet"
+                # instead of drawing zeros. A copy of the list: the engine appends to it from the
+                # run's thread while this one serializes.
+                report = runner.state.report
+                # Judged against the time of this reading, not of the ask: a window that reset since
+                # the run finished is stale now, whatever it was when the backend printed it.
+                now = _clock()
+                asks = usage_mod.judge(list(runner.state.usage), now)
+                self._json(200, {"run": usage_mod.summarize(asks, now) if report or asks else None,
+                                 "asks": asks})
             elif path == "/models":
                 # The console is local only; the models need not be, and the operator should never
                 # have to read a hostname to find that out. `leaving` is the answer to "what goes
@@ -1506,39 +1633,56 @@ def make_handler(runner: Runner, operator: Operator,
                         entry = by_model.setdefault(
                             model_id, {"nodes": [], "seats": [], "known": model_id in known})
                         entry["nodes"].append({"node_id": node_id, "mode": mode})
+                # The coding role's default is a model that builds without being assigned. Marked
+                # `default` so it is never read as an assignment: `node_models` and `source` stay
+                # what the plan and the store said.
+                for node_id, ids in (coder_default() if coder_default else {}).items():
+                    mode = graph.BY_ID[node_id].mode if node_id in graph.BY_ID else None
+                    for model_id in ids:
+                        entry = by_model.setdefault(
+                            model_id, {"nodes": [], "seats": [], "known": model_id in known})
+                        entry["nodes"].append({"node_id": node_id, "mode": mode, "default": True})
+                shown_seats = {}
                 for seat, command in seat_models.items():
                     # A seat naming a registry model lands in that model's bucket rather than
-                    # inventing a second entry for the same backend under its command line.
-                    label = (command if isinstance(command, str) and command in known
-                             else " ".join(command) if isinstance(command, (list, tuple))
-                             else str(command))
-                    entry = by_model.setdefault(
-                        label, {"nodes": [], "seats": [], "known": label in known})
-                    entry["seats"].append(seat)
+                    # inventing a second entry for the same backend under its command line. One
+                    # bucket per model of the seat (CHG-20261005-02).
+                    try:
+                        labels = [models_mod.entry_label(e)
+                                  for e in models_mod.seat_entries(command, reg)]
+                    except models_mod.ModelError:
+                        # A plan's list the registry cannot resolve: shown as written, and refused
+                        # when a run starts, rather than failing the whole page.
+                        labels = ([str(m) for m in command]
+                                  if isinstance(command, (list, tuple)) else [str(command)])
+                    shown_seats[seat] = labels
+                    for label in labels:
+                        entry = by_model.setdefault(
+                            label, {"nodes": [], "seats": [], "known": label in known})
+                        entry["seats"].append(seat)
                 # Models the project has and nothing uses. Said out loud, because "configured" and
                 # "used" look identical in a list and only one of them does anything.
                 for model_id in known:
                     by_model.setdefault(model_id, {"nodes": [], "seats": [], "known": True})
                 self._json(200, {
                     "node_models": node_models,
-                    "seat_models": {k: (" ".join(v) if isinstance(v, (list, tuple)) else str(v))
-                                    for k, v in seat_models.items()},
+                    "seat_models": shown_seats,
                     "by_model": by_model,
                     "models": [m.as_dict() for m in reg],
                     # Which source put each assignment there. An override nobody can see is worse
                     # than no override: the plan wins over the store, and a console that showed the
-                    # merged result with no provenance could not say that it had. **The shipped
-                    # console is that console** — it draws `by_model` and no provenance at all
-                    # (CHG-20260907-28). Sent for a client that wants it, and for the view that
-                    # nobody has built yet.
+                    # merged result with no provenance could not say that it had. The node panel
+                    # reads this to say that the plan sets a node or seat and wins
+                    # (CHG-20261005-03); the models list draws `by_model` and no provenance
+                    # (CHG-20260907-28).
                     "source": dict(held.get("source") or {}),
-                    # Which modes do anything with a list, for a client that wants to refuse a node
-                    # before it posts; `POST /config/nodes` refuses the same node anyway. **No
-                    # shipped console reads this.** This comment said the console greys out the rest
-                    # from the day the key shipped, and the console has never had a per-node
-                    # configure control to grey (CHG-20260907-28).
+                    # Which modes do anything with a list, so a client can refuse a node before it
+                    # posts; `POST /config/nodes` refuses the same node anyway. The node panel reads
+                    # this and offers a model editor only for these modes (CHG-20261005-03).
                     "assignable": list(store_mod.MODES_THAT_USE_MODELS),
                 })
+            elif path == "/config/seats":
+                self._json(200, _seat_choices())
             elif path == "/whoami":
                 self._json(200, {"operator": operator.name})
             else:
@@ -1603,6 +1747,8 @@ def make_handler(runner: Runner, operator: Operator,
                     out = _assign_node(body)
                 elif self.path == "/config/seats":
                     out = _assign_seat(body)
+                elif self.path == "/config/dimensions":
+                    out = _set_dimensions(body)
                 elif self.path == "/config/halts":
                     out = _route_halt(body)
                 elif self.path == "/run/decide":
@@ -1678,7 +1824,9 @@ def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
           registry_path: Optional[Path] = None,
           assignments: Optional[Mapping[str, object]] = None,
           db=None, plan_assignments: Optional[Mapping[str, object]] = None,
-          assignment_source: Optional[Mapping[str, str]] = None
+          assignment_source: Optional[Mapping[str, str]] = None,
+          coder_default=None,
+          settings_path: Optional[str] = None
           ) -> ThreadingHTTPServer:
     """Build the server, refusing any host that is not this machine.
 
@@ -1742,7 +1890,9 @@ def serve(runner: Runner, operator: Operator, host: str = "127.0.0.1",
         return _OneRunner((host, port),
                           make_handler(runner, operator, registry, registry_path, assignments,
                                        db=db, plan_assignments=plan_assignments,
-                                       assignment_source=assignment_source))
+                                       assignment_source=assignment_source,
+                                       coder_default=coder_default,
+                                       settings_path=settings_path))
     except OSError as exc:
         # Only what the errno establishes. This branch used to say "something is already there"
         # for every failure a socket can have, and `socket.gaierror` is an `OSError` — so the

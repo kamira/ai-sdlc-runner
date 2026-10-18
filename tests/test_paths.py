@@ -247,14 +247,22 @@ def test_unlink_removes_a_deep_file(tmp_path):
 ALLOWED_DIRECT_WRITES = {
     # (module, function called) : why it does not go through paths.py
     ("store.py", "sqlite3.connect"):
-        "the database open itself; sqlite takes a path string rather than a handle, so it is given "
-        "paths.real(file) and preceded by paths.check(file) two lines above — routed, just not "
-        "through a paths.* call the scanner can see",
+        "the database opens themselves (connect, and stored_model_ids which setup uses to read the "
+        "store without migrating it); sqlite takes a path string rather than a handle, so connect "
+        "is given paths.real(...) and stored_model_ids a file: URI built from paths.real(...) "
+        "(percent-encoded, ?mode=ro, uri=True) — routed, just not through a paths.* call the "
+        "scanner can see. connect is preceded by paths.check(file) and paths.makedirs a few "
+        "lines above; stored_model_ids is preceded by paths.exists(path), which refuses a "
+        "missing file with a clear error, and mode=ro opens read-only (it never creates a file "
+        "and refuses to roll back a hot journal)",
     ("worktree.py", "shutil.which"):
         "not a write at all — it asks whether `git` is on PATH. Caught by the deliberately broad "
         "`shutil.*` rule the seats asked for, and kept broad: a rule that enumerated only the "
         "writing half of shutil would be the kind of list that goes stale, which is worse than one "
         "false positive with a reason beside it",
+    ("tui.py", "shutil.get_terminal_size"):
+        "not a write at all — `runner setup` asks how wide the terminal is so it can wrap a "
+        "menu's body. Caught by the same deliberately broad `shutil.*` rule as `shutil.which` above",
     ("worktree.py", "tempfile.mkdtemp"):
         "the directory the module worktrees are made under, in the system temp root. No flow can "
         "make that path deep — the segments are a fixed prefix and `module-NNN` — and it is created "
@@ -741,7 +749,7 @@ def test_every_exception_a_person_reads_goes_through_plain_in():
     assert not unstripped, (
         "these let an exception reach a person with the extended-length prefix still on it: "
         + ", ".join(unstripped))
-    assert modules == 21, f"the survey read {modules} modules; the package had 21"
-    assert in_scope == 12, (
-        f"the survey looked inside {in_scope} in-scope handlers; there were 12. It cannot "
+    assert modules == 23, f"the survey read {modules} modules; the package had 23"
+    assert in_scope == 16, (
+        f"the survey looked inside {in_scope} in-scope handlers; there were 16. It cannot "
         f"report a clean tree over handlers it did not open")

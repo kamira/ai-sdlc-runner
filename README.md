@@ -167,8 +167,14 @@ vouched for as ordinary, because the name says nothing about what it will do.
 
 ### Review seats
 
-Four seats, each answering a **different question**. The floor is three; going below it needs an
-explicit high-risk-mode bypass, which is recorded.
+Fifteen seats, each answering a **different question**; **three open by default** (`conformance`,
+`defect`, `risk`) and an install that sets nothing opens exactly those. The floor is three; going
+below it needs an explicit high-risk-mode bypass, which is recorded. `review_seats` opens the first
+N of the twelve seats that are not opt-in (at most 12). `review_dimensions` in
+`config/settings.json` (or `runner settings`) names the seats you want, in order, and replaces the
+`review_seats` count while it is set; it must include `conformance`, the veto seat, unless high-risk
+mode is on (the run then records that it had no veto). `intake_review` asks the same seats. A seat may have **several models** (`seat_models`): each is its own session, and
+the seat passes only if every one does. The run report says which models answered which seat.
 
 | Seat | Asks | |
 |---|---|---|
@@ -176,6 +182,8 @@ explicit high-risk-mode bypass, which is recorded.
 | `defect` | Where is this wrong? Concrete inputs and the wrong result. | |
 | `risk` | What does this make hard to undo? | |
 | `idiom` | Does this read like the code around it? Is any of it unnecessary? | |
+| `security` `ux` `ci` `modularity` `privacy` `performance` `portability` `docs` | the other eight dimensions, each with its own question (`runner policy` lists them) | |
+| `observability` `supply_chain` `i18n` | three more, **opt-in**: only `review_dimensions` opens them, no seat count does | |
 
 Adjudication is **veto → majority → a tie decides nothing**. The veto seat's subject is a matter of
 fact, and counting votes on a fact is how a panel talks itself out of one.
@@ -198,8 +206,8 @@ on the node. The difference is declared in `graph.Node.mode`, never inferred fro
 | `model_panel` | N voices on **one question**, adjudicated | N |
 | `pool` | a pool the main dispatches to; **one** does the work | 1 |
 | `follows` | whichever model answered the node it names | 1 |
-| `seat_panel` | the review seats — independence is not configurable | one per seat |
-| `survey` | every seat asked, **all** answers kept, nothing adjudicated | one per seat |
+| `seat_panel` | the review seats — independence is not configurable | one per (seat, model) |
+| `survey` | every seat asked, **all** answers kept, nothing adjudicated | one per (seat, model) |
 
 Same three ids in `node_models`; entirely different runs. A pool's choice is **random on purpose** —
 any cleverer rule is the runner deciding which model is better at a task it has not seen — and
@@ -209,7 +217,7 @@ earlier ask shifts the ordinal and can change later dispatches. Every dispatch i
 what actually makes "which model built this" answerable.
 
 **One ask, one session.** Every asking node gets its own session, opened and closed around a single
-ask. A multi-seat review is several asks, so each seat is its own session — otherwise "three seats"
+ask. A multi-seat review is several asks, so each seat — and each model on a seat — is its own session — otherwise "three seats"
 is one model answering three times in one context, which is the anchoring the seats were bought to
 avoid.
 
@@ -424,6 +432,44 @@ The screen is four things: an **instruction box** (with attachments), **where th
 whole flow as a diagram** with the current node highlighted, and **the log** — every ask, who was
 asked, which model answered, and what it said.
 
+**Click a node** (or Tab to it and press Enter or Space; Escape closes) and its settings open. The
+node's role, mode, gate and what the role may do (spawn, write, execute) are shown and **not
+editable** — they are governance, in `policy.py`. What you can choose is who answers: for a node
+whose mode carries models (`single`, `model_panel`, `pool`) the registry's models, each with its
+tier, effort template and **reach** (where the work goes, and a guessed reach marked as a guess), in
+order; for the review-seat nodes (`lead_review`, `intake_review`) which review dimensions open, in
+what order, and which models sit on each seat. Saving goes through `POST /config/nodes`,
+`/config/seats` and `/config/dimensions`, and whatever the server refuses — a seat that does not
+exist, a panel below the floor of three without high-risk mode, a list without `conformance` (the
+veto seat, marked as required unless high-risk mode is on), a model listed twice or not in the
+registry — is printed in the panel, in the server's words, including a refusal of the read that
+follows a save. The three opt-in seats are marked and open only when ticked; each seat's question
+is shown. A node or seat the plan file sets is shown as the plan's and offers no save, because the
+plan wins. A save in one section leaves unsaved edits in the others, is checked against the version
+the panel was loaded at (so a second tab's change refuses it, and so does the run moving on, since
+the one version counts both), and says "Saved" or "Not saved" in a live region; a save answered
+after another node's panel opened changes nothing in that panel. Opening a node moves keyboard
+focus to the panel's heading, and closing it returns focus to the node. A dimension choice is
+written to the settings file and the next walk reads it. The **models list** shows each model's
+tier, its effort template, and every node (with its role) and seat it answers, or says it is used
+nowhere; the coder it names is the one the next walk will build with. The diagram is drawn in the
+browser from `GET /flow`, with no library and nothing fetched from outside this machine; shapes
+(rectangle step, hexagon decision, pill loop, dashed pill end) and the words *gate*, *HALT* and
+*HERE* carry what colour would otherwise carry. A visited node also shows a check mark and says
+"visited" in its accessible name; an edge with both ends visited (not necessarily the edge the run
+walked) is drawn thicker and named for a screen reader.
+
+The **用量 / usage** panel shows, per model, how many asks ran, their cost (claude's API-equivalent
+USD, not a bill on a subscription) and tokens, and — only where a backend states it — the quota
+remaining: codex's rate-limit windows as a percentage with the window length, reset time and when it
+was read. A window past its reset (judged when the panel is read, and again on an open page by a timer set for
+the earliest reset still ahead, with no fetch) says the reading is stale instead of showing the old
+figure, and a
+backend that reports nothing says *not reported* rather than showing zero. Codex's remaining quota is
+read from its local session log for the thread the runner itself just opened (`$CODEX_HOME`, default
+`~/.codex`), read-only; the panel says so in a line of its own, with what is kept (only the rate-limit windows
+and their timestamp). The same data is `GET /usage`.
+
 A run in progress can be added to: type more and press *add to the brief*, or attach a spec. Every
 work order from then on carries all of it, numbered, so a reviewer can see that something **arrived
 late** rather than being handed a brief that looks as though it was always complete.
@@ -464,7 +510,7 @@ model should be a decision somebody made, not one they discover later.
     "lead_task_review": ["claude", "codex", "gemini"],   // model_panel → three voices
     "engineer_build":   ["claude", "codex", "gemini"]    // pool → one builds
   },
-  "seat_models": { "conformance": "claude", "defect": "codex" },
+  "seat_models": { "conformance": "claude", "defect": ["codex", "gemini"] },   // a seat may have several
   "node_specs": {
     "engineer_build": {
       "scope": "src/slugify.py",
@@ -559,7 +605,8 @@ the order runs. What `reply.schema` requires:
 | anything else | `required: []` — nothing in the answer is acted on; `why` is still read by a person |
 
 The work order arrives as JSON on **stdin**; the answer goes to **stdout** as one JSON object. A
-non-zero exit is a failed attempt.
+non-zero exit is a failed attempt. (claude's and codex's JSON output modes wrap the answer in an
+envelope; the runner reads the answer from inside it. See `docs/MODELS.md`.)
 
 `decisions.next_module` may be `"frontier"`, which reads two recorded facts — what the PM most
 recently planned, and what the engineers have built — instead of a list written before the first
@@ -581,13 +628,25 @@ models that opens fewer than N sessions is refused"* rather than *"panels work"*
 in CI and refuses a record whose status says finished with no acceptance record beside it. It caught
 one of mine.
 
-**Substantial changes go to two independent seats**, each with the same brief, neither seeing the
-other, against a frozen tree — `python tools/frozen_tree.py` says whether it is one, printing the
+**Substantial changes go to the review matrix** (DIR-3): every DIR-2 engine on every enabled
+dimension, one session each, run by `python3 tools/panel.py run`, with
+[`config/panel.json`](config/panel.json) choosing the dimensions. The config is read from the base
+the change is measured against (`origin/main`, or `tools/panel.py run --config-from REF`), not from
+the commit under review, so a change cannot weaken its own reviewers; `tools/panel.py run --config
+PATH` takes a file as it is and the report says so. If codex cannot be used (`codex login status` fails, or a quota window on this machine is below `min_remaining_percent`), `sonnet` takes its seat for the whole round, decided once before it starts; the report names the swap and its reason, and `tools/panel.py run --no-substitute` keeps codex and stops-and-asks as before. Every seat in the review phase gets the same brief unless `tools/panel.py run --brief-for MODEL=FILE` gives one model
+its own (say, the increment only; the matrix is unchanged and the report records each model's brief),
+and none sees another; the
+cross-read phase then shows each seat the other seats' answers on that dimension. The round runs
+against a frozen tree — `python tools/frozen_tree.py` says whether it is one, printing the
 commit being verified or naming the files that differ from it. That check exists because the rule
 did not have one: on 2026-08-27 an acceptance round of this repository's own ledger ran eleven
-verifiers against a single shared worktree and broke it (CHG-20260827-13). Their verdicts are committed whole in
-[`docs/design/reviews/`](docs/design/reviews/) rather than summarised — a summary is where an
-objection gets softened, and this repository's recorded history is disagreement being flattened.
+verifiers against a single shared worktree and broke it (CHG-20260827-13). The tool **refuses an
+`--out` inside the repo** — raw seat output there would dirty the frozen tree — so the report and
+the per-cell answers live outside the tree during the round and are not committed by the tool.
+What reaches the repository is the acceptance record: the ACC carries the verdict table and the
+findings, and a summary is where an objection gets softened, so it should quote the findings as the
+seats said them rather than condense them. This repository's recorded history is disagreement being
+flattened.
 
 **This is a practice, not a mechanism, and it has been broken.** CHG-20260823-14 and -15 — the two
 changes that wrote this section — **landed before any seat had read them**, and their own Status
@@ -636,13 +695,15 @@ src/ai_sdlc_runner/
   paths.py        every filesystem call, because Windows lies about long paths
   worktree.py     per-module isolation, and what a halted run keeps
   sandbox.py      what a run may reach, and what it records when it cannot be bounded
-  settings.py     what an operator sets on a screen: seats, high-risk mode, the vouch
+  settings.py     what an operator sets on a screen: seats, high-risk mode, the vouch, the coder
+  detect.py       which model CLIs are installed, for `runner setup`
+  usage.py        what each ask used, and the quota a backend says remains
   tui.py          the interactive selector
   console/        the operator console — one page, no build step
-  cli.py          flow · policy · settings · run · serve · conversations · export
+  cli.py          flow · policy · settings · setup · run · serve · conversations · export
 docs/
   SCHEMAS.md      all sixteen schemas, and which a machine enforces
-  API.md          the nineteen HTTP routes, and the guard that runs before every one
+  API.md          the twenty-two HTTP routes, and the guard that runs before every one
   DATABASE.md     the SQLite schema, and every column that is deliberately not in it
   MODELS.md       the rules that govern a model: refusals, reach, assignment
   changes/        one record per change, with done-whens and what is not claimed
@@ -663,7 +724,7 @@ SQLite DDL, and the server's HTTP API. **Five** are closed schemas — the plan 
 the work order, the model registry and the settings: a field outside them is refused rather than
 ignored.
 
-Three have pages of their own — [`docs/API.md`](docs/API.md) for the **nineteen** HTTP routes,
+Three have pages of their own — [`docs/API.md`](docs/API.md) for the **twenty-two** HTTP routes,
 [`docs/DATABASE.md`](docs/DATABASE.md) for the SQLite schema (**six of its six tables are
 built**), and [`docs/MODELS.md`](docs/MODELS.md) for the rules that govern models: every refusal,
 how reach is computed, and how a model reaches an ask.
@@ -692,6 +753,17 @@ runner --config runner.yaml serve --plan plan.json          # POST /config/nodes
 runner --config runner.yaml run   --plan plan.json          # reads the same store
 runner run --plan plan.json --assignment-store none         # the plan alone (run only; serve refuses it)
 ```
+
+`runner setup` finds `claude`, `codex` and `ollama` on `PATH` and offers each as a registry entry
+(`--yes` to accept off a terminal). A model carries an optional `tier` and an `effort_argv`
+template; with nothing assigned to `engineer_build`, the `coder_model` setting — or the registry's
+only `mid` model, when no `agent_command` is configured and you did not answer No in `setup` —
+builds, at `coder_effort`. A `coder_model` you set overrides a configured `agent_command` (a
+notice says so); `setup --yes` does not set one when `agent_command` is configured. A model called
+`none` is never the coder. The `claude` and `codex` entries `setup` writes declare
+`declared_reach: external`, because those CLIs send the prompt, repository content included, to
+their vendor; `setup` says so before it writes and when it offers one as the coder. See
+`docs/MODELS.md`.
 
 **The plan wins where it says something; the store fills where the plan is silent.** That is
 `settings.py`'s rule one layer out — a per-change declaration must not be silently overridden by
@@ -810,7 +882,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 2433 tests
+pytest -q          # 3040 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

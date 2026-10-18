@@ -48,7 +48,7 @@ def test_the_page_lists_exactly_the_fields_that_persist():
     # rather than equality, because the page names field-like identifiers for other reasons.
     absent = sorted(n for n in models.COMPUTED if n not in PAGE)
     assert not absent, f"the page must name every computed field; it omits {absent}"
-    assert len(persisted) == 8, f"the registry now persists {len(persisted)} fields, not eight"
+    assert len(persisted) == 11, f"the registry now persists {len(persisted)} fields, not eleven"
     # The page's own sentence, read as a **number** rather than matched as a string. It said
     # `"Eight fields persist" in FLAT`, so correcting the page — which CHG-20260907-14 had to do,
     # to name `models.Model` — broke the guard. A guard that pins a sentence is a guard the page
@@ -107,6 +107,22 @@ def test_every_refusal_the_page_documents_actually_fires(model, fragment):
 def test_two_models_with_one_id_are_refused():
     with pytest.raises(models.ModelError, match="two models are called"):
         models.Registry(models=(_cli(), _cli()))
+
+
+@pytest.mark.parametrize("model_id", ["none", "None", "NONE"])
+def test_the_reserved_id_is_refused_when_a_model_is_created_but_not_when_one_is_loaded(
+        model_id, tmp_path):
+    # `none` is the settings' refusal sentinel. A registry written before it was reserved must still
+    # load, or `run` and `serve` stop on data the previous runner accepted.
+    with pytest.raises(models.ModelError, match="is reserved"):
+        models.Registry().add(_cli(id=model_id))
+    with pytest.raises(models.ModelError, match="is reserved"):
+        models.validate_new(_cli(id=model_id))
+    held = models.Registry(models=(_cli(id=model_id),))
+    assert models.reserved_in(held) == [model_id]
+    where = tmp_path / "models.json"
+    models.save(held, where)
+    assert [m.id for m in models.load(where)] == [model_id]
 
 
 def test_a_valid_model_of_each_transport_is_accepted():
@@ -227,7 +243,7 @@ def test_the_page_states_the_resolution_order_the_factory_uses():
     # CHG-20260823-51 split this into a lookup and a fallback so  could tell a
     # seat-typed command from the config'"'"'s own. The ORDER this test is about did not move; the
     # line it anchored on did, and the anchor going stale is the test working.
-    raw_seat = body.index("seat_argv = seat_models.get(seat)")
+    raw_seat = body.index("seat_argv = entry")
     assert seat_named < by_model < raw_seat, "the factory's resolution order moved"
     assert "most specific first" in FLAT.lower()
 

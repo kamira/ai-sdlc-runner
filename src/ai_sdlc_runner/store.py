@@ -39,15 +39,16 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import urllib.parse
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from . import graph, models as models_mod, paths, policy
 
 #: Bumped when the tables change. Read and compared at open — a version nobody consults is a number,
 #: not a mechanism, which is what an earlier draft of the design was pulled up for.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 
 #: The modes that do **something** with a list of models. The other four ignore it entirely, and
 #: assigning to them is refused rather than stored: a setting that looks configured and does nothing
@@ -228,6 +229,44 @@ def _migrate(db: sqlite3.Connection) -> None:
             for statement in _SCHEMA_3:
                 db.execute(statement)
             db.execute("PRAGMA user_version = 3")
+    if found < 4:
+        # Schema 4 adds a model's tier, effort template and declared reach (CHG-20261005-01). The columns are
+        # added to a `models` table verified to be the schema-3 one first, and both default to
+        # "nothing", so a store written before this change reads back exactly as it was.
+        _verify_or_refuse(db, before=3)
+        with _locked(db), db:
+            db.execute("BEGIN")            # see schema 1: DDL does not open one by itself
+            have = {row[1] for row in db.execute("PRAGMA table_info(models)")}
+            for column, statement in _SCHEMA_4:
+                # A store half-built at version 0 from the *current* DDL already has them.
+                if column not in have:
+                    db.execute(statement)
+            db.execute("PRAGMA user_version = 4")
+    else:
+        # A store stamped 4 by the build before review round 2 has `tier` and `effort_argv` but not
+        # `declared_reach`. Schema 4 had not shipped, so it gains the column here rather than
+        # costing a fifth version; any other shape is left for the first query to refuse.
+        with _locked(db), db:
+            db.execute("BEGIN")
+            have = {row[1] for row in db.execute("PRAGMA table_info(models)")}
+            if have and "declared_reach" not in have:
+                db.execute(dict(_SCHEMA_4)["declared_reach"])
+    if found < 5:
+        # Schema 5 gives a seat a list of models (CHG-20261005-02): `seat_assignments` gains a
+        # `position`, and its primary key becomes (seat, position). Rebuilt rather than altered —
+        # SQLite cannot change a primary key — and copied inside the one transaction, so every
+        # single assignment a v4 store holds comes out as position 0 of its seat.
+        _verify_or_refuse(db, before=4)
+        with _locked(db), db:
+            db.execute("BEGIN")            # see schema 1: DDL does not open one by itself
+            have = tuple(row[1] for row in db.execute("PRAGMA table_info(seat_assignments)"))
+            if have != _EXPECTED["seat_assignments"]:
+                db.execute("ALTER TABLE seat_assignments RENAME TO seat_assignments_v4")
+                db.execute(_SEAT_ASSIGNMENTS_5)
+                db.execute("INSERT INTO seat_assignments (seat, position, model_id) "
+                           "SELECT seat, 0, model_id FROM seat_assignments_v4")
+                db.execute("DROP TABLE seat_assignments_v4")
+            db.execute("PRAGMA user_version = 5")
     db.commit()
 
 
@@ -252,7 +291,7 @@ _SCHEMA_1 = (
          model_id TEXT NOT NULL REFERENCES models(id),
          PRIMARY KEY (node_id, ordinal)
        )""",
-    # One model per seat. A seat is one voice; a list would be a panel inside a panel.
+    # One model per seat, as schema 1 made it; schema 5 rebuilds it as a list (`_SEAT_ASSIGNMENTS_5`).
     """CREATE TABLE IF NOT EXISTS seat_assignments (
          seat     TEXT PRIMARY KEY,
          model_id TEXT NOT NULL REFERENCES models(id)
@@ -312,22 +351,53 @@ _SCHEMA_3 = (
 )
 
 
+#: Schema 4: the three columns a model gained (tier, effort template, declared reach). `ADD COLUMN` rather than a rebuilt table, because the
+#: assignment tables point at `models(id)` and a rebuild would have to drop what they reference.
+_SCHEMA_4 = (
+    ("tier", "ALTER TABLE models ADD COLUMN tier TEXT NOT NULL DEFAULT ''"),
+    ("effort_argv", "ALTER TABLE models ADD COLUMN effort_argv TEXT NOT NULL DEFAULT '[]'"),
+    ("declared_reach", "ALTER TABLE models ADD COLUMN declared_reach TEXT NOT NULL DEFAULT ''"),
+)
+
+#: Schema 5: a seat's models, in order. `position` is what a seat's list is read by, exactly as
+#: `ordinal` is for a node's.
+_SEAT_ASSIGNMENTS_5 = """CREATE TABLE seat_assignments (
+         seat     TEXT NOT NULL,
+         position INTEGER NOT NULL,
+         model_id TEXT NOT NULL REFERENCES models(id),
+         PRIMARY KEY (seat, position)
+       )"""
+
+#: `models` as schema 1 created it. A store below schema 4 must hold exactly this, because the
+#: columns the schema-4 block adds are not there yet.
+_MODELS_BEFORE_4 = ("id", "vendor", "name", "transport", "command_json", "endpoint", "key_env",
+                    "note")
+
 _EXPECTED = {
     "halt_routing": ("kind", "recipient"),
-    "models": ("id", "vendor", "name", "transport", "command_json", "endpoint", "key_env", "note"),
+    "models": _MODELS_BEFORE_4 + ("tier", "effort_argv", "declared_reach"),
     "node_assignments": ("node_id", "ordinal", "model_id"),
-    "seat_assignments": ("seat", "model_id"),
+    "seat_assignments": ("seat", "position", "model_id"),
     "conversations": ("conversation_id", "project_id", "project_name", "schema", "run_json"),
     "turns": ("conversation_id", "seq", "kind", "at", "body_json"),
 }
 
 
-def _verify_or_refuse(db: sqlite3.Connection) -> None:
-    """A table already here at version 0 must be the one we would have made."""
+def _verify_or_refuse(db: sqlite3.Connection, before: int = 0) -> None:
+    """A table already here must be the one we would have made at the version it claims.
+
+    `before` is the schema the store is being brought up *from*: below 4, `models` is the
+    eight-column table, and demanding the schema-4 shape of it would refuse every older store.
+    Below 5 `seat_assignments` is the two-column table, for the same reason.
+    """
     for table, columns in _EXPECTED.items():
         found = tuple(row[1] for row in db.execute(f"PRAGMA table_info({table})"))
         if not found:
             continue                      # not there; it is about to be created
+        if table == "models" and before < 4 and found == _MODELS_BEFORE_4:
+            continue                      # the schema-1 shape; the schema-4 block adds the rest
+        if table == "seat_assignments" and before < 5 and found == ("seat", "model_id"):
+            continue                      # the schema-1 shape; the schema-5 block rebuilds it
         if found != columns:
             raise StoreError(
                 f"{table!r} already exists with columns {list(found)}, and this runner's schema "
@@ -370,12 +440,17 @@ def save_registry(db: sqlite3.Connection, registry: models_mod.Registry) -> None
     with _locked(db), db:
         db.executemany(
             "INSERT INTO models (id, vendor, name, transport, command_json, endpoint, key_env, "
-            "note) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "note, tier, effort_argv, declared_reach) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET vendor=excluded.vendor, name=excluded.name, "
             "transport=excluded.transport, command_json=excluded.command_json, "
-            "endpoint=excluded.endpoint, key_env=excluded.key_env, note=excluded.note",
+            "endpoint=excluded.endpoint, key_env=excluded.key_env, note=excluded.note, "
+            "tier=excluded.tier, effort_argv=excluded.effort_argv, "
+            "declared_reach=excluded.declared_reach",
             [(m.id, m.vendor, m.name, m.transport, json.dumps(list(m.command)),
-              m.endpoint, m.key_env, m.note) for m in registry])
+              m.endpoint, m.key_env, m.note, m.tier, json.dumps(list(m.effort_argv)),
+              m.declared_reach)
+             for m in registry])
         stale = [row[0] for row in db.execute("SELECT id FROM models")
                  if row[0] not in keep]
         for model_id in stale:
@@ -394,8 +469,51 @@ def _assigned_to(db: sqlite3.Connection, model_id: str) -> List[str]:
         "SELECT DISTINCT node_id FROM node_assignments WHERE model_id = ? ORDER BY node_id",
         (model_id,))]
     seats = [f"seat {row[0]!r}" for row in db.execute(
-        "SELECT seat FROM seat_assignments WHERE model_id = ? ORDER BY seat", (model_id,))]
+        "SELECT DISTINCT seat FROM seat_assignments WHERE model_id = ? ORDER BY seat",
+        (model_id,))]
     return nodes + seats
+
+
+def stored_model_ids(path: "str | Path") -> frozenset:
+    r"""The ids in the store's `models` table, read without writing to it or migrating it.
+
+    `setup` needs these before anyone has accepted anything, and `connect` migrates (and commits)
+    the store to the current schema: a setup that then wrote nothing would still have made the
+    store unreadable by the previous runner. So this reads the file as it is, whatever its schema
+    version, and never migrates.
+
+    Read-only is `mode=ro` in a `file:` URI, which opens the file read-only at the OS level. It
+    is not `PRAGMA query_only = 1` (round 15): that only stops this connection's own statements,
+    and on a writable connection the first read of a store with a hot rollback journal (a writer
+    crashed mid-transaction) rolls the journal back, rewriting pages and deleting the journal. A
+    `mode=ro` connection refuses that recovery instead, so such a store raises `StoreError` and
+    setup asks nothing. The URI is `"file:" + quote(paths.real(path)) + "?mode=ro"` with no `//`
+    authority, so SQLite takes the decoded remainder as the path: the same long form `connect`
+    uses, which on Windows carries the extended-length prefix. `?`, `#` and `%` are
+    percent-encoded (the prefix `\\?\` contains a `?`); `/`, `\` and `:` are left as they are.
+    The earlier `Path.resolve().as_uri()` form was replaced in round 15 because it bypassed
+    `paths.real`, so on Windows past MAX_PATH SQLite answered "unable to open database file" for a
+    store every other command opens. `mode=ro` never creates a file, and a path that does not
+    exist is still refused with `StoreError` first. A store that cannot be read (locked, not a
+    database, hot journal) also raises `StoreError`, and the caller refuses: an empty set there
+    would let setup accept an id the store already holds. A store with no `models` table yet
+    really has no ids, so that case returns an empty set. The connection is always closed.
+    """
+    if not paths.exists(path):
+        raise StoreError(f"cannot read the store {path}: no such file")
+    uri = "file:" + urllib.parse.quote(paths.real(path), safe="/\\:") + "?mode=ro"
+    try:
+        db = sqlite3.connect(uri, uri=True)
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        raise StoreError(f"cannot read the store {path}: {paths.plain_in(str(exc))}") from exc
+    try:
+        return frozenset(r[0] for r in db.execute("SELECT id FROM models"))
+    except sqlite3.Error as exc:
+        if "no such table" in str(exc):
+            return frozenset()
+        raise StoreError(f"cannot read the store {path}: {paths.plain_in(str(exc))}") from exc
+    finally:
+        db.close()
 
 
 def load_registry(db: sqlite3.Connection) -> models_mod.Registry:
@@ -408,12 +526,14 @@ def load_registry(db: sqlite3.Connection) -> models_mod.Registry:
     """
     with _locked(db):
         rows = db.execute(
-            "SELECT id, vendor, name, transport, command_json, endpoint, key_env, note "
-            "FROM models ORDER BY id").fetchall()
+            "SELECT id, vendor, name, transport, command_json, endpoint, key_env, note, tier, "
+            "effort_argv, declared_reach FROM models ORDER BY id").fetchall()
     return models_mod.Registry(models=tuple(
         models_mod._model_from({
             "id": r[0], "vendor": r[1], "name": r[2], "transport": r[3],
-            "command": json.loads(r[4]), "endpoint": r[5], "key_env": r[6], "note": r[7]})
+            "command": json.loads(r[4]), "endpoint": r[5], "key_env": r[6], "note": r[7],
+            "tier": r[8], "effort_argv": json.loads(r[9]),
+            "declared_reach": r[10]})
         for r in rows))
 
 
@@ -463,14 +583,24 @@ def set_node_models(db: sqlite3.Connection, node_id: str, model_ids: Sequence[st
                     f"no model {model_id!r} in this store; assign one the registry has") from None
 
 
-def set_seat_model(db: sqlite3.Connection, seat: str, model_id: Optional[str]) -> None:
+def set_seat_model(db: sqlite3.Connection, seat: str,
+                   model_ids: Union[None, str, Sequence[str]]) -> None:
+    """Assign a seat its models, or clear them. One id (the old shape) is a one-element list."""
     _check_seat(seat)
+    listed = [model_ids] if isinstance(model_ids, str) else list(model_ids or ())
+    listed = [m for m in listed if m]
+    repeated = sorted({m for m in listed if listed.count(m) > 1})
+    if repeated:
+        raise StoreError(
+            f"model(s) {repeated} listed more than once on seat {seat!r}. Each model on a seat is "
+            f"its own session; the same model twice is one voice counted twice")
     with _locked(db), db:
         db.execute("DELETE FROM seat_assignments WHERE seat = ?", (seat,))
-        if model_id:
+        for position, model_id in enumerate(listed):
             try:
-                db.execute("INSERT INTO seat_assignments (seat, model_id) VALUES (?, ?)",
-                           (seat, model_id))
+                db.execute(
+                    "INSERT INTO seat_assignments (seat, position, model_id) VALUES (?, ?, ?)",
+                    (seat, position, model_id))
             except sqlite3.IntegrityError:
                 raise StoreError(
                     f"no model {model_id!r} in this store; assign one the registry has") from None
@@ -509,10 +639,14 @@ def node_models(db: sqlite3.Connection) -> Dict[str, List[str]]:
     return out
 
 
-def seat_models(db: sqlite3.Connection) -> Dict[str, str]:
+def seat_models(db: sqlite3.Connection) -> Dict[str, List[str]]:
+    out: Dict[str, List[str]] = {}
     with _locked(db):
-        rows = db.execute("SELECT seat, model_id FROM seat_assignments ORDER BY seat").fetchall()
-    return {seat: model_id for seat, model_id in rows}
+        rows = db.execute(
+            "SELECT seat, model_id FROM seat_assignments ORDER BY seat, position").fetchall()
+    for seat, model_id in rows:
+        out.setdefault(seat, []).append(model_id)
+    return out
 
 
 # ── resolution ────────────────────────────────────────────────────────────────────────────────
@@ -538,7 +672,8 @@ def resolve(plan: Mapping[str, object], stored: Mapping[str, object]
     return merged, source
 
 
-def overrides(plan: Mapping[str, object], stored: Mapping[str, object]) -> Dict[str, str]:
+def overrides(plan: Mapping[str, object], stored: Mapping[str, object]
+              ) -> Dict[str, Union[str, List[str]]]:
     """The assignments the plan **displaced** — not the ones it merely named.
 
     `resolve`'s map answers *which source put an assignment there*, and for that question
@@ -553,7 +688,7 @@ def overrides(plan: Mapping[str, object], stored: Mapping[str, object]) -> Dict[
     why this reads the two inputs instead. Returns ``key -> what the store had``, so a caller can
     say what was displaced and not only how many.
     """
-    displaced: Dict[str, str] = {}
+    displaced: Dict[str, Union[str, List[str]]] = {}
     for half in ("node_models", "seat_models"):
         from_plan = dict(plan.get(half) or {})
         from_store = dict(stored.get(half) or {})

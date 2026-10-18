@@ -1,6 +1,6 @@
 # The server's HTTP API
 
-The console's back end. **Nineteen routes** — eight `GET`, eleven `POST` — every one crossing a process
+The console's back end. **Twenty-two routes** — ten `GET`, twelve `POST` — every one crossing a process
 boundary to a browser, and until now none of them written down. An independent seat called this the
 largest omission in [`SCHEMAS.md`](SCHEMAS.md); this is that entry.
 
@@ -50,12 +50,15 @@ The whole graph, so the console can draw it without embedding a copy.
 { "nodes": [ { "id": …, "kind": …, "label": …, "role": …, "gate": …, "gate_when": …,
                "mode": …, "main": …, "follows": …, "rejects_to": …,
                "branches": { "<label>": "<node id>" }, "next": …,
-               "permanent": … } ],                                      // all 31
+               "permanent": …,
+               "capabilities": { "can_spawn": …, "can_write": …, "can_execute": … } | null } ],  // all 31
   "gates": { "<gate>": { "<risk>": "<verdict>" } },                     // all 10
   "modes": [ "runner", "single", "seat_panel", … ] }                    // all 7
 ```
 
 Thirteen of `Node`'s eighteen fields. `answer_decides`, `note`, `grades_risk`, `settles_risk` and `panel_branches` are **not** sent.
+
+`capabilities` (CHG-20261005-03) is not a `Node` field: it is `policy.capabilities(node.role)`, the three flags a work order may carry for the node's role, or `null` for a node with no role. **Read-only** — the console's node panel shows it, and no route changes it, because a role's capabilities are governance (`policy.py`) and a click must not rewrite what a node is allowed to do.
 
 `permanent` (CHG-20260827-22) **is** sent, and the distinction is the one this section keeps making. It says a terminal node is a *give-up* rather than an ending — `halt_second_fail` and `halt_unreconciled` against `done`. Drawing those three the same way is the confusion the field was added to end, and drawing is exactly what the console is for. A field it cannot act on is withheld; this is one it must act on.
 
@@ -88,13 +91,43 @@ The registry, plus the one question a registry cannot answer for itself.
 
 ```jsonc
 { "models": [ { "id", "vendor", "name", "transport", "command", "endpoint", "key_env", "note",
-                "reach", "leaves_this_machine", "reach_guessed" } ],
+                "tier", "effort_argv", "declared_reach", "reach", "leaves_this_machine",
+                "reach_guessed" } ],
   "leaving": [ "<model id>", … ] }
 ```
 
 **Three fields, listed in `models.COMPUTED`, appear here and are never persisted** — `reach`,
-`leaves_this_machine` and `reach_guessed`, computed on every read from `(transport, endpoint)`. `leaving` is the same fact stated at the top level, because
+`leaves_this_machine` and `reach_guessed`, computed on every read from `(transport, endpoint)`, with `reach`
+raised to the stored `declared_reach` when that is higher (CHG-20261005-01). `leaving` is the same fact stated at the top level, because
 *"what goes out from here"* should not require a reader to scan a list and notice a hostname.
+
+### `GET /usage`
+What the current or last run's asks used, as each backend reported it (CHG-20261006-01). Same guard
+as every other `GET`. Never an estimate: a backend that printed nothing usable is `unreported`, and an
+unknown figure is `null`, not `0`. The list belongs to the run, not to its report, so asks already
+made are listed even when the run stopped on an error and no report came back.
+
+```jsonc
+{ "run": null                                   // no run yet
+       | { "models": { "<model id or (default backend)>": {
+                 "asks": 3, "asks_unreported": 0,
+                 "cost_usd": 0.42 | null,        // null: no ask of this model reported a cost
+                 "tokens": { "input", "output", "cache_read", "cache_write" } | null } },
+           "remaining": [ { "model", "window": "primary" | "secondary", "window_minutes": 300 | null,
+                            "used_percent", "remaining_percent",
+                            "resets_at": "<iso8601>" | null, "as_of": "<iso8601>" | null,
+                            "stale": false } ] },   // the latest reading of each window name
+  "asks": [ { "ask_id", "node_id", "seat", "model",
+              "kind": "claude" | "codex" | "unreported",
+              "cost_usd", "tokens", "remaining": [ …as above, without `model`… ], "note" } ] }
+```
+
+`cost_usd` is the API-equivalent figure `claude` prints, not a bill on a subscription. Remaining quota
+is stated only by codex, from its local session log (`$CODEX_HOME/sessions/…/rollout-*-<thread id>.jsonl`)
+for the thread the runner itself just opened — read-only, and only `rate_limits` is kept. A window
+whose `resets_at` has passed is `stale: true`: the reading is from before the reset. `stale` is
+judged against the time of the request, not of the ask, in both `run.remaining` and `asks`: a
+window that reset after the run finished is stale when it is read.
 
 ### `GET /attachments`
 ```jsonc
@@ -104,14 +137,30 @@ The registry, plus the one question a registry cannot answer for itself.
 
 `id` is the **full 64-character digest**. The stored filename is `id[:32]` and is never sent.
 
+### `GET /config/seats`
+The review seats a user may open, and what the settings file chooses now (CHG-20261005-03). Read
+from the settings file on every call. A server started without a settings file answers `200` with
+the defaults (nothing chosen): this is a read, and only `POST /config/dimensions` needs a file to
+write, so only it is refused there. A settings file that does not load answers `409` with the
+loader's sentence.
+
+```jsonc
+{ "seats": [ { "name", "label", "question", "veto", "opt_in" } ],   // policy.SEATS, in order; only conformance vetoes
+  "review_dimensions": [ "<seat>", … ] | null,    // null: the first `review_seats` (or the floor) seats that are not opt-in open
+  "review_seats": 4 | null,
+  "high_risk_mode": false,
+  "floor": 3,
+  "max_seat_count": 12 }                          // policy.MAX_SEAT_COUNT; a count opens no opt-in seat
+```
+
 ### `GET /config/nodes`
 Where each model is actually **used** — a model listed and used nowhere looks configured, and a model
 on eight nodes looks the same in a list as one on a single node.
 
 ```jsonc
 { "node_models": { "<node id>": ["<model id>", …] },
-  "seat_models": { "<seat>": "<model id or joined command line>" },
-  "by_model": { "<model id or command>": { "nodes": [ {"node_id", "mode"} ],
+  "seat_models": { "<seat>": ["<model id or joined command line>", …] },
+  "by_model": { "<model id or command>": { "nodes": [ {"node_id", "mode", "default"?} ],
                                            "seats": [ "<seat>", … ],
                                            "known": true } },
   "models": [ …as in GET /models, without `leaving`… ],
@@ -119,42 +168,45 @@ on eight nodes looks the same in a list as one on a single node.
   "assignable": [ "single", "model_panel", "pool" ] }
 ```
 
+**A `by_model` node entry with `"default": true` is the coding role's default, not an assignment.**
+With nothing assigned to `engineer_build`, the run builds with `coder_model` or the registry's only
+`mid` model (a model called `none` is never picked, and an assignment naming it is refused), unless
+`coder_model` is `none` or a runner.yaml `agent_command` is configured — an explicit `coder_model`
+still wins over `agent_command`, with a notice (`cli.coder_defaults`), and `fix_pass` and `engineer_selfverify` follow it. `serve` passes
+the server that same resolution, so the model that will build is listed under those three nodes
+instead of "used nowhere". `node_models` and `source` stay exactly what the plan and the store said.
+
 **`source` says which of two places put each assignment there.** An assignment can come from the
 plan file (this change's declaration) or from the store (the project's standing one), and **the plan
 wins**. A console showing the merged result with no provenance could not say that it had — and an
-override nobody can see is worse than no override. **The console this repository ships is that
-console**: it draws the merged assignments through `by_model` and renders no provenance at all.
-`runner run` and `runner serve` each print a count to the terminal; per-assignment provenance is
-sent on this route and read by nothing, and the view that would read it is named in
-CHG-20260907-28 and built by no record yet.
+override nobody can see is worse than no override. **The console this repository ships**
+(CHG-20261005-03) draws the merged assignments in the models list through `by_model`, and the node
+panel reads `source` for one sentence only — that the plan sets a node or a seat and
+wins over what is saved, in which case it offers no save. `runner run` and `runner serve` each
+print a count to the terminal; no view lists every assignment's provenance.
 
 **`assignable` is the three modes that do anything with a list.** It is for a client that wants to
 refuse a node before it posts — `POST /config/nodes` refuses the same node anyway, with a `409`
-naming what each of the other four does instead. **No shipped console reads it.** From `22f6ace`
-until CHG-20260907-28 this page said the console greys the other four out; the console has no
-per-node configure control at all, so there has never been anything to grey.
+naming what each of the other four does instead. **The node panel reads it** (CHG-20261005-03): a
+node whose mode is not listed gets no model editor. Before that change no shipped console read it,
+and this page's claim that the console greys the other four out had nothing to grey.
 
 `known: false` marks a model a plan names and the registry does not have. Every registry model
 appears in `by_model` even with empty `nodes` and `seats` — that is how "configured but unused"
 becomes visible.
 
-**`known` is built here and read by nothing**, like `assignable` above it and like the
-per-assignment provenance. Inside the branch that builds this answer the key is written on three
-lines — `server.py:1489`, `:1498`, `:1503` — and a **local dict of the same name**, the registry
-index, is built at `:1483` and read at `:1489`, `:1494`, `:1498` and `:1502`. Two of those lines do
-both: `"known": model_id in known` at `:1489` and `"known": label in known` at `:1498` each write
-the key and read the local in one expression. Six lines, eight occurrences, and no split of the
-lines into two sets is right — which is why this record's first count (six writes) and its second
-(three and three) were both refused. No client in this repository reads the key back: the console
-decides "not in the registry" from the model list, not from this.
+**`known` is built here and read by no client in this repository.** The console decides "not in
+the registry" from the model list, not from this key. In the branch that builds this answer the key
+is written in four places — the `node_models` loop, the coding default's loop, the seat loop and the
+loop over registry models nothing uses — and each of the four also reads a local dict of the same
+name, the registry index (three test membership in it, the fourth iterates it), so a count of lines
+that mention `known` counts two different things.
 
 It is **nested** inside `by_model`, and that is why no guard says so: CHG-20260907-28 built a rule
 over this route's keys — the one that holds `source` and `assignable` — and it reads the **top
-level** only. `assignable`'s unread status is held by that guard; this one's is held by this
-paragraph, which is weaker and is the reason it is written here rather than left implied. Whether
-an unread key should ship at all is the question
-CHG-20260907-28 left open for `assignable`; this entry only stops the page implying somebody reads
-this one.
+level** only. That rule, and `test_the_page_documents_this_route_and_promises_no_reader_it_does_not_have`
+over this section, hold what they can; whether an unread nested key should ship at all is a
+question this entry does not settle.
 
 ### `GET /whoami`
 ```jsonc
@@ -187,20 +239,24 @@ If the version does not match the run's current one:
 ```
 
 **Every POST under `/run` and `/attachments` returns the run snapshot**
-([§3](#3--the-run-snapshot)) with `200`. `POST /models` does not, and neither do the three
-`/config/*` writes: they go through one function (`server.py`'s `_config_edit`) and answer the
-merged assignment with its provenance and the new version —
+([§3](#3--the-run-snapshot)) with `200`. `POST /models` does not, and neither do the four
+`/config/*` writes. Three of them (`nodes`, `seats`, `halts`) go through one function
+(`server.py`'s `_config_edit`) and answer the merged assignment with its provenance and the new
+version; `POST /config/dimensions` goes through `Runner.edit_versioned` directly and answers the
+`GET /config/seats` shape plus `version`. In both, **`version` is the one that edit itself
+produced**, read inside the same lock that checked and advanced it, so another tab's commit
+landing a moment later is not reported as this edit's. The merged-assignment shape is —
 
 ```jsonc
 { "node_models": { "<node id>": ["<model id>", …] },
-  "seat_models": { "<seat>": "<model id>" },
+  "seat_models": { "<seat>": ["<model id>", …] },
   "source": { "node_models.<node id>": "plan" | "store", … },
   "version": 7 }
 ```
 
 Three of `GET /config/nodes`'s keys — `node_models`, `seat_models` and `source` — and the version
-the edit advanced to. `seat_models` values are **not** joined here the way that route joins them;
-this one answers the stored id. [Below](#the-three-assignment-routes-return-the-resolved-assignment)
+the edit advanced to. `seat_models` values are lists of model ids (a seat's models in order); that route
+does not join them, and this one answers the stored ids. [Below](#the-three-assignment-routes-return-the-resolved-assignment)
 now says the same thing about the same routes. Until CHG-20260908-02 it did not: it said **two**
 routes and **three** keys, while the sentence above this table said all of them return the run
 snapshot. Why neither was noticed is not measured here. What is measurable: no guard in this
@@ -215,11 +271,12 @@ snapshot"* the whole time the sentence above said it was one.
 | `POST /run/decide` | `{version, node_id, branch}` | the run is not suspended, or is suspended on a **gate** rather than a tie |
 | `POST /run/proceed` | `{version, node_id?}` | the run is not suspended on findings a seat called **unsafe**, or `node_id` names a different stop. There is no gate to confirm here: the answer is a decision about what was shown, so it is refused at every other shape rather than treated as one |
 | `POST /config/nodes` | `{version, node_id, models: [...]}` | no such node; a node whose **mode ignores** a model list; a model the registry does not have; `models` not a list |
-| `POST /config/seats` | `{version, seat, model_id}` | no such seat; a model the registry does not have |
+| `POST /config/seats` | `{version, seat, model_id}` — `model_id` a model id **or a list of them**, in order; empty clears | no such seat; a model the registry does not have; a model listed twice; `model_id` neither a string nor a list of strings |
+| `POST /config/dimensions` | `{version, review_dimensions}` — a list of seat names, **in the order they open**, or `null` to clear | the refusals `runner settings` gives, because it saves through `settings.save`: an unknown seat, a seat named twice, an empty list, fewer than the floor (3) without high-risk mode, a list without `conformance` (the veto seat) outside high-risk mode; not a list or `null`; a server started without a settings file. Answers the `GET /config/seats` shape plus `version`, and the **next walk** reads the file, so the choice reaches the next run |
 | `POST /config/halts` | `{version, kind, recipient?}` | a `kind` that is not one of the six permanent halts. A `recipient` is **never** refused — an organisation names its own functions, and an unrecognised one still reaches somebody because the operator is on every halt. A blank or missing `recipient` clears the route |
 | `POST /run/instruct` | `{version, instruction}` | the instruction is empty — *"an empty instruction says nothing"* |
 | `POST /attachments` | `{version, filename, data}` — `data` is **base64** | the base64 is invalid, or `attachments.py` refuses the type or size |
-| `POST /models` | `{version, model: {…8 fields, listed in `models.Model`…}}` | `_model_from` refuses an unknown field, or `validate` refuses the model |
+| `POST /models` | `{version, model: {…11 fields, listed in `models.Model`…}}` | `_model_from` refuses an unknown field, or the model is refused (`validate`, and for a new id `validate_new`, which refuses `none`) |
 
 ### Gate and tie are not interchangeable
 

@@ -195,7 +195,8 @@ def test_an_assignment_survives_being_written_and_read(db):
     store.set_node_models(db, "pm_plan", ["opus"])
     store.set_seat_model(db, "defect", "opus")
     assert store.node_models(db) == {"pm_plan": ["opus"]}
-    assert store.seat_models(db) == {"defect": "opus"}
+    # A string is the old shape, and reads back as the one-element list it now is (CHG-20261005-02).
+    assert store.seat_models(db) == {"defect": ["opus"]}
 
 
 def test_the_order_of_a_node_list_is_kept(db):
@@ -425,7 +426,7 @@ def test_a_model_added_and_assigned_through_the_console_survives_a_restart(tmp_p
     try:
         _, out = again.call("/config/nodes")
         assert out["node_models"] == {"pm_plan": ["opus"]}
-        assert out["seat_models"] == {"defect": "opus"}
+        assert out["seat_models"] == {"defect": ["opus"]}
         # The registry too. Driving this found it empty: the store had the model and the console
         # showed none, so an assignment referenced a model the console said did not exist.
         assert [m["id"] for m in out["models"]] == ["opus"]
@@ -659,16 +660,19 @@ def test_a_config_edit_checks_and_bumps_the_version_without_letting_go(console):
     """Three separate critical sections is a check-then-act window.
 
     Two threads validate version N, both write, both bump — and the double-submit the version
-    exists to refuse happens anyway. `Runner.edit` holds one lock across all three.
+    exists to refuse happens anyway. `Runner.edit_versioned` (which `Runner.edit` calls) holds one
+    lock across all three, and reads the version it answers inside it.
     """
     import inspect
     from ai_sdlc_runner import server as server_mod
 
-    edit = inspect.getsource(server_mod.Runner.edit)
+    assert "edit_versioned" in inspect.getsource(server_mod.Runner.edit)
+    edit = inspect.getsource(server_mod.Runner.edit_versioned)
     assert "with self._lock:" in edit
     body = edit.split("with self._lock:")[1]
     for step in ("_require_version", "write()", "self.state.version += 1"):
         assert step in body, f"{step} is outside the lock"
+    assert "return out, self.state.version" in body, "the version answered is read outside the lock"
 
 
 def test_adding_a_model_also_checks_the_version(console):

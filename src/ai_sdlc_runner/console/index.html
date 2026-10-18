@@ -41,9 +41,12 @@
   h2{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--faint);margin:0 0 8px;font-weight:600}
   /* The flowchart. Four states, and each is a different colour on purpose: where the run IS has
      to be findable at a glance, which is the whole reason this stopped being a list. */
-  .chart{min-width:100%}
+  .chart{max-width:none}
+  #flowtools{margin:-4px 0 8px}
+  main.wide{grid-template-columns:1fr;height:auto}
+  main.wide aside{border-right:0;overflow:visible}
   .chart .edge{fill:none;stroke:var(--line);stroke-width:1.5}
-  .chart .edge.taken{stroke:var(--go);stroke-width:2}
+  .chart .edge.taken{stroke:var(--go);stroke-width:3}
   .chart .edge.back{stroke-dasharray:3 3}
   .chart .elabel{font-family:var(--mono);font-size:8.5px;fill:var(--faint)}
   .chart .box{fill:var(--card);stroke:var(--line);stroke-width:1.5}
@@ -54,7 +57,7 @@
   .chart .n.done .box{fill:var(--soft);stroke:var(--line)}
   .chart .n.done .name{fill:var(--faint)}
 
-  /* HERE — the one thing this panel exists to answer */
+  /* HERE — the one thing this chart exists to answer */
   .chart .n.here .box{fill:var(--wait);stroke:var(--wait);stroke-width:2.5}
   .chart .n.here .name{fill:var(--bg);font-weight:700}
   .chart .n.here .who{fill:var(--bg);opacity:.8}
@@ -62,6 +65,31 @@
 
   /* a terminal, and a gate */
   .chart .n.terminal .box{stroke-dasharray:4 3}
+  .chart .box.inner{fill:none}
+  .chart .tag{font-family:var(--mono);font-size:7.5px;font-weight:700;fill:var(--ink)}
+  .chart .n.here .tag{fill:var(--bg)}
+  .chart .n{cursor:pointer}
+  .chart .n:focus{outline:none}
+  .chart .n:focus .box,.chart .n.picked .box{stroke:var(--accent);stroke-width:3}
+  .chart .n.here:focus .box{stroke:var(--ink)}
+
+  /* the node panel */
+  #panel{border:1px solid var(--accent);border-radius:8px;padding:12px 14px;margin:0 0 16px;background:var(--card)}
+  #panel .ph{display:flex;gap:10px;align-items:baseline}
+  #panel .ph h3{margin:0;font-size:14px;flex:1}
+  #panel h3{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);margin:14px 0 6px}
+  #panel dl.facts{display:grid;grid-template-columns:130px 1fr;gap:3px 10px;margin:10px 0 6px;font-size:12.5px}
+  #panel dl.facts dt{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  #panel dl.facts dd{margin:0}
+  .picker .prow{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;padding:3px 0;border-top:1px solid var(--line);font-size:12px}
+  .picker .prow .id{font-family:var(--mono)}
+  .picker .prow .q{flex-basis:100%}
+  .picker .prow.warn{color:var(--wait)}
+  #panel .status{font-size:12px;margin:8px 0 0;font-family:var(--mono)}
+  #panel .status.ok{color:var(--go)}
+  button.mv{padding:0 7px;font-size:12px}
+  #panel details{margin:6px 0;border-top:1px solid var(--line);padding-top:4px}
+  #panel summary{cursor:pointer;font-family:var(--mono);font-size:12px}
   .chart .gatepin{fill:var(--wait)}
   .chart .n.done .gatepin{fill:var(--faint)}
   textarea{width:100%;font:13px/1.5 inherit;padding:9px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);resize:vertical}
@@ -108,15 +136,21 @@
   .mdl{border:1px solid var(--line);border-radius:6px;background:var(--card);margin:0 0 8px;overflow:hidden}
   .mdl .h{display:flex;gap:8px;align-items:baseline;padding:6px 9px;background:var(--soft);font-size:12px}
   .mdl .h .id{font-family:var(--mono);font-size:11.5px;font-weight:600}
-  .mdl .h .reach{margin-left:auto;font-family:var(--mono);font-size:9.5px;padding:1px 6px;border-radius:99px;background:var(--card);border:1px solid var(--line)}
-  .mdl .h .reach.local{color:var(--go)}
-  .mdl .h .reach.internal{color:var(--wait)}
-  .mdl .h .reach.external{color:var(--stop)}
+  .reach{font-family:var(--mono);font-size:9.5px;padding:1px 6px;border-radius:99px;background:var(--card);border:1px solid var(--line)}
+  .mdl .h .reach{margin-left:auto}
+  .reach.local{color:var(--go)}
+  .reach.internal{color:var(--wait)}
+  .reach.external{color:var(--stop)}
   .mdl .u{display:grid;grid-template-columns:62px 1fr;gap:8px;padding:4px 9px;border-top:1px solid var(--line);font-size:11.5px}
   .mdl .u .k{font-family:var(--mono);font-size:10px;color:var(--faint)}
   .mdl .u .v{font-family:var(--mono);font-size:10.5px}
   .mdl .u.none .v{color:var(--faint);font-family:inherit;font-style:italic}
   .mdl .u.unknown .k{color:var(--stop)}
+  /* The bar is a second channel: the percentage is always in the text beside it, so nothing here
+     depends on seeing the fill (CHG-20261006-01). */
+  .bar{height:8px;border:1px solid var(--line);border-radius:4px;background:var(--soft);overflow:hidden;margin:3px 0}
+  .bar .fill{height:100%;background:var(--accent)}
+  .bar.low .fill{background:var(--stop)}
   .legend .sw{display:inline-block;width:9px;height:9px;border-radius:2px;vertical-align:middle;margin-right:5px;border:1px solid var(--line)}
   .filebtn{font:inherit;padding:6px 13px;border:1px solid var(--line);border-radius:6px;background:var(--card);cursor:pointer}
   button.no{border-color:var(--stop);color:var(--stop)}
@@ -135,15 +169,23 @@
   <span class="grow" id="meta"></span>
 </header>
 
-<main>
+<main id="app">
   <aside>
     <h2>the flow</h2>
+    <div id="flowtools"><button type="button" id="expand" aria-pressed="false"
+      aria-label="expand the flow to the full page width">expand</button></div>
     <div id="flow"></div>
     <p class="legend" id="legend"></p>
     <h2 style="margin-top:22px">the models, and where they are used</h2>
     <div id="models"></div>
+    <h2 style="margin-top:22px">用量 / usage</h2>
+    <p class="muted" id="usage-source">Where this comes from: what each backend printed for its
+      own ask. For codex, the remaining quota is read from codex's local session log, only for the
+      thread this runner itself opened; only the rate-limit windows and their timestamp are kept.</p>
+    <div id="usage"><p class="muted">no run yet</p></div>
   </aside>
   <section>
+    <div id="panel" role="region" aria-labelledby="paneltitle" hidden></div>
     <div id="ask"></div>
     <h2>your instruction</h2>
     <textarea id="instruction" rows="3" placeholder="what should this runner build?"></textarea>
@@ -189,7 +231,7 @@ function api(method, path, body) {
 
 // --- drawing ---------------------------------------------------------------------------------
 var SVGNS = "http://www.w3.org/2000/svg";
-var W = 132, H = 26, GAPX = 20, GAPY = 44, PAD = 14;
+var W = 132, H = 34, GAPX = 24, GAPY = 24, PAD = 14, BACKLANE = 9, COLW = 465;
 
 function svg(name, attrs, parent) {
   var el = document.createElementNS(SVGNS, name);
@@ -198,92 +240,161 @@ function svg(name, attrs, parent) {
   return el;
 }
 
-function layout() {
-  // Layers from a breadth-first walk of the REAL edges. Computed rather than hand-placed: a
-  // hand-drawn diagram is a second description of the graph, and a second description goes stale —
-  // this project already had a mock-up claim 23 nodes while drawing 18.
-  var by = {}, depth = {}, order = [];
-  flow.forEach(function (n) { by[n.id] = n; });
-  var queue = ["intake"];
-  depth.intake = 0;
-  while (queue.length) {
-    var id = queue.shift(), n = by[id];
-    if (!n) continue;
-    order.push(id);
+// LAYOUT-BEGIN
+// The layout is a pure function of the `/flow` nodes: no DOM, no globals but the size constants, so
+// a test can lift it out of this page and run it on the real payload. It names no node — the roots
+// are the nodes nothing points at, and the layers are the longest path from them. A hand-placed
+// diagram is a second description of the graph, and a second description goes stale: this project
+// already had a mock-up claim 23 nodes while drawing 18.
+function layout(nodes, maxw) {
+  var by = {}, index = {}, edges = [];
+  nodes.forEach(function (n, i) { by[n.id] = n; index[n.id] = i; });
+  nodes.forEach(function (n) {
     var outs = [];
-    for (var k in n.branches) outs.push(n.branches[k]);
-    if (n.next) outs.push(n.next);
-    outs.forEach(function (t) {
-      if (by[t] && !(t in depth)) { depth[t] = depth[id] + 1; queue.push(t); }
+    for (var k in n.branches) outs.push([k, n.branches[k]]);
+    if (n.next) outs.push([null, n.next]);
+    outs.forEach(function (o) {
+      if (by[o[1]]) edges.push({ from: n.id, to: o[1], label: o[0], back: false });
+    });
+  });
+  var out = {}, incoming = {};
+  edges.forEach(function (e) {
+    (out[e.from] = out[e.from] || []).push(e);
+    incoming[e.to] = true;
+  });
+
+  // Depth-first from the roots (then from anything still unvisited, so a node nothing reaches is
+  // still placed). An edge into a node still on the stack closes a cycle: that edge is the back
+  // edge — a loop or a send-back — and is left out of the layering so a cycle cannot stretch it.
+  var state = {}, post = [];
+  function visit(id) {
+    state[id] = 1;
+    (out[id] || []).forEach(function (e) {
+      if (state[e.to] === 1) e.back = true;
+      else if (!state[e.to]) visit(e.to);
+    });
+    state[id] = 2;
+    post.push(id);
+  }
+  nodes.forEach(function (n) { if (!incoming[n.id] && !state[n.id]) visit(n.id); });
+  nodes.forEach(function (n) { if (!state[n.id]) visit(n.id); });
+
+  var layer = {};
+  nodes.forEach(function (n) { layer[n.id] = 0; });
+  for (var i = post.length - 1; i >= 0; i--) {
+    (out[post[i]] || []).forEach(function (e) {
+      if (!e.back) layer[e.to] = Math.max(layer[e.to], layer[post[i]] + 1);
     });
   }
-  var rows = {};
-  order.forEach(function (id) {
-    var d = depth[id];
-    (rows[d] = rows[d] || []).push(id);
-  });
-  var pos = {}, widest = 0;
-  Object.keys(rows).forEach(function (d) {
-    widest = Math.max(widest, rows[d].length);
-    rows[d].forEach(function (id, i) {
-      pos[id] = { x: PAD + i * (W + GAPX), y: PAD + Number(d) * (H + GAPY), row: Number(d) };
+
+  // Layers are rows, top to bottom, so the chart is as wide as the column it sits in: a layer with
+  // more nodes than fit across wraps onto extra rows instead of widening the chart.
+  var backs = edges.filter(function (e) { return e.back; }).length;
+  var perRow = Math.max(1, Math.floor(((maxw || COLW) - PAD * 2 - backs * BACKLANE + GAPX) /
+                                      (W + GAPX)));
+  var layers = [], pos = {}, row = 0, widest = 0;
+  nodes.forEach(function (n) { (layers[layer[n.id]] = layers[layer[n.id]] || []).push(n.id); });
+  layers.forEach(function (ids, l) {
+    if (!ids) return;
+    ids.forEach(function (id, i) {
+      var r = row + Math.floor(i / perRow), c = i % perRow;
+      pos[id] = { x: PAD + c * (W + GAPX), y: PAD + r * (H + GAPY), layer: l, row: r, col: c };
     });
+    widest = Math.max(widest, Math.min(ids.length, perRow));
+    row += Math.ceil(ids.length / perRow);
   });
-  return { by: by, pos: pos,
-           w: PAD * 2 + widest * (W + GAPX) - GAPX,
-           h: PAD * 2 + (Math.max.apply(null, Object.keys(rows).map(Number)) + 1) * (H + GAPY) };
+  var right = PAD + widest * (W + GAPX) - GAPX;
+  var width = right + backs * BACKLANE + PAD;
+  var height = PAD * 2 + row * (H + GAPY) - GAPY;
+  var lane = 0;
+  edges.forEach(function (e) {
+    var a = pos[e.from], b = pos[e.to], d, lx, ly;
+    var x1 = a.x + W / 2, y1 = a.y + H, x2 = b.x + W / 2, y2 = b.y;
+    if (e.back) {
+      // Out of the bottom of the source, along the gap under its row to a lane right of every node,
+      // up that lane, along the gap above the target's row, down into the target's top. It runs only
+      // in gaps and lanes, so it crosses no node, and it ends on the two boxes it connects.
+      var lx0 = right + BACKLANE * (++lane);
+      var ya = y1 + 4 + (lane % 3) * 4, yb = y2 - 4 - (lane % 3) * 4;
+      d = "M " + x1 + " " + y1 + " V " + ya + " H " + lx0 + " V " + yb + " H " + x2 + " V " + y2;
+      lx = lx0 - 3; ly = (ya + yb) / 2;
+    } else {
+      var mid = (y2 - y1) / 2;
+      d = "M " + x1 + " " + y1 + " C " + x1 + " " + (y1 + mid) + ", " + x2 + " " + (y2 - mid) +
+          ", " + x2 + " " + y2;
+      lx = x1 + 3; ly = y1 + 9;
+    }
+    e.d = d; e.lx = lx; e.ly = ly;
+  });
+  return { pos: pos, edges: edges, w: width, h: height };
+}
+// LAYOUT-END
+
+function nodeById(id) {
+  return flow.filter(function (n) { return n.id === id; })[0];
+}
+
+function describeNode(n) {
+  return n.id + " — " + n.label + ". " + n.kind + ", " + n.mode +
+         (n.gate ? ", gate " + n.gate : "") + (n.permanent ? ", permanent halt" : "");
+}
+
+function shapeFor(n, p, g) {
+  // Shape says the kind, so it survives without colour: a step is a rectangle, a decision a
+  // hexagon, a loop a pill, a terminal a dashed pill (double-lined when it is a permanent halt).
+  var attrs = { "class": "box" };
+  if (n.kind === "decision") {
+    var c = 12;
+    attrs.points = [p.x + c, p.y, p.x + W - c, p.y, p.x + W, p.y + H / 2, p.x + W - c, p.y + H,
+                  p.x + c, p.y + H, p.x, p.y + H / 2].join(" ");
+    return svg("polygon", attrs, g);
+  }
+  var round = (n.kind === "loop" || n.kind === "terminal") ? H / 2 : 5;
+  if (n.kind === "terminal" && n.permanent) {
+    svg("rect", { "class": "box inner", x: p.x - 3, y: p.y - 3, width: W + 6, height: H + 6,
+                  rx: round + 3 }, g);
+  }
+  return svg("rect", { "class": "box", x: p.x, y: p.y, width: W, height: H, rx: round }, g);
 }
 
 function drawFlow() {
   var here = state && state.at, seen = (state && state.visited) || [];
-  var L = layout(), host = $("#flow");
+  var host = $("#flow");
+  var L = layout(flow, host.clientWidth || COLW);
+  var active = document.activeElement && document.activeElement.getAttribute
+    ? document.activeElement.getAttribute("data-node") : null;
   host.innerHTML = "";
-  var root = svg("svg", { "class": "chart", width: L.w, height: L.h,
+  var root = svg("svg", { "class": "chart", width: L.w, height: L.h, role: "group",
+                          "aria-label": "the flow, " + flow.length + " nodes",
                           viewBox: "0 0 " + L.w + " " + L.h }, host);
 
   // edges first, so nodes sit on top of them
-  flow.forEach(function (n) {
-    var from = L.pos[n.id];
-    if (!from) return;
-    var outs = [];
-    for (var k in n.branches) outs.push([k, n.branches[k]]);
-    if (n.next) outs.push([null, n.next]);
-    outs.forEach(function (pair) {
-      var label = pair[0], to = L.pos[pair[1]];
-      if (!to) return;
-      var back = to.row <= from.row;
-      var x1 = from.x + W / 2, y1 = from.y + H, x2 = to.x + W / 2, y2 = to.y;
-      var d;
-      if (back) {
-        // A loop or a send-back. Drawn round the right-hand side so it reads as going *back*
-        // rather than as a stray line crossing the spine.
-        var side = L.w - 6;
-        d = "M " + (from.x + W) + " " + (from.y + H / 2) +
-            " H " + side + " V " + (to.y + H / 2) + " H " + (to.x + W);
-        y1 = from.y + H / 2;
-      } else {
-        d = "M " + x1 + " " + y1 + " C " + x1 + " " + (y1 + GAPY / 2) + ", " +
-            x2 + " " + (y2 - GAPY / 2) + ", " + x2 + " " + y2;
-      }
-      // "taken" means this edge was actually walked — both ends visited, in order.
-      var walked = seen.indexOf(n.id) >= 0 && seen.indexOf(pair[1]) >= 0;
-      svg("path", { "class": "edge" + (back ? " back" : "") + (walked ? " taken" : ""), d: d },
-          root);
-      if (label) {
-        svg("text", { "class": "elabel", x: back ? L.w - 4 : (x1 + x2) / 2 + 3,
-                      y: back ? y1 - 4 : y1 + GAPY / 2,
-                      "text-anchor": back ? "end" : "middle" }, root).textContent = label;
-      }
-    });
+  L.edges.forEach(function (e) {
+    // "taken" is what the code checks: both ends are among the visited nodes. It is not proof this
+    // edge was the one walked, or that they were visited in this order.
+    var walked = seen.indexOf(e.from) >= 0 && seen.indexOf(e.to) >= 0;
+    var ep = svg("path", { "class": "edge" + (e.back ? " back" : "") + (walked ? " taken" : ""),
+                           d: e.d, "data-from": e.from, "data-to": e.to }, root);
+    // Not colour alone: a taken edge is also drawn twice as thick, and named for a screen reader.
+    if (walked) {
+      ep.setAttribute("role", "img");
+      ep.setAttribute("aria-label", "edge " + e.from + " to " + e.to + ", both ends visited");
+    }
+    if (e.label) {
+      svg("text", { "class": "elabel", x: e.lx, y: e.ly }, root).textContent = e.label;
+    }
   });
 
   // nodes
   flow.forEach(function (n) {
     var p = L.pos[n.id];
-    if (!p) return;
     var cls = "n" + (n.id === here ? " here" : seen.indexOf(n.id) >= 0 ? " done" : "") +
-              (n.kind === "terminal" ? " terminal" : "");
-    var g = svg("g", { "class": cls }, root);
+              " " + n.kind + (n.id === picked ? " picked" : "");
+    var visited = n.id !== here && seen.indexOf(n.id) >= 0;
+    var g = svg("g", { "class": cls, tabindex: 0, role: "button", "data-node": n.id,
+                       "aria-label": describeNode(n) + (n.id === here ? ", the run is here" : "") +
+                                     (visited ? ", visited" : "") +
+                                     ". Press Enter to open its settings." }, root);
     var t = svg("title", {}, g);
     t.textContent = n.label + (n.gate ? "  ·  gate: " + n.gate : "") + "  ·  " + n.mode +
                     (n.rejects_to ? "  ·  refusal → " + n.rejects_to : "");
@@ -291,17 +402,35 @@ function drawFlow() {
       svg("rect", { "class": "halo", x: p.x - 4, y: p.y - 4, width: W + 8, height: H + 8,
                     rx: 8 }, g);
     }
-    svg("rect", { "class": "box", x: p.x, y: p.y, width: W, height: H, rx: 5 }, g);
-    if (n.gate) svg("circle", { "class": "gatepin", cx: p.x + W - 8, cy: p.y + 7, r: 2.6 }, g);
-    svg("text", { "class": "name", x: p.x + 8, y: p.y + 12 }, g).textContent = n.id;
-    svg("text", { "class": "who", x: p.x + 8, y: p.y + 21 }, g).textContent =
-      (n.role || "runner") + " · " + n.mode;
+    shapeFor(n, p, g);
+    if (n.gate) svg("circle", { "class": "gatepin", cx: p.x + W - 9, cy: p.y + 8, r: 2.6 }, g);
+    svg("text", { "class": "name", x: p.x + 14, y: p.y + 14 }, g).textContent = n.id;
+    // Words for what colour would say: a gate, a halt, where the run is, and a check for visited.
+    var who = (n.role || "runner") + " · " + n.mode;
+    var tags = (visited ? "\u2713 " : "") + (n.gate ? "gate " : "") + (n.permanent ? "HALT " : "") +
+               (n.id === here ? "HERE" : "");
+    svg("text", { "class": "who", x: p.x + 14, y: p.y + 25 }, g).textContent = who;
+    if (tags) svg("text", { "class": "tag", x: p.x + W - 14, y: p.y + 25,
+                            "text-anchor": "end" }, g).textContent = tags.trim();
+    function open() { openPanel(n.id); }
+    g.addEventListener("click", open);
+    g.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter" || ev.key === " " || ev.key === "Spacebar") {
+        ev.preventDefault(); open();
+      }
+    });
   });
 
   // Keep the current node on screen without yanking the view when nothing moved.
   var current = root.querySelector(".n.here");
-  if (current && current.scrollIntoView) {
+  if (current && current.scrollIntoView && !active) {
     current.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+  // The stream redraws the chart on every state change; without this a keyboard user loses their
+  // place each time the run moves.
+  if (active) {
+    var again = root.querySelector('[data-node="' + active + '"]');
+    if (again && again.focus) again.focus();
   }
   drawLegend();
 }
@@ -310,7 +439,7 @@ function drawModels() {
   var box = $("#models");
   if (!box || !assign) return;
   box.innerHTML = "";
-  var byModel = assign.by_model || {};
+  var byModel = byModelOf();
   var meta = {};
   (assign.models || []).forEach(function (m) { meta[m.id] = m; });
 
@@ -322,28 +451,17 @@ function drawModels() {
     var name = document.createElement("span"); name.className = "id"; name.textContent = id;
     h.appendChild(name);
     if (m) {
+      // The tier and the effort template, next to the name: what a model is for, and how an
+      // effort reaches it (CHG-20261005-01).
+      var tier = document.createElement("span");
+      tier.className = "muted";
+      tier.textContent = "tier " + tierOf(m);
+      h.appendChild(tier);
       var vendor = document.createElement("span");
       vendor.className = "muted";
       vendor.textContent = m.vendor + " · " + m.transport;
       h.appendChild(vendor);
-      var reach = document.createElement("span");
-      reach.className = "reach " + m.reach;
-      // The one fact worth never having to infer: does work sent here leave this machine?
-      reach.textContent = m.reach;
-      reach.title = m.leaves_this_machine
-        ? "work orders sent to this model leave this machine"
-        : "runs on this machine; nothing leaves it";
-      // **A guessed reach says so** (CHG-20260903-39). `internal` from a dotless host is a
-      // judgement, and what it buys is the exemption from the refusal that an external endpoint
-      // must name a key variable. `internal_by_guess`'s docstring says the console names these;
-      // measured, its only caller was a stdout footer and this page rendered `reach` as a fact.
-      if (m.reach_guessed) {
-        reach.textContent = m.reach + "?";
-        reach.title = "guessed from a host name with no dot in it, not measured. " +
-          "If this host resolves publicly the grade is wrong, and it is what exempts " +
-          "this model from having to name a key variable. " + reach.title;
-      }
-      h.appendChild(reach);
+      h.appendChild(reachSpan(m));
     } else {
       var gone = document.createElement("span");
       gone.className = "reach external";
@@ -359,13 +477,21 @@ function drawModels() {
       r.appendChild(k); r.appendChild(v); el.appendChild(r);
     }
 
+    if (m) row("effort", effortOf(m));
     if (use.nodes && use.nodes.length) {
       // The mode matters as much as the node: three models on a `pool` is one of them doing the
       // work, and on a `model_panel` it is three voices being adjudicated. Same list, different run.
-      use.nodes.forEach(function (n) { row("node", n.node_id + "  (" + n.mode + ")"); });
+      // And the role the node asks for: this list is where "which role does this model play" is
+      // answered, since the role itself is governance and is not editable.
+      use.nodes.forEach(function (n) {
+        var node = nodeById(n.node_id);
+        // A default is not an assignment: nothing was assigned, the coding default builds.
+        row("node", n.node_id + "  (" + n.mode + (node && node.role ? ", " + node.role : "") + ")" +
+            (n.default ? "  coder default (settings or the only mid model), not an assignment" : ""));
+      });
     }
     if (use.seats && use.seats.length) {
-      use.seats.forEach(function (seat) { row("seat", seat); });
+      use.seats.forEach(function (seat) { row("seat", seat + "  (review seat)"); });
     }
     if (!(use.nodes || []).length && !(use.seats || []).length) {
       // Said out loud. "Configured" and "used" look identical in a list, and only one of them does
@@ -388,13 +514,485 @@ function drawLegend() {
   $("#legend").innerHTML =
     '<span class="sw" style="background:var(--wait);border-color:var(--wait)"></span>' +
     '<b>where the run is</b><br>' +
-    '<span class="sw" style="background:var(--soft)"></span>already visited<br>' +
+    '<span class="sw" style="background:var(--soft)"></span>already visited (also marked ' +
+    '<b>\u2713</b> on the node)<br>' +
     '<span class="sw" style="background:var(--card)"></span>not reached yet<br>' +
     '<span class="sw" style="background:var(--go);border-color:var(--go)"></span>' +
-    'an edge this run took<br>' +
+    'an edge with both ends visited, drawn thicker (the run may not have walked that edge)<br>' +
     '<span class="sw" style="background:var(--wait);border-radius:50%;border-color:var(--wait)">' +
-    '</span>the node has a gate';
+    '</span>the node has a gate (also written <b>gate</b> on it)<br>' +
+    'shapes: rectangle = step, hexagon = decision, pill = loop, dashed pill = end ' +
+    '(double line, <b>HALT</b> = a give-up)<br>' +
+    'Tab to a node, Enter or Space opens its settings, Escape closes them.';
 }
+
+// --- the node panel ----------------------------------------------------------------------------
+// Click a node (or Enter / Space on it) and its settings open. Role, mode, gate and the role's
+// capabilities are shown and **not editable**: they are governance, and this page holds none. What
+// can be chosen is which models answer the node, and which review dimensions open on the seat
+// nodes. Every save is a route that already validates; whatever the server refuses is put on
+// screen word for word, and nothing here decides on the server's behalf.
+var picked = null, seatInfo = null, seatInfoError = "", configOk = false, panelVersion = null;
+// Counts panel openings and closings. A save or a load that finishes under another count belongs
+// to a panel that is gone, and writes nothing into the one on screen.
+var panelEpoch = 0;
+
+function el(tag, cls, text) {
+  var e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+// The one place `by_model` is read: the models list and the node panel both draw from it.
+function byModelOf() { return (assign && assign.by_model) || {}; }
+
+// Where work sent to this model goes, in words (not colour alone) and with the same tooltip
+// everywhere the console shows a model: the models list and every row of the pickers.
+function reachSpan(m) {
+  var reach = document.createElement("span");
+  reach.className = "reach " + m.reach;
+  // The one fact worth never having to infer: does work sent here leave this machine?
+  reach.textContent = m.reach;
+  reach.title = m.leaves_this_machine
+    ? "work orders sent to this model leave this machine"
+    : "runs on this machine; nothing leaves it";
+  // **A guessed reach says so** (CHG-20260903-39). `internal` from a dotless host is a
+  // judgement, and what it buys is the exemption from the refusal that an external endpoint
+  // must name a key variable. `internal_by_guess`'s docstring says the console names these;
+  // measured, its only caller was a stdout footer and this page rendered `reach` as a fact.
+  if (m.reach_guessed) {
+    reach.textContent = m.reach + "?";
+    reach.title = "guessed from a host name with no dot in it, not measured. " +
+      "If this host resolves publicly the grade is wrong, and it is what exempts " +
+      "this model from having to name a key variable. " + reach.title;
+  }
+  return reach;
+}
+
+function modelMeta(id) {
+  return ((assign && assign.models) || []).filter(function (m) { return m.id === id; })[0];
+}
+
+function tierOf(m) { return m && m.tier ? m.tier : "unclassified"; }
+function effortOf(m) {
+  return m && m.effort_argv && m.effort_argv.length ? m.effort_argv.join(" ")
+                                                    : "no effort control";
+}
+
+// An ordered checklist over `all`. What is ticked is a list **in order** — a `model_panel`'s
+// voices, a seat's sessions and the opening review dimensions all are — so a ticked row carries
+// up / down buttons. Every change redraws the rows, so the control the user acted on is found
+// again by its key and given focus back: a keyboard or screen-reader user keeps their place
+// (CHG-20261005-03).
+function checklist(order, all, o) {
+  var root = el("div", "picker"), want = null;
+  function draw() {
+    root.innerHTML = "";
+    var keyed = {};
+    if (o.head) o.head(root);
+    var rows = order.concat(all.filter(function (id) { return order.indexOf(id) < 0; }));
+    rows.forEach(function (id) {
+      var on = order.indexOf(id) >= 0, row = el("div", "prow"), lab = el("label");
+      var box = el("input"); box.type = "checkbox"; box.checked = on; box.disabled = !!o.locked;
+      box.setAttribute("aria-label", o.box(id));
+      box.onchange = function () {
+        if (box.checked) order.push(id); else order.splice(order.indexOf(id), 1);
+        want = "box " + id; draw();
+      };
+      keyed["box " + id] = box;
+      lab.appendChild(box);
+      lab.appendChild(el("span", "id", " " + id));
+      row.appendChild(lab);
+      o.fill(row, id);
+      if (on && !o.locked) {
+        [-1, 1].forEach(function (dir) {
+          var b = el("button", "mv", dir < 0 ? "↑" : "↓"); b.type = "button";
+          b.setAttribute("aria-label", o.move(id, dir));
+          b.onclick = function () {
+            var i = order.indexOf(id), j = i + dir;
+            if (j < 0 || j >= order.length) return;
+            order[i] = order[j]; order[j] = id;
+            want = "move " + id + " " + dir; draw();
+          };
+          keyed["move " + id + " " + dir] = b;
+          row.appendChild(b);
+        });
+      }
+      root.appendChild(row);
+    });
+    if (o.tail) o.tail(root);
+    if (want && keyed[want] && keyed[want].focus) keyed[want].focus();
+    want = null;
+  }
+  draw();
+  return { root: root, get: function () { return order.slice(); },
+           reset: function (ids) { order = ids.slice(); draw(); } };
+}
+
+// The registry as a checklist. `locked` is a node or seat the plan sets: shown, not editable.
+function picker(initial, locked) {
+  var registered = ((assign && assign.models) || []).map(function (m) { return m.id; });
+  // A seat can hold a bare command line set from the CLI. `POST /config/seats` only takes registry
+  // ids, so saving replaces it; the page says so rather than dropping it unannounced.
+  var foreign = [];
+  function known(ids) {
+    foreign = ids.filter(function (id) { return registered.indexOf(id) < 0; });
+    return ids.filter(function (id) { return registered.indexOf(id) >= 0; });
+  }
+  var list = checklist(known(initial), registered, {
+    locked: locked,
+    box: function (id) { return id; },
+    move: function (id, dir) { return "move " + id + (dir < 0 ? " earlier" : " later"); },
+    head: function (root) {
+      foreign.forEach(function (label) {
+        root.appendChild(el("div", "prow warn", locked
+          ? "set by the plan, and not in the registry: " + label
+          : "not in the registry, and saving replaces it: " + label));
+      });
+    },
+    fill: function (row, id) {
+      var m = modelMeta(id);
+      row.appendChild(el("span", "muted", "tier " + tierOf(m) + " · effort: " + effortOf(m)));
+      // Choosing a model is choosing where the work order goes, so the choice shows it: the same
+      // badge as the models list, and a guess said to be a guess (CHG-20260903-39).
+      if (m) {
+        row.appendChild(el("span", "muted", "reach"));
+        row.appendChild(reachSpan(m));
+        if (m.reach_guessed) {
+          row.appendChild(el("span", "muted", "guessed from the host name, not measured"));
+        }
+      }
+    },
+    tail: function (root) {
+      if (!registered.length) {
+        root.appendChild(el("p", "muted",
+          "No models are registered, so there is nothing to choose."));
+      }
+    }
+  });
+  return { root: list.root, get: list.get, reset: function (ids) { list.reset(known(ids)); } };
+}
+
+function panelError(text) { var e = $("#panelerr"); if (e) e.textContent = text || ""; }
+
+// What happened to the last save, in words: "Saved" or "Not saved", beside the server's own
+// sentence when it refused. A live region, so it is announced, and text, so it is not colour alone.
+function panelStatus(text, ok) {
+  var e = $("#panelok");
+  if (!e) return;
+  e.textContent = text || "";
+  e.className = "status" + (ok ? " ok" : "");
+  if (text && e.scrollIntoView) e.scrollIntoView({ block: "nearest" });
+}
+
+// Every save ends here. It submits the version this panel was **loaded at**, not the latest one
+// streamed since: a second tab's change moves the version, the server refuses the stale write and
+// its sentence is shown, instead of this panel overwriting what it never saw. A save of ours
+// advances that version to the one the server answers with (the one its own edit produced), so
+// the next save in this panel is not mistaken for a stale one. Nothing is rebuilt but what
+// `o.after` redraws, so a save in one section leaves the unsaved edits in the others alone.
+// The answer belongs to the panel that sent it: if another has opened since, the version, the
+// status and the redraw are dropped, or that panel would hold a version newer than what it shows.
+function save(path, body, o) {
+  o = o || { label: "the settings" };
+  panelError(""); panelStatus("");
+  if (panelVersion === null) {
+    panelError("this panel has not loaded the configuration yet");
+    return;
+  }
+  body.version = panelVersion;
+  var epoch = panelEpoch;
+  api("POST", path, body).then(function (out) {
+    if (epoch !== panelEpoch) return;
+    if (out && typeof out.version === "number") {
+      panelVersion = out.version;
+      if (state) state.version = out.version;
+    }
+    panelStatus("Saved: " + o.label + " (version " + panelVersion + ").", true);
+    return loadConfig(true).then(function (fresh) {
+      if (!fresh) return;
+      // The read of the seats can be refused after a write that went through (`POST /config/seats`
+      // does not read the settings file; `GET /config/seats` does). It is said here, since nothing else
+      // redraws the part of the panel that would show it.
+      if (seatInfoError) panelError(seatInfoError);
+      var again = o.after && o.after();
+      if (again && again.focus) again.focus();
+    }, function (e) {
+      panelError("saved, but the settings could not be read back: " + e.message);
+    });
+  }, function (e) {
+    if (epoch !== panelEpoch) return;
+    panelStatus("Not saved: the server refused it.");
+    panelError(e.message);
+  }).catch(function (e) { panelError(e.message); });
+}
+
+function seatDefaults() {
+  // A count opens a prefix of the seats that are not opt-in; those open only when named.
+  var open = seatInfo.seats.filter(function (s) { return !s.opt_in; })
+    .map(function (s) { return s.name; });
+  return open.slice(0, seatInfo.review_seats || seatInfo.floor);
+}
+
+function renderDimensions(host) {
+  if (!seatInfo) return;          // the read-back was refused: `save()` has said so, keep the list
+  host.innerHTML = "";
+  host.appendChild(el("h3", null, "review dimensions"));
+  var set = seatInfo.review_dimensions;
+  host.appendChild(el("p", "muted", set
+    ? "Opening, in this order: " + set.join(", ") + "."
+    : "Not chosen: the first " + (seatInfo.review_seats || seatInfo.floor) +
+      " seats that are not opt-in open. Choosing here replaces that, and it needs at least " +
+      seatInfo.floor + " unless high-risk mode is on (" +
+      (seatInfo.high_risk_mode ? "it is" : "it is off") + ")."));
+  var list = checklist((set || seatDefaults()).slice(),
+                       seatInfo.seats.map(function (s) { return s.name; }), {
+    box: function (name) { return "open the " + name + " seat"; },
+    move: function (name, dir) { return "move " + name + (dir < 0 ? " earlier" : " later"); },
+    fill: function (row, name) {
+      var s = seatInfo.seats.filter(function (x) { return x.name === name; })[0];
+      row.appendChild(el("span", "muted", s.label +
+        (s.veto ? " · veto seat, required unless high-risk mode is on" : "") +
+        (s.opt_in ? " · opt-in, open only when ticked" : "")));
+      row.appendChild(el("span", "muted q", s.question));
+      row.title = s.question;
+    }
+  });
+  host.appendChild(list.root);
+  var row = el("div", "row");
+  var go = el("button", "p", "save the review dimensions"); go.type = "button";
+  go.onclick = function () {
+    save("/config/dimensions", { review_dimensions: list.get() }, {
+      label: "the review dimensions", after: function () { renderDimensions(host); return host.go; }
+    });
+  };
+  var clear = el("button", null, "clear (back to the default prefix)"); clear.type = "button";
+  clear.onclick = function () {
+    save("/config/dimensions", { review_dimensions: null }, {
+      label: "the review dimensions, cleared",
+      after: function () { renderDimensions(host); return host.clear; }
+    });
+  };
+  host.go = go; host.clear = clear;
+  row.appendChild(go); row.appendChild(clear);
+  host.appendChild(row);
+}
+
+function planSets(key) { return ((assign && assign.source) || {})[key] === "plan"; }
+
+function renderSeatEditor(host) {
+  if (!seatInfo) {
+    host.appendChild(el("h3", null, "review dimensions"));
+    host.appendChild(el("p", "err", seatInfoError || "the seat list is not available"));
+    return;
+  }
+  var dims = el("div");
+  host.appendChild(dims);
+  renderDimensions(dims);
+
+  host.appendChild(el("h3", null, "models on each seat"));
+  host.appendChild(el("p", "muted",
+    "A seat passes only when every model on it passes. No model means the default backend."));
+  seatInfo.seats.forEach(function (s) {
+    // The plan wins over the store for a seat as for a node (`store.resolve`), so a save here
+    // would write a value nothing reads. It is not offered.
+    var fixed = planSets("seat_models." + s.name);
+    var d = el("details");
+    d.appendChild(el("summary", null, s.name + (fixed ? " — set by the plan" : "")));
+    var pk = picker(((assign && assign.seat_models) || {})[s.name] || [], fixed);
+    if (fixed) {
+      d.appendChild(el("p", "muted", "The plan file sets this seat, and the plan wins over " +
+        "anything saved here: a save would change the store and not the next run. Change the " +
+        "seat in the plan file."));
+    }
+    d.appendChild(pk.root);
+    if (!fixed) {
+      var b = el("button", null, "save " + s.name + " models"); b.type = "button";
+      b.onclick = function () {
+        save("/config/seats", { seat: s.name, model_id: pk.get() }, {
+          label: "the models on " + s.name,
+          after: function () {
+            pk.reset(((assign && assign.seat_models) || {})[s.name] || []);
+            return b;
+          }
+        });
+      };
+      d.appendChild(b);
+    }
+    host.appendChild(d);
+  });
+}
+
+function renderPanel() {
+  var box = $("#panel");
+  var kept = document.activeElement && document.activeElement.id === "paneltitle";
+  box.innerHTML = "";
+  var n = picked && nodeById(picked);
+  if (!n) { box.hidden = true; return; }
+  box.hidden = false;
+
+  var head = el("div", "ph");
+  var title = el("h3", null, n.id + " — " + n.label);
+  title.id = "paneltitle";
+  title.setAttribute("tabindex", "-1");
+  head.appendChild(title);
+  var x = el("button", null, "close"); x.type = "button";
+  x.setAttribute("aria-label", "close the settings for " + n.id + " (Escape)");
+  x.onclick = closePanel;
+  head.appendChild(x);
+  box.appendChild(head);
+
+  // Both lines sit under the title, where the result of a save is seen, not at the foot of a
+  // fifteen-seat list. They exist before anything is fetched, so a refusal has a place to go.
+  var status = el("p", "status"); status.id = "panelok";
+  status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
+  box.appendChild(status);
+  var err = el("p", "err"); err.id = "panelerr"; err.setAttribute("role", "alert");
+  box.appendChild(err);
+
+  // Read-only: what the node is. Governance lives in policy.py and graph.py, not here.
+  var dl = el("dl", "facts");
+  function fact(k, v) { dl.appendChild(el("dt", null, k)); dl.appendChild(el("dd", null, v)); }
+  fact("role", n.role || "runner (no model asks)");
+  fact("mode", n.mode);
+  fact("gate", n.gate ? n.gate + (n.gate_when ? " (" + n.gate_when + ")" : "") : "none");
+  if (n.rejects_to) fact("a refusal goes to", n.rejects_to);
+  var caps = n.capabilities;
+  fact("the role may", caps
+    ? ["can_spawn", "can_write", "can_execute"].map(function (k) {
+        return k.replace("can_", "") + ": " + (caps[k] ? "yes" : "no");
+      }).join(" · ")
+    : "no role, so nothing is carried");
+  // CHG-20261005-01: a node with no assignment may still be built by the coding role default.
+  // Shown as a default, never as an assignment: it is not in node_models, and saving does not
+  // make it one.
+  var defaults = [];
+  var byModel = byModelOf();
+  Object.keys(byModel).sort().forEach(function (mid) {
+    ((byModel[mid] || {}).nodes || []).forEach(function (u) {
+      if (u.node_id === n.id && u.default) defaults.push(mid);
+    });
+  });
+  if (defaults.length) {
+    fact("coder default", defaults.join(", ") +
+         "  (settings or the only mid model), not an assignment");
+  }
+  box.appendChild(dl);
+  box.appendChild(el("p", "muted",
+    "Role, mode, gate and capabilities are governance and are not editable here. Choosing which " +
+    "models answer a node is what decides which role each model plays."));
+
+  var editor = el("div", "editor");
+  var assignable = (assign && assign.assignable) || [];
+  if (!configOk) {
+    editor.appendChild(el("p", "muted", "The model and seat settings are not loaded."));
+  } else if (n.mode === "seat_panel" || n.mode === "survey") {
+    renderSeatEditor(editor);
+  } else if (assignable.indexOf(n.mode) >= 0) {
+    editor.appendChild(el("h3", null, "models for " + n.id));
+    var fixed = planSets("node_models." + n.id);
+    if (fixed) {
+      editor.appendChild(el("p", "muted", "The plan file sets this node, and the plan wins over " +
+        "anything saved here, so no save is offered. Change the node in the plan file."));
+    }
+    var pk = picker(((assign && assign.node_models) || {})[n.id] || [], fixed);
+    editor.appendChild(pk.root);
+    if (!fixed) {
+      var b = el("button", "p", "save the models for " + n.id); b.type = "button";
+      b.onclick = function () {
+        save("/config/nodes", { node_id: n.id, models: pk.get() }, {
+          label: "the models for " + n.id,
+          after: function () {
+            pk.reset(((assign && assign.node_models) || {})[n.id] || []);
+            return b;
+          }
+        });
+      };
+      editor.appendChild(b);
+    }
+  } else {
+    editor.appendChild(el("p", "muted",
+      "A " + n.mode + " node takes no model list, so there is nothing to choose here."));
+  }
+  box.appendChild(editor);
+  if (kept && title.focus) title.focus();
+  if (title.scrollIntoView) title.scrollIntoView({ block: "nearest" });
+}
+
+// Reads the configuration the panel and the models list draw from. `panelVersion` is the run
+// version read **before** the fetch, so a change landing during it makes the next save stale and
+// refused rather than silently included. A save passes `keep`: its own answer already set the
+// version, and the unsaved editors beside it were drawn from the older one.
+// It resolves true when its answer was applied and false when another panel opened or this one
+// closed meanwhile: that answer is older than the screen and is dropped whole, version and data
+// together, so a panel never holds a version newer than the settings it shows.
+function loadConfig(keep) {
+  var at = state ? state.version : null, epoch = panelEpoch;
+  var got = {};
+  return api("GET", "/config/nodes").then(function (a) {
+    got.assign = a;
+    return api("GET", "/config/seats").then(function (s) {
+      got.seatInfo = s; got.seatInfoError = "";
+    }, function (e) { got.seatInfo = null; got.seatInfoError = e.message; });
+  }).then(function () {
+    if (epoch !== panelEpoch) return false;
+    assign = got.assign; seatInfo = got.seatInfo; seatInfoError = got.seatInfoError;
+    configOk = true;
+    if (!keep) panelVersion = at;
+    drawModels();
+    return true;
+  });
+}
+
+function refreshConfig() { return loadConfig().then(function () { renderPanel(); }); }
+
+// The panel opens beside the flow, not under it: with the flow expanded to the page width the panel
+// would sit below the chart and the node that opened it would scroll away, so opening one narrows it.
+function setExpanded(on) {
+  var app = $("#app"), b = $("#expand");
+  app.className = on ? "wide" : "";
+  b.setAttribute("aria-pressed", on ? "true" : "false");
+  b.textContent = on ? "collapse" : "expand";
+  b.setAttribute("aria-label", on ? "return the flow to its column"
+                                 : "expand the flow to the full page width");
+  drawFlow();
+}
+
+function openPanel(id) {
+  picked = id; configOk = false; panelVersion = null; panelEpoch++;
+  var epoch = panelEpoch;
+  if ($("#app").className === "wide") setExpanded(false);
+  drawFlow();
+  var again = document.querySelector('[data-node="' + id + '"]');
+  if (again && again.scrollIntoView) again.scrollIntoView({ block: "nearest", inline: "nearest" });
+  // The panel is drawn before the fetch, so a refusal of `GET /config/nodes` has a line to land on.
+  // Focus goes into it, onto its heading: a keyboard user would otherwise be a whole chart of Tab
+  // stops away from it, and a screen reader would say nothing. `renderPanel` keeps it there when
+  // the load redraws the panel.
+  renderPanel();
+  var title = $("#paneltitle");
+  if (title && title.focus) title.focus();
+  loadConfig().then(function (fresh) { if (fresh) renderPanel(); },
+                    function (e) { if (epoch === panelEpoch) panelError(e.message); });
+}
+
+function closePanel() {
+  var was = picked;
+  picked = null; panelEpoch++;
+  renderPanel();
+  drawFlow();
+  var again = was && document.querySelector('[data-node="' + was + '"]');
+  if (again && again.focus) again.focus();
+}
+
+document.addEventListener("keydown", function (ev) {
+  if ((ev.key === "Escape" || ev.key === "Esc") && picked) closePanel();
+});
+
+$("#expand").onclick = function () {
+  setExpanded($("#app").className !== "wide");
+};
 
 function drawLog() {
   var log = (state && state.log) || [];
@@ -724,6 +1322,158 @@ function act(path, body) {
   api("POST", path, body).then(apply).catch(fail);
 }
 
+// --- usage: what a run used, and the quota a backend says remains (CHG-20261006-01) ---
+// Drawn from GET /usage, which is built from what each backend printed. Where one printed nothing
+// the panel says so in words: an unreported figure shown as 0 would read as "free".
+function windowName(minutes) {
+  if (minutes === null || minutes === undefined) return "";
+  if (minutes % 1440 === 0) return (minutes / 1440) + "d";
+  if (minutes % 60 === 0) return (minutes / 60) + "h";
+  return minutes + "min";
+}
+
+function pct(n) { return (Math.round(n * 10) / 10) + "%"; }
+
+// The clock the panel judges a window against; the page's tests replace it to move time.
+var nowMs = function () { return Date.now(); };
+
+// A reading is stale once its window's reset has passed *now*, whatever the server judged when it
+// was served: an open page outlives the reset.
+function isStale(w) {
+  if (w.stale) return true;
+  var reset = w.resets_at ? Date.parse(w.resets_at) : NaN;
+  return !isNaN(reset) && reset < nowMs();
+}
+
+function drawWindow(w) {
+  var box = el("div", "u"); box.setAttribute("data-window", w.window);
+  var len = windowName(w.window_minutes);
+  box.appendChild(el("span", "k", w.window + (len ? " " + len : "")));
+  var v = el("span", "v");
+  var stale = isStale(w);
+  if (stale) {
+    // Past its reset, the old percentage describes a window that no longer exists.
+    v.textContent = "reading is from before the window reset; remaining unknown";
+  } else {
+    var low = w.remaining_percent < 10 ? " (low)" : "";
+    var bar = el("div", "bar" + (low ? " low" : ""));
+    bar.setAttribute("role", "progressbar");
+    bar.setAttribute("aria-label", w.window + " window " + (len ? len + " " : "") + "remaining");
+    bar.setAttribute("aria-valuemin", "0");
+    bar.setAttribute("aria-valuemax", "100");
+    bar.setAttribute("aria-valuenow", String(Math.round(w.remaining_percent)));
+    bar.setAttribute("aria-valuetext", pct(w.remaining_percent) + " remaining" + low);
+    var fill = el("div", "fill");
+    fill.style.width = Math.max(0, Math.min(100, w.remaining_percent)) + "%";
+    bar.appendChild(fill);
+    v.appendChild(bar);
+    v.appendChild(el("div", "", pct(w.remaining_percent) + " remaining (" + pct(w.used_percent) + " used)" + low));
+  }
+  var when = [];
+  if (w.resets_at) when.push((stale ? "reset " : "resets ") + new Date(w.resets_at).toLocaleString());
+  if (w.as_of) when.push("as of " + new Date(w.as_of).toLocaleString());
+  if (w.model) when.push(w.model);
+  if (when.length) v.appendChild(el("div", "muted", when.join(" · ")));
+  box.appendChild(v);
+  return box;
+}
+
+var lastUsage = null;
+var usageTimer = null;
+var USAGE_TIMER_MAX_MS = 60 * 60 * 1000;   // far-off resets are re-armed hourly; setTimeout overflows near 2^31 ms
+
+function clearUsageTimer() {
+  if (usageTimer !== null) { clearTimeout(usageTimer); usageTimer = null; }
+}
+
+// An idle page gets no run events, so nothing would redraw it when the reset of a window passes. Wake
+// once, just after the earliest reset still ahead of us among the windows shown, and redraw from the
+// body already held (no fetch). Each redraw re-arms for the next window; none ahead, no timer.
+function armUsageTimer() {
+  clearUsageTimer();
+  if (!lastUsage || !lastUsage.run) return;
+  var now = nowMs(), next = null;
+  (lastUsage.run.remaining || []).forEach(function (w) {
+    if (isStale(w) || !w.resets_at) return;
+    var t = Date.parse(w.resets_at);
+    if (!isNaN(t) && t >= now && (next === null || t < next)) next = t;
+  });
+  if (next === null) return;
+  usageTimer = setTimeout(function () {
+    usageTimer = null;
+    if (lastUsage) drawUsage(lastUsage);
+  }, Math.min(next - now + 1, USAGE_TIMER_MAX_MS));
+}
+
+function drawUsage(data) {
+  drawUsageBody(data);
+  armUsageTimer();
+}
+
+function drawUsageBody(data) {
+  var box = $("#usage");
+  if (!box) return;
+  lastUsage = data;
+  box.innerHTML = "";
+  var run = data && data.run;
+  if (!run) { box.appendChild(el("p", "muted", "no run yet")); return; }
+  var ids = Object.keys(run.models || {}).sort();
+  if (!ids.length) { box.appendChild(el("p", "muted", "no ask has run yet")); return; }
+  var reading = {};
+  (run.remaining || []).forEach(function (w) { reading[w.model] = true; });
+  ids.forEach(function (id) {
+    var m = run.models[id];
+    var card = el("div", "mdl"); card.setAttribute("data-usage-model", id);
+    var h = el("div", "h"); h.appendChild(el("span", "id", id));
+    h.appendChild(el("span", "muted", m.asks + (m.asks === 1 ? " ask" : " asks")));
+    card.appendChild(h);
+    var row = function (k, v, cls) {
+      var r = el("div", "u" + (cls ? " " + cls : ""));
+      r.appendChild(el("span", "k", k)); r.appendChild(el("span", "v", v));
+      card.appendChild(r);
+    };
+    if (m.asks_unreported >= m.asks) {
+      row("used", "not reported by this backend", "none");
+    } else {
+      row("cost", m.cost_usd === null
+        ? "not reported by this backend"
+        : "$" + m.cost_usd.toFixed(4) + " API-equivalent USD, not a bill on a subscription",
+        m.cost_usd === null ? "none" : "");
+      var t = m.tokens;
+      row("tokens", t === null
+        ? "not reported by this backend"
+        : "in " + t.input + " · out " + t.output + " · cache read " + t.cache_read +
+          " · cache write " + t.cache_write, t === null ? "none" : "");
+      if (m.asks_unreported) row("note", m.asks_unreported + " of " + m.asks + " asks reported nothing", "none");
+      if (!reading[id]) row("left", "remaining quota not reported by this backend", "none");
+    }
+    box.appendChild(card);
+  });
+  (run.remaining || []).forEach(function (w) {
+    var card = el("div", "mdl");
+    card.appendChild(drawWindow(w));
+    box.appendChild(card);
+  });
+}
+
+// Fetched when the run changes, not on a timer (the redraw timer above does not fetch): the state, the log length and the visited count
+// move exactly when an ask can have finished.
+var usageKey = null;
+function refreshUsage(force) {
+  var key = state ? [state.state, (state.log || []).length, (state.visited || []).length].join("|") : "";
+  if (!force && key === usageKey) {
+    // No new ask, but time has passed: judge the windows again against the clock, no fetch.
+    if (lastUsage) drawUsage(lastUsage);
+    return Promise.resolve();
+  }
+  usageKey = key;
+  return api("GET", "/usage").then(drawUsage, function (e) {
+    var box = $("#usage");
+    clearUsageTimer();
+    if (box) { box.innerHTML = ""; box.appendChild(el("p", "err", "usage unavailable: " + e.message)); }
+  });
+}
+
 function apply(s) {
   state = s;
   $("#state").textContent = s.state;
@@ -735,6 +1485,7 @@ function apply(s) {
   drawBrief();
   $("#err").textContent = s.error || "";
   drawFlow(); drawLog(); drawDecisions(); drawAsk();
+  refreshUsage();
 }
 
 function fail(e) { $("#err").textContent = e.message; }
@@ -782,8 +1533,8 @@ $("#file").onchange = function () {
 
 // --- go --------------------------------------------------------------------------------------
 api("GET", "/flow")
-  .then(function (f) { flow = f.nodes; return api("GET", "/config/nodes"); })
-  .then(function (a) { assign = a; drawModels(); return api("GET", "/run"); })
+  .then(function (f) { flow = f.nodes; return refreshConfig(); })
+  .then(function () { return api("GET", "/run"); })
   .then(function (s) {
     apply(s);
     // The snapshot came first, so the stream can only ever move us forward from a known state.

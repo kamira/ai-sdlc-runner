@@ -13,7 +13,7 @@ It exists so that running this flow needs no other company's agent, and it holds
 pack, or vendored contract. The flow and the governance are its own, in two files:
 
 - **`policy.py`** — six roles with capability flags, 10 gates × three risk grades, six
-  never-automated actions, four review seats and the rule that adjudicates them.
+  never-automated actions, fifteen review seats (three open by default) and the rule that adjudicates them.
 - **`graph.py`** — 31 nodes, one kind of work each.
 
 Nothing points outside this repository. The dependency graph closes inside `src/`.
@@ -168,8 +168,11 @@ continuing somebody else's is worse than one starting over.
 
 ## 6. The panel
 
-One or many seats, count set by the user above a floor of 3. Each is asked separately and is
-blind to the others; their instructions say so explicitly.
+One or many of fifteen seats, opened either by a count (the first N of the twelve that are not
+opt-in, never fewer than the floor of 3 unless high-risk mode is on) or by the user's own list, `review_dimensions`,
+which can also open the three opt-in seats. Each seat may have several models; every (seat, model) is
+its own session, asked separately and blind to the others — their instructions say so explicitly.
+A seat passes only when every one of its models passes, and the seats' verdicts are then adjudicated.
 
 Verdicts are **adjudicated, not averaged**: the `conformance` seat has a veto and cannot be outvoted,
 a majority is needed to pass, and a tie does not pass. The engine routes the flow on the result.

@@ -1022,6 +1022,10 @@ class Seat:
     label: str
     question: str
     veto: bool
+    #: An opt-in seat opens only when `review_dimensions` names it. `seat_names` — the prefix a
+    #: `review_seats` count takes — stops before every opt-in seat (`PREFIX_SEATS`), so no count
+    #: reaches one. A field rather than a second tuple, so a seat and its opt-in cannot drift apart.
+    opt_in: bool = False
 
 
 SEATS: Tuple[Seat, ...] = (
@@ -1036,9 +1040,53 @@ SEATS: Tuple[Seat, ...] = (
          veto=False),
     Seat("idiom", "慣例與簡潔",
          "Does this read like the code around it, and is any of it unnecessary?", veto=False),
+    # The eleven below are the other dimensions `config/panel.json` names for DIR-3, in its order
+    # and with its ids, labels and questions (CHG-20261005-02). **Only `conformance` vetoes**: a
+    # veto on `security` is a policy decision for the user, not something to infer from the word.
+    # **The default is unchanged**: with `review_dimensions` unset, a run opens the first
+    # `SEAT_FLOOR` seats. A `review_seats` count takes a longer prefix, up to the twelve that are
+    # not opt-in; the three opt-in seats open only when `settings.review_dimensions` names them.
+    Seat("security", "資訊安全",
+         "Look for injection, secret exposure, privilege escalation, red-line bypass and unsafe "
+         "defaults.", veto=False),
+    Seat("ux", "UX/UI",
+         "Are the console, CLI and messages usable and clear, and is anything inaccessible to a "
+         "user who cannot see colour or read the language?", veto=False),
+    Seat("ci", "CI/測試",
+         "Do the tests fail when the change is broken? Check the test matrix and any source of "
+         "flakiness.", veto=False),
+    Seat("modularity", "模組化/架構",
+         "Are the boundaries and coupling sound, and is every new piece wired into something that "
+         "calls it (KN-8)?", veto=False),
+    Seat("privacy", "隱私/資料外流",
+         "What leaves the machine, to whom (the models' `reach`), and is that disclosed to the "
+         "user?", veto=False),
+    Seat("performance", "效能/成本",
+         "What are the wall-clock time and the token or quota spend, and which model calls are "
+         "avoidable?", veto=False),
+    Seat("portability", "跨平台相容性",
+         "Will it run on Windows and Linux and on Python 3.9–3.13 — paths, encodings, subprocess "
+         "behaviour?", veto=False),
+    Seat("docs", "文件與治理一致",
+         "Do README, SCHEMAS and the CHG and ACC records agree with the code, and are the ledger "
+         "rules followed?", veto=False),
+    Seat("observability", "錯誤處理/可觀測性",
+         "Are failures reported rather than swallowed, and do the logs say what actually "
+         "happened?", veto=False, opt_in=True),
+    Seat("supply_chain", "相依/供應鏈",
+         "Does it add dependencies, unpinned versions or external downloads?", veto=False,
+         opt_in=True),
+    Seat("i18n", "國際化/在地化",
+         "Check text encoding, mixed-language UI and any locale assumptions.", veto=False,
+         opt_in=True),
 )
 
 BY_SEAT: Dict[str, Seat] = {s.name: s for s in SEATS}
+
+#: The seats a `review_seats` count can reach: every seat but the opt-in ones, in opening order.
+PREFIX_SEATS: Tuple[Seat, ...] = tuple(s for s in SEATS if not s.opt_in)
+#: The largest `review_seats` there is.
+MAX_SEAT_COUNT = len(PREFIX_SEATS)
 
 #: The floor: how many seats open by default. Fewer than this needs the user's explicit high-risk
 #: mode, because a single reviewer is exactly the single point of view the panel exists to avoid.
@@ -1162,9 +1210,55 @@ def stops(verdict_value: str) -> bool:
 def seat_names(count: int) -> List[str]:
     if count < 1:
         raise PolicyError("a review needs at least one seat")
-    if count > len(SEATS):
-        raise PolicyError(f"{count} seats requested but this runner defines {len(SEATS)}")
-    return [s.name for s in SEATS[:count]]
+    if count > MAX_SEAT_COUNT:
+        raise PolicyError(
+            f"{count} seats requested but a seat count opens at most {MAX_SEAT_COUNT}. "
+            f"{', '.join(s.name for s in SEATS if s.opt_in)} are opt-in: they open only when "
+            f"`review_dimensions` names them")
+    return [s.name for s in PREFIX_SEATS[:count]]
+
+
+def resolve_dimensions(names: Sequence[str], high_risk_mode: bool) -> List[str]:
+    """The seats a user *named*, in the order they named them, under the same floor as a count.
+
+    `review_dimensions` replaces the `review_seats` prefix, so it is held to the rule the prefix is:
+    fewer than `SEAT_FLOOR` needs high-risk mode, with `resolve_seats`' message. Unknown names and
+    duplicates are refused rather than dropped — a seat that silently did not open is a panel that
+    reads smaller than it was configured to be.
+
+    **A list that leaves out a veto seat is refused unless high-risk mode is on** (CHG-20261005-02,
+    round 1). Every prefix opens `conformance` first, so a count never dropped the only veto; a
+    named list can, and a panel without one decides scope by majority. High-risk mode allows it and
+    `engine.walk` records it in `report.relaxations`, as it does a list below the floor.
+    """
+    chosen = list(names)
+    unknown = [n for n in chosen if n not in BY_SEAT]
+    if unknown:
+        raise PolicyError(f"no seat {', '.join(unknown)}; this runner's seats are "
+                          f"{', '.join(s.name for s in SEATS)}")
+    repeated = sorted({n for n in chosen if chosen.count(n) > 1})
+    if repeated:
+        raise PolicyError(f"seat(s) {repeated} named more than once; a seat opens once")
+    if not chosen:
+        raise PolicyError("a review needs at least one seat")
+    if len(chosen) < SEAT_FLOOR and not high_risk_mode:
+        raise PolicyError(
+            f"{len(chosen)} seat(s) is below the floor of {SEAT_FLOOR}. Enable high-risk mode to go "
+            f"below it — one reviewer is the single point of view the panel exists to avoid, so "
+            f"this runner does not lower the floor by itself.")
+    missing = vetoes_missing(chosen)
+    if missing and not high_risk_mode:
+        raise PolicyError(
+            f"review_dimensions leaves out {', '.join(missing)}, the veto seat: the one seat that "
+            f"cannot be outvoted, because its subject is a matter of fact. Name it, or enable "
+            f"high-risk mode to open a panel without it — the run then records that it had no "
+            f"veto.")
+    return chosen
+
+
+def vetoes_missing(chosen: Sequence[str]) -> List[str]:
+    """The veto seats a list of seat names does not open."""
+    return [s.name for s in SEATS if s.veto and s.name not in chosen]
 
 
 def resolve_seats(requested: Optional[int], high_risk_mode: bool) -> int:

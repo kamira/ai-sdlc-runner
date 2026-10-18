@@ -11,7 +11,9 @@ applies.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
+import textwrap
 from typing import Callable, List, Optional, Sequence, Tuple
 
 # An option is (label, description).
@@ -53,15 +55,31 @@ def _want_curses(stream_in, stream_out) -> bool:
     return True
 
 
+class _TooSmall(Exception):
+    """The screen cannot hold a menu's body and options; `select` falls back to the numbered prompt."""
+
+
+def _wrap_body(body: Sequence[str], width: int) -> List[str]:
+    """Wrap each paragraph of ``body`` to ``width`` columns; an empty paragraph stays a blank line."""
+    lines: List[str] = []
+    for paragraph in body:
+        lines.extend(textwrap.wrap(paragraph, max(width, 20)) or [""])
+    return lines
+
+
 def _numbered_select(
     title: str,
     options: Sequence[Option],
     *,
     input_fn: Callable[[str], str] = input,
     out=None,
+    body: Sequence[str] = (),
 ) -> Optional[int]:
     """Numbered-list fallback. Returns the chosen 0-based index, or ``None`` to cancel."""
     out = out or sys.stdout
+    # Printed here, with the question, so it is on screen when the answer is typed.
+    for line in _wrap_body(body, shutil.get_terminal_size((80, 24)).columns - 1):
+        print(line, file=out)
     print(title, file=out)
     for i, (label, desc) in enumerate(options, 1):
         suffix = f"  — {desc}" if desc else ""
@@ -87,7 +105,8 @@ def cycle_index(idx: int, n: int, key: int, *, key_up: Sequence[int] = (), key_d
     return idx
 
 
-def _curses_select_on(stdscr, title: str, options: Sequence[Option]) -> Optional[int]:
+def _curses_select_on(stdscr, title: str, options: Sequence[Option],
+                      body: Sequence[str] = ()) -> Optional[int]:
     """Arrow-key menu drawn on an **already-initialized** ``stdscr`` (no nested ``curses.wrapper``).
 
     ↑/↓ (or k/j) to move, Enter to choose, q/Esc to cancel.
@@ -102,6 +121,12 @@ def _curses_select_on(stdscr, title: str, options: Sequence[Option]) -> Optional
     Kept rather than inlined, because the shape is still right — a menu that does not open a
     nested session is the reusable one, and merging it back would have to be undone by whoever
     next embeds a menu. What is removed is the claim that someone already did.
+
+    ``body`` is text the user must read before answering (a disclosure). It is wrapped to the
+    window and redrawn above the options on every frame, because each frame erases the screen and
+    anything printed before the menu opened is not on it. If it and the options do not fit, this
+    raises `_TooSmall` rather than drop part of it; options alone too tall for the window are the
+    same case.
     """
     import curses
 
@@ -110,17 +135,28 @@ def _curses_select_on(stdscr, title: str, options: Sequence[Option]) -> Optional
     key_up = (curses.KEY_UP, ord("k"))
     key_down = (curses.KEY_DOWN, ord("j"))
     while True:
+        # **Checked with or without a body.** Only a body was checked, so a menu of seventeen
+        # options on an 18-row terminal drew its first rows and lost the last two (Done, Clear) to
+        # the `curses.error` swallowed below, with nothing on screen to say they existed.
+        rows, cols = stdscr.getmaxyx()
+        lines = _wrap_body(body, cols - 1) if body else []
+        # title, hint, blank, body, blank, options, blank, the description line
+        if (3 + len(lines) + 1 if lines else 3) + n + 2 > rows:
+            raise _TooSmall()
+        top = 3 + len(lines) + 1 if lines else 3
         stdscr.erase()
         stdscr.addstr(0, 0, title)
         stdscr.addstr(1, 0, "↑/↓ move · Enter select · q cancel")
+        for j, line in enumerate(lines):
+            stdscr.addstr(3 + j, 0, line)
         for i, (label, desc) in enumerate(options):
             marker = "›" if i == idx else " "
             line = f"{marker} {label}"
             attr = curses.A_REVERSE if i == idx else curses.A_NORMAL
             try:
-                stdscr.addstr(3 + i, 0, line, attr)
+                stdscr.addstr(top + i, 0, line, attr)
                 if desc and i == idx:
-                    stdscr.addstr(3 + n + 1, 0, desc[: max(0, curses.COLS - 1)], curses.A_DIM)
+                    stdscr.addstr(top + n + 1, 0, desc[: max(0, curses.COLS - 1)], curses.A_DIM)
             except curses.error:
                 pass
         stdscr.refresh()
@@ -133,7 +169,7 @@ def _curses_select_on(stdscr, title: str, options: Sequence[Option]) -> Optional
             idx = cycle_index(idx, n, key, key_up=key_up, key_down=key_down)
 
 
-def _curses_select(title: str, options: Sequence[Option]) -> Optional[int]:
+def _curses_select(title: str, options: Sequence[Option], body: Sequence[str] = ()) -> Optional[int]:
     """Arrow-key menu via stdlib curses, in its own ``curses.wrapper`` session.
 
     ↑/↓ (or k/j) to move, Enter to choose, q/Esc to cancel.
@@ -147,7 +183,7 @@ def _curses_select(title: str, options: Sequence[Option]) -> Optional[int]:
             curses.init_pair(1, curses.COLOR_CYAN, -1)
         except Exception:
             pass
-        return _curses_select_on(stdscr, title, options)
+        return _curses_select_on(stdscr, title, options, body)
 
     return curses.wrapper(_run)
 
@@ -159,8 +195,13 @@ def select(
     input_fn: Callable[[str], str] = input,
     stream_in=None,
     stream_out=None,
+    body: Sequence[str] = (),
 ) -> Optional[int]:
     """Show ``title`` and a list of ``options``; return the chosen 0-based index, or ``None`` to cancel.
+
+    ``body`` (paragraphs) is shown above the options by both renderers; see `_curses_select_on`.
+    A terminal too small for it, or for the options alone, gets the numbered prompt, never a clipped
+    menu.
 
     Uses the curses arrow-key menu when interactive; otherwise a numbered prompt. ``input_fn`` is
     injectable so the fallback can be tested without a real TTY.
@@ -171,11 +212,11 @@ def select(
     so = stream_out or sys.stdout
     if _want_curses(si, so):
         try:
-            return _curses_select(title, options)
+            return _curses_select(title, options, body)
         except Exception:
             # Any curses failure (e.g. unusual terminal) degrades gracefully.
-            return _numbered_select(title, options, input_fn=input_fn, out=so)
-    return _numbered_select(title, options, input_fn=input_fn, out=so)
+            return _numbered_select(title, options, input_fn=input_fn, out=so, body=body)
+    return _numbered_select(title, options, input_fn=input_fn, out=so, body=body)
 
 
 def confirm_high_risk(requested: int, floor: int, *, input_fn=input, stream_out=None) -> bool:

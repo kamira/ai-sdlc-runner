@@ -12,8 +12,11 @@ picked. "This work order leaves the machine" is a fact about a configuration, an
 records `endpoint` and leaves the reader to notice the hostname has made that fact into a detail.
 
 So every model carries a **reach** — ``local``, ``internal`` or ``external`` — computed from what it
-actually is, and the console shows it. The point is not to discourage external models. It is that
-choosing one should be a decision somebody made rather than one they discover later, in the same way
+actually is, and the console shows it. The one thing a transport cannot show is a vendor's CLI: a
+``cli`` model is a subprocess here, and ``claude`` sends its prompt to a hosted API, so such an entry
+*declares* its reach (``declared_reach``), which may only raise the computed one.
+
+The point is not to discourage external models. It is that choosing one should be a decision somebody made rather than one they discover later, in the same way
 this repository refuses to let a node's *name* decide how its models are read.
 
 ## Keys are named, never held
@@ -178,6 +181,9 @@ def graded_by_guess(endpoint: str) -> bool:
 def reach_of(transport: str, endpoint: str = "") -> str:
     """Where a model actually is. Computed, never declared.
 
+    From the transport alone. A vendor CLI's own `Model.declared_reach` can only raise this, and is
+    applied by `Model.reach`, which is what every disclosure reads.
+
     Asking the operator to label this themselves would put the one fact worth being sure about
     behind the one place a mistake is invisible — a model labelled ``internal`` pointing at a public
     host is a configuration that reads as safe and is not.
@@ -221,10 +227,24 @@ class Model:
     #: `api` only: the **name** of an environment variable holding the key. Never the key.
     key_env: str = ""
     note: str = ""
+    #: How much a model is trusted with, as a **label** a person gives it: `high`, `mid`, `low`, or
+    #: empty for unclassified. Nothing infers it from a name — a name→tier table goes stale with
+    #: every release (CHG-20261005-01). Read by the coding role's default (`cli.coder_defaults`).
+    tier: str = ""
+    #: `cli` only: an argv template appended after `command` when an effort is in force, each
+    #: element with `{effort}` substituted. A template rather than a vendor table, so the runner
+    #: holds no knowledge of any one CLI and a local model needs no code. Empty means this model
+    #: has no effort control, which a run reports rather than refuses.
+    effort_argv: Tuple[str, ...] = ()
+    #: Where the work really goes, when the transport cannot say: a `cli` model is a subprocess
+    #: here, and `claude` or `codex` is a thin client that sends the prompt to a vendor. Empty means
+    #: "derive it". It may only **raise** the derived reach (`validate`), never lower it, so it
+    #: cannot label a public endpoint `local` (CHG-20261005-01, review round 2).
+    declared_reach: str = ""
 
     @property
     def reach(self) -> str:
-        return reach_of(self.transport, self.endpoint)
+        return self.declared_reach or reach_of(self.transport, self.endpoint)
 
     @property
     def leaves_this_machine(self) -> bool:
@@ -233,6 +253,7 @@ class Model:
     def as_dict(self) -> Dict[str, object]:
         payload = asdict(self)
         payload["command"] = list(self.command)
+        payload["effort_argv"] = list(self.effort_argv)
         payload["reach"] = self.reach
         payload["leaves_this_machine"] = self.leaves_this_machine
         # **The grade that is a judgement says it is one** (CHG-20260903-39, idiom seat).
@@ -247,12 +268,68 @@ class Model:
         # external endpoint must name a key variable. A disclosure that makes an exemption
         # acceptable has to reach the surface, or the exemption is unaccompanied.
         payload["reach_guessed"] = bool(
-            self.transport == "api" and graded_by_guess(self.endpoint))
+            self.transport == "api" and not self.declared_reach
+            and graded_by_guess(self.endpoint))
         return payload
 
 
+#: What a model's `tier` may say. Empty is "unclassified", and is a value rather than an absence.
+TIERS = ("", "high", "mid", "low")
+
+#: Where an effort lands inside `Model.effort_argv`.
+EFFORT_SLOT = "{effort}"
+
+
+def _check_declared_reach(model: Model) -> None:
+    """A declared reach is one of `REACHES` and never nearer than the transport shows."""
+    if not model.declared_reach:
+        return
+    if model.declared_reach not in REACHES:
+        raise ModelError(f"model {model.id!r} has declared_reach {model.declared_reach!r}; a reach "
+                         f"is one of {list(REACHES)}, or empty to derive it")
+    derived = reach_of(model.transport, model.endpoint)
+    if REACHES.index(model.declared_reach) < REACHES.index(derived):
+        raise ModelError(
+            f"model {model.id!r} declares reach {model.declared_reach!r} but its endpoint is "
+            f"{derived!r}. A declaration may say work goes further than the transport shows, never "
+            f"less far: a model labelled nearer than it is reads as safe and is not.")
+
+
+def with_effort(model: Model, effort: str) -> Optional[List[str]]:
+    """The argv words that carry `effort` to this model, or `None` when it has no template."""
+    if not model.effort_argv:
+        return None
+    return [word.replace(EFFORT_SLOT, effort) for word in model.effort_argv]
+
+
+#: The settings' refusal sentinel (`settings.NO_CODER`); no model may be *created* with it as an id.
+#: Refused in `validate_new`, not `validate`: `validate` runs on every load, and a registry that
+#: already holds a model so named (it was accepted before this was reserved) must still load, or
+#: `run` and `serve` stop on data the previous runner wrote (CHG-20261005-01, review round 10).
+RESERVED_ID = "none"
+
+
+def is_reserved(model_id: str) -> bool:
+    return model_id.lower() == RESERVED_ID
+
+
+def reserved_in(registry: "Registry") -> List[str]:
+    """The ids in `registry` that read as the refusal sentinel, so a load can name them."""
+    return [m.id for m in registry if is_reserved(m.id)]
+
+
+def validate_new(model: Model) -> Model:
+    """`validate`, plus the refusals that apply only where a model is created or renamed."""
+    if is_reserved(model.id):
+        raise ModelError(
+            f"model id {model.id!r} is reserved: `{RESERVED_ID}` is what the settings store for "
+            f"\"no default coder model\", so a model called that would read as a refusal the "
+            f"moment it was chosen as the coder. Pick another id.")
+    return validate(model)
+
+
 def validate(model: Model) -> Model:
-    """Every refusal this registry makes, in one place so none of them is optional."""
+    """Every refusal this registry makes on a load, in one place so none of them is optional."""
     if not model.id or not _ENV_NAME.match(model.id.replace("-", "_")):
         raise ModelError(
             f"model id {model.id!r} is not a plain name. It is used as a key in config and on the "
@@ -265,6 +342,20 @@ def validate(model: Model) -> Model:
     if model.transport not in TRANSPORTS:
         raise ModelError(f"model {model.id!r} has unknown transport {model.transport!r}; this "
                          f"runner speaks {list(TRANSPORTS)}")
+    if model.tier not in TIERS:
+        raise ModelError(f"model {model.id!r} has tier {model.tier!r}; a tier is one of "
+                         f"{[t for t in TIERS if t]}, or empty for unclassified")
+    if not all(isinstance(word, str) for word in model.effort_argv):
+        raise ModelError(f"model {model.id!r} has an effort_argv that is not a list of strings")
+    if model.effort_argv and not any(EFFORT_SLOT in word for word in model.effort_argv):
+        raise ModelError(
+            f"model {model.id!r} has an effort_argv with no {EFFORT_SLOT} in it, so the effort "
+            f"asked for would never reach the process. A template nothing fills in looks "
+            f"configured and does nothing.")
+    if model.effort_argv and model.transport != CLI:
+        raise ModelError(
+            f"api model {model.id!r} carries an effort_argv it cannot use. Nothing dispatches an "
+            f"api model, and a field nothing reads is one somebody will later assume was honoured.")
 
     if model.transport == CLI:
         if not model.command:
@@ -273,6 +364,7 @@ def validate(model: Model) -> Model:
             raise ModelError(
                 f"cli model {model.id!r} carries an endpoint or a key name it cannot use. A field "
                 f"nothing reads is one somebody will later assume was honoured.")
+        _check_declared_reach(model)
         return model
 
     if not model.endpoint:
@@ -291,6 +383,7 @@ def validate(model: Model) -> Model:
             f"{remedy}")
     if model.command:
         raise ModelError(f"api model {model.id!r} carries a command it cannot use")
+    _check_declared_reach(model)
     if model.key_env and not _ENV_NAME.match(model.key_env):
         raise ModelError(
             f"model {model.id!r} has key_env {model.key_env!r}, which is not the name of an "
@@ -337,7 +430,7 @@ class Registry:
         raise ModelError(f"no model {model_id!r}; this project has {[m.id for m in self.models]}")
 
     def add(self, model: Model) -> "Registry":
-        return Registry(models=self.models + (validate(model),))
+        return Registry(models=self.models + (validate_new(model),))
 
     def remove(self, model_id: str) -> "Registry":
         self.get(model_id)
@@ -377,7 +470,76 @@ def _model_from(payload: Dict[str, object]) -> Model:
         endpoint=str(payload.get("endpoint") or ""),
         key_env=str(payload.get("key_env") or ""),
         note=str(payload.get("note") or ""),
+        tier=str(payload.get("tier") or ""),
+        effort_argv=tuple(payload.get("effort_argv") or ()),
+        declared_reach=str(payload.get("declared_reach") or ""),
     )
+
+
+def seat_entries(value, registry: Optional["Registry"] = None, *,
+                 legacy_argv: bool = False) -> List[object]:
+    """One seat's models as a list: each entry a model id (`str`) or, for the legacy form, an argv.
+
+    `seat_models` used to give a seat **one** model — a string, or one argv from `--seat-model` —
+    and now gives it a list of model ids (CHG-20261005-02). Every reader goes through here, so the
+    old shape is one place's job. `None`, `""` and `[]` are no model: the seat asks the default
+    backend, as ever.
+
+    **The contract.** A value is one of:
+
+    - a string — a model id, or (as before this change) a command line the factory splits;
+    - a list of model ids. Every one must be a model the `registry` has, and no id may repeat:
+      an unknown id is refused naming it, and so is a list when there is no registry to check it
+      against. A list is never read as a command because one of its ids is missing.
+
+    **The one legacy form** is a flat list of words that is one argv — what `--seat-model` and
+    `session_factory(seat_models={"conformance": ["python3", "agent.py"]})` produced before. It is
+    read as an argv only when `legacy_argv` is set, which only `cli.session_factory` does, and only
+    when the list's first word is not a model id the registry has (or there is no registry). A list
+    that starts with a model id is a list of ids, so `["opus", "missing"]` is refused, not run.
+    Values from a plan, the store or the console never reach this with `legacy_argv`: `cmd_run` and
+    `serve` check them with this function first.
+    """
+    if value is None or value == "" or value == []:
+        return []
+    if isinstance(value, str):
+        return [value]
+    items = list(value)
+    if not all(isinstance(i, str) for i in items):
+        raise ModelError(
+            f"a seat's models are model ids, got {value!r}. `seat_models` holds a model id or a "
+            f"list of model ids")
+    if legacy_argv and (registry is None or not _has(registry, items[0])):
+        return [items]                    # the legacy form: one argv
+    repeated = sorted({i for i in items if items.count(i) > 1})
+    if repeated:
+        raise ModelError(
+            f"model(s) {repeated} listed more than once on one seat. Each model on a seat is its "
+            f"own session; the same model twice is one voice counted twice, and a seat passes "
+            f"only when every one of them passes")
+    if registry is None:
+        raise ModelError(
+            f"seat models {items!r} cannot be checked: there is no model registry loaded "
+            f"(`--assignment-store none`), so none of them is a model id this project has")
+    unknown = [i for i in items if not _has(registry, i)]
+    if unknown:
+        raise ModelError(
+            f"seat models name unknown model id(s) {unknown!r}; this project has "
+            f"{sorted(m.id for m in registry)}. A list is model ids only, never a command")
+    return items
+
+
+def _has(registry: "Registry", model_id: str) -> bool:
+    try:
+        registry.get(model_id)
+        return True
+    except ModelError:
+        return False
+
+
+def entry_label(entry) -> str:
+    """What the report calls one seat model: the id, or the argv joined."""
+    return " ".join(entry) if isinstance(entry, (list, tuple)) else str(entry)
 
 
 def load(path: str | Path) -> Registry:

@@ -228,10 +228,13 @@ def test_a_missing_file_is_the_defaults(tmp_path):
     assert settings_mod.load(str(tmp_path / "nope.json")) == settings_mod.Settings()
 
 
-def test_an_empty_file_is_the_defaults(tmp_path):
+def test_an_empty_file_is_an_error_not_the_defaults(tmp_path):
+    """Changed in CHG-20261005-03 round 4: an empty file is what an interrupted in-place write
+    leaves, and reading it as the defaults would drop `high_risk_mode` and the operator's seats."""
     path = tmp_path / "settings.json"
     path.write_text("", encoding="utf-8")
-    assert settings_mod.load(str(path)) == settings_mod.Settings()
+    with pytest.raises(settings_mod.SettingsError, match="empty"):
+        settings_mod.load(str(path))
 
 
 def test_a_corrupt_file_is_an_error_not_the_defaults(tmp_path):
@@ -786,10 +789,12 @@ def test_vouching_a_command_decides_whether_a_permanent_halt_trips():
     assert policy.recognise("rm -rf /srv", ("rm",)) == "red"
 
 
-def test_the_surface_is_still_three_fields():
+def test_the_surface_is_six_fields():
     """Kept from the old body, as what it actually was: an enumeration of the surface. It is a
-    useful check and it was never the claim its name made."""
-    assert settings_mod.FIELDS == ("review_seats", "high_risk_mode", "ordinary_commands")
+    useful check and it was never the claim its name made. CHG-20261005-01 added the coding role's
+    model and effort; CHG-20261005-02 added `review_dimensions`."""
+    assert settings_mod.FIELDS == ("review_seats", "high_risk_mode", "ordinary_commands",
+                                   "coder_model", "coder_effort", "review_dimensions")
     assert set(settings_mod.Settings().as_dict()) == set(settings_mod.FIELDS)
 
 
@@ -952,10 +957,11 @@ BANNED_CLAIM = re.compile(r"lower\s+the\s+seat\s+floor\s+and\s+(?:can\s+do\s+)?n
 #: the two documents that name it, and that sentence would have kept saying three
 #: (CHG-20260907-12).
 COUNTS_SETTINGS = re.compile(
-    r"(?:one|two|three|four)\s+of\s+(?:the\s+)?(one|two|three|four)\s+(?:settings|fields)",
+    r"(?:one|two|three|four|five|six)\s+of\s+(?:the\s+)?(one|two|three|four|five|six)"
+    r"\s+(?:settings|fields)",
     re.I)
 
-_NUMBERS = {"one": 1, "two": 2, "three": 3, "four": 4}
+_NUMBERS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
 
 
 def counts_that_disagree(prose, how_many):

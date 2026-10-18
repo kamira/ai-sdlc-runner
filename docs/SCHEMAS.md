@@ -216,8 +216,18 @@ design**, and it overwrites.
 
 ```jsonc
 { "ask_id": "000-pm_plan", "node_id": "pm_plan", "seat": null,
-  "status": "pending|answered|refused", "order": { …schema 5… }, "result": { … } }
+  "status": "pending|answered|refused", "order": { …schema 5… }, "result": { … },
+  "voice": { "model": "opus" | null, "argv": ["claude", "-p"] | null } }   // seat asks only
 ```
+
+**`voice` is who a seat ask was put to** (CHG-20261005-02). `model` is the seat's model id for that
+session, `null` for a seat with no model, which runs the default backend; `argv` is the command the
+session factory resolves for it (for the default backend, the `agent_command`, or `null` when there
+is none). A seat with several models has one entry per model, the ask id taking `-m<N>` (`N` the
+model's position) after the seat: `004-lead_review-defect-m1`; a seat with one model or none keeps
+`NNN-node-seat`. A resume reuses a journaled seat answer only when its `voice` equals the voice
+about to be asked; an entry that differs, or has no `voice` (written before this field existed), is
+asked again. An ask that is not a seat ask has no `voice`.
 
 **Two order shapes can sit in one journal.** An entry written before CHG-20260925-01 has no `reply`.
 A resumed run compares such an entry with the new order minus its `reply`; an entry that has a
@@ -234,8 +244,8 @@ older runner wrote past a failed build holds the self-check and the review of th
 An entry whose question changed does not cut the rest; the later entries are still reused where
 they ask the same.
 
-**It carries no model and no operator turn.** That is why the conversation store is not derived
-from it.
+**It carries no operator turn, and a model only through a seat ask's `voice`.** That is why the
+conversation store is not derived from it.
 
 ## 8 · Conversation document + turn
 
@@ -278,8 +288,8 @@ body fields per kind.
 | `closed` | `state` (`finished`/`suspended`/`stopped`), `at_node`, `why`, `risk`, `change_class` |
 | `review` | `by`, `note` — an operator saying they looked at an `emergency` run afterwards |
 
-`model` is what was **asked for**; `backend` is what **answered**. They come apart on a seat panel,
-which routes by seat name and passes no model at all.
+`model` is what was **asked for**; `backend` is what **answered**. They come apart where a seat has
+no model assigned: the ask names none, and the default backend answers.
 
 A reader may add `incomplete_lines` (a torn write) and `duplicate_seqs` (what `file` can report but
 not refuse).
@@ -309,7 +319,7 @@ The **HTML** export groups turns into *stops*: consecutive turns at one `node_id
 gathered — a node revisited later is a **second** stop, and merging the two would hide the loop
 the format exists to show.
 
-An `answer` carries `ask_id` and no `node_id`, so its node is read back out of the `NNN-node_id[-seat]`
+An `answer` carries `ask_id` and no `node_id`, so its node is read back out of the `NNN-node_id[-seat[-mN]]`
 form of the id. Without that, every ask/answer pair splits in two: 53 stops for 55 turns, a list
 wearing a waterfall's markup.
 
@@ -319,7 +329,7 @@ the way in — the same reason CSV cells are defused against formulas.
 
 ## 10 · Model registry — **closed**, entry *and* envelope
 
-Eight fields, listed in `models.Model`, persist. `_model_from` refuses anything else by name — and so, now, does the envelope.
+Eleven fields, listed in `models.Model`, persist. `_model_from` refuses anything else by name — and so, now, does the envelope.
 A seat found that `{"models": [], "modelz": [...]}` loaded as an **empty registry**: one typo and
 every model you configured was gone with no message, which is the same defect `_model_from` refuses
 one level down. Closed on every path in: file load, `Registry.add`, and the console's
@@ -331,11 +341,15 @@ one level down. Closed on every path in: file load, `Registry.add`, and the cons
                 "command": ["claude", "-p"],     // argv as a LIST, never re-split by a shell
                 "endpoint": "https://…",         // api only
                 "key_env": "ANTHROPIC_API_KEY",  // the NAME of an env var. Never a key.
-                "note": "" } ] }
+                "note": "",
+                "tier": "",                      // "" | "high" | "mid" | "low" — a label, not inferred
+                "effort_argv": [],               // cli only — argv template; "{effort}" is substituted
+                "declared_reach": "" } ] }       // "" | "local" | "internal" | "external" — may only raise the derived reach
 ```
 
 **Three fields, listed in `models.COMPUTED`, are computed and never stored** — `reach` is `local` /
-`internal` / `external` derived from `(transport, endpoint)` on every load,
+`internal` / `external` derived from `(transport, endpoint)` on every load — raised to
+`declared_reach` when that is set and higher, never lowered by it (CHG-20261005-01) —
 `leaves_this_machine` follows from it, and `reach_guessed` says whether the derivation had
 to guess. `save()` strips them, and `models.py` says why on `models.COMPUTED`'s own line:
 *"Storing one would let a stale label outlive the truth."*
@@ -348,8 +362,20 @@ closed all along and revision 1 of this page did not say so.
 ```jsonc
 { "review_seats": null,          // null = the floor (3)
   "high_risk_mode": false,       // may the floor be crossed at all
-  "ordinary_commands": [] }      // tools the operator vouches for — the TOOL, never a command line
+  "ordinary_commands": [],       // tools the operator vouches for — the TOOL, never a command line
+  "coder_model": "",             // registry id for engineer_build when nothing is assigned; "" = the only mid model (unless agent_command is set); "none" = no default
+  "coder_effort": "medium",      // low | medium | high — for engineer_build and what follows it
+  "review_dimensions": null }    // null = the first review_seats seats; or seat names, in opening order
 ```
+
+`review_dimensions` (CHG-20261005-02) is a list of names from `policy.SEATS` — fifteen, of which the
+first three (`conformance`, `defect`, `risk`) open by default, `review_seats` takes a prefix of the
+twelve that are not opt-in, and `observability`, `supply_chain` and `i18n` open only when named. When
+it is set it **replaces** the `review_seats` prefix and `review_seats` is ignored (`runner settings
+--show` says so). An unknown name, a repeat, fewer names than the floor (3), or a list that leaves out
+`conformance` (the veto seat) is refused at load and at save; high-risk mode allows the last two, as
+it does for a count, and a run without `conformance` records that in `relaxations`.
+`intake_review` asks the same seats.
 
 ## 12 · Attachment manifest
 
@@ -376,12 +402,25 @@ under pressure here; only the filename is."*
 ## 13 · Run report
 
 `visited · asks · state · suspended · halted_at · halt_reason · relaxations · verdicts · on_trust ·
-confirmations · adjudications · single_model_panels · effects · resumed ·
-intake_asked_somebody · dispatches · survey ·
+confirmations · adjudications · single_model_panels · seat_models · effects · resumed ·
+intake_asked_somebody · dispatches · effort_not_applied · usage · usage_summary · survey ·
 options · panel_rounds · send_backs · rejections · rulings · store_errors · change_class ·
 relaxations_by_class · risk_proposed · risk_settled · risk_agreed · halts ·
 class_authorised_by ·
 relaxation_authorisers`
+
+`usage` (CHG-20261006-01) is one entry per ask whose session reported usage — `{ask_id, node_id, seat,
+model, kind, cost_usd, tokens, remaining, note}`, `kind` being `claude`, `codex` or `unreported`;
+an unknown figure is `null`, never `0`. Sessions with no usage attribute (the stub) add nothing.
+`usage_summary` is `usage.summarize` over it: `{models: {id: {asks, cost_usd, tokens,
+asks_unreported}}, remaining: [latest reading of each window]}`. Both are served by `GET /usage`.
+
+`seat_models` (CHG-20261005-02) is `{node_id: {seat: [model, …]}}` — which models answered which seat,
+for `intake_review` and `lead_review`, one entry per session in the order they were asked. A model
+is its registry id, or its argv joined by spaces for a command; a seat nobody routed reads
+`"(default backend)"`. A seat with several models also adds `by_model` to its adjudication
+(`{seat: [word, …]}`), because the seat's own word is their conjunction. A seat that said `fail`
+while one of its models named no verdict adds `unreached` (`{seat: ["seat (model)", …]}`).
 
 `intake_asked_somebody` answers one question — *did the intake survey open a session this lap?*
 — measured over that node's seat asks alone and **before** the escalation dispatches its own option
@@ -457,12 +496,15 @@ CREATE TABLE turns (
 CREATE TABLE models (
   id TEXT PRIMARY KEY, vendor TEXT NOT NULL, name TEXT NOT NULL, transport TEXT NOT NULL,
   command_json TEXT NOT NULL DEFAULT '[]', endpoint TEXT NOT NULL DEFAULT '',
-  key_env TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '');
+  key_env TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
+  tier TEXT NOT NULL DEFAULT '', effort_argv TEXT NOT NULL DEFAULT '[]',
+  declared_reach TEXT NOT NULL DEFAULT '');
 ```
 
 All six are live in [`store.py`](../src/ai_sdlc_runner/store.py): `models`,
 `node_assignments` and `seat_assignments` at schema 1, `conversations` and `turns` at schema
-2 with the conversation-store migration, and `halt_routing` after it.
+2 with the conversation-store migration, and `halt_routing` after it. `seat_assignments` was rebuilt
+at schema 5 as `(seat, position, model_id)` — see [`DATABASE.md`](DATABASE.md).
 
 > This paragraph said `conversations` and `turns` were *"not created by any code yet"* until
 > CHG-20260907-13. `DATABASE.md` was corrected for the same sentence by CHG-20260903-37 and
@@ -491,7 +533,7 @@ duplicate-`seq` policy is written down for the importer and not for the live pat
 
 ## 15 · Server HTTP API
 
-Nineteen routes, eight `GET` and eleven `POST`, every one crossing a process boundary to a browser.
+Twenty-two routes, ten `GET` and twelve `POST`, every one crossing a process boundary to a browser.
 Written down in **[`API.md`](API.md)** and pinned by `tests/test_api_schema.py`.
 
 The three-check guard that runs before every route — loopback `Host`, then `Origin`, then
@@ -501,8 +543,8 @@ because the order is the property.
 ## 16 · Model management
 
 Entry 10 is the model **shape**. [`MODELS.md`](MODELS.md) is the part that governs it — every
-refusal `validate()` makes, how `reach` is computed from `(transport, endpoint)` and why an operator
-must never label it themselves, and how a model gets from the registry to an actual ask through
+refusal `validate()` makes, how `reach` is derived from `(transport, endpoint)` and raised to
+`declared_reach` when that is higher (never lowered), and how a model gets from the registry to an actual ask through
 `node_models`, `seat_models` and the factory's resolution order.
 
 One thing it records that appears nowhere else: **an `api` model validates, lists, and cannot be
@@ -517,7 +559,7 @@ found these independently.
 
 | Missing | Why it matters |
 |---|---|
-| ~~The server HTTP API~~ | **written down** — [`API.md`](API.md), nineteen routes, pinned by `tests/test_api_schema.py` |
+| ~~The server HTTP API~~ | **written down** — [`API.md`](API.md), twenty-two routes, pinned by `tests/test_api_schema.py` |
 | **`runner.yaml`** — `agent_command`, `agent_timeout` | durable config with a hand-rolled fallback parser that has already shipped one bug (the inline-list split) |
 | **`RunConfig`** | the engine's real input contract, substantially wider than the plan file the catalogue shows |
 | **`Approval` / `Rejection` / `Ruling`** | operator decisions crossing the server→engine boundary; the catalogue has their flattened conversation turns, not their input shapes |
