@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>台北一週氣象</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header id="header">
+    <h1>台北一週氣象</h1>
+    <p class="coords">25.0330°N 121.5654°E</p>
+  </header>
+
+  <main>
+    <!-- 載入中與錯誤狀態：由 app.js 控制 hidden -->
+    <div id="status-loading" class="status status-loading" role="status" hidden>載入中…</div>
+    <div id="status-error" class="status status-error" role="alert" hidden></div>
+
+    <section id="now" class="block" aria-label="現在"></section>
+
+    <section id="chart" class="block" aria-label="今天每小時氣溫"></section>
+
+    <section id="week" class="block" aria-label="七天預報"></section>
+  </main>
+
+  <footer id="footer">
+    <p>資料來源：<span id="source-name">—</span></p>
+    <p>取得時間：<span id="fetched-at">—</span></p>
+
+    <details id="cwa-settings">
+      <summary>使用中央氣象署資料（選用）</summary>
+      <label for="cwa-key">CWA 授權碼</label>
+      <input id="cwa-key" type="password" autocomplete="off">
+      <button id="cwa-save" type="button">儲存</button>
+      <button id="cwa-clear" type="button">清除</button>
+      <p class="hint">授權碼只存在這個瀏覽器的 localStorage；沒有授權碼時使用 Open-Meteo。</p>
+    </details>
+  </footer>
+
+  <script src="sources.js"></script>
+  <script src="openmeteo.js"></script>
+  <script src="cwa.js"></script>
+  <script src="normalize.js"></script>
+  <script src="now.js"></script>
+  <script src="week.js"></script>
+  <script src="chart.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

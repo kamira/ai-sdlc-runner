@@ -1,0 +1,8 @@
+$ echo 'Reply OK' | /tmp/claude-0/-home-user-ai-sdlc-runner/e9610bf5-653a-5d17-821e-d8ca61c6322a/scratchpad/cleanenv.sh claude -p --model claude-sonnet-5-5 --effort medium --tools '' --output-format json | python3 -c 'import json,sys;d=json.load(sys.stdin);print("result:",d["result"]);print("is_error:",d["is_error"]);print("model:",list(d.get("modelUsage",{})))'
+# started 2026-10-19T10:36:06Z
+# ended   2026-10-19T10:36:09Z
+# exit    0
+
+result: OK
+is_error: False
+model: ['claude-sonnet-5-5']

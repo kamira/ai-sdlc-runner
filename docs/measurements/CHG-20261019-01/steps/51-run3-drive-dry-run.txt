@@ -1,0 +1,6 @@
+$ python3 examples/weather-live/drive.py --dry-run
+# started 2026-10-19T11:31:48Z
+# ended   2026-10-19T11:31:48Z
+# exit    0
+
+ok: plan, runner.yaml and brief (10 modules named) are valid; nothing was started

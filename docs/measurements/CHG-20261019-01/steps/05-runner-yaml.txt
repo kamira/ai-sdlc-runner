@@ -1,0 +1,23 @@
+file   examples/weather-live/runner.yaml
+sha256 6b1a00f745219cabfad41c7c6d73690dc7cff85add1303259c62070e525031c2
+time   2026-10-19T10:36:11Z
+
+# The real backend: one `claude -p` process per ask, the work order on stdin, the answer on stdout.
+# Every node gets the same model and effort (DIR-3's coding default), so the time of one ask is
+# comparable with another's.
+#
+# The grants below are the whole boundary around what the model can touch -- nobody is at the
+# keyboard to approve anything else, so a tool not named here is refused.
+#   Write, Edit  the build writes its module under site/ in this directory (the run's working
+#                directory; `claude -p` does not write outside it without approval)
+#   Read, Glob   a node looks at what earlier modules wrote, and which files exist yet
+#   Grep         finds a name an earlier module exports
+# Not granted, and named in --disallowedTools so the refusal is explicit: Bash (a work order asks
+# for files and an answer, never for a command to run), WebFetch and WebSearch (the page fetches its
+# own data in the browser at run time; building it makes no request).
+agent_command: ["claude", "-p", "--model", "claude-sonnet-5-5", "--effort", "medium", "--allowedTools", "Write Edit Read Glob Grep", "--disallowedTools", "Bash WebFetch WebSearch"]
+# One ask, not the run. A module build with a medium effort is minutes at most; this is the ceiling
+# for a hung process, as the README says of the default.
+agent_timeout: 1800
+# A retry is for a backend that failed to answer, and a measured run counts every ask once.
+agent_retries: 0

@@ -1,0 +1,48 @@
+$ PYTHONPATH=src python3 docs/measurements/CHG-20261019-01/measure.py /tmp/claude-0/-home-user-ai-sdlc-runner/e9610bf5-653a-5d17-821e-d8ca61c6322a/scratchpad/run4 --json docs/measurements/CHG-20261019-01/run4-measure.json --drive-log /tmp/claude-0/-home-user-ai-sdlc-runner/e9610bf5-653a-5d17-821e-d8ca61c6322a/scratchpad/run4.log
+# started 2026-10-19T12:04:34Z
+# ended   2026-10-19T12:04:34Z
+# exit    0
+
+first -> last turn   839.51s
+inside asks           819.72s    98%
+  module loop         498.98s    59%   <- everything concurrency can touch
+  everything else     320.74s    38%
+waiting for a person    0.00s     0%
+runner overhead        19.79s     2%
+
+nodes counted as the module loop (graph.module_cycle): engineer_build, engineer_selfverify, fix_pass, lead_task_review, re_review
+modules built 10   asks 44   asks in the loop 30
+
+node                   asks   total s   mean s
+engineer_build           10    204.55    20.45  (loop)
+engineer_selfverify      10    148.61    14.86  (loop)
+lead_task_review         10    145.83    14.58  (loop)
+lead_review               3    110.48    36.83
+intake_review             3     66.26    22.09
+qa_verify                 1     43.93    43.93
+merge                     1     31.85    31.85
+qa_accept                 1     28.82    28.82
+pr                        1     12.70    12.70
+pm_plan                   1      8.06     8.06
+pm_signoff                1      7.19     7.19
+lead_assess               1      7.16     7.16
+pm_confirm                1      4.29     4.29
+
+ceiling(n) = 1 / ((1 - s) + s / n)      s = the loop's share; n = builders (inf: 1 / (1 - s))
+share s                        at 4 builders  at infinity
+time share  59%                        1.80x        2.47x
+            of working time = wall - waiting for a person
+ask share   68%                        2.05x        3.14x
+
+file                  node                    ask  mtime (UTC)
+site/app.js           engineer_build          #35  11:59:44.871
+site/chart.js         engineer_build          #32  11:58:56.239
+site/cwa.js           engineer_build          #20  11:55:07.507
+site/index.html       engineer_build           #8  11:52:27.423
+site/normalize.js     engineer_build          #23  11:56:17.975
+site/now.js           engineer_build          #26  11:57:25.119
+site/openmeteo.js     engineer_build          #17  11:54:25.775
+site/sources.js       engineer_build          #14  11:53:53.227
+site/styles.css       engineer_build          #11  11:53:02.455
+site/week.js          engineer_build          #29  11:58:07.219
+writes: 10 files, all by a build node
