@@ -23,9 +23,11 @@ import json
 import os
 import subprocess
 import sys
+import time
+import uuid
 from dataclasses import replace
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import attachments as attach_mod
 from . import sandbox as sandbox_mod
@@ -36,7 +38,8 @@ from . import plan as plan_mod
 from . import store as store_mod
 from . import usage as usage_mod
 from . import intake as intake_mod
-from . import detect, engine, models as models_mod, graph, policy, settings as settings_mod, ship, tui, workorder
+from . import detect, engine, models as models_mod, graph, policy, seatspec
+from . import settings as settings_mod, ship, tui, workorder
 
 DEFAULT_CONFIG = "config/runner.yaml"
 
@@ -1447,6 +1450,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     #: Empty unless a store says otherwise, which is the ordinary case and means
     #: `policy.HALT_ROUTING` decides. Never `None`: a routing lookup must not have to test for it.
     halt_routes: Dict[str, str] = {}
+    #: The role and spec entries the console saved, when there is a store to read them from.
+    stored_specs: Tuple = ()
     store_path = args.assignment_store or ".runner/config.sqlite"
     if str(store_path).lower() != "none":
         try:
@@ -1454,6 +1459,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             # Who each permanent halt reaches, for this project (CHG-20260827-19). Read here rather
             # than inside the engine, so the engine still takes its whole world through `RunConfig`.
             halt_routes = store_mod.halt_routing(config_db)
+            stored_specs = store_mod.seat_specs(config_db)
             resolved_assignments, assignment_source = store_mod.resolve(
                 plan_assignments,
                 {"node_models": store_mod.node_models(config_db),
@@ -1554,6 +1560,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         autonomy=plan.get("autonomy"),
         review_seats=seats,
         review_dimensions=dimensions,
+        # The user's role and spec per seat: the settings file over the console's store, per level
+        # (CHG-20261016-01). Read here for the same reason as everything else in this config.
+        seat_specs=seatspec.merge(saved.seat_specs, stored_specs)[0],
         # Where it came from, so a standing configuration and a one-run flag do not write
         # the same record (CHG-20260904-18).
         seats_from=("--review-seats" if args.review_seats is not None
@@ -1574,6 +1583,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         undeclared=args.undeclared,
         resume=bool(args.resume),
         journal=journal,
+        # A run with no ask journal has no directory of its own, and its briefs are recorded all
+        # the same (CHG-20261016-01, round 1): `.runner/briefs/<UTC time>-<id>/`, next to the
+        # `.runner/config.sqlite` it reads by default, one directory per run. Made when the first
+        # seat is asked. With a journal the briefs sit beside it and this is not used.
+        brief_store=None if journal else engine.BriefStore(
+            Path(".runner") / "briefs"
+            / f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{uuid.uuid4().hex[:8]}"),
         # How many times this run has already stopped asking for each aspect. `serve` has passed
         # this since intake shipped; `run` never did, so it was `()` on every invocation and
         # `intake.times_asked` was hard-wired to 0 — which meant the escalation to options could
@@ -1763,6 +1779,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     for node_id, by_seat in sorted(report.seat_models.items()):
         print(f"seat models:   {node_id}: " + "; ".join(
             f"{seat}={', '.join(labels)}" for seat, labels in by_seat.items()))
+    for brief in report.seat_briefs:
+        # Every seat session, so an empty one reads "no role, no spec" rather than being missing
+        # (CHG-20261016-01). The stored brief is linked by path and named by its hash.
+        print(f"seat brief:    {brief['node_id']}/{brief['seat']} [{brief['model']}]: "
+              f"{brief['summary']}; sha256 {str(brief['sha256'])[:12]}"
+              + (f"; {brief['file']}" if brief.get("file") else "")
+              + ("; reused from the journal" if brief.get("reused") else ""))
     for line in report.effort_not_applied:
         print(f"effort:        not applied for {line} (no effort_argv), so it ran at its own default")
     for decision in report.adjudications:
@@ -2138,6 +2161,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
                                           or live.review_dimensions is not None) else ""),
             review_seats=live.review_seats,
             review_dimensions=live.review_dimensions,
+            # Per walk, like the rest of the live file: the settings file and the store both change
+            # while `serve` runs (CHG-20261016-01).
+            seat_specs=seatspec.merge(live.seat_specs, store_mod.seat_specs(db))[0],
             high_risk_mode=live.high_risk_mode,
             operations=plan.get("operations", {}),
             confirmed=approvals,

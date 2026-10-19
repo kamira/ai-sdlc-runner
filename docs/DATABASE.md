@@ -1,7 +1,7 @@
 # The database schema
 
-**Status: 6 of 6 tables are built.** `models`, `node_assignments`, `seat_assignments`,
-`conversations`, `turns` and `halt_routing`
+**Status: 7 of 7 tables are built.** `models`, `node_assignments`, `seat_assignments`,
+`conversations`, `turns`, `halt_routing` and `seat_specs`
 are live in [`store.py`](../src/ai_sdlc_runner/store.py) — that is model configuration, both halves,
 after the ruling that it was meant to include the assignment.
 
@@ -193,11 +193,26 @@ CREATE TABLE seat_assignments (
   model_id TEXT NOT NULL REFERENCES models(id),
   PRIMARY KEY (seat, position)
 );
+
+-- The user's role and spec for a seat (schema 6, CHG-20261016-01). `seat` empty is the level shared
+-- by every open seat, `model` empty is the whole seat. `spec_kind` is reserved: only 'text' exists.
+-- An entry has spec_text (inline) or spec_path (a file in the repository, read when the run starts,
+-- never copied here), or neither.
+CREATE TABLE seat_specs (
+  seat      TEXT NOT NULL,
+  model     TEXT NOT NULL,
+  role      TEXT NOT NULL DEFAULT '',
+  spec_kind TEXT NOT NULL DEFAULT '',
+  spec_text TEXT NOT NULL DEFAULT '',
+  spec_path TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (seat, model)
+);
 ```
 
-**The five tables in this section** are all built (CHG-20260823-41); `halt_routing` is in §0.2, and the page-wide count is the six of line 3. `models`, `node_assignments` and
-`seat_assignments` arrived at schema 1; `conversations` and `turns` at schema 2, with the
-conversation-store migration this document had been describing for four rounds.
+**The six tables in this section** are all built (CHG-20260823-41); `halt_routing` is in §0.2, and
+the page-wide count is the seven of line 3. `models`, `node_assignments` and `seat_assignments`
+arrived at schema 1; `conversations` and `turns` at schema 2, with the conversation-store migration
+this document had been describing for four rounds.
 
 **Schema 4 (CHG-20261005-01) adds three columns to `models`**, `tier`, `effort_argv` and
 `declared_reach`, by
@@ -213,6 +228,20 @@ three-column one, copies every row in as `position` 0 and drops the old one — 
 with the version stamp, so a schema-4 store's single assignments come out as one-model lists and
 nothing else moves. `_verify_or_refuse` accepts the two-column table below schema 5 and the
 three-column one from then on. `store.seat_models` returns `{seat: [model_id, …]}`.
+**Schema 6 (CHG-20261016-01) adds `seat_specs`**, the user's role and spec per seat. A new table, so
+a schema-5 store reads back exactly as it was; the migration verifies the shape of what is there,
+creates the table and stamps the version in one transaction, like the others. Forward-only, for the
+store and for the settings file. Opening the store with this runner stamps it 6, and the previous
+runner refuses a higher version ("upgrade the runner rather than opening it"); this happens with
+the table empty. `Settings.as_dict` writes `"seat_specs": []` into every settings file this runner
+saves, as it does `review_dimensions` and `coder_model` when unset, and the previous runner refuses
+a settings file with a key it does not read. Back up `config.sqlite` and the settings file before
+upgrading. To go back, restore both, or edit by hand: `DROP TABLE seat_specs;`
+`PRAGMA user_version = 5;` and remove the `seat_specs` key from the settings file. No foreign key
+on `model` (the empty string is a level, not a model):
+`store.set_seat_spec` checks a model-level entry's id against `models`, and refuses to drop a model
+that still has one (`_assigned_to`). `store.seat_specs` returns the entries, shared first. The
+settings file carries the same entries as `seat_specs`, and wins per level (`seatspec.merge`).
 
 That sentence used to read *"`conversations` and `turns` are not created by any code yet"*, with the
 reason attached: a table nothing reads or writes is a mechanism nobody invokes, and this repository

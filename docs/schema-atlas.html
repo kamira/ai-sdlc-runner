@@ -192,7 +192,7 @@
   <div class="stats">
     <span><b>31</b> nodes</span><span><b>7</b> modes</span><span><b>10</b> gates</span>
     <span><b>6</b> never-automated kinds</span><span><b>15</b> seats, floor <b>3</b></span>
-    <span><b>10</b> turn kinds</span><span><b>22</b> HTTP routes</span><span><b>1084</b> tests</span>
+    <span><b>10</b> turn kinds</span><span><b>23</b> HTTP routes</span><span><b>1084</b> tests</span>
   </div>
 </header>
 
@@ -331,6 +331,22 @@
       <p class="fk-note">Schema 5: a list of models per seat, keyed by <code>(seat, position)</code>.
         Each (seat, model) is its own session, and the seat passes only when every one of its models
         passes. A schema-4 row, one model per seat, migrates to position 0.</p>
+    </div>
+
+    <div class="tbl">
+      <header><span class="name">seat_specs</span><span class="chip c-built">built</span></header>
+      <ul class="cols">
+        <li><span class="k">PK</span> seat <span class="ty">TEXT</span></li>
+        <li><span class="k">PK</span> model <span class="ty">TEXT</span></li>
+        <li><span class="k">&nbsp;&nbsp;</span> role <span class="ty">TEXT</span></li>
+        <li><span class="k">&nbsp;&nbsp;</span> spec_kind <span class="ty">TEXT</span></li>
+        <li><span class="k">&nbsp;&nbsp;</span> spec_text <span class="ty">TEXT</span></li>
+        <li><span class="k">&nbsp;&nbsp;</span> spec_path <span class="ty">TEXT</span></li>
+      </ul>
+      <p class="fk-note">Schema 6: the user’s role and spec for a seat. Empty <code>seat</code> is
+        the level shared by every open seat, empty <code>model</code> the whole seat. No foreign key
+        on <code>model</code>: the empty string is a level, not a model, so the store checks the id
+        itself. <code>spec_kind</code> is reserved; only <code>text</code> exists.</p>
     </div>
 
     <div class="tbl designed">

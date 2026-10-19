@@ -822,6 +822,138 @@ function renderSeatEditor(host) {
     }
     host.appendChild(d);
   });
+
+  renderSpecs(host);
+}
+
+// --- role and spec per seat (CHG-20261016-01) ---------------------------------------------------
+// The user's text for a seat: a role to review as and a spec to judge against, at three levels —
+// every open seat, one seat, one model on a seat. A more specific level replaces a less specific
+// one; nothing is merged. This page checks nothing: the caps, the repository rule for a file and
+// the unknown seat are the server's, and its sentence is shown. A level the settings file sets is
+// shown and locked, as a plan-set seat is: the file wins, so a save here would change nothing.
+function specEntry(seat, model) {
+  var list = (seatInfo.seat_specs && seatInfo.seat_specs.entries) || [];
+  return list.filter(function (e) {
+    return (e.seat || "") === seat && (e.model || "") === model;
+  })[0] || null;
+}
+
+function specSummary(e) {
+  if (!e) return "not set";
+  var bits = [];
+  if (e.role) bits.push("role: " + e.role);
+  if (e.spec) bits.push("spec: " + (e.spec.path ? "file " + e.spec.path : "inline text"));
+  return bits.join("; ");
+}
+
+function specForm(seat, model, title) {
+  var e = specEntry(seat, model), fixed = !!e && e.source === "settings";
+  var limits = seatInfo.seat_specs.limits;
+  var d = el("details");
+  d.appendChild(el("summary", null, title + " — " + specSummary(e) +
+    (fixed ? " — set by the settings file" : "")));
+  if (fixed) {
+    d.appendChild(el("p", "muted", "The settings file sets this level, and the file wins over " +
+      "anything saved here: a save would change the store and not the next run. Change it with " +
+      "`runner settings`."));
+  }
+  var tag = (seat || "shared") + (model ? " " + model : "");
+  var role = el("input"); role.type = "text"; role.value = (e && e.role) || "";
+  role.maxLength = limits.role_chars; role.disabled = fixed;
+  role.setAttribute("aria-label", "review as, for " + tag);
+  var mode = el("select"); mode.disabled = fixed;
+  mode.setAttribute("aria-label", "where the spec text comes from, for " + tag);
+  [["none", "no spec"], ["text", "inline text"], ["path", "a file in the repository"]]
+    .forEach(function (o) {
+      var op = el("option", null, o[1]); op.value = o[0]; mode.appendChild(op);
+    });
+  mode.value = e && e.spec ? (e.spec.path ? "path" : "text") : "none";
+  var text = el("textarea"); text.rows = 4; text.maxLength = limits.spec_chars;
+  text.value = (e && e.spec && e.spec.text) || ""; text.disabled = fixed;
+  text.setAttribute("aria-label", "spec text, for " + tag);
+  var path = el("input"); path.type = "text"; path.disabled = fixed;
+  path.value = (e && e.spec && e.spec.path) || "";
+  path.setAttribute("aria-label", "spec file path, for " + tag);
+  function lay() { text.hidden = mode.value !== "text"; path.hidden = mode.value !== "path"; }
+  mode.onchange = lay; lay();
+  var f1 = el("label", null, "Review as: "); f1.appendChild(role);
+  var f2 = el("label", null, "Judge against this spec: "); f2.appendChild(mode);
+  d.appendChild(f1); d.appendChild(f2); d.appendChild(text); d.appendChild(path);
+  d.appendChild(el("p", "muted", "kind: " + limits.kinds.join(", ") + " (the only kind: the seat " +
+    "reasons from these words, nothing is run or measured). Role at most " + limits.role_chars +
+    " characters, spec at most " + limits.spec_chars + "; a file at most " +
+    limits.spec_file_bytes + " bytes, inside the repository, and it is sent to the model " +
+    "answering for this seat."));
+  if (!fixed) {
+    var row = el("div", "row");
+    // After a save only this level is drawn again, open, so the unsaved edits in the other
+    // levels stay as they are (the rule `save()` states).
+    function again() {
+      var fresh = specForm(seat, model, title); fresh.open = true;
+      d.parentNode.replaceChild(fresh, d);
+      drawApplied();       // a save at one level changes which level another seat used
+      return fresh.saveBtn || fresh;
+    }
+    function spec() {
+      return mode.value === "text" ? { kind: "text", text: text.value }
+           : mode.value === "path" ? { kind: "text", path: path.value } : null;
+    }
+    var saveBtn = el("button", "p", "save " + tag + " role and spec"); saveBtn.type = "button";
+    saveBtn.onclick = function () {
+      save("/config/seat_specs", { seat: seat, model: model, role: role.value, spec: spec() },
+           { label: "the role and spec for " + tag, after: again });
+    };
+    var clear = el("button", null, "clear " + tag); clear.type = "button";
+    clear.onclick = function () {
+      save("/config/seat_specs", { seat: seat, model: model, role: "", spec: null },
+           { label: "the role and spec for " + tag + ", cleared", after: again });
+    };
+    row.appendChild(saveBtn); row.appendChild(clear);
+    d.appendChild(row);
+    d.saveBtn = saveBtn;
+  }
+  return d;
+}
+
+// The line under each seat that says which level its role and its spec came from. Kept so a save
+// can redraw the words without redrawing the forms, which would drop edits not yet saved.
+var specApplied = [];
+
+function appliedText(seat, a) {
+  return (a.model ? a.model : "default backend") + " is asked with role from " +
+    (a.role ? "the " + a.role + " level" : "nowhere (none)") + ", spec from " +
+    (a.spec ? "the " + a.spec + " level" : "nowhere (none)") + ".";
+}
+
+function drawApplied() {
+  specApplied.forEach(function (s) {
+    var now = ((seatInfo.seat_specs.applies || {})[s.seat] || [])[s.index];
+    if (now) s.p.textContent = appliedText(s.seat, now);
+  });
+}
+
+function renderSpecs(host) {
+  specApplied = [];
+  host.appendChild(el("h3", null, "role and spec"));
+  host.appendChild(el("p", "muted",
+    "Added to a seat's question, labelled as yours. A model's own replaces its seat's, which " +
+    "replaces the shared one; they are never joined. It changes what a seat considers, never how " +
+    "its answer is counted. A role narrows a seat's focus, and a spec is reasoned from, not " +
+    "measured. Unset, a seat is asked its own question and nothing more."));
+  host.appendChild(specForm("", "", "every open seat (shared)"));
+  seatInfo.seats.forEach(function (s) {
+    var d = el("div", "specseat");
+    d.appendChild(specForm(s.name, "", s.name));
+    var applied = (seatInfo.seat_specs.applies || {})[s.name] || [];
+    applied.forEach(function (a, index) {
+      if (a.model) d.appendChild(specForm(s.name, a.model, s.name + " · model " + a.model));
+      var p = el("p", "muted", appliedText(s.name, a));
+      specApplied.push({ seat: s.name, index: index, p: p });
+      d.appendChild(p);
+    });
+    host.appendChild(d);
+  });
 }
 
 function renderPanel() {

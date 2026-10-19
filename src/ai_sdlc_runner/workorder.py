@@ -263,7 +263,7 @@ def reply(schema: Mapping[str, object]) -> Dict[str, object]:
 
 def render(node, node_spec: Mapping[str, object], verdict: Mapping[str, object],
            seat: Optional[str] = None, *,
-           answer_schema: Mapping[str, object]) -> Dict[str, object]:
+           answer_schema: Mapping[str, object], seat_text: str = "") -> Dict[str, object]:
     """Render the order for one node.
 
     ``verdict`` arrives already resolved from `policy.py`: the engine consults the gate and passes
@@ -272,6 +272,10 @@ def render(node, node_spec: Mapping[str, object], verdict: Mapping[str, object],
     ``seat`` names which review seat this ask is for, when the node opens several. It shapes the
     instructions and nothing else — the rest of the order is identical across seats, which is what
     makes several seats a cross-check rather than one opinion asked repeatedly.
+
+    ``seat_text`` is the user's role and spec for this seat, already rendered and delimited
+    (`seatspec.render`, CHG-20261016-01). It goes below the seat's question and is the only thing
+    that changes the instructions; `""` — nothing set — leaves them byte for byte as they were.
 
     ``answer_schema`` describes the answer the run will act on (see `reply`). **Required, with no
     default** (CHG-20260925-01): a default of "nothing is read" would be the silent fallback this
@@ -297,7 +301,8 @@ def render(node, node_spec: Mapping[str, object], verdict: Mapping[str, object],
         instructions = (
             f"{instructions}\n\nYou are the {chair.label} seat, and this seat only. "
             f"{chair.question}\n"
-            f"Answer independently: you have not seen and will not see the other seats' answers.")
+            f"Answer independently: you have not seen and will not see the other seats' answers."
+            f"{seat_text}")
 
     order = {
         "node_id": node.id,

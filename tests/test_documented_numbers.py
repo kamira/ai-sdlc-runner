@@ -132,7 +132,7 @@ NUMBER_WORDS = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
     "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
     "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
-    "twenty-one": 21, "twenty-two": 22,
+    "twenty-one": 21, "twenty-two": 22, "twenty-three": 23,
 }
 
 #: Field counts in prose that name no referent. Each is a **mention** rather than a claim -- a
@@ -165,7 +165,7 @@ FIELD_MENTIONS = {
      'Choosing was the mistake, and it was the same mistake twice: the check first read only `operation["description"]` while the giveaway sat in `instructions`, and then read three fields while the giveaway could sit in `done_criteria` or `acceptance_predicate`.'):
         'the same refused alternative, recorded beside the code that replaced it',
     ('settings.py',
-     '**Two of the six fields do change whether a stop happens**, and this paragraph used to deny it (CHG-20260903-47, defect seat L-13).'):
+     '**Two of the seven fields do change whether a stop happens**, and this paragraph used to deny it (CHG-20260903-47, defect seat L-13).'):
         'a real claim, and counted by `test_settings.COUNTS_SETTINGS` -- widened in CHG-20260907-12 to see it, because the pattern said `settings` and this sentence says `fields`',
 }
 
@@ -208,7 +208,7 @@ def _prose(raw, keep_quotations=False):
 #: sentence, with the reason, exactly as `FIELD_MENTIONS` is.
 COUNT_MENTIONS = {
     ('DATABASE.md',
-     '--- ## 2 · The tables **The five tables in this section** are all built (CHG-20260823-41); `halt_routing` is in §0.2, and the page-wide count is the six of line 3.'):
+     '--- ## 2 · The tables **The six tables in this section** are all built (CHG-20260823-41); `halt_routing` is in §0.2, and the page-wide count is the seven of line 3.'):
         'explicitly scoped to one section, which is why it is not compared with `store._EXPECTED` -- a bare noun names the global authority only where the sentence does not narrow it',
     ('MODELS.md',
      'The user ruled that 「模型配置」 means both halves, so [`store.py`](../src/ai_sdlc_runner/store.py) now holds them: two tables and two routes for the assignment halves — `node_assignments` and `seat_assignments`, `POST /config/nodes` and `POST /config/seats`.'):

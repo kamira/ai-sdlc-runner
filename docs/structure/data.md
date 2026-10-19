@@ -25,7 +25,8 @@ two writes leaves the question on disk exactly as it was asked.
 | `status` | str (enum) | `pending` \| `answered` \| `refused` | `pending` is written first; `answered` replaces it, or `refused` when the ask's own check would not take the answer (the answer is kept) |
 | `order` | object | required | The work order verbatim — the question itself, not a summary of it |
 | `result` | object | present when answered or refused | Whatever the backend replied |
-| `voice` | object | present on a seat ask; absent on any other | `{model, argv}`: the model id the seat session was put to (`null` for the default backend) and the argv the factory resolves for it. A resume reuses the answer only if this equals the voice about to be asked; an entry with no `voice` is asked again |
+| `voice` | object | present on a seat ask; absent on any other | `{model, argv}`: the model id the seat session was put to (`null` for the default backend) and the argv the factory resolves for it. A resume reuses the answer only if this equals the voice about to be asked; an entry with no `voice` is asked again. When the user set a role or spec for the seat it adds `brief_sha256`, so a changed brief is asked again |
+| `brief` | object | present on a seat ask; absent on any other | What the seat session was sent (CHG-20261016-01): `sha256` and `file` of the stored brief (`briefs/<ask_id>.json`, byte for byte what the process received; a run with no journal keeps the file in `.runner/briefs/<UTC time>-<id>/` and has no entry), `role` (`text`, `level`) and `spec` (`kind`, `source` inline or file, `path`, `text` as copied when the walk started, `sha256`, `level`), each `null` when none applies. A spec file edited later does not change it |
 
 A reconstructed approximation of a question is not the question. The order is stored whole so a
 resumed run re-asks the same thing rather than something like it.
@@ -67,6 +68,7 @@ LF, UTF-8 — so the same order is the same bytes on every machine.
 | `relaxations` | list[str] | The seat floor bypassed, and at what count; a node run undeclared |
 | `on_trust` | list[str] | Operations nothing could confirm — declared ordinary, with no targets *or* with targets this runner does not recognise. The planner's word is all that is behind them, and this is where that shows |
 | `resumed` | list[str] | Ask ids answered from the journal rather than by opening a session |
+| `seat_briefs` | list[object] | One per seat session (CHG-20261016-01): the role and spec it was sent and the level each came from, the brief's sha256 and stored file, or "no role, no spec" |
 | `single_model_panels` | list[str] | Panels where every seat was answered by the same backend — independent sessions, one set of blind spots |
 | `effects` | dict[str, object] | Per node, all four keys `EffectOutcome.as_dict()` writes: `frontier` (where the resume started), `already_met`, `applied`, `out_of_order`. An out-of-order effect is in **both** `already_met` and `out_of_order`, so the two lists do not partition the sequence |
 | `halted_at`, `halt_reason` | str | Where the run stopped and why, in words that name the rule |
@@ -118,15 +120,16 @@ because it is the only one that is a fact rather than a claim.
 
 ### config/settings.json
 
-What the user set, and the only file this runner writes on their behalf. **Six fields, listed in `settings.FIELDS` (the table below has all six).** They
-cannot change what a gate verdict is, which kinds are permanent halts, or the adjudication rule —
-`policy` owns those and takes nothing from here. Two of them do change **whether a stop happens**:
-`review_seats=1` makes the `undecided` outcome unreachable, and `ordinary_commands` decides whether
-the `unrecognised-target` halt trips (CHG-20260903-47). `coder_model` and
-`coder_effort` choose a backend and touch no verdict (CHG-20261005-01). `review_dimensions`
-names the review seats that open, in order, and replaces the `review_seats` count while it is set;
-the floor applies to its length, and it must include the veto seat `conformance` unless high-risk
-mode is on (CHG-20261005-02).
+What the user set, and the only file this runner writes on their behalf. **Seven fields, listed in
+`settings.FIELDS` (the table below has all seven).** They cannot change what a gate verdict is,
+which kinds are permanent halts, or the adjudication rule — `policy` owns those and takes nothing
+from here. Two of them do change **whether a stop happens**: `review_seats=1` makes the `undecided`
+outcome unreachable, and `ordinary_commands` decides whether the `unrecognised-target` halt trips
+(CHG-20260903-47). `coder_model` and `coder_effort` choose a backend and touch no verdict
+(CHG-20261005-01). `review_dimensions` names the review seats that open, in order, and replaces the
+`review_seats` count while it is set; the floor applies to its length, and it must include the veto
+seat `conformance` unless high-risk mode is on (CHG-20261005-02). `seat_specs` carries the user's
+role and spec per seat and touches no verdict, veto or adjudication (CHG-20261016-01).
 
 | Field | Type | Constraint | Description |
 |-------|------|------------|-------------|
@@ -135,6 +138,7 @@ mode is on (CHG-20261005-02).
 | `high_risk_mode` | bool | required-ish (defaults false) | Whether the floor may be crossed at all |
 | `ordinary_commands` | list[str] | absent → none; one word each, never an executor | Commands whose **name** stops being unrecognised. The description is still read against the permanent halts — vouching clears `unrecognised-target` and nothing else, which is what the prose four lines above says |
 | `coder_model` | str | absent → empty; not checked against a registry at save time | The registry model `engineer_build` uses when nothing is assigned. Empty means the registry's only `mid` model, if exactly one and no `agent_command` is configured; `none` means no default coder model (a No in `runner setup`), and a model so named is never picked. A set `coder_model` overrides a configured `agent_command`, with a notice. An id the registry lacks is an error when a run resolves it |
+| `seat_specs` | list[object] \| null | each `{seat?, model?, role?, spec?}`; role ≤ 500 characters, spec text ≤ 8000, a spec `path` inside the repository (no `..`, no symlink out) and ≤ 32768 bytes; `kind` is `text` (reserved); one entry per level; absent → none | The user's text added to a seat's brief below its question: no `seat` is shared by every open seat, a `seat` is the whole seat, with a `model` that model on that seat. A more specific level replaces a less specific one, per text. Wins over the store's (console's) entry for the same level |
 | `coder_effort` | str | `low` \| `medium` \| `high`; absent → `medium` | The effort for `engineer_build` and the nodes that follow it; delivered through the model's `effort_argv` |
 
 This said *"Two fields, both about the seat floor"* over a table of two until CHG-20260902-20.

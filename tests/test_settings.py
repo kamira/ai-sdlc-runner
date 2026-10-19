@@ -789,12 +789,14 @@ def test_vouching_a_command_decides_whether_a_permanent_halt_trips():
     assert policy.recognise("rm -rf /srv", ("rm",)) == "red"
 
 
-def test_the_surface_is_six_fields():
+def test_the_surface_is_seven_fields():
     """Kept from the old body, as what it actually was: an enumeration of the surface. It is a
     useful check and it was never the claim its name made. CHG-20261005-01 added the coding role's
-    model and effort; CHG-20261005-02 added `review_dimensions`."""
+    model and effort; CHG-20261005-02 added `review_dimensions`; CHG-20261016-01 added
+    `seat_specs`."""
     assert settings_mod.FIELDS == ("review_seats", "high_risk_mode", "ordinary_commands",
-                                   "coder_model", "coder_effort", "review_dimensions")
+                                   "coder_model", "coder_effort", "review_dimensions",
+                                   "seat_specs")
     assert set(settings_mod.Settings().as_dict()) == set(settings_mod.FIELDS)
 
 

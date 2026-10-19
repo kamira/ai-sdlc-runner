@@ -25,7 +25,7 @@ miscounts its own subject is the thing it warns about, so the count is now check
 | 11 | Settings | [`settings.py`](../src/ai_sdlc_runner/settings.py) | shipped · **closed** |
 | 12 | Attachment manifest | [`attachments.py`](../src/ai_sdlc_runner/attachments.py) | shipped |
 | 13 | Run report | [`engine.py`](../src/ai_sdlc_runner/engine.py) | shipped |
-| 14 | **SQLite DDL** | [`DATABASE.md`](DATABASE.md) | 6 of 6 tables **built** |
+| 14 | **SQLite DDL** | [`DATABASE.md`](DATABASE.md) | 7 of 7 tables **built** |
 | 15 | **Server HTTP API** | [`API.md`](API.md) | shipped |
 | 16 | **Model management** — rules, reach, assignment | [`MODELS.md`](MODELS.md) | shipped |
 
@@ -217,8 +217,29 @@ design**, and it overwrites.
 ```jsonc
 { "ask_id": "000-pm_plan", "node_id": "pm_plan", "seat": null,
   "status": "pending|answered|refused", "order": { …schema 5… }, "result": { … },
-  "voice": { "model": "opus" | null, "argv": ["claude", "-p"] | null } }   // seat asks only
+  "voice": { "model": "opus" | null, "argv": ["claude", "-p"] | null,
+             "brief_sha256"?: "<sha256>" },            // seat asks only
+  "brief": { "sha256": "<sha256 of the brief file>",
+             "file": "briefs/000-lead_review-defect.json" | null,
+             "role": { "text": "…", "level": "model|seat|shared" } | null,
+             "spec": { "kind": "text", "source": "inline|file", "path": "docs/x.md" | null,
+                       "text": "…", "sha256": "<sha256 of text>",
+                       "level": "model|seat|shared" } | null }
+}                                                      // seat asks only
 ```
+
+**`brief` is what a seat session was sent** (CHG-20261016-01). The brief is the work order exactly
+as the process receives it, `workorder.to_json(order)` as UTF-8, kept byte for byte in
+`briefs/<ask_id>.json` beside the entries (a subdirectory, so it is never read as an ask) with its
+sha256 in the entry. A run with no ask journal keeps the same file in its own directory instead
+(`runner run`: `.runner/briefs/<UTC time>-<id>/<ask_id>.json`), but writes no entry. `role`
+and `spec` are the user's text in that brief with the level each came from, or `null`; both `null`
+is a seat asked its own question and nothing more. `spec.text` is the text **copied when the walk
+started**, so a spec file edited later leaves this entry as it was; `spec.sha256` is that text's
+hash and `spec.path` the repository path when it came from a file. When a role or spec applies,
+`voice.brief_sha256` is the brief's hash and a resume compares it with the rest of the voice, so a
+changed role or spec re-asks that session; when neither applies `voice` is what it always was, which
+is what lets a journal from before this change be resumed.
 
 **`voice` is who a seat ask was put to** (CHG-20261005-02). `model` is the seat's model id for that
 session, `null` for a seat with no model, which runs the default backend; `argv` is the command the
@@ -365,8 +386,17 @@ closed all along and revision 1 of this page did not say so.
   "ordinary_commands": [],       // tools the operator vouches for — the TOOL, never a command line
   "coder_model": "",             // registry id for engineer_build when nothing is assigned; "" = the only mid model (unless agent_command is set); "none" = no default
   "coder_effort": "medium",      // low | medium | high — for engineer_build and what follows it
-  "review_dimensions": null }    // null = the first review_seats seats; or seat names, in opening order
+  "review_dimensions": null,     // null = the first review_seats seats; or seat names, in order
+  "seat_specs": [] }             // the user's role and spec per seat; [] = nobody's
 ```
+
+`seat_specs` (CHG-20261016-01) is a list of `{"seat"?, "model"?, "role"?, "spec"?}`: no `seat` is
+the level shared by every open seat, a `seat` alone is that whole seat, a `seat` and a `model` is
+that model on that seat. `spec` is `{"kind": "text", "text": "…"}` or `{"kind": "text", "path":
+"docs/ARCHITECTURE.md"}` (a file inside the directory the runner is started from). `kind` is
+reserved: only `text` exists. Each level holds one entry, and an entry sets a role, a spec, or both.
+Role at most 500 characters, spec at most 8000 (a file at most 32768 bytes). The same validator
+(`seatspec.parse`) reads the file, the settings screen, the store and `POST /config/seat_specs`.
 
 `review_dimensions` (CHG-20261005-02) is a list of names from `policy.SEATS` — fifteen, of which the
 first three (`conformance`, `defect`, `risk`) open by default, `review_seats` takes a prefix of the
@@ -402,11 +432,10 @@ under pressure here; only the filename is."*
 ## 13 · Run report
 
 `visited · asks · state · suspended · halted_at · halt_reason · relaxations · verdicts · on_trust ·
-confirmations · adjudications · single_model_panels · seat_models · effects · resumed ·
-intake_asked_somebody · dispatches · effort_not_applied · usage · usage_summary · survey ·
-options · panel_rounds · send_backs · rejections · rulings · store_errors · change_class ·
-relaxations_by_class · risk_proposed · risk_settled · risk_agreed · halts ·
-class_authorised_by ·
+confirmations · adjudications · single_model_panels · seat_models · seat_briefs · effects · resumed
+· intake_asked_somebody · dispatches · effort_not_applied · usage · usage_summary · survey · options
+· panel_rounds · send_backs · rejections · rulings · store_errors · change_class ·
+relaxations_by_class · risk_proposed · risk_settled · risk_agreed · halts · class_authorised_by ·
 relaxation_authorisers`
 
 `usage` (CHG-20261006-01) is one entry per ask whose session reported usage — `{ask_id, node_id, seat,
@@ -421,6 +450,18 @@ is its registry id, or its argv joined by spaces for a command; a seat nobody ro
 `"(default backend)"`. A seat with several models also adds `by_model` to its adjudication
 (`{seat: [word, …]}`), because the seat's own word is their conjunction. A seat that said `fail`
 while one of its models named no verdict adds `unreached` (`{seat: ["seat (model)", …]}`).
+
+`seat_briefs` (CHG-20261016-01) is one entry per seat session, in the order asked, for
+`intake_review` and `lead_review`: `{ask_id, node_id, seat, model, position, summary, sha256, file,
+role, spec, reused}`. `summary` reads "no role, no spec" for a seat with neither, so an empty one is
+visible and not missing, and otherwise names the level each text came from and, for a file, its path
+(a spec file is sent to that seat's model, under the same `reach` the model has). `file` links the
+stored brief (the absolute path, in the journal's `briefs/` or in the run's own brief directory;
+`null` only for a caller of `engine.walk` that gave neither a journal nor a `brief_store`);
+`sha256` is the brief's; `role` and
+`spec` are the journal's records (the spec text as sent, with its kind, source and hash); `reused`
+is true when a resume answered the session from the journal. The verdict was reasoned from the
+spec's text, not measured on a device.
 
 `intake_asked_somebody` answers one question — *did the intake survey open a session this lap?*
 — measured over that node's seat asks alone and **before** the escalation dispatches its own option
@@ -453,7 +494,7 @@ The **dataclass** does not enforce membership — `RunReport(state="banana")` co
 `as_dict()` emits it. `_finish` refuses on every walk exit, so it is enforced at the boundary that
 matters and not by the type.
 
-## 14 · SQLite DDL — six of six tables built
+## 14 · SQLite DDL — seven of seven tables built
 
 The full schema, with every absent column and the finding that removed it, is
 **[`DATABASE.md`](DATABASE.md)** — pinned by `tests/test_database_schema.py`, which executes the
@@ -501,10 +542,11 @@ CREATE TABLE models (
   declared_reach TEXT NOT NULL DEFAULT '');
 ```
 
-All six are live in [`store.py`](../src/ai_sdlc_runner/store.py): `models`,
+All seven are live in [`store.py`](../src/ai_sdlc_runner/store.py): `models`,
 `node_assignments` and `seat_assignments` at schema 1, `conversations` and `turns` at schema
 2 with the conversation-store migration, and `halt_routing` after it. `seat_assignments` was rebuilt
-at schema 5 as `(seat, position, model_id)` — see [`DATABASE.md`](DATABASE.md).
+at schema 5 as `(seat, position, model_id)`, and `seat_specs` arrived at schema 6 — see
+[`DATABASE.md`](DATABASE.md).
 
 > This paragraph said `conversations` and `turns` were *"not created by any code yet"* until
 > CHG-20260907-13. `DATABASE.md` was corrected for the same sentence by CHG-20260903-37 and
@@ -533,8 +575,8 @@ duplicate-`seq` policy is written down for the importer and not for the live pat
 
 ## 15 · Server HTTP API
 
-Twenty-two routes, ten `GET` and twelve `POST`, every one crossing a process boundary to a browser.
-Written down in **[`API.md`](API.md)** and pinned by `tests/test_api_schema.py`.
+Twenty-three routes, ten `GET` and thirteen `POST`, every one crossing a process boundary to a
+browser. Written down in **[`API.md`](API.md)** and pinned by `tests/test_api_schema.py`.
 
 The three-check guard that runs before every route — loopback `Host`, then `Origin`, then
 `X-Operator-Token` — and the two deliberate token exemptions are documented there, in that order,
@@ -559,7 +601,7 @@ found these independently.
 
 | Missing | Why it matters |
 |---|---|
-| ~~The server HTTP API~~ | **written down** — [`API.md`](API.md), twenty-two routes, pinned by `tests/test_api_schema.py` |
+| ~~The server HTTP API~~ | **written down** — [`API.md`](API.md), twenty-three routes, pinned by `tests/test_api_schema.py` |
 | **`runner.yaml`** — `agent_command`, `agent_timeout` | durable config with a hand-rolled fallback parser that has already shipped one bug (the inline-list split) |
 | **`RunConfig`** | the engine's real input contract, substantially wider than the plan file the catalogue shows |
 | **`Approval` / `Rejection` / `Ruling`** | operator decisions crossing the server→engine boundary; the catalogue has their flattened conversation turns, not their input shapes |
