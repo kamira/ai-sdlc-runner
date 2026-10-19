@@ -190,3 +190,39 @@ def test_drive_walks_the_plan_to_its_end_and_stops_only_at_merge(tmp_path):
     # Each hook call carried a UTC time after the node id.
     assert all(re.fullmatch(r"\d\d:\d\d:\d\dZ", line.split()[1])
                for line in seen.read_text(encoding="utf-8").splitlines())
+
+
+def test_start_when_asks_nothing_until_the_file_appears(tmp_path):
+    import os
+    import time
+    backend = tmp_path / "stand_in.py"
+    backend.write_text(STAND_IN, encoding="utf-8")
+    config = tmp_path / "runner.yaml"
+    config.write_text(f'agent_command: ["{sys.executable}", "{backend.as_posix()}"]\n'
+                      f"agent_timeout: 60\n", encoding="utf-8")
+    work, go = tmp_path / "work", tmp_path / "go"
+    proc = subprocess.Popen(
+        [sys.executable, str(DRIVE), "--runner-yaml", str(config), "--workdir", str(work),
+         "--start-when", str(go)], cwd=str(tmp_path), stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+        env={**os.environ, "PYTHONUTF8": "1"})
+    lines = []
+    try:
+        for line in proc.stdout:
+            lines.append(line)
+            if "waiting for" in line:
+                break
+        assert any("serving" in l for l in lines) and "waiting for" in lines[-1]
+        time.sleep(2)                       # long enough for a run that ignored the flag to ask
+        asks = work / ".runner" / "asks"
+        assert not (asks.is_dir() and list(asks.glob("*.json")))
+        assert not (work / ".built").exists()
+        assert proc.poll() is None
+        go.write_text("", encoding="utf-8")
+        rest, _ = proc.communicate(timeout=300)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode == 0, "".join(lines) + rest
+    assert "final node:  done  (state finished" in rest
+    assert list((work / ".runner" / "asks").glob("*.json"))

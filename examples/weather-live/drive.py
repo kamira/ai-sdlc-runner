@@ -208,6 +208,8 @@ def main(argv=None) -> int:
                     help="stay up after the end and print the console URL and the token file's path")
     ap.add_argument("--on-node", default=None, metavar="CMD",
                     help="run CMD <node-id> <utc-time> on every node change")
+    ap.add_argument("--start-when", type=Path, default=None, metavar="PATH",
+                    help="once serving, wait until PATH exists before typing the brief")
     ap.add_argument("--dry-run", action="store_true",
                     help="validate the plan, runner.yaml and brief, then exit without a run")
     args = ap.parse_args(argv)
@@ -223,6 +225,12 @@ def main(argv=None) -> int:
     proc, console, token_file = start_server(work, runner_yaml, brief)
     try:
         print(f"{utc()}  serving {console.base} in {work}", flush=True)
+        if args.start_when:
+            print(f"{utc()}  waiting for {args.start_when} before starting the run", flush=True)
+            while not args.start_when.exists():
+                if proc.poll() is not None:
+                    raise SystemExit("the server exited while waiting to start")
+                time.sleep(0.5)
         state, run_id = walk(console, brief, work / ".runner" / "asks", args.on_node.split() if args.on_node else None)
         print(f"run id:      {run_id or 'unknown (the run never stopped at a gate)'}")
         print(f"final node:  {state.get('at')}  (state {state.get('state')}, "
