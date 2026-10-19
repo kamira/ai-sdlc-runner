@@ -4,8 +4,16 @@
 
 There is no agent in this directory. The runner builds the page, with whatever `runner.yaml` names
 as its backend, and this script is only the person: it types the brief, starts the run, approves
-each gate the run stops at, and says where `site/` ended up. The wire is `weather-spa/scenarios.py`'s
-scenario A -- copied rather than imported, so the two examples stay independent.
+each ordinary gate the run stops at, and says where `site/` ended up. The wire is
+`weather-spa/scenarios.py`'s scenario A -- copied rather than imported, so the two examples stay
+independent.
+
+A stop that asks a person to read something is never answered here. Those are a seat calling the
+requirement unsafe (`POST /run/proceed`), an incomplete requirement (`POST /run/instruct`) and a
+panel that tied (`POST /run/decide`). drive.py writes the server's text to
+`<workdir>/.runner/person/<NNN>-<node>.md`, prints `AWAITING-PERSON <that path>`, and waits for
+`<NNN>-<node>.proceed` (its text is the instruction, or the branch, where the route takes one) or
+`<NNN>-<node>.stop` beside it.
 
 `--dry-run` checks the plan, `runner.yaml` and the brief, starts nothing and spends nothing.
 """
@@ -78,6 +86,55 @@ def validate(runner_yaml: Path, models: Path | None) -> str:
     return brief
 
 
+class Refused(Exception):
+    """A route answered with a 4xx or 5xx. The message is the server's own."""
+
+
+class PersonStop(Exception):
+    """The person asked for the run to end at a stop they were shown."""
+
+
+#: What the server's `suspended` says -> the route that answers it and the body fields it needs.
+#: Read from `server._require_suspension`, which refuses the other three for each.
+PERSON_ROUTES = {"unsafe": "/run/proceed", "incomplete": "/run/instruct", "undecided": "/run/decide"}
+
+
+def stop_kind(stop: dict) -> str:
+    """`gate`, or the shape of a stop that needs a person: `unsafe`, `incomplete`, `undecided`."""
+    for kind in ("unsafe", "incomplete", "undecided"):
+        if stop.get(kind):
+            return kind
+    return "gate"
+
+
+def person_text(state: dict, kind: str, number: int) -> str:
+    """Everything the server says about this stop, for the person to read."""
+    stop = state.get("suspended") or {}
+    lines = [f"# Stop {number:03d}: {stop.get('node_id')} ({kind})", "",
+             f"Answered by `POST {PERSON_ROUTES[kind]}`.", "",
+             f"The run says: {state.get('reason') or stop.get('reason') or '(nothing)'}", ""]
+    if kind == "unsafe":
+        lines += ["## What the seats called unsafe", ""]
+        for seat, said in sorted((stop.get("safety") or {}).items()):
+            lines += [f"### seat: {seat}", ""] + [f"- {line}" for line in said] + [""]
+    if stop.get("missing"):
+        lines += ["## Missing", ""] + [f"- {m}" for m in stop["missing"]] + [""]
+    if stop.get("problems"):
+        lines += ["## Problems the seats raised", ""] + [f"- {m}" for m in stop["problems"]] + [""]
+    if kind == "undecided":
+        lines += ["## Branches", "", ", ".join(stop.get("branches") or []), ""]
+        for seat, verdict in sorted((stop.get("verdicts") or {}).items()):
+            lines.append(f"- {seat}: {verdict}")
+        lines.append("")
+    lines += ["## How to answer", "",
+              {"unsafe": "Create the `.proceed` file to continue past this, or `.stop` to end the run.",
+               "incomplete": "Put the missing requirement in the `.proceed` file (its text is added "
+                             "to the brief), or create `.stop` to end the run.",
+               "undecided": "Put the branch you choose in the `.proceed` file, or create `.stop`."
+               }[kind], ""]
+    return "\n".join(lines)
+
+
 class Console:
     """The console's side of the wire: the token, an Origin, and the version being answered."""
 
@@ -110,7 +167,7 @@ class Console:
         """What every button does: read the version, then answer it."""
         status, answer = self.call(path, dict(body, version=self.state()["version"]))
         if status >= 400:
-            raise SystemExit(f"{path} was refused ({status}): {answer.get('error', answer)}")
+            raise Refused(f"{path} was refused ({status}): {answer.get('error', answer)}")
         return answer
 
 
@@ -172,8 +229,10 @@ def journal_nodes(journal: Path, seen: set):
     return found
 
 
-def walk(console: Console, brief: str, journal: Path, on_node):
-    """Type the brief, start, approve each gate, and print one line per node change."""
+def walk(console: Console, brief: str, journal: Path, on_node, person_dir: Path, server=None):
+    """Type the brief, start, approve each ordinary gate, hand every other stop to a person, and
+    print one line per node change. Returns the state and the run id; `Refused` and `PersonStop`
+    leave the state on the console."""
     run_id = None
     seen: set = set()
     last = None
@@ -214,12 +273,51 @@ def walk(console: Console, brief: str, journal: Path, on_node):
         announce(state)
         return state
 
+    def ask_person(state, kind, number):
+        """Write the stop down, wait for the person's file, answer with the route the server named."""
+        stop = state.get("suspended") or {}
+        node = stop.get("node_id")
+        person_dir.mkdir(parents=True, exist_ok=True)
+        text_path = person_dir / f"{number:03d}-{node}.md"
+        text_path.write_text(person_text(state, kind, number), encoding="utf-8")
+        proceed, halt = text_path.with_suffix(".proceed"), text_path.with_suffix(".stop")
+        print(f"{utc()}  stopped at {node} for a person to read ({kind})", flush=True)
+        print(f"AWAITING-PERSON {text_path}", flush=True)
+        said = ""
+        while True:
+            if halt.exists():
+                raise PersonStop(f"{utc()}  STOPPED-BY-PERSON at {node} ({halt.name}); "
+                                 f"the run was not continued")
+            if proceed.exists():
+                said = proceed.read_text(encoding="utf-8").strip()
+                if said or kind == "unsafe":
+                    break
+            if server is not None and server.poll() is not None:
+                raise Refused("the server exited while waiting for a person")
+            time.sleep(0.5)
+        route = PERSON_ROUTES[kind]
+        body = {"node_id": node}
+        if kind == "incomplete":
+            body = {"instruction": said}
+        elif kind == "undecided":
+            body["branch"] = said.split()[0]
+        # Printed when the answer is sent, not when the walk it starts has come to rest.
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        print(f"PERSON-ANSWERED {route.rsplit('/', 1)[-1]} {stamp}", flush=True)
+        return press(route, body)
+
     state = press("/run", {"instruction": brief})
+    people = 0
     while state.get("state") == "suspended":
         stop = state.get("suspended") or {}
-        print(f"{utc()}  stopped at gate {stop.get('gate')} ({stop.get('node_id')}); approving",
-              flush=True)
-        state = press("/run/gate", {"gate": stop.get("gate"), "node_id": stop.get("node_id")})
+        kind = stop_kind(stop)
+        if kind == "gate":
+            print(f"{utc()}  stopped at gate {stop.get('gate')} ({stop.get('node_id')}); approving",
+                  flush=True)
+            state = press("/run/gate", {"gate": stop.get("gate"), "node_id": stop.get("node_id")})
+        else:
+            people += 1
+            state = ask_person(state, kind, people)
     return state, run_id
 
 
@@ -238,6 +336,9 @@ def main(argv=None) -> int:
                     help="run CMD <node-id> <utc-time> on every node change")
     ap.add_argument("--start-when", type=Path, default=None, metavar="PATH",
                     help="once serving, wait until PATH exists before typing the brief")
+    ap.add_argument("--person-dir", type=Path, default=None, metavar="DIR",
+                    help="where a stop that needs a person is written, and where their .proceed or "
+                         ".stop file is looked for (default: <workdir>/.runner/person)")
     ap.add_argument("--dry-run", action="store_true",
                     help="validate the plan, runner.yaml and brief, then exit without a run")
     args = ap.parse_args(argv)
@@ -260,13 +361,24 @@ def main(argv=None) -> int:
                 if proc.poll() is not None:
                     raise SystemExit("the server exited while waiting to start")
                 time.sleep(0.5)
-        state, run_id = walk(console, brief, work / ".runner" / "asks", args.on_node.split() if args.on_node else None)
+        run_id, failure, ended = None, None, False
+        try:
+            state, run_id = walk(console, brief, work / ".runner" / "asks",
+                                 args.on_node.split() if args.on_node else None,
+                                 (args.person_dir or work / ".runner" / "person").resolve(), proc)
+        except PersonStop as exc:
+            failure, ended = str(exc), True
+        except Refused as exc:
+            failure = f"{utc()}  REFUSED: {exc}"
+        if failure:
+            print(failure, flush=True)
+            state = console.state() if proc.poll() is None else {}
         print(f"run id:      {run_id or 'unknown (the run never stopped at a gate)'}")
         print(f"final node:  {state.get('at')}  (state {state.get('state')}, "
               f"{len(state.get('visited') or [])} nodes walked)")
         site = work / "site"
         print(f"site/:       {site}" + ("" if site.exists() else "  (nothing was built)"))
-        if args.keep_serving:
+        if args.keep_serving and not ended and proc.poll() is None:
             print(f"console:     {console.base}/")
             print(f"token file:  {token_file}")
             print("serving until interrupted (Ctrl-C)", flush=True)
@@ -275,7 +387,7 @@ def main(argv=None) -> int:
                     time.sleep(1)
             except KeyboardInterrupt:
                 pass
-        return 0 if state.get("state") == "finished" else 1
+        return 0 if state.get("state") == "finished" and not failure else 1
     finally:
         proc.terminate()
 

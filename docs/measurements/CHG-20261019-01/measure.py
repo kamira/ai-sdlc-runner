@@ -11,12 +11,23 @@ the ask whose ASK..ANSWER interval contains it, and flags a file written by a no
 `engineer_build`/`fix_pass`, by `engineer_selfverify` for any file but the module its
 `engineer_build` visit just built, or outside every ask. Needs no network and writes nothing but the
 optional JSON.
+
+Waiting for a person. A stop is a `closed` turn whose `state` is `suspended`. The record tells the
+operator's own gates from a stop that needs a person: a gate answer writes a `decision` turn
+(`approval` or `rejection`) next, and the other three kinds (unsafe, incomplete requirement, tie)
+do not. The wait runs from that `closed` turn to the first `ask`, `instruction` or `decision` turn
+after it. What the record cannot say is the moment the person answered -- the answer to `/run/proceed`
+writes nothing of its own -- so that end is the next turn, and includes the few milliseconds the
+runner takes to restart. `--drive-log FILE` (drive.py's stdout) gives the moment: each
+`PERSON-ANSWERED <route> <UTC>` line ends the wait that began at the last stop before it. The wait is
+reported as "waiting for a person" and is not "runner overhead".
 """
 from __future__ import annotations
 
 import argparse
 import json
 import sys
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -71,6 +82,41 @@ def asks_of(turns: Sequence[dict]) -> List[dict]:
     return rows
 
 
+#: What a gate answer writes (engine: `conversation.decision("approval" | "rejection", ...)`).
+GATE_ANSWERS = ("approval", "rejection")
+ANSWERED = re.compile(r"^PERSON-ANSWERED \S+ (\S+Z)\s*$", re.M)
+
+
+def answered_in(log: str) -> List[float]:
+    """The moments drive.py printed `PERSON-ANSWERED`, from its log."""
+    return sorted(_when(m.group(1)) for m in ANSWERED.finditer(log))
+
+
+def person_waits(turns: Sequence[dict], answered: Sequence[float] = ()) -> List[dict]:
+    """Every stop that needed a person: node, start, end and seconds, from stop to answer.
+
+    A stop with no turn after it was never answered, and is not counted. With `answered` (from
+    `--drive-log`) the end is the last answer given before the next turn, not the next turn.
+    """
+    waits: List[dict] = []
+    for i, t in enumerate(turns):
+        if t["kind"] != conversations.CLOSED or t.get("state") != "suspended":
+            continue
+        after = next((u for u in turns[i + 1:]
+                      if u["kind"] in (conversations.ASK, conversations.INSTRUCTION, conversations.DECISION)),
+                     None)
+        if after is None or (after["kind"] == conversations.DECISION
+                             and after.get("decision") in GATE_ANSWERS):
+            continue                                      # the operator's gate, or never answered
+        start, end, source = _when(t["at"]), _when(after["at"]), "record"
+        said = [a for a in answered if start <= a <= end]
+        if said:
+            end, source = said[-1], "drive log"
+        waits.append({"node": t.get("at_node"), "start": start, "end": end,
+                      "seconds": end - start, "source": source})
+    return waits
+
+
 def union_seconds(spans: Sequence[Tuple[float, float]]) -> float:
     """Wall-clock covered by the spans, so overlapping asks are not counted twice."""
     total, edge = 0.0, None
@@ -88,13 +134,15 @@ def amdahl(share: float, n: Optional[int]) -> float:
     return 1.0 / ((1.0 - share) + (share / n if n else 0.0))
 
 
-def measure(turns: Sequence[dict], loop_nodes: Sequence[str]) -> dict:
+def measure(turns: Sequence[dict], loop_nodes: Sequence[str], answered: Sequence[float] = ()) -> dict:
     rows = asks_of(turns)
     if not rows:
         raise SystemExit("the record holds no answered ask")
     wall = _when(turns[-1]["at"]) - _when(turns[0]["at"])
     loop = [r for r in rows if r["node"] in loop_nodes]
     inside = union_seconds([(r["start"], r["end"]) for r in rows])
+    waits = person_waits(turns, answered)
+    waiting = union_seconds([(w["start"], w["end"]) for w in waits])
     in_loop = union_seconds([(r["start"], r["end"]) for r in loop])
     per_node: Dict[str, dict] = {}
     for r in rows:
@@ -105,14 +153,19 @@ def measure(turns: Sequence[dict], loop_nodes: Sequence[str]) -> dict:
         n["mean"] = n["total"] / n["asks"]
         n["loop"] = node in loop_nodes
     built = [r for r in rows if r["node"] == "engineer_build" and r["result"].get("module")]
-    share_t = in_loop / wall if wall else 0.0
+    # A person's wait is not work concurrency could touch, so it stays out of the denominator.
+    working = wall - waiting
+    share_t = in_loop / working if working > 0 else 0.0
     share_n = len(loop) / len(rows)
     out = {
         "wall_seconds": wall,
         "inside_asks_seconds": inside,
         "module_loop_seconds": in_loop,
         "everything_else_seconds": inside - in_loop,
-        "runner_overhead_seconds": wall - inside,
+        "waiting_for_person_seconds": waiting,
+        "working_seconds": working,
+        "person_stops": waits,
+        "runner_overhead_seconds": wall - inside - waiting,
         "loop_nodes": sorted(loop_nodes),
         "per_node": dict(sorted(per_node.items(), key=lambda kv: -kv[1]["total"])),
         "modules_built": len(built),
@@ -187,6 +240,8 @@ def render(m: dict) -> str:
         line("inside asks", m["inside_asks_seconds"]),
         line("  module loop", m["module_loop_seconds"], "   <- everything concurrency can touch"),
         line("  everything else", m["everything_else_seconds"]),
+        line("waiting for a person", m["waiting_for_person_seconds"],
+             f"   {len(m['person_stops'])} stop(s)" if m["person_stops"] else ""),
         line("runner overhead", m["runner_overhead_seconds"]),
         "",
         f"nodes counted as the module loop (graph.module_cycle): {', '.join(m['loop_nodes'])}",
@@ -205,6 +260,7 @@ def render(m: dict) -> str:
         f"{'share s':<28}{'at ' + str(b) + ' builders':>16}{'at infinity':>13}",
         f"{'time share  ' + format(m['share_time'] * 100, '.0f') + '%':<28}"
         f"{c['time']['at_builders']:>15.2f}x{c['time']['at_infinity']:>12.2f}x",
+        "            of working time = wall - waiting for a person",
         f"{'ask share   ' + format(m['share_asks'] * 100, '.0f') + '%':<28}"
         f"{c['asks']['at_builders']:>15.2f}x{c['asks']['at_infinity']:>12.2f}x",
     ]
@@ -215,10 +271,13 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("workdir", type=Path, help="the directory drive.py ran in (or a store root)")
     ap.add_argument("--json", type=Path, default=None, metavar="OUT", help="also write the numbers as JSON")
+    ap.add_argument("--drive-log", type=Path, default=None, metavar="FILE",
+                    help="drive.py's output; its PERSON-ANSWERED lines time when a person answered")
     args = ap.parse_args(argv)
     workdir = args.workdir.resolve()
     turns = turns_of(open_store(workdir))
-    m = measure(turns, graph.module_cycle())
+    answered = answered_in(args.drive_log.read_text(encoding="utf-8", errors="replace")) if args.drive_log else []
+    m = measure(turns, graph.module_cycle(), answered)
     m["writes"] = writes(asks_of(turns), workdir)
     print(render(m))
     print(render_writes(m["writes"]))

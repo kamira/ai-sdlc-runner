@@ -26,7 +26,7 @@ and a test says so.
 | `plan.json` | the plan `runner serve` is started with — 24 node specs and their operations, derived from `weather-spa`'s |
 | `runner.yaml` | the real backend: `claude -p`, `claude-sonnet-5-5`, effort `medium`, **read-only** (`Read Glob Grep`) |
 | `models.json` | one model, `sonnet-writer`: the same command plus `Write Edit`, given to `engineer_build` by `plan.json`'s `node_models` |
-| `drive.py` | the person at the console, as a script: types the brief, starts, approves each gate, waits |
+| `drive.py` | the person at the console, as a script: types the brief, starts, approves each ordinary gate, hands any stop that needs a person to them, waits |
 | `fixtures/open-meteo-taipei-2026-10-19.json` | a real Open-Meteo response, see below |
 
 ## The brief
@@ -136,7 +136,11 @@ python3 examples/weather-live/drive.py --keep-serving
 
 From anywhere. It copies `plan.json`, `runner.yaml`, `models.json` and `brief.md` into a new temporary directory
 (`--workdir` chooses another), starts `runner serve` there on a free port, types the brief, starts the
-run and approves each gate it stops at. It prints a line per node with the UTC time, then the run id,
+run and approves each ordinary gate it stops at (`merge`). A stop that needs a person to read something
+(a seat called the requirement unsafe, an incomplete requirement, a tied panel) is never answered by the
+script: it writes the server's text to `<workdir>/.runner/person/<NNN>-<node>.md`, prints
+`AWAITING-PERSON <path>` and waits for `<NNN>-<node>.proceed` (or `.stop`) beside it; `--person-dir` moves
+the directory. It prints a line per node with the UTC time, then the run id,
 the final node and where `site/` is. With `--keep-serving` it stays up and prints the console URL and
 the **path** of the operator token file (never the token), so the run can be watched in the console.
 

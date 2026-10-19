@@ -26,11 +26,11 @@ def _files():
     return [p for p in EXAMPLE.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
 
 
-def _run(*args, cwd=ROOT, timeout=600):
+def _run(*args, cwd=ROOT, timeout=600, env=None):
     import os
     return subprocess.run([sys.executable, str(DRIVE), *args], cwd=str(cwd), capture_output=True,
                           text=True, encoding="utf-8", errors="replace", timeout=timeout,
-                          env={**os.environ, "PYTHONUTF8": "1"})
+                          env={**os.environ, "PYTHONUTF8": "1", **(env or {})})
 
 
 def test_the_runner_builds_it_so_the_directory_holds_no_agent_and_no_page_code():
@@ -218,7 +218,7 @@ def test_the_dry_run_refuses_a_runner_yaml_with_no_agent(tmp_path):
 #: Answers each ask the way the order's contract asks and builds nothing. It declares the brief's
 #: ten files as the plan and reports one per build, then `""`. Nothing here is about a page.
 STAND_IN = '''
-import json, sys
+import json, os, sys
 from pathlib import Path
 order = json.loads(sys.stdin.read())
 node, seat = order["node_id"], order.get("seat")
@@ -226,6 +226,11 @@ MODULES = %r
 def say(payload):
     print(json.dumps(payload)); sys.exit(0)
 if node == "intake_review":
+    # The way a survey seat calls a requirement unsafe: an `unsafe` list of strings in its answer.
+    # Once, and only when the test asks for it.
+    if seat == "risk" and os.environ.get("STAND_IN_UNSAFE") and not Path(".unsafe-said").exists():
+        Path(".unsafe-said").write_text("1")
+        say({"missing": [], "problems": [], "unsafe": ["the key goes in the URL query string"]})
     say({"missing": [], "problems": [], "unsafe": []})
 if seat:
     say({"verdict": "pass", "why": "stand-in"})
@@ -332,3 +337,101 @@ def test_drive_copies_the_models_file_and_the_build_is_asked_through_it(tmp_path
     asked = marker.read_text(encoding="utf-8").split()
     assert set(asked) == {"engineer_build", "engineer_selfverify"}, "only the build and what follows it"
     assert asked.count("engineer_build") == len(MODULES)
+
+
+# ── a stop that needs a person is never answered by drive.py ──────────────────────────────────────
+
+def _stand_in_config(tmp_path):
+    backend = tmp_path / "stand_in.py"
+    backend.write_text(STAND_IN, encoding="utf-8")
+    config = tmp_path / "runner.yaml"
+    config.write_text(f'agent_command: ["{sys.executable}", "{backend.as_posix()}"]\n'
+                      f"agent_timeout: 60\n", encoding="utf-8")
+    return config
+
+
+def _start_unsafe(tmp_path, *extra):
+    import os
+    work = tmp_path / "work"
+    proc = subprocess.Popen(
+        [sys.executable, str(DRIVE), "--runner-yaml", str(_stand_in_config(tmp_path)),
+         "--workdir", str(work), *extra], cwd=str(tmp_path), stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+        env={**os.environ, "PYTHONUTF8": "1", "STAND_IN_UNSAFE": "1"})
+    lines = []
+    for line in proc.stdout:
+        lines.append(line)
+        if line.startswith("AWAITING-PERSON "):
+            break
+    return proc, work, lines
+
+
+def test_an_unsafe_stop_waits_for_the_person_and_proceeds_only_on_their_file(tmp_path):
+    import time
+    proc, work, lines = _start_unsafe(tmp_path)
+    try:
+        assert lines[-1].startswith("AWAITING-PERSON "), "".join(lines)
+        text = Path(lines[-1].split(" ", 1)[1].strip())
+        assert text == work / ".runner" / "person" / "001-intake_review.md"
+        said = text.read_text(encoding="utf-8")
+        assert "risk" in said and "the key goes in the URL query string" in said
+        assert "intake_review" in said and "POST /run/proceed" in said
+        time.sleep(3)                       # a driver that approved on its own would be past it
+        assert proc.poll() is None
+        assert not (work / "site").exists() and not (work / ".built").exists()
+        text.with_suffix(".proceed").write_text("", encoding="utf-8")
+        rest, _ = proc.communicate(timeout=300)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    out = "".join(lines) + rest
+    assert proc.returncode == 0, out
+    assert re.search(r"^PERSON-ANSWERED proceed \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$", rest, re.M), out
+    assert out.count("AWAITING-PERSON") == 1
+    assert "final node:  done  (state finished" in out and "gate merge" in out
+    token = (work / ".runner" / "operator.token").read_text(encoding="utf-8").strip()
+    assert token not in out
+
+
+def test_a_stop_file_ends_the_run_with_a_nonzero_exit(tmp_path):
+    proc, work, lines = _start_unsafe(tmp_path)
+    try:
+        Path(lines[-1].split(" ", 1)[1].strip()).with_suffix(".stop").write_text("", encoding="utf-8")
+        rest, _ = proc.communicate(timeout=120)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode != 0
+    assert "STOPPED-BY-PERSON" in rest and "PERSON-ANSWERED" not in rest
+    assert not (work / "site").exists()
+
+
+def test_person_dir_moves_the_files(tmp_path):
+    where = tmp_path / "elsewhere"
+    proc, work, lines = _start_unsafe(tmp_path, "--person-dir", str(where))
+    try:
+        assert Path(lines[-1].split(" ", 1)[1].strip()).parent == where.resolve()
+        (where / "001-intake_review.stop").write_text("", encoding="utf-8")
+        proc.communicate(timeout=120)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode != 0
+
+
+def test_an_unexpected_refusal_prints_the_servers_message_and_exits_cleanly(tmp_path):
+    """A route that 409s must not leave the server running or die without saying why."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("weather_live_drive", DRIVE)
+    drive = importlib.util.module_from_spec(spec)
+    sys.modules["weather_live_drive"] = drive
+    spec.loader.exec_module(drive)
+    console = drive.Console(1, "t")
+    console.call = lambda path, body=None: (
+        (200, {"version": 3}) if body is None else (409, {"error": "not what it waits for"}))
+    with pytest.raises(drive.Refused, match=r"/run/gate was refused \(409\): not what it waits for"):
+        console.act("/run/gate", {})
+    stop = {"unsafe": True, "node_id": "intake_review", "safety": {"risk": ["x"]}}
+    assert drive.stop_kind(stop) == "unsafe" and drive.stop_kind({"gate": "merge"}) == "gate"
+    assert drive.stop_kind({"incomplete": True}) == "incomplete"
+    assert drive.stop_kind({"undecided": True}) == "undecided"
