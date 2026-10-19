@@ -9,7 +9,9 @@ import copy
 import hashlib
 import io
 import json
+import ntpath
 import os
+import posixpath
 import sqlite3
 import sys
 from pathlib import Path
@@ -272,6 +274,33 @@ def test_the_caps_are_exact_at_the_edge(repo):
     wide.write_text("é" * (seatspec.MAX_SPEC_CHARS + 1), encoding="utf-8")   # 16002 bytes
     with pytest.raises(seatspec.SeatSpecError, match="characters and the most"):
         seatspec.read_file("docs/wide.md")
+
+
+ANCHORED = ["/x", "\\x", "C:\\x", "C:x", "c:/x", "//server/share/x", "\\\\server\\share\\x"]
+
+
+@pytest.mark.parametrize("spelled", ANCHORED)
+@pytest.mark.parametrize("flavour", [posixpath, ntpath], ids=["posix", "windows"])
+def test_an_anchored_path_is_refused_the_same_on_every_platform(repo, monkeypatch, flavour, spelled):
+    """Cut: back to `os.path.isabs` alone, and `/x` and `C:x` pass on one flavour (3.13 Windows)."""
+    assert seatspec.spelled_anchored(spelled)
+    with monkeypatch.context() as m:
+        m.setattr(seatspec.os, "path", flavour)       # the flavour check_path would see
+        with pytest.raises(seatspec.SeatSpecError, match="not a file inside"):
+            seatspec.check_path(spelled, repo)
+
+
+@pytest.mark.parametrize("plain", ["docs/device.md", "device.md", "a/b.md", "./docs/device.md"])
+def test_a_plain_relative_path_is_not_anchored(plain):
+    assert not seatspec.spelled_anchored(plain)
+
+
+def test_a_byte_order_mark_reaches_neither_the_brief_nor_the_hash(repo):
+    """Cut: `utf-8-sig` -> `utf-8` in `read_file`, and the text starts with U+FEFF."""
+    (repo / "docs" / "bom.md").write_bytes(b"\xef\xbb\xbf" + PI.encode("utf-8"))
+    text = seatspec.read_file("docs/bom.md")
+    assert text == PI and "\ufeff" not in text
+    assert seatspec.digest(text) == hashlib.sha256(PI.encode("utf-8")).hexdigest()
 
 
 def test_a_symlink_out_of_the_repository_is_refused(repo, tmp_path_factory):

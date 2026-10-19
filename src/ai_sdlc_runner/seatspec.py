@@ -39,7 +39,9 @@ it is read.
 from __future__ import annotations
 
 import hashlib
+import ntpath
 import os
+import posixpath
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -140,10 +142,25 @@ def root_dir(root: "str | Path | None" = None) -> Path:
 
 # ── validation: one validator for every door ──────────────────────────────────────────────────────
 
+def spelled_anchored(text: str) -> bool:
+    """Whether a path is spelled absolute, rooted or with a drive, on any platform.
+
+    `os.path.isabs` answers differently by platform and version (Windows before 3.13 calls `/x`
+    absolute, 3.13 does not), so the same settings file would be accepted on one and refused on
+    another. Asked of both flavours instead: `/x`, `\\x`, `C:\\x`, `C:x` and `//server/share/x` are
+    refused everywhere, and only a plain relative path is joined onto the root.
+    """
+    if text[:1] in ("/", "\\"):
+        return True
+    return any(flavour.isabs(text) or flavour.splitdrive(text)[0]
+               for flavour in (posixpath, ntpath, os.path))
+
+
 def check_path(path: object, root: "str | Path | None" = None, *, where: str = "seat_specs") -> str:
     """A spec file's path as stored (relative to the root, forward slashes), or a `SeatSpecError`.
 
-    Refused: a blank path, a `..` component, a path that resolves outside the root (an absolute path
+    Refused: a blank path, a path spelled absolute, rooted or with a drive (the same on every
+    platform, see `spelled_anchored`), a `..` component, a path that resolves outside the root (an absolute path
     elsewhere, or a symlink out of the tree), and the root itself. Whether the file exists is not
     asked here: it may be written later, and the run refuses it if it is still missing then.
     """
@@ -153,8 +170,13 @@ def check_path(path: object, root: "str | Path | None" = None, *, where: str = "
     if ".." in text.split("/"):
         raise SeatSpecError(f"{where}: spec path {text!r} has a '..' in it. A spec file must sit "
                             f"inside the repository, named without leaving it.")
+    if spelled_anchored(text):
+        raise SeatSpecError(
+            f"{where}: spec path {text!r} is not a file inside the repository "
+            f"({root_dir(root)}): it is spelled absolute, rooted or with a drive. Name it "
+            f"relative to the repository.")
     base = os.path.realpath(str(root_dir(root)))
-    candidate = text if os.path.isabs(text) else os.path.join(base, text)
+    candidate = os.path.join(base, text)
     real = os.path.realpath(candidate)
     try:
         inside = os.path.commonpath([os.path.normcase(base), os.path.normcase(real)]) \
@@ -299,7 +321,7 @@ def read_file(path: str, root: "str | Path | None" = None, *, where: str = "seat
         if size > MAX_SPEC_FILE_BYTES:
             raise SeatSpecError(f"{where}: spec file {relative} is {size} bytes and the most this "
                                 f"runner reads is {MAX_SPEC_FILE_BYTES}")
-        text = paths.read_text(target, encoding="utf-8").strip()
+        text = paths.read_text(target, encoding="utf-8-sig").strip()
     except (OSError, UnicodeDecodeError) as exc:
         raise SeatSpecError(f"{where}: spec file {relative} cannot be read as UTF-8 text: "
                             f"{type(exc).__name__}: {paths.plain_in(str(exc))}") from exc
