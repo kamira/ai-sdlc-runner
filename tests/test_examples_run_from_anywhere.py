@@ -55,8 +55,13 @@ EXAMPLES = ROOT / "examples"
 #: listed: an example added later gets this test for free, and one that is deleted does not leave a
 #: name here pointing at nothing. A hand-written list is how `minimal` came to be the only one that
 #: worked from the repo root without anybody noticing the other two did not.
+#:
+#: Only those that ship an agent. `weather-live` ships none on purpose -- its `runner.yaml` names a
+#: real model, so walking it here would spend quota (or fail where `claude` is absent).
+#: `test_example_weather_live.py` covers it without a backend.
 SHIPPED = sorted(d.name for d in EXAMPLES.iterdir()
-                 if (d / "runner.yaml").is_file() and (d / "plan.json").is_file())
+                 if (d / "runner.yaml").is_file() and (d / "plan.json").is_file()
+                 and (d / "agent.py").is_file())
 
 
 def test_the_discovery_actually_found_the_examples():

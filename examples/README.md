@@ -1,14 +1,15 @@
 # Examples
 
-Three, and they answer different questions. Each has its own README; this page is only the way in.
+Four, and they answer different questions. Each has its own README; this page is only the way in.
 
 | | what it shows | read |
 |---|---|---|
 | **minimal** | the smallest plan this runner accepts, and an agent that answers what its orders' **answer contract** (`reply`) asks | [`minimal/README.md`](minimal/README.md) |
 | **tide-spa** | one brief run five times, each differing by a single field, to show **where a run stops and why**. A real single-page app comes out of the first one | [`tide-spa/README.md`](tide-spa/README.md) |
 | **weather-spa** | the **console** path: a brief typed by a person, a gate approved by clicking, and the refusals that only exist there | [`weather-spa/README.md`](weather-spa/README.md) |
+| **weather-live** | the same page as `weather-spa`, but **built by a real model** and showing **real data**: no example agent, only a brief, a plan and a `runner.yaml` | [`weather-live/README.md`](weather-live/README.md) |
 
-Read them in that order if you are new to this. Each assumes the one before it.
+Read them in that order if you are new to this. Each assumes the one before it. `weather-live` is the exception to the rest of this page: it spends model quota, so nothing here runs it for you.
 
 ## Running them
 
@@ -61,7 +62,11 @@ It is about 320 KB, which is most of what this directory weighs. That is a real 
 instructions and a re-walk; a much larger one means something re-walked that should not have, and a
 test says so.
 
-## What the three have in common
+## What the first three have in common
+
+`weather-live` is left out of this paragraph on purpose: its run is a real model's, so the suite checks
+what the repository holds (plan, `runner.yaml`, brief, fixture) and drives its console path with a
+stand-in backend, never the run itself.
 
 Every example here is driven end to end against the real runner, and every number in every README is
 a measurement rather than a claim — `tests/test_example_tide_spa.py` and
