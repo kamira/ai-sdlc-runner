@@ -24,7 +24,8 @@ and a test says so.
 |---|---|
 | `brief.md` | what a person types into the console: the page, the data sources, the ten modules, the limits |
 | `plan.json` | the plan `runner serve` is started with — 24 node specs and their operations, derived from `weather-spa`'s |
-| `runner.yaml` | the real backend: `claude -p`, `claude-sonnet-5-5`, effort `medium`, and only the tools a build needs |
+| `runner.yaml` | the real backend: `claude -p`, `claude-sonnet-5-5`, effort `medium`, **read-only** (`Read Glob Grep`) |
+| `models.json` | one model, `sonnet-writer`: the same command plus `Write Edit`, given to `engineer_build` by `plan.json`'s `node_models` |
 | `drive.py` | the person at the console, as a script: types the brief, starts, approves each gate, waits |
 | `fixtures/open-meteo-taipei-2026-10-19.json` | a real Open-Meteo response, see below |
 
@@ -100,10 +101,32 @@ Same 24 node specs, the same `operations` and the same `decisions` (`next_module
 ## `runner.yaml`
 
 `claude -p --model claude-sonnet-5-5 --effort medium`, on every node, so the time of one ask is
-comparable with another's. `Write Edit Read Glob Grep` are pre-granted — nobody is at the keyboard to
-approve more — and `Bash`, `WebFetch` and `WebSearch` are refused explicitly: a work order asks for a
+comparable with another's. The default command is **read-only**: `Read Glob Grep` are granted, and
+`Write`, `Edit`, `Bash`, `WebFetch` and `WebSearch` are refused by name — a work order asks for a
 file and an answer, and the page fetches its own data. `agent_timeout: 1800` is the ceiling for one
 ask; `agent_retries: 0` so a measured run counts each ask once. The file comments say why of each.
+
+### Who can write
+
+`models.json` holds `sonnet-writer`: the same model and effort, plus `Write Edit`. `plan.json`'s
+`node_models` gives it to `engineer_build` (a pool of one), and `drive.py` copies `models.json` to
+`.runner/models.json` in the work directory, where `serve` reads it. Every other node uses the
+read-only default, and each node's spec says so: `engineer_build` builds only the first missing file
+and touches no other; every other node, one line, must not create or change a file.
+
+`fix_pass` and `engineer_selfverify` are `follows engineer_build` in the runner's flow, so the engine
+dispatches them with the model that answered the build, which is `sonnet-writer`. They can write.
+**`engineer_selfverify` is the known exception to "only build nodes write"**: its spec says it may
+only correct the module just built and must not create another file, but nothing stops it. It cannot
+be closed from here, because a `follows` node takes the build's model (`engine._followed_model`) and
+`node_models` is not consulted for it; closing it takes a change in `src/`. So it is *measured*
+instead: `docs/measurements/CHG-20261019-01/measure.py WORKDIR` has a "writes" check that attributes
+each file under `site/` to the ask whose interval holds its modification time and flags any file
+written by a node other than `engineer_build`/`fix_pass`, or by `engineer_selfverify` for a file
+other than the module its build just built.
+
+`--models PATH` chooses another registry; with no `models.json` beside `--runner-yaml`, the plan's
+`node_models` are dropped and `agent_command` answers every node.
 
 ## Run it
 
@@ -111,7 +134,7 @@ ask; `agent_retries: 0` so a measured run counts each ask once. The file comment
 python3 examples/weather-live/drive.py --keep-serving
 ```
 
-From anywhere. It copies `plan.json`, `runner.yaml` and `brief.md` into a new temporary directory
+From anywhere. It copies `plan.json`, `runner.yaml`, `models.json` and `brief.md` into a new temporary directory
 (`--workdir` chooses another), starts `runner serve` there on a free port, types the brief, starts the
 run and approves each gate it stops at. It prints a line per node with the UTC time, then the run id,
 the final node and where `site/` is. With `--keep-serving` it stays up and prints the console URL and
@@ -120,6 +143,7 @@ the **path** of the operator token file (never the token), so the run can be wat
 | option | |
 |---|---|
 | `--runner-yaml PATH` | build with another backend |
+| `--models PATH` | the registry `node_models` names (default: `models.json` beside `--runner-yaml`) |
 | `--workdir DIR` | run in `DIR` |
 | `--keep-serving` | stay up after the end |
 | `--on-node CMD` | run `CMD <node-id> <utc-time>` on every node change, e.g. to take a screenshot |

@@ -45,12 +45,29 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-def validate(runner_yaml: Path) -> str:
+def models_beside(runner_yaml: Path) -> Path | None:
+    """The registry of the backend `runner_yaml` names: `models.json` in its directory, if any."""
+    found = runner_yaml.parent / "models.json"
+    return found if found.is_file() else None
+
+
+def validate(runner_yaml: Path, models: Path | None) -> str:
     """Load the plan, the settings file and the brief the way the runner will. Returns the brief."""
     sys.path.insert(0, str(REPO / "src"))
-    from ai_sdlc_runner import cli, plan
+    from ai_sdlc_runner import cli, models as models_mod, plan
 
-    plan.load(str(HERE / "plan.json"))
+    loaded = plan.load(str(HERE / "plan.json"))
+    wanted = {m for ids in (loaded.get("node_models") or {}).values() for m in ids}
+    if models is not None:
+        try:
+            registry = models_mod.load(models)
+            for model_id in wanted:
+                registry.get(model_id)
+        except models_mod.ModelError as exc:
+            raise SystemExit(f"{models}: {exc}")
+    elif wanted:
+        print(f"note: no models.json beside {runner_yaml.name}, so the plan's node_models "
+              f"({', '.join(sorted(wanted))}) are dropped and agent_command answers every node")
     config = cli.load_config(str(runner_yaml))
     if not config.get("agent_command"):
         raise SystemExit(f"{runner_yaml} names no agent_command: the runner would answer with its stub")
@@ -97,9 +114,17 @@ class Console:
         return answer
 
 
-def start_server(work: Path, runner_yaml: Path, brief: str):
+def start_server(work: Path, runner_yaml: Path, brief: str, models: Path | None):
     work.mkdir(parents=True, exist_ok=True)
-    shutil.copy(HERE / "plan.json", work / "plan.json")
+    if models is not None:
+        # `serve` reads `<token dir>/models.json`, and the token dir is `.runner`.
+        (work / ".runner").mkdir(exist_ok=True)
+        shutil.copy(models, work / ".runner" / "models.json")
+        shutil.copy(HERE / "plan.json", work / "plan.json")
+    else:
+        stripped = json.loads((HERE / "plan.json").read_text(encoding="utf-8"))
+        stripped.pop("node_models", None)
+        (work / "plan.json").write_text(json.dumps(stripped, indent=2) + "\n", encoding="utf-8")
     shutil.copy(runner_yaml, work / "runner.yaml")
     (work / "brief.md").write_text(brief, encoding="utf-8")
     port = free_port()
@@ -202,6 +227,9 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--runner-yaml", type=Path, default=HERE / "runner.yaml",
                     help="the backend to build with (default: the real one beside this file)")
+    ap.add_argument("--models", type=Path, default=None, metavar="PATH",
+                    help="the model registry the plan's node_models name (default: models.json "
+                         "beside --runner-yaml; none there means agent_command answers every node)")
     ap.add_argument("--workdir", type=Path, default=None,
                     help="where the run lives (default: a new temporary directory)")
     ap.add_argument("--keep-serving", action="store_true",
@@ -215,14 +243,15 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     runner_yaml = args.runner_yaml.resolve()
-    brief = validate(runner_yaml)
+    models = args.models.resolve() if args.models else models_beside(runner_yaml)
+    brief = validate(runner_yaml, models)
     if args.dry_run:
         print(f"ok: plan, {runner_yaml.name} and brief ({len(MODULES)} modules named) are valid; "
               f"nothing was started")
         return 0
 
     work = (args.workdir or Path(tempfile.mkdtemp(prefix="weather-live-"))).resolve()
-    proc, console, token_file = start_server(work, runner_yaml, brief)
+    proc, console, token_file = start_server(work, runner_yaml, brief, models)
     try:
         print(f"{utc()}  serving {console.base} in {work}", flush=True)
         if args.start_when:

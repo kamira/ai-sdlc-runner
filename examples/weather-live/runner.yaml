@@ -2,16 +2,26 @@
 # Every node gets the same model and effort (DIR-3's coding default), so the time of one ask is
 # comparable with another's.
 #
-# The grants below are the whole boundary around what the model can touch -- nobody is at the
-# keyboard to approve anything else, so a tool not named here is refused.
-#   Write, Edit  the build writes its module under site/ in this directory (the run's working
-#                directory; `claude -p` does not write outside it without approval)
+# This command is READ-ONLY, and it is the default for every node. The grants below are the whole
+# boundary around what the model can touch -- nobody is at the keyboard to approve anything else, so
+# a tool not named here is refused.
 #   Read, Glob   a node looks at what earlier modules wrote, and which files exist yet
 #   Grep         finds a name an earlier module exports
-# Not granted, and named in --disallowedTools so the refusal is explicit: Bash (a work order asks
-# for files and an answer, never for a command to run), WebFetch and WebSearch (the page fetches its
-# own data in the browser at run time; building it makes no request).
-agent_command: ["claude", "-p", "--model", "claude-sonnet-5-5", "--effort", "medium", "--allowedTools", "Write Edit Read Glob Grep", "--disallowedTools", "Bash WebFetch WebSearch"]
+# Not granted, and named in --disallowedTools so the refusal is explicit: Write and Edit (only a
+# build writes, see below), Bash (a work order asks for files and an answer, never for a command to
+# run), WebFetch and WebSearch (the page fetches its own data in the browser at run time; building
+# it makes no request).
+#
+# WHO WRITES. `models.json` (beside this file) holds one model, `sonnet-writer`: this same command
+# plus `Write Edit`, and `plan.json`'s `node_models` gives it to `engineer_build`, a pool of one.
+# `engineer_selfverify` and `fix_pass` are `follows engineer_build` in the runner's flow, so the
+# engine sends them to whichever model answered the build, and they can write too. That is the
+# known exception to "only build nodes write": `engineer_selfverify` can write a file, and the
+# `node_models` of a `follows` node cannot take that away, because the engine reads it from the
+# build's last ask (`engine._followed_model`) and never from the plan. Closing it takes a change in
+# src/. Its spec tells it to correct only the module just built, and `measure.py`'s "writes" check
+# flags a file it wrote otherwise.
+agent_command: ["claude", "-p", "--model", "claude-sonnet-5-5", "--effort", "medium", "--allowedTools", "Read Glob Grep", "--disallowedTools", "Write Edit Bash WebFetch WebSearch"]
 # One ask, not the run. A module build with a medium effort is minutes at most; this is the ceiling
 # for a hung process, as the README says of the default.
 agent_timeout: 1800

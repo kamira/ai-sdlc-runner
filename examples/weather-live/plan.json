@@ -8,7 +8,7 @@
     "intake": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -19,7 +19,7 @@
     "intake_review": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -30,7 +30,7 @@
     "pm_plan": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Declare the modules in the answer's modules list: the ten file names the brief numbers, in that order, and no others.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Declare the modules in the answer's modules list: the ten file names the brief numbers, in that order, and no others. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -41,7 +41,7 @@
     "pm_confirm": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -52,7 +52,7 @@
     "lead_assess": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -63,7 +63,7 @@
     "pm_signoff": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -74,7 +74,7 @@
     "next_module": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -85,7 +85,7 @@
     "engineer_build": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Build one module per ask: the first file in the brief's numbered list that does not yet exist under site/, writing it to site/. Answer {\"module\": \"<that file name>\"}. When all ten files already exist, write nothing and answer {\"module\": \"\"}.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Build one module per ask: the first file in the brief's numbered list that does not yet exist under site/, writing it to site/. Build only that first missing file and touch no other file. Answer {\"module\": \"<that file name>\"}. When all ten files already exist, write nothing and answer {\"module\": \"\"}.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -96,7 +96,7 @@
     "engineer_selfverify": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. You may only correct the module just built; you must not create any other file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -107,7 +107,7 @@
     "lead_task_review": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -118,7 +118,7 @@
     "record_module": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -140,7 +140,7 @@
     "re_review": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -151,7 +151,7 @@
     "halt_second_fail": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -162,7 +162,7 @@
     "lead_review": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -173,7 +173,7 @@
     "review_failed": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -184,7 +184,7 @@
     "qa_verify": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -195,7 +195,7 @@
     "qa_accept": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -206,7 +206,7 @@
     "acceptance_failed": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -217,7 +217,7 @@
     "pr": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -228,7 +228,7 @@
     "merge": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -239,7 +239,7 @@
     "close_out": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -250,7 +250,7 @@
     "feedback": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -261,7 +261,7 @@
     "done": {
       "scope": "ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
-      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Do not create or change any file.",
       "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
       "acceptance_predicate": "all ten files exist and parse, no file holds an API key, and the page requests nothing but the two named API hosts",
       "input_artifacts": [],
@@ -486,6 +486,11 @@
           "site/"
         ]
       }
+    ]
+  },
+  "node_models": {
+    "engineer_build": [
+      "sonnet-writer"
     ]
   }
 }

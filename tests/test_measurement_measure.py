@@ -89,3 +89,67 @@ def test_cli_prints_the_block_and_writes_json(run_dir, tmp_path):
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["modules_built"] == len(MODULES)
     assert set(data["ceiling"]) == {"time", "asks"}
+
+
+# ── the writes check: mtimes placed inside and outside the asks ──────────────────────────────────
+
+def _site(tmp_path, run_dir, placements):
+    """Files under tmp_path/site whose mtime is the midpoint of the n-th ask (None: after the run)."""
+    rows = measure.asks_of(measure.turns_of(measure.open_store(run_dir)))
+    (tmp_path / "site").mkdir()
+    for name, ask in placements.items():
+        path = tmp_path / "site" / name
+        path.write_text("x", encoding="utf-8")
+        when = rows[-1]["end"] + 60 if ask is None else (rows[ask]["start"] + rows[ask]["end"]) / 2
+        os.utime(path, (when, when))
+    return rows
+
+
+def _first(rows, node, after=-1):
+    return next(i for i, r in enumerate(rows) if r["node"] == node and i > after)
+
+
+def test_writes_attributes_each_file_to_its_ask_and_flags_only_what_is_not_allowed(tmp_path, run_dir):
+    rows = measure.asks_of(measure.turns_of(measure.open_store(run_dir)))
+    build = _first(rows, "engineer_build")
+    built = rows[build]["result"]["module"]
+    verify = _first(rows, "engineer_selfverify", build)
+    review = _first(rows, "lead_task_review", build)
+    _site(tmp_path, run_dir, {built: build, "other.js": verify, "stray.js": review, "late.js": None})
+    found = {w["file"]: w for w in measure.writes(rows, tmp_path)}
+    assert found[f"site/{built}"]["node"] == "engineer_build" and not found[f"site/{built}"]["flag"]
+    assert found[f"site/{built}"]["ask"] == build + 1
+    assert "selfverify" in found["site/other.js"]["flag"]
+    assert "lead_task_review" in found["site/stray.js"]["flag"]
+    assert "outside" in found["site/late.js"]["flag"]
+
+
+def test_selfverify_may_write_the_module_its_build_just_built(tmp_path, run_dir):
+    rows = measure.asks_of(measure.turns_of(measure.open_store(run_dir)))
+    build = _first(rows, "engineer_build")
+    verify = _first(rows, "engineer_selfverify", build)
+    built = rows[build]["result"]["module"]
+    _site(tmp_path, run_dir, {built: verify})
+    [w] = measure.writes(rows, tmp_path)
+    assert w["node"] == "engineer_selfverify" and w["flag"] == ""
+
+
+def test_writes_is_in_the_output_and_the_json(tmp_path, run_dir):
+    rows = measure.asks_of(measure.turns_of(measure.open_store(run_dir)))
+    build = _first(rows, "engineer_build")
+    _site(tmp_path, run_dir, {"index.html": build, "bad.js": _first(rows, "pm_plan")})
+    (tmp_path / "conv").symlink_to(run_dir / "conv", target_is_directory=True)
+    out = tmp_path / "m.json"
+    done = subprocess.run([sys.executable, str(TOOL), str(tmp_path), "--json", str(out)],
+                          capture_output=True, text=True, encoding="utf-8")
+    assert done.returncode == 0, done.stderr
+    assert "site/index.html" in done.stdout and "!! written by pm_plan" in done.stdout
+    assert "2 files, 1 flagged" in done.stdout
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert {w["file"]: bool(w["flag"]) for w in data["writes"]} == {
+        "site/bad.js": True, "site/index.html": False}
+
+
+def test_no_site_directory_is_no_writes(tmp_path, run_dir):
+    rows = measure.asks_of(measure.turns_of(measure.open_store(run_dir)))
+    assert measure.writes(rows, tmp_path) == []

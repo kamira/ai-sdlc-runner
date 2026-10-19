@@ -61,7 +61,7 @@ def test_the_plan_has_the_node_specs_and_operations_of_weather_spas():
     assert live["decisions"] == spa["decisions"]
 
 
-def test_runner_yaml_names_the_model_and_effort_and_grants_no_network_tool():
+def test_runner_yaml_names_the_model_and_effort_and_grants_no_write_and_no_network_tool():
     from ai_sdlc_runner import cli
 
     config = cli.load_config(str(EXAMPLE / "runner.yaml"))
@@ -72,9 +72,81 @@ def test_runner_yaml_names_the_model_and_effort_and_grants_no_network_tool():
     assert config["agent_retries"] == 0
     assert int(config["agent_timeout"]) >= 1800
     granted = command[command.index("--allowedTools") + 1].split()
-    for tool in ("Bash", "WebFetch", "WebSearch"):
-        assert tool not in granted, f"{tool} is granted, and a build does not need it"
-    assert {"Write", "Read"} <= set(granted)
+    refused = command[command.index("--disallowedTools") + 1].split()
+    assert set(granted) == {"Read", "Glob", "Grep"}
+    for tool in ("Write", "Edit", "Bash", "WebFetch", "WebSearch"):
+        assert tool not in granted, f"{tool} is granted by the default command"
+        assert tool in refused, f"{tool} is not refused by name"
+
+
+def _writer():
+    from ai_sdlc_runner import models as models_mod
+
+    registry = models_mod.load(EXAMPLE / "models.json")
+    return registry, registry.get("sonnet-writer")
+
+
+def test_the_write_capable_command_is_the_default_plus_write_and_edit_and_nothing_else():
+    from ai_sdlc_runner import cli
+
+    default = cli.load_config(str(EXAMPLE / "runner.yaml"))["agent_command"]
+    _, writer = _writer()
+    command = list(writer.command)
+    assert command[command.index("--model") + 1] == "claude-sonnet-5-5"
+    assert command[command.index("--effort") + 1] == "medium"
+    granted = command[command.index("--allowedTools") + 1].split()
+    refused = command[command.index("--disallowedTools") + 1].split()
+    assert set(granted) == {"Read", "Glob", "Grep", "Write", "Edit"}
+    assert set(refused) == {"Bash", "WebFetch", "WebSearch"}
+    stripped = [w for w in command if w not in ("--allowedTools", "--disallowedTools")]
+    assert [w for w in default if w not in ("--allowedTools", "--disallowedTools")][:6] == stripped[:6]
+
+
+def test_through_the_runners_resolution_only_the_build_and_the_nodes_that_follow_it_can_write():
+    """The plan's node_models, the engine's pool and follows rules, and the factory's argv."""
+    from ai_sdlc_runner import cli, engine, graph, plan, settings
+
+    loaded = plan.load(str(EXAMPLE / "plan.json"))
+    registry, writer = _writer()
+    config = cli.load_config(str(EXAMPLE / "runner.yaml"))
+    node_models, _, _ = cli.coder_defaults(loaded["node_models"], registry, settings.Settings(),
+                                           agent_command=True)
+    factory = cli.session_factory(config, registry=registry)
+    cfg = engine.RunConfig(node_specs=loaded["node_specs"], decisions=loaded["decisions"],
+                           node_models=node_models)
+    report = engine.RunReport()
+    can_write = set()
+    for node in graph.NODES:
+        if not node.role:
+            continue
+        configured = list(node_models.get(node.id) or ())
+        model = None
+        if node.mode == graph.POOL and configured:
+            model = engine._dispatch_from(configured, cfg, node, 0)
+        elif node.mode == graph.FOLLOWS:
+            model = engine._followed_model(node, report)
+        elif configured:
+            model = configured[0]
+        if node.id == "engineer_build":
+            report.asks.append(engine.Ask(node.id, node.role, None, {}, model=model))
+        argv = factory(model=model, role=node.role).argv
+        tools = argv[argv.index("--allowedTools") + 1].split()
+        if "Write" in tools or "Edit" in tools:
+            can_write.add(node.id)
+    assert can_write == {"engineer_build", "fix_pass", "engineer_selfverify"}
+    assert [n.id for n in graph.NODES if n.follows == "engineer_build"] == [
+        "engineer_selfverify", "fix_pass"], "the follows nodes changed: update runner.yaml and the README"
+    assert loaded["node_models"] == {"engineer_build": ["sonnet-writer"]}
+
+
+def test_the_specs_tell_every_node_what_it_may_write():
+    specs = json.loads((EXAMPLE / "plan.json").read_text(encoding="utf-8"))["node_specs"]
+    assert "Build only that first missing file and touch no other file" in specs["engineer_build"]["instructions"]
+    assert ("You may only correct the module just built; you must not create any other file"
+            in specs["engineer_selfverify"]["instructions"])
+    for node, spec in specs.items():
+        if node not in ("engineer_build", "engineer_selfverify", "fix_pass"):
+            assert spec["instructions"].endswith("Do not create or change any file."), node
 
 
 def test_the_brief_names_the_modules_the_sources_the_error_state_and_the_key_rule():
@@ -117,6 +189,13 @@ def test_the_recorded_response_is_what_the_readme_says_it_is():
 def test_the_readme_says_the_cwa_response_is_confirmed_at_the_measurement():
     readme = " ".join((EXAMPLE / "README.md").read_text(encoding="utf-8").split())
     assert "not confirmed here" in readme and "task 1a" in readme
+
+
+def test_the_dry_run_refuses_a_models_file_without_the_model_the_plan_names(tmp_path):
+    empty = tmp_path / "models.json"
+    empty.write_text('{"models": []}', encoding="utf-8")
+    done = _run("--dry-run", "--models", str(empty))
+    assert done.returncode != 0 and "sonnet-writer" in (done.stdout + done.stderr)
 
 
 def test_the_dry_run_exits_zero_from_the_repo_root_and_from_elsewhere(tmp_path):
@@ -226,3 +305,30 @@ def test_start_when_asks_nothing_until_the_file_appears(tmp_path):
     assert proc.returncode == 0, "".join(lines) + rest
     assert "final node:  done  (state finished" in rest
     assert list((work / ".runner" / "asks").glob("*.json"))
+
+
+def test_drive_copies_the_models_file_and_the_build_is_asked_through_it(tmp_path):
+    """A stand-in registry under the same id: the build's asks go to it, every other ask does not."""
+    backend = tmp_path / "stand_in.py"
+    backend.write_text(STAND_IN, encoding="utf-8")
+    marker = tmp_path / "writer_asks.txt"
+    wrapper = tmp_path / "writer.py"
+    wrapper.write_text("import sys, json\nraw = sys.stdin.read()\n"
+                       f"open({str(marker)!r}, 'a').write(json.loads(raw)['node_id'] + '\\n')\n"
+                       f"import subprocess\nr = subprocess.run([{sys.executable!r}, {str(backend)!r}], "
+                       "input=raw, text=True, capture_output=True)\nsys.stdout.write(r.stdout)\n",
+                       encoding="utf-8")
+    config = tmp_path / "runner.yaml"
+    config.write_text(f'agent_command: ["{sys.executable}", "{backend.as_posix()}"]\n'
+                      f"agent_timeout: 60\n", encoding="utf-8")
+    (tmp_path / "models.json").write_text(json.dumps({"models": [{
+        "id": "sonnet-writer", "vendor": "test", "name": "stand-in", "transport": "cli",
+        "command": [sys.executable, str(wrapper)]}]}), encoding="utf-8")
+    work = tmp_path / "work"
+    done = _run("--runner-yaml", str(config), "--workdir", str(work), cwd=tmp_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "final node:  done  (state finished" in done.stdout
+    assert (work / ".runner" / "models.json").is_file()
+    asked = marker.read_text(encoding="utf-8").split()
+    assert set(asked) == {"engineer_build", "engineer_selfverify"}, "only the build and what follows it"
+    assert asked.count("engineer_build") == len(MODULES)

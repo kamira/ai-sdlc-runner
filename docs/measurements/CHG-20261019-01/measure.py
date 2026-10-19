@@ -6,14 +6,18 @@ WORKDIR is the directory `examples/weather-live/drive.py` ran in (`runner serve`
 under `WORKDIR/conv`); a store root given directly works too. Every number comes from the `ASK` and
 `ANSWER` turns, read through the runner's own `conversations` backend, paired by `ask_id`. Which
 nodes are "the module loop" is derived from the flow by `graph.module_cycle()`, not listed here.
-Needs no network and writes nothing but the optional JSON.
+The "writes" check lists every file under `WORKDIR/site/` with its modification time, attributed to
+the ask whose ASK..ANSWER interval contains it, and flags a file written by a node other than
+`engineer_build`/`fix_pass`, by `engineer_selfverify` for any file but the module its
+`engineer_build` visit just built, or outside every ask. Needs no network and writes nothing but the
+optional JSON.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -126,6 +130,52 @@ def measure(turns: Sequence[dict], loop_nodes: Sequence[str]) -> dict:
     return out
 
 
+#: The nodes whose job is to write a file. `engineer_selfverify` may write only the module just built.
+WRITERS = ("engineer_build", "fix_pass")
+SELFVERIFY = "engineer_selfverify"
+
+
+def writes(rows: Sequence[dict], workdir: Path) -> List[dict]:
+    """Every file under `workdir/site/`, the ask it was written in, and whether that was allowed."""
+    site = workdir / "site"
+    files = sorted(p for p in site.rglob("*") if p.is_file()) if site.is_dir() else []
+    out: List[dict] = []
+    for path in files:
+        when = path.stat().st_mtime
+        name = path.relative_to(site).as_posix()
+        hit = next((i for i, r in enumerate(rows) if r["start"] <= when <= r["end"]), None)
+        entry = {"file": f"site/{name}", "mtime": when, "node": None, "ask": None, "flag": ""}
+        if hit is None:
+            entry["flag"] = "written outside every ask"
+        else:
+            node = rows[hit]["node"]
+            entry.update(node=node, ask=hit + 1)
+            if node == SELFVERIFY:
+                # The module its own build visit just built: the latest engineer_build answer before it.
+                built = next((r["result"].get("module") for r in reversed(rows[:hit])
+                              if r["node"] == "engineer_build"), None)
+                if not built or name != built:
+                    entry["flag"] = f"selfverify wrote a file other than the module just built ({built or 'none'})"
+            elif node not in WRITERS:
+                entry["flag"] = f"written by {node}, which is not a build node"
+        out.append(entry)
+    return out
+
+
+def render_writes(found: Sequence[dict]) -> str:
+    if not found:
+        return "writes: no file under site/"
+    lines = ["", f"{'file':<22}{'node':<22}{'ask':>5}  mtime (UTC)", ]
+    for w in found:
+        stamp = datetime.fromtimestamp(w["mtime"], tz=timezone.utc).strftime("%H:%M:%S.%f")[:-3]
+        lines.append(f"{w['file']:<22}{w['node'] or '-':<22}{('#' + str(w['ask'])) if w['ask'] else '-':>5}"
+                     f"  {stamp}" + (f"   !! {w['flag']}" if w["flag"] else ""))
+    bad = [w for w in found if w["flag"]]
+    lines.append(f"writes: {len(found)} files, {len(bad)} flagged" if bad else
+                 f"writes: {len(found)} files, all by a build node")
+    return "\n".join(lines)
+
+
 def render(m: dict) -> str:
     wall = m["wall_seconds"] or 1.0
 
@@ -166,8 +216,12 @@ def main(argv=None) -> int:
     ap.add_argument("workdir", type=Path, help="the directory drive.py ran in (or a store root)")
     ap.add_argument("--json", type=Path, default=None, metavar="OUT", help="also write the numbers as JSON")
     args = ap.parse_args(argv)
-    m = measure(turns_of(open_store(args.workdir.resolve())), graph.module_cycle())
+    workdir = args.workdir.resolve()
+    turns = turns_of(open_store(workdir))
+    m = measure(turns, graph.module_cycle())
+    m["writes"] = writes(asks_of(turns), workdir)
     print(render(m))
+    print(render_writes(m["writes"]))
     if args.json:
         args.json.write_text(json.dumps(m, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return 0
