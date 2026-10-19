@@ -86,17 +86,33 @@ fixture, not a fallback: the page itself must never ship numbers.
 
 Same 24 node specs, the same `operations` and the same `decisions` (`next_module: frontier`,
 `feedback: done`), at `risk: low`, so the run stops for a person only where `weather-spa`'s does — at
-`merge`. What changed is text in the specs:
+`merge`. What changed is text in the specs, and **each node's spec says what that node judges or does
+at its stage of the flow**.
 
-- **scope, objective, done criteria, acceptance predicate, expected outputs** name ten files, the
-  live data and the error state, where `weather-spa`'s say "four modules" and "no network request of
-  any kind".
-- **`instructions`** adds that the brief carries the ten modules and the no-key rule.
-- **`pm_plan`** is told to declare the brief's ten file names, in order, as `modules`.
-- **`engineer_build`** is told to build the first file in the brief's list that does not yet exist and
-  answer with its name, or `{"module": ""}` when all ten do. A scripted agent knows its own order; a
-  real model has to be told it, and the runner's frontier needs the name.
-- **`fix_pass`** is told to fix only what the review named.
+### Why `weather-spa`'s single shared spec does not carry over
+
+`weather-spa` gives every node the same spec — the whole change's scope, done criteria and acceptance
+predicate — because its scripted agent never reads it. A real model does. In run 3 `pm_signoff`, the
+plan's sign-off gate and the fourth node of the flow, was handed "all ten files exist and parse", found
+`site/` empty, and answered no, twice; the walk cycled `pm_plan → pm_confirm → lead_assess →
+pm_signoff → pm_plan` and never reached a build. The node had done what its order said. Nothing in
+the runner attaches an earlier node's answer to a later order (an order carries its own spec,
+`input_artifacts` and, on a re-ask, the reason the run came back), so `pm_signoff` also never sees
+`lead_assess`'s answer, and its spec says so rather than asking it to judge one.
+
+### One spec per stage
+
+| stage | nodes | what the spec asks | `acceptance_predicate` | `expected_outputs` |
+|---|---|---|---|---|
+| plan | `intake`, `intake_review`, `pm_plan`, `pm_confirm`, `lead_assess`, `pm_signoff` | judge **the plan**: the ten-module list, its order, its scope and the data rules. Nothing is built, so an empty `site/` is expected. `pm_plan` declares the ten file names, in order, as `modules`; `lead_assess` judges feasibility and risk; `pm_signoff` judges the plan itself and is told no assessment is attached | the plan names the ten modules, in order, and keeps the data rules | none |
+| module | `next_module`, `engineer_build`, `engineer_selfverify`, `lead_task_review`, `record_module`, `fix_pass`, `re_review`, `halt_second_fail` | **one module**. `engineer_build` builds the first file in the brief's list that does not yet exist and answers with its name (`{"module": ""}` when all ten do); the others check, review, fix or re-review the module just built | that module exists under `site/`, parses, holds no key, requests only the two hosts | `engineer_build`: the one module in hand; the rest: none |
+| whole change | `lead_review`, `review_failed`, `qa_verify`, `qa_accept`, `acceptance_failed`, `pr`, `merge`, `close_out`, `feedback`, `done` | judge **the built page** against the full predicate | all ten files exist and parse, no file holds a key, only the two hosts, an error state with no made-up numbers | the ten files |
+
+Every spec keeps the brief's rules (no key in any file, no made-up or fallback numbers), and every node
+but the build, `engineer_selfverify` and `fix_pass` ends with "Do not create or change any file."
+`fix_pass` fixes only what the review named. Tests read these specs through the runner's own plan
+loader: no node before the module loop asks for a `site/` file, `engineer_build` names one module, and
+the whole-change nodes name all ten.
 
 ## `runner.yaml`
 

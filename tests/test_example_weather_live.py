@@ -22,6 +22,13 @@ MODULES = ["index.html", "styles.css", "sources.js", "openmeteo.js", "cwa.js",
            "normalize.js", "now.js", "week.js", "chart.js", "app.js"]
 
 
+#: The nodes the flow reaches before the module loop (`graph.py`: intake .. pm_signoff), and the ones
+#: that judge the finished change. Spelled out so a node added to either stage has to be placed.
+PRE_BUILD = ["intake", "intake_review", "pm_plan", "pm_confirm", "lead_assess", "pm_signoff"]
+CHANGE_STAGE = ["lead_review", "review_failed", "qa_verify", "qa_accept", "acceptance_failed",
+                "pr", "merge", "close_out", "feedback", "done"]
+
+
 def _files():
     return [p for p in EXAMPLE.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
 
@@ -48,8 +55,8 @@ def test_the_plan_loads_the_way_serve_loads_it():
     assert loaded["risk"] == "low"
     assert loaded["decisions"]["next_module"] == "frontier", (
         "the module loop reads its modules from what pm_plan declares")
-    for spec in loaded["node_specs"].values():
-        assert all(name in spec["expected_outputs"] for name in MODULES)
+    for node in CHANGE_STAGE:
+        assert all(name in loaded["node_specs"][node]["expected_outputs"] for name in MODULES)
 
 
 def test_the_plan_has_the_node_specs_and_operations_of_weather_spas():
@@ -147,6 +154,75 @@ def test_the_specs_tell_every_node_what_it_may_write():
     for node, spec in specs.items():
         if node not in ("engineer_build", "engineer_selfverify", "fix_pass"):
             assert spec["instructions"].endswith("Do not create or change any file."), node
+
+
+def _specs():
+    from ai_sdlc_runner import plan
+
+    return plan.load(str(EXAMPLE / "plan.json"))["node_specs"]
+
+
+def _requires_a_site_file(spec):
+    text = " ".join([json.dumps(spec["expected_outputs"]), spec["acceptance_predicate"]])
+    return "site/" in text or any(name in text for name in MODULES) or "files exist" in text
+
+
+def test_no_node_before_the_module_loop_requires_a_built_file():
+    """A real model reads its spec: a sign-off whose predicate is the build's says no to an empty site/."""
+    from ai_sdlc_runner import graph
+
+    specs = _specs()
+    before_loop = [n.id for n in graph.NODES[:graph.NODES.index(graph.BY_ID["next_module"])]
+                   if n.id in specs and n.role is not None or n.id == "intake"]
+    assert before_loop == PRE_BUILD, "a node was added before the module loop: place it"
+    for node in PRE_BUILD:
+        assert not _requires_a_site_file(specs[node]), node
+        assert specs[node]["expected_outputs"] == [], node
+
+
+def test_the_plan_stage_specs_judge_the_plan_and_pm_signoff_does_not_ask_for_the_assessment():
+    specs = _specs()
+    for node in PRE_BUILD:
+        assert "plan" in specs[node]["acceptance_predicate"], node
+        assert specs[node]["instructions"].endswith("Do not create or change any file."), node
+    signoff = specs["pm_signoff"]["instructions"]
+    assert "no lead assessment is attached" in signoff and "empty site/ is expected" in signoff
+
+
+def test_engineer_build_names_exactly_one_module_to_build():
+    spec = _specs()["engineer_build"]
+    assert "the first file in the brief's numbered list that does not yet exist" in spec["instructions"]
+    for field in ("scope", "instructions", "done_criteria", "acceptance_predicate", "expected_outputs"):
+        named = [m for m in MODULES if m in json.dumps(spec[field])]
+        assert named == [], (field, "the spec lists modules instead of naming one", named)
+    assert "all ten files exist" not in spec["acceptance_predicate"]
+    assert "exists under site/" in spec["acceptance_predicate"]
+
+
+def test_the_module_stage_judges_one_module_and_never_all_ten():
+    specs = _specs()
+    for node in ("next_module", "engineer_build", "engineer_selfverify", "lead_task_review",
+                 "record_module", "fix_pass", "re_review", "halt_second_fail"):
+        assert "all ten" not in specs[node]["acceptance_predicate"], node
+        assert not [m for m in MODULES if m in specs[node]["expected_outputs"]], node
+        assert "the module" in specs[node]["acceptance_predicate"], node
+
+
+def test_the_whole_change_stage_judges_the_page_against_the_full_predicate():
+    specs = _specs()
+    for node in CHANGE_STAGE:
+        predicate = specs[node]["acceptance_predicate"]
+        assert [m for m in MODULES if m not in predicate + specs[node]["scope"]] == [], node
+        assert "all ten files exist" in predicate, node
+        assert "no file holds an API key" in predicate, node
+        assert "nothing but the two named API hosts" in predicate, node
+        assert "error state" in predicate, node
+
+
+def test_every_node_keeps_the_briefs_rules():
+    for node, spec in _specs().items():
+        assert "no API key in any file" in spec["instructions"], node
+        assert "no made-up or fallback numbers" in spec["instructions"], node
 
 
 def test_the_brief_names_the_modules_the_sources_the_error_state_and_the_key_rule():
