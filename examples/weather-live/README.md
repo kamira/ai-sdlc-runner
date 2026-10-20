@@ -70,9 +70,9 @@ keeps it in that browser's `localStorage` and nowhere else. A test fails the sui
 this directory looks like a CWA key (`CWA-` followed by twenty or more hex characters or dashes).
 
 The CWA's response shape and whether the API answers a browser's cross-origin request are **not
-confirmed here**. They are checked against the API's documentation and a live call at the measurement
-(CHG-20261019-01, task 1a). If the API cannot be called from a page, the CWA is left out and the
-record says so, rather than adding a server that would hold the key.
+confirmed here**. The measurement (CHG-20261019-01, task 1a) happened, but no key reached that
+session, so the CWA was neither confirmed nor left out: `cwa.js` was built from the API's
+documentation and has not been run against a live response. A person with a key is the check.
 
 ### The recorded response
 
@@ -141,6 +141,13 @@ each file under `site/` to the ask whose interval holds its modification time an
 written by a node other than `engineer_build`/`fix_pass`, or by `engineer_selfverify` for a file
 other than the module its build just built.
 
+**What the boundary is.** The tool list, not paths. `Read`, `Glob` and `Grep` reach anything the
+process user can read, and `Write`/`Edit` (on `sonnet-writer`) are not scoped to a path unless the
+runner's sandbox (bwrap) confines the process. Without it, the person directory being outside the
+workdir rests on `claude`'s own permission behaviour for a write outside its start directory, which
+this change did not test. That is why `drive.py` refuses a `--workdir` that is
+not empty, and why the end of its output says whether the asks ran unsandboxed.
+
 `--models PATH` chooses another registry; with no `models.json` beside `--runner-yaml`, the plan's
 `node_models` are dropped and `agent_command` answers every node.
 
@@ -151,22 +158,26 @@ python3 examples/weather-live/drive.py --keep-serving
 ```
 
 From anywhere. It copies `plan.json`, `runner.yaml`, `models.json` and `brief.md` into a new temporary directory
-(`--workdir` chooses another), starts `runner serve` there on a free port, types the brief, starts the
+(`--workdir` chooses another, and must be new or empty: a directory with anything in it is refused and
+nothing is copied), starts `runner serve` there on a free port, types the brief, starts the
 run and approves each ordinary gate it stops at (`merge`). A stop that needs a person to read something
 (a seat called the requirement unsafe, an incomplete requirement, a tied panel) is never answered by the
 script: it writes the server's text to `<NNN>-<node>.md` in a new temporary directory **outside the workdir** (the build
 model can write inside it, so it must not be able to answer; the path is printed at start), prints
 `AWAITING-PERSON <path>` and waits for `<NNN>-<node>.proceed` (or `.stop`) beside it. `--person-dir` chooses
 the directory and is refused if it is inside the workdir; a `.proceed` that exists before the stop is
-written is refused, not taken as the answer. `--on-node` is split like a shell command line, so quote a path with spaces. It prints a line per node with the UTC time, then the run id,
-the final node and where `site/` is. With `--keep-serving` it stays up and prints the console URL and
+written is refused, not taken as the answer. `--on-node` is split like a shell command line, so quote a path with spaces. It prints the server's own startup lines (how many models are registered and how many leave this machine; the
+token line is left out) and a line naming the program each work order goes to (`agent_command: claude — leaves this
+machine`). It prints a line per node with the UTC time, then the run id,
+the final node, where `site/` is, and the conversation's `relaxation` turns (the engine records
+"N ask(s) ran unsandboxed" there) or `no relaxation recorded`. With `--keep-serving` it stays up and prints the console URL and
 the **path** of the operator token file (never the token), so the run can be watched in the console.
 
 | option | |
 |---|---|
 | `--runner-yaml PATH` | build with another backend |
 | `--models PATH` | the registry `node_models` names (default: `models.json` beside `--runner-yaml`) |
-| `--workdir DIR` | run in `DIR` |
+| `--workdir DIR` | run in `DIR`, which must be new or empty |
 | `--keep-serving` | stay up after the end |
 | `--on-node CMD` | run `CMD <node-id> <utc-time>` on every node change, e.g. to take a screenshot |
 | `--dry-run` | check the plan, `runner.yaml` and brief, start nothing, spend nothing |

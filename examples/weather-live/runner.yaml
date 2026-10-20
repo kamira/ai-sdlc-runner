@@ -12,6 +12,14 @@
 # run), WebFetch and WebSearch (the page fetches its own data in the browser at run time; building
 # it makes no request).
 #
+# The boundary is the TOOL LIST, not paths. Read, Glob and Grep reach anything the process user can
+# read, wherever it is. Write and Edit (on the writer model, below) are not scoped to a path either,
+# unless the runner's sandbox (bwrap) confines the process. Without it, the person directory
+# (drive.py's `--person-dir`, where a stop that needs a person is answered) being outside the workdir
+# rests on claude's own permission behaviour for a write outside its start directory, which this
+# change did not test. drive.py prints at the end whether the asks ran
+# unsandboxed.
+#
 # WHO WRITES. `models.json` (beside this file) holds one model, `sonnet-writer`: this same command
 # plus `Write Edit`, and `plan.json`'s `node_models` gives it to `engineer_build`, a pool of one.
 # `engineer_selfverify` and `fix_pass` are `follows engineer_build` in the runner's flow, so the

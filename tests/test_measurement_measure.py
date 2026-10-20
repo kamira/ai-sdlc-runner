@@ -85,12 +85,13 @@ def test_cli_prints_the_block_and_writes_json(run_dir, tmp_path):
                           capture_output=True, text=True, encoding="utf-8", timeout=120,
                           env={**os.environ, "PYTHONUTF8": "1"})
     assert done.returncode == 0, done.stderr
-    for text in ("first -> last turn", "inside asks", "module loop", "runner overhead",
+    for text in ("brief -> last turn", "inside asks", "module loop", "runner overhead",
                  "engineer_build", "ceiling(n) = 1 / ((1 - s) + s / n)", "time share", "ask share"):
         assert text in done.stdout
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["modules_built"] == len(MODULES)
     assert set(data["ceiling"]) == {"time", "asks"}
+    assert {"window_start", "window_end", "opened_to_brief_seconds"} <= set(data)
 
 
 # ── the writes check: mtimes placed inside and outside the asks ──────────────────────────────────
@@ -276,3 +277,59 @@ def test_cli_prints_the_waiting_line_and_takes_a_drive_log(person_run, tmp_path)
     assert "waiting for a person" in done.stdout and "1 stop(s)" in done.stdout
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["person_stops"][0]["source"] == "drive log"
+
+
+# ── the window starts at the brief, not at the conversation opening ──────────────────────────────
+
+def test_the_window_starts_at_the_brief_and_the_idle_time_is_reported_apart():
+    turns = ([_turn(1, "opened", 0)] + [_turn(2, "instruction", 30)]
+             + _ask(3, 30.5, 31.5) + _ask(5, 32, 33))
+    m = measure.measure(turns, [])
+    assert m["wall_seconds"] == pytest.approx(3)
+    assert m["opened_to_brief_seconds"] == pytest.approx(30)
+    assert m["runner_overhead_seconds"] == pytest.approx(1)
+    assert m["window_start"] == "2026-10-19T10:00:30.000Z" and m["window_end"] == "2026-10-19T10:00:33.000Z"
+    assert "brief -> last turn" in measure.render(m)
+
+
+def test_with_no_instruction_the_window_starts_at_the_first_ask():
+    turns = [_turn(1, "opened", 0)] + _ask(2, 5, 6)
+    m = measure.measure(turns, [])
+    assert (m["wall_seconds"], m["opened_to_brief_seconds"]) == (pytest.approx(1), pytest.approx(5))
+
+
+def test_start_when_idle_time_does_not_enter_wall_or_overhead(tmp_path):
+    """A real run held at --start-when for a while: the hold is in neither number."""
+    import time
+    backend = tmp_path / "stand_in.py"
+    backend.write_text(STAND_IN, encoding="utf-8")
+    config = tmp_path / "runner.yaml"
+    config.write_text("agent_command: " + json.dumps([sys.executable, backend.as_posix()])
+                      + "\nagent_timeout: 60\n", encoding="utf-8")
+    work, go = tmp_path / "work", tmp_path / "go"
+    proc = subprocess.Popen(
+        [sys.executable, str(DRIVE), "--runner-yaml", str(config), "--workdir", str(work),
+         "--start-when", str(go)], cwd=str(tmp_path), stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+        env={**os.environ, "PYTHONUTF8": "1"})
+    try:
+        for line in proc.stdout:
+            if "waiting for" in line:
+                break
+        time.sleep(6)
+        go.write_text("", encoding="utf-8")
+        proc.communicate(timeout=300)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode == 0
+    turns = measure.turns_of(measure.open_store(work))
+    m = measure.measure(turns, measure.graph.module_cycle())
+    brief = next(t for t in turns if t["kind"] == "instruction")
+    assert m["opened_to_brief_seconds"] >= 5
+    assert m["wall_seconds"] == pytest.approx(measure._when(turns[-1]["at"]) - measure._when(brief["at"]))
+    assert m["wall_seconds"] == pytest.approx(
+        measure._when(turns[-1]["at"]) - measure._when(turns[0]["at"]) - m["opened_to_brief_seconds"])
+    assert m["runner_overhead_seconds"] < m["wall_seconds"]
+    assert m["wall_seconds"] == pytest.approx(
+        m["inside_asks_seconds"] + m["waiting_for_person_seconds"] + m["runner_overhead_seconds"])

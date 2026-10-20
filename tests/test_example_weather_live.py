@@ -35,6 +35,15 @@ def _files():
     return [p for p in EXAMPLE.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
 
 
+def _drive_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("weather_live_drive", DRIVE)
+    drive = importlib.util.module_from_spec(spec)
+    sys.modules["weather_live_drive"] = drive
+    spec.loader.exec_module(drive)
+    return drive
+
+
 def _run(*args, cwd=ROOT, timeout=600, env=None):
     import os
     return subprocess.run([sys.executable, str(DRIVE), *args], cwd=str(cwd), capture_output=True,
@@ -264,9 +273,19 @@ def test_the_recorded_response_is_what_the_readme_says_it_is():
     assert "27.9" in readme and "75 %" in readme
 
 
-def test_the_readme_says_the_cwa_response_is_confirmed_at_the_measurement():
+def test_the_readme_says_the_measurement_neither_confirmed_nor_left_out_the_cwa():
     readme = " ".join((EXAMPLE / "README.md").read_text(encoding="utf-8").split())
     assert "not confirmed here" in readme and "task 1a" in readme
+    assert "no key reached that session" in readme
+    assert "neither confirmed nor left out" in readme
+    assert "left out if" not in readme and "checked against the API" not in readme
+
+
+def test_runner_yaml_and_readme_say_the_boundary_is_the_tool_list_not_paths():
+    for name in ("runner.yaml", "README.md"):
+        text = " ".join((EXAMPLE / name).read_text(encoding="utf-8").split())
+        assert "tool list, not paths" in text.lower(), name
+        assert "bwrap" in text and "permission behaviour" in text, name
 
 
 def test_the_dry_run_refuses_a_models_file_without_the_model_the_plan_names(tmp_path):
@@ -538,3 +557,43 @@ def test_an_unexpected_refusal_prints_the_servers_message_and_exits_cleanly(tmp_
     assert drive.stop_kind(stop) == "unsafe" and drive.stop_kind({"gate": "merge"}) == "gate"
     assert drive.stop_kind({"incomplete": True}) == "incomplete"
     assert drive.stop_kind({"undecided": True}) == "undecided"
+
+
+def test_a_workdir_that_is_not_empty_is_refused_and_nothing_is_copied(tmp_path):
+    work = tmp_path / "project"
+    work.mkdir()
+    (work / "keep.txt").write_text("mine", encoding="utf-8")
+    done = _run("--runner-yaml", str(_stand_in_config(tmp_path)), "--workdir", str(work), cwd=tmp_path)
+    assert done.returncode != 0 and "not empty" in done.stdout + done.stderr
+    assert sorted(p.name for p in work.iterdir()) == ["keep.txt"]
+
+
+def test_an_existing_empty_workdir_is_used(tmp_path):
+    work = tmp_path / "empty"
+    work.mkdir()
+    done = _run("--runner-yaml", str(_stand_in_config(tmp_path)), "--workdir", str(work), cwd=tmp_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_drive_prints_the_servers_models_line_where_the_commands_go_and_the_relaxations(tmp_path):
+    work = tmp_path / "work"
+    done = _run("--runner-yaml", str(_stand_in_config(tmp_path)), "--workdir", str(work), cwd=tmp_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+    out = done.stdout
+    assert re.search(r"^server: models +\d+ registered, \d+ of which leave this machine", out, re.M)
+    assert "agent_command: python" in out
+    token = (work / ".runner" / "operator.token").read_text(encoding="utf-8").strip()
+    assert token not in out and "#token=" not in out
+    assert re.search(r"^relaxation:  ", out, re.M)
+
+
+def test_the_reach_line_names_the_program():
+    drive = _drive_module()
+    assert drive.reach_line("agent_command", "claude") == (
+        "agent_command: claude — leaves this machine (the work order goes to the vendor)")
+    assert "local script" in drive.reach_line("agent_command", "python3")
+
+
+def test_the_relaxations_are_read_from_the_conversation(tmp_path):
+    drive = _drive_module()
+    assert drive.relaxations(tmp_path) == []

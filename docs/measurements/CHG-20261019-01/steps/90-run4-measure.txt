@@ -1,14 +1,14 @@
 $ PYTHONPATH=src python3 docs/measurements/CHG-20261019-01/measure.py /tmp/claude-0/-home-user-ai-sdlc-runner/e9610bf5-653a-5d17-821e-d8ca61c6322a/scratchpad/run4 --json docs/measurements/CHG-20261019-01/run4-measure.json --drive-log /tmp/claude-0/-home-user-ai-sdlc-runner/e9610bf5-653a-5d17-821e-d8ca61c6322a/scratchpad/run4.log
-# started 2026-10-19T12:04:34Z
-# ended   2026-10-19T12:04:34Z
+# started 2026-10-20T17:34:12Z
+# ended   2026-10-20T17:34:12Z
 # exit    0
 
-first -> last turn   839.51s
-inside asks           819.72s    98%
-  module loop         498.98s    59%   <- everything concurrency can touch
-  everything else     320.74s    38%
+brief -> last turn  819.88s   (2026-10-19T11:50:43.199Z .. 2026-10-19T12:04:23.074Z; 19.64s from the conversation opening to the brief is not counted)
+inside asks           819.72s   100%
+  module loop         498.98s    61%   <- everything concurrency can touch
+  everything else     320.74s    39%
 waiting for a person    0.00s     0%
-runner overhead        19.79s     2%
+runner overhead         0.15s     0%
 
 nodes counted as the module loop (graph.module_cycle): engineer_build, engineer_selfverify, fix_pass, lead_task_review, re_review
 modules built 10   asks 44   asks in the loop 30
@@ -30,7 +30,7 @@ pm_confirm                1      4.29     4.29
 
 ceiling(n) = 1 / ((1 - s) + s / n)      s = the loop's share; n = builders (inf: 1 / (1 - s))
 share s                        at 4 builders  at infinity
-time share  59%                        1.80x        2.47x
+time share  61%                        1.84x        2.55x
             of working time = wall - waiting for a person
 ask share   68%                        2.05x        3.14x
 

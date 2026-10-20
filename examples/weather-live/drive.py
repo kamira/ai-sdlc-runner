@@ -16,6 +16,12 @@ the workdir, so it must not be able to answer), prints `AWAITING-PERSON <that pa
 `<NNN>-<node>.proceed` (its text is the instruction, or the branch, where the route takes one) or
 `<NNN>-<node>.stop` beside it. A `.proceed` that already exists when the stop is written is refused.
 
+`--workdir` must be new or empty: the model that writes can write anywhere inside it, so a project
+tree is refused rather than built into. The server's own startup lines (how many models are
+registered and how many leave this machine) are printed, with the operator token left out, and so is
+one line naming the program each work order goes to. At the end the conversation's `relaxation` turns
+are printed -- the engine records "N ask(s) ran unsandboxed" there -- or "no relaxation recorded".
+
 `--dry-run` checks the plan, `runner.yaml` and the brief, starts nothing and spends nothing.
 """
 from __future__ import annotations
@@ -23,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -59,6 +66,31 @@ def models_beside(runner_yaml: Path) -> Path | None:
     """The registry of the backend `runner_yaml` names: `models.json` in its directory, if any."""
     found = runner_yaml.parent / "models.json"
     return found if found.is_file() else None
+
+
+def command_programs(runner_yaml: Path, models: Path | None) -> list:
+    """`(label, program)` for the default agent_command and each registry model that has a command."""
+    sys.path.insert(0, str(REPO / "src"))
+    from ai_sdlc_runner import cli
+
+    def program(command) -> str:
+        argv = shlex.split(command, posix=(os.name != "nt")) if isinstance(command, str) else list(command or [])
+        name = Path(str(argv[0])).name if argv else "(none)"
+        return name[:-4] if name.lower().endswith(".exe") else name
+
+    found = [("agent_command", program(cli.load_config(str(runner_yaml)).get("agent_command")))]
+    if models is not None:
+        for entry in json.loads(models.read_text(encoding="utf-8")).get("models") or []:
+            if entry.get("command"):
+                found.append((f"model {entry.get('id')}", program(entry["command"])))
+    return found
+
+
+def reach_line(label: str, prog: str) -> str:
+    """A work order goes to this program. A python script is the stand-in's shape, so it says less."""
+    if prog.lower().startswith("python"):
+        return f"{label}: {prog} — a local script; whether it sends work orders off this machine is its own"
+    return f"{label}: {prog} — leaves this machine (the work order goes to the vendor)"
 
 
 def validate(runner_yaml: Path, models: Path | None) -> str:
@@ -173,6 +205,46 @@ class Console:
         return answer
 
 
+class Startup:
+    """The server's own startup lines, as it printed them, and the thread that reads its output."""
+
+    def __init__(self):
+        self.lines: list = []
+        self.printed = threading.Event()
+        self.thread = None
+
+
+#: The line that carries the token in a URL, and any other place one could appear.
+TOKEN_URL = re.compile(r"#token=\S+")
+
+
+def relay_startup(proc) -> Startup:
+    """Print what `serve` says about itself up to and including its `models` line, which reports how
+    many models are registered and how many leave this machine. Nothing is printed after that, but
+    the pipe is still read so the server never blocks on it. The `open …#token=` line is not
+    printed: it carries the operator token."""
+    startup = Startup()
+
+    def read():
+        quiet = False
+        for line in proc.stdout:
+            startup.lines.append(line)
+            if quiet:
+                continue
+            text = line.rstrip()
+            if text.startswith("open ") or "token=" in text:
+                continue
+            print(f"server: {TOKEN_URL.sub('#token=<omitted>', text)}", flush=True)
+            if text.startswith("models "):
+                quiet = True
+                startup.printed.set()
+        startup.printed.set()
+
+    startup.thread = threading.Thread(target=read, daemon=True)
+    startup.thread.start()
+    return startup
+
+
 def start_server(work: Path, runner_yaml: Path, brief: str, models: Path | None):
     work.mkdir(parents=True, exist_ok=True)
     if models is not None:
@@ -197,17 +269,19 @@ def start_server(work: Path, runner_yaml: Path, brief: str, models: Path | None)
          "--ask-journal", str(work / ".runner" / "asks")],
         cwd=str(work), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         encoding="utf-8", errors="replace")
+    proc.startup = relay_startup(proc)
     token_file = work / ".runner" / "operator.token"
     for _ in range(120):
         if token_file.exists() and proc.poll() is None:
             break
         if proc.poll() is not None:
-            raise SystemExit("the server exited before it wrote a token:\n"
-                             + (proc.stdout.read() if proc.stdout else ""))
+            proc.startup.thread.join(5)
+            raise SystemExit("the server exited before it wrote a token:\n" + "".join(proc.startup.lines))
         time.sleep(0.25)
     else:
         proc.terminate()
         raise SystemExit("the server never wrote a token")
+    proc.startup.printed.wait(10)
     return proc, Console(port, token_file.read_text(encoding="utf-8").strip()), token_file
 
 
@@ -326,6 +400,31 @@ def walk(console: Console, brief: str, journal: Path, on_node, person_dir: Path,
     return state, run_id
 
 
+def relaxations(work: Path) -> list:
+    """The text of every `relaxation` turn in the run's conversation (the engine writes
+    "N ask(s) ran unsandboxed …" there when this machine could not bound the asks)."""
+    sys.path.insert(0, str(REPO / "src"))
+    from ai_sdlc_runner import conversations
+
+    root = work / "conv"
+    for kind in conversations.BACKENDS:
+        try:
+            back = conversations.backend(kind, root=str(root))
+            heads = back.conversations()
+            if not heads:
+                continue
+            found = []
+            for head in heads:
+                pid = str((head.get("project") or {}).get("id"))
+                for turn in back.read(pid, str(head["conversation_id"]))["turns"]:
+                    if turn["kind"] == conversations.RELAXATION:
+                        found.append(str(turn.get("text")))
+            return found
+        except Exception:  # noqa: BLE001 - try the next kind
+            continue
+    return []
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--runner-yaml", type=Path, default=HERE / "runner.yaml",
@@ -334,7 +433,7 @@ def main(argv=None) -> int:
                     help="the model registry the plan's node_models name (default: models.json "
                          "beside --runner-yaml; none there means agent_command answers every node)")
     ap.add_argument("--workdir", type=Path, default=None,
-                    help="where the run lives (default: a new temporary directory)")
+                    help="where the run lives; must be new or empty (default: a new temporary directory)")
     ap.add_argument("--keep-serving", action="store_true",
                     help="stay up after the end and print the console URL and the token file's path")
     ap.add_argument("--on-node", default=None, metavar="CMD",
@@ -357,6 +456,11 @@ def main(argv=None) -> int:
               f"nothing was started")
         return 0
 
+    if args.workdir:
+        existing = args.workdir.resolve()
+        if existing.exists() and (not existing.is_dir() or any(existing.iterdir())):
+            raise SystemExit(f"--workdir {existing} exists and is not empty; the model that writes can "
+                             f"write anywhere in it, so choose a new or empty directory. Nothing was copied.")
     work = (args.workdir or Path(tempfile.mkdtemp(prefix="weather-live-"))).resolve()
     if args.person_dir:
         person_dir = args.person_dir.resolve()
@@ -366,6 +470,8 @@ def main(argv=None) -> int:
     else:
         person_dir = Path(tempfile.mkdtemp(prefix="weather-live-person-")).resolve()
         print(f"{utc()}  a stop that needs a person is written to {person_dir}", flush=True)
+    for label, prog in command_programs(runner_yaml, models):
+        print(reach_line(label, prog), flush=True)
     proc, console, token_file = start_server(work, runner_yaml, brief, models)
     try:
         print(f"{utc()}  serving {console.base} in {work}", flush=True)
@@ -392,6 +498,11 @@ def main(argv=None) -> int:
               f"{len(state.get('visited') or [])} nodes walked)")
         site = work / "site"
         print(f"site/:       {site}" + ("" if site.exists() else "  (nothing was built)"))
+        recorded = relaxations(work)
+        for text in recorded:
+            print(f"relaxation:  {text}")
+        if not recorded:
+            print("relaxation:  no relaxation recorded")
         if args.keep_serving and not ended and proc.poll() is None:
             print(f"console:     {console.base}/")
             print(f"token file:  {token_file}")

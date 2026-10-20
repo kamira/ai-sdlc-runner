@@ -21,6 +21,11 @@ writes nothing of its own -- so that end is the next turn, and includes the few 
 runner takes to restart. `--drive-log FILE` (drive.py's stdout) gives the moment: each
 `PERSON-ANSWERED <route> <UTC>` line ends the wait that began at the last stop before it. The wait is
 reported as "waiting for a person" and is not "runner overhead".
+
+The window. "brief -> last turn" runs from the first `instruction` turn (or the first `ask` if the
+record has none) to the last turn. The `opened` turn is earlier, written when `serve` opens the
+conversation; with `drive.py --start-when` the gap can be long, so it is reported on its own as
+`opened_to_brief_seconds` and is in neither the wall-clock nor the runner overhead.
 """
 from __future__ import annotations
 
@@ -134,11 +139,30 @@ def amdahl(share: float, n: Optional[int]) -> float:
     return 1.0 / ((1.0 - share) + (share / n if n else 0.0))
 
 
+def window_of(turns: Sequence[dict]) -> Tuple[float, float, float]:
+    """Where the measured window starts and ends, and the idle time before it.
+
+    It starts at the first `instruction` turn (the brief typed), or the first `ask` when the record
+    has none, and ends at the last turn. The `opened` turn is written when `serve` opens the
+    conversation, which with `drive.py --start-when` is long before anyone types a brief, so it is
+    not the start. The time from `opened` to the start is returned on its own.
+    """
+    start = next((t for t in turns if t["kind"] == conversations.INSTRUCTION), None) \
+        or next((t for t in turns if t["kind"] == conversations.ASK), turns[0])
+    first = min(_when(turns[0]["at"]), _when(start["at"]))
+    return _when(start["at"]), _when(turns[-1]["at"]), _when(start["at"]) - first
+
+
+def _iso(stamp: float) -> str:
+    return datetime.fromtimestamp(stamp, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
 def measure(turns: Sequence[dict], loop_nodes: Sequence[str], answered: Sequence[float] = ()) -> dict:
     rows = asks_of(turns)
     if not rows:
         raise SystemExit("the record holds no answered ask")
-    wall = _when(turns[-1]["at"]) - _when(turns[0]["at"])
+    began, ended, idle = window_of(turns)
+    wall = ended - began
     loop = [r for r in rows if r["node"] in loop_nodes]
     inside = union_seconds([(r["start"], r["end"]) for r in rows])
     waits = person_waits(turns, answered)
@@ -159,6 +183,9 @@ def measure(turns: Sequence[dict], loop_nodes: Sequence[str], answered: Sequence
     share_n = len(loop) / len(rows)
     out = {
         "wall_seconds": wall,
+        "window_start": _iso(began),
+        "window_end": _iso(ended),
+        "opened_to_brief_seconds": idle,
         "inside_asks_seconds": inside,
         "module_loop_seconds": in_loop,
         "everything_else_seconds": inside - in_loop,
@@ -236,7 +263,8 @@ def render(m: dict) -> str:
         return f"{label:<21}{seconds:>7.2f}s  {seconds / wall * 100:>4.0f}%{tag}"
 
     lines = [
-        f"first -> last turn   {m['wall_seconds']:.2f}s",
+        f"brief -> last turn  {m['wall_seconds']:.2f}s   ({m['window_start']} .. {m['window_end']}; "
+        f"{m['opened_to_brief_seconds']:.2f}s from the conversation opening to the brief is not counted)",
         line("inside asks", m["inside_asks_seconds"]),
         line("  module loop", m["module_loop_seconds"], "   <- everything concurrency can touch"),
         line("  everything else", m["everything_else_seconds"]),

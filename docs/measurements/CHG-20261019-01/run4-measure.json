@@ -1,12 +1,15 @@
 {
-  "wall_seconds": 839.510999917984,
+  "wall_seconds": 819.875,
+  "window_start": "2026-10-19T11:50:43.199Z",
+  "window_end": "2026-10-19T12:04:23.074Z",
+  "opened_to_brief_seconds": 19.63599991798401,
   "inside_asks_seconds": 819.7219996452332,
   "module_loop_seconds": 498.98200011253357,
   "everything_else_seconds": 320.7399995326996,
   "waiting_for_person_seconds": 0.0,
-  "working_seconds": 839.510999917984,
+  "working_seconds": 819.875,
   "person_stops": [],
-  "runner_overhead_seconds": 19.789000272750854,
+  "runner_overhead_seconds": 0.1530003547668457,
   "loop_nodes": [
     "engineer_build",
     "engineer_selfverify",
@@ -99,12 +102,12 @@
   "asks_in_loop": 30,
   "formula": "ceiling(n) = 1 / ((1 - s) + s / n)      s = the loop's share; n = builders (inf: 1 / (1 - s))",
   "builders": 4,
-  "share_time": 0.5943722001990225,
+  "share_time": 0.6086074098033646,
   "share_asks": 0.6818181818181818,
   "ceiling": {
     "time": {
-      "at_builders": 1.8043348608579546,
-      "at_infinity": 2.465314262214407
+      "at_builders": 1.8397759622547813,
+      "at_infinity": 2.5549793865479176
     },
     "asks": {
       "at_builders": 2.046511627906977,
