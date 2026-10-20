@@ -5,7 +5,7 @@
 - **後端**：每個節點都是 `claude-sonnet-5-5`、effort `medium`，每次 ask 是一個 `claude -p` 程序。
 - **範例**：`examples/weather-live`。這個範例只放人交給 runner 的東西：brief、plan、`runner.yaml`、`models.json`。頁面完全由 runner 實跑時建出，沒有範例 agent。
 - **操作方式**：用 `drive.py` 透過 `runner serve` 和 console 操作 run，就像操作員在 console 上做的一樣。執行中，console 由 Chromium 定時擷取，同步推送到即時頁面。
-- **截圖與紀錄**：每筆指令、每項設定、每張畫面都附有圖片和文字紀錄，放在 `steps/`。下方「操作流程」逐步列出。截圖已用 `capture.py check` 掃過，沒有任何密鑰。
+- **截圖與紀錄**：指令、設定和畫面都附有圖片和文字紀錄，放在 `steps/`；下方「操作流程」逐步列出。有幾項沒在當下擷取，或事後無法補回，第 6 節逐一列出。截圖已用 `capture.py check` 掃過，沒有任何密鑰。
 
 ## 1. 結論
 
@@ -141,7 +141,7 @@ modules built 10   asks 44   asks in the loop 30
     - **現象**：
       - 範例把 claude 後端放在 `runner.yaml` 的 `agent_command`，這個位置不會出現在任何「會不會離開本機」的顯示上。
       - Run 1 的 `GET /models` 回答 `models: []`、`leaving: []`（步驟 10），但當時 8 次 ask 都已送到 Anthropic。
-      - Run 2–4 的 console 只把 `sonnet-writer` 標成外部，而 Run 4 的 44 次 ask 裡，有 34 次是走預設指令送出的。
+      - Run 2–4 的 console 只把 `sonnet-writer` 標成外部，但 Run 4 的 44 次 ask 裡，有 24 次走預設指令送出；另外 20 次走 `sonnet-writer`，其中包括 10 次 `engineer_selfverify`，因為它跟隨 `engineer_build`。
       - `serve` 啟動時會印一行說明外送情況，但原本的 `drive.py` 沒有把這行顯示出來。
     - **建議**：runner 判斷 `agent_command` 的 reach，並和註冊表的模型一起顯示。這次 `drive.py` 已經改成會印出這行，也會自己標明預設指令會外送。
 14. **沒有沙箱時，只在 run 結束時記一筆。**
@@ -167,6 +167,11 @@ Run 1–3 的工作目錄保留在 session 暫存區裡，不進 repository。�
 - **CWA**：沒有用真實授權碼驗證。
 - **花費與速率限制**：都沒有量測，見第 1 節。
 - **Run 3 的執行指令沒有在當下擷取**：擷取用的包裝程式和 run 一起被結束了。Run 3 的執行紀錄、交給你閱讀的停止全文、你的回覆，以及這兩個檔案的寫入時間，事後從保留的工作目錄補擷取，見步驟 52、56、57、58。
+- **Run 4 開跑前的設定**：Run 4 當時只截了 plan（步驟 72）和 console（步驟 74）。runner.yaml 和 models.json 事後從 Run 4 所用的 commit `7b834e0` 補擷取（步驟 75、76），sha256 和 Run 2 的擷取（步驟 32、33）完全相同。Run 4 伺服器上的 `GET /models`、`GET /config/nodes`、`GET /config/seats` 沒有在當下擷取，事後無法補回；Run 2 的擷取（步驟 37、38）是相同設定下的結果。
+- **未擷取的操作**：送出開始訊號的 `touch`，以及手動中止 run 的 `kill`，都沒有截圖。
+- **runner 的設定檔放在建置模型可寫的地方**：量測的四次 run 裡，設定檔、operator token、`config.sqlite`、對話紀錄與 ask journal 都在工作目錄內，可寫檔的模型改得到。Run 4 的寫檔核對沒有發現任何越權寫入，但這些檔案的完整性靠的是模型自律。之後的 `drive.py` 已把它們移到工作目錄外。
+- **讀取範圍**：唯讀的預設指令仍能讀取程序使用者讀得到的任何檔案（包括 `~/.claude` 等），讀到的內容可能進入答覆與紀錄。這次已用 `capture.py check` 掃過，沒有發現密鑰，但這個掃描只認得特定格式。
+- **驗證頁面時關閉了 Chromium 沙箱**：`page_check.py` 以 `--no-sandbox` 開啟模型建出的頁面，只在本機 loopback 上執行。
 - **console 截圖並非「每換節點」**：擷取工具以 `GET /run` 的 `at` 判斷是否換節點，但 `at` 只在 run 停下時才更新，所以實際上幾乎都是定時擷取。
 - **外送沒有在 console 上顯示**：見第 4 節第 13 項。這份報告和 CHG 都寫明，每次 ask 都送到 Anthropic（`claude-sonnet-5-5`）。
 - **沒有沙箱**：Run 4 的 ask 全部在沒有沙箱的情況下執行，見第 4 節第 14 項。
@@ -188,10 +193,10 @@ Run 1–3 的工作目錄保留在 session 暫存區裡，不進 repository。�
    - Python 3.9 以上；
    - 有 Chromium 和 Playwright，截圖時才需要。
 2. `python3 examples/weather-live/drive.py --dry-run`：確認設定可以被載入。
-3. `PYTHONPATH=src cleanenv.sh python3 examples/weather-live/drive.py --workdir RUN --start-when RUN-go`：啟動 runner serve，並等待開始訊號。`RUN` 必須是不存在或空的目錄。
+3. `PYTHONPATH=src cleanenv.sh python3 examples/weather-live/drive.py --workdir RUN --start-when RUN-go`：啟動 runner serve，並等待開始訊號。`RUN` 必須是不存在或空的目錄。現在的 `drive.py` 會把 runner 的設定、token、對話紀錄和 ask journal 放在工作目錄外的狀態目錄，並在啟動時印出它的路徑；Run 1–4 執行時還沒有這個機制。範例的指令現在也加了 `--output-format json`，重跑時會記錄花費。
 4. 依需要擷取 console 和設定（`capture.py page` / `cmd` / `file`），然後 `touch RUN-go` 開始 run。也可以另開 `capture.py watch` 定時擷取 console。
 5. 出現 `AWAITING-PERSON <檔案>` 時，閱讀該檔案，再建立同名的 `.proceed` 或 `.stop` 檔回覆。
-6. 跑完後執行 `measure.py RUN --json OUT --drive-log <drive 的輸出>` 算出數字，再執行 `page_check.py RUN/site <fixture> <輸出目錄> live|recorded|failing` 驗證頁面。
+6. 跑完後執行 `measure.py RUN --state-dir STATE --json OUT --drive-log <drive 的輸出>` 算出數字（`STATE` 是 `drive.py` 啟動時印出的狀態目錄；Run 4 當時沒有狀態目錄，所以不帶這個參數），再執行 `page_check.py RUN/site <fixture> <輸出目錄> live|recorded|failing` 驗證頁面。
 
 ## 8. 操作流程（每一步的指令或設定、截圖與 UTC 時間）
 
@@ -200,7 +205,7 @@ Run 1–3 的工作目錄保留在 session 暫存區裡，不進 repository。�
 - **步驟 0 · cleanenv** — 設定：每個 claude 與 runner 程序都經過這支腳本啟動，只傳入列出的環境變數（其餘一律不傳）；決定模型程序看到的環境  
   檔案：`$S/cleanenv.sh`（sha256 `d458eedc3fbc…`）  
   結果：腳本只傳入 HOME、PATH、TERM、LANG、USER、代理與 CA 相關變數、ANTHROPIC_BASE_URL、CODEX_HOME、PYTHONPATH；其他變數（包括 CWA_API_KEY）一律不傳給子程序。  
-  17:31:15 → 17:31:24 UTC · 文字紀錄 [00-cleanenv.txt](steps/00-cleanenv.txt)  
+  2026-10-20 17:31:15（事後） → 17:31:24 UTC · 文字紀錄 [00-cleanenv.txt](steps/00-cleanenv.txt)  
   ![步驟 0](steps/00-cleanenv.png)
 
 - **步驟 1 · repo-state** — 記錄實測所用的程式版本（分支與 commit）  
@@ -278,7 +283,7 @@ Run 1–3 的工作目錄保留在 session 暫存區裡，不進 repository。�
 - **步驟 15 · run1-answers** — Run 1：每個 ask 的節點、狀態與答覆開頭（事後從保留的工作目錄擷取），佐證哪些節點自稱寫了檔案  
   指令：`cd $S/run1/.runner/asks && for f in 0*.json; do python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));r=d.get("result") or {};print(sys.argv[1], d.get("status"), (r.get("stdout") or "")[:240].replace(chr(10)," "))' $f; done`  
   結果：lead_assess 回答「我寫好了 site/ 底下的十個檔案」；pm_signoff 回答「I wrote all ten files」；engineer_build 回答 {"module": ""}；engineer_selfverify 仍是 pending。  
-  17:31:49 → 17:31:50 UTC · 文字紀錄 [15-run1-answers.txt](steps/15-run1-answers.txt)  
+  2026-10-20 17:31:49（事後） → 17:31:50 UTC · 文字紀錄 [15-run1-answers.txt](steps/15-run1-answers.txt)  
   ![步驟 15](steps/15-run1-answers.png)
 
 **執行中的 console**：共 8 張。擷取工具以 `GET /run` 的 `at` 判斷是否換節點，但 `at` 只在 run 停下時才更新，所以實際上幾乎都是每 45–60 秒定時擷取，檔名多半標成 `none`。畫面中只有用量區的 ask 數會隨執行變化。
@@ -380,7 +385,7 @@ Run 1–3 的工作目錄保留在 session 暫存區裡，不進 repository。�
 - **步驟 52 · run3-drive-log** — Run 3 的執行輸出（drive.py 的完整紀錄）。原本的擷取包裝在中止 run 時被一併結束，沒有寫出；這是事後從保留的紀錄檔擷取  
   檔案：`$S/run3.log`（sha256 `1ca37d8a8a31…`）  
   結果：Run 3 的輸出：intake_review 停下 → AWAITING-PERSON → 11:39:12 PERSON-ANSWERED proceed → pm_plan → … → pm_signoff 之後又回到 pm_plan，然後被中止。  
-  11:56:55 → 11:57:21 UTC · 文字紀錄 [52-run3-drive-log.txt](steps/52-run3-drive-log.txt)  
+  2026-10-20 11:56:55（事後） → 11:57:21 UTC · 文字紀錄 [52-run3-drive-log.txt](steps/52-run3-drive-log.txt)  
   ![步驟 52](steps/52-run3-drive-log.png)
 
 - **步驟 53 · run3-console-before-run** — Run 3：run 開始前的 runner console  
@@ -404,19 +409,19 @@ Run 1–3 的工作目錄保留在 session 暫存區裡，不進 repository。�
 - **步驟 56 · run3-person-stop** — Run 3：intake_review 停下時交給使用者閱讀的全文（事後擷取）（擷取內容有遮蔽）  
   檔案：`$S/run3/.runner/person/001-intake_review.md`（sha256 `81eb23b21c88…`）  
   結果：defect 席位標記 unsafe 的全文：CWA 金鑰放在請求網址；另列約 30 項非阻擋問題。  
-  11:57:21 → 11:57:23 UTC · 文字紀錄 [56-run3-person-stop.txt](steps/56-run3-person-stop.txt)  
+  2026-10-20 11:57:21（事後） → 11:57:23 UTC · 文字紀錄 [56-run3-person-stop.txt](steps/56-run3-person-stop.txt)  
   ![步驟 56](steps/56-run3-person-stop.png)
 
 - **步驟 57 · run3-person-answer** — Run 3：使用者的回覆「繼續」，11:39:12 UTC 寫入（事後擷取；檔案時間見文字紀錄）  
   檔案：`$S/run3/.runner/person/001-intake_review.proceed`（sha256 `8e0adec90d6e…`）  
   結果：回覆檔的內容是「使用者 2026-10-19 回覆：繼續 (proceed)」。  
-  11:57:23 → 11:57:25 UTC · 文字紀錄 [57-run3-person-answer.txt](steps/57-run3-person-answer.txt)  
+  2026-10-20 11:57:23（事後） → 11:57:25 UTC · 文字紀錄 [57-run3-person-answer.txt](steps/57-run3-person-answer.txt)  
   ![步驟 57](steps/57-run3-person-answer.png)
 
 - **步驟 58 · run3-person-file-times** — Run 3：停止檔與回覆檔的寫入時間（UTC），佐證 11:33:19 停下、11:39:12 回覆  
   指令：`TZ=UTC ls -la --time-style=+%FT%TZ $S/run3/.runner/person/`  
   結果：停止檔的寫入時間是 11:33:19，回覆檔是 11:39:12。  
-  11:57:34 → 11:57:34 UTC · 文字紀錄 [58-run3-person-file-times.txt](steps/58-run3-person-file-times.txt)  
+  2026-10-20 11:57:34（事後） → 11:57:34 UTC · 文字紀錄 [58-run3-person-file-times.txt](steps/58-run3-person-file-times.txt)  
   ![步驟 58](steps/58-run3-person-file-times.png)
 
 **執行中的 console**：共 10 張。擷取工具以 `GET /run` 的 `at` 判斷是否換節點，但 `at` 只在 run 停下時才更新，所以實際上幾乎都是每 45–60 秒定時擷取，檔名多半標成 `none`。畫面中只有用量區的 ask 數會隨執行變化。
@@ -474,6 +479,18 @@ Run 1–3 的工作目錄保留在 session 暫存區裡，不進 repository。�
   11:50:27 → 11:50:29 UTC · 文字紀錄 [74-run4-console-before-run.txt](steps/74-run4-console-before-run.txt)  
   ![步驟 74](steps/74-run4-console-before-run.png)
 
+- **步驟 75 · run4-runner-yaml** — Run 4 的 runner.yaml（事後擷取）：取自 Run 4 所用的 commit 7b834e0，並與 Run 2 的擷取（步驟 32）比對 sha256  
+  指令：`git show 7b834e0:examples/weather-live/runner.yaml; echo; echo '--- sha256 at 7b834e0 / at add8f7f (run 2):'; git show 7b834e0:examples/weather-live/runner.yaml | sha256sum; git show add8f7f:examples/weather-live/runner.yaml | sha256sum`  
+  結果：Run 4 用的 runner.yaml：唯讀預設指令（Read Glob Grep）。sha256 8304d892…，和 Run 2（步驟 32）相同。  
+  2026-10-20 23:28:38（事後） → 23:28:38 UTC · 文字紀錄 [75-run4-runner-yaml.txt](steps/75-run4-runner-yaml.txt)  
+  ![步驟 75](steps/75-run4-runner-yaml.png)
+
+- **步驟 76 · run4-models-json** — Run 4 的 models.json（事後擷取）：取自 commit 7b834e0，並與 Run 2 的擷取（步驟 33）比對 sha256  
+  指令：`git show 7b834e0:examples/weather-live/models.json; echo; echo '--- sha256 at 7b834e0 / at add8f7f (run 2):'; git show 7b834e0:examples/weather-live/models.json | sha256sum; git show add8f7f:examples/weather-live/models.json | sha256sum`  
+  結果：Run 4 用的 models.json：sonnet-writer（多了 Write、Edit）。sha256 3ff9bc73…，和 Run 2（步驟 33）相同。  
+  2026-10-20 23:28:46（事後） → 23:28:46 UTC · 文字紀錄 [76-run4-models-json.txt](steps/76-run4-models-json.txt)  
+  ![步驟 76](steps/76-run4-models-json.png)
+
 **執行中的 console**：共 14 張。擷取工具以 `GET /run` 的 `at` 判斷是否換節點，但 `at` 只在 run 停下時才更新，所以實際上幾乎都是每 45–60 秒定時擷取，檔名多半標成 `none`。畫面中只有用量區的 ask 數會隨執行變化。
 
 - 12:03:51 UTC · [80-console-merge-120351-014.txt](steps/80-console-merge-120351-014.txt)  
@@ -510,7 +527,7 @@ Run 1–3 的工作目錄保留在 session 暫存區裡，不進 repository。�
 - **步驟 90 · run4-measure** — Run 4：從對話紀錄計算耗時（從輸入 brief 起算）、模組迴圈佔比、各節點時間、Amdahl 上限與寫檔歸屬  
   指令：`PYTHONPATH=src python3 docs/measurements/CHG-20261019-01/measure.py $S/run4 --json docs/measurements/CHG-20261019-01/run4-measure.json --drive-log $S/run4.log`  
   結果：從輸入 brief 到最後一個 turn 共 819.88 秒（serve 啟動到 brief 的 19.64 秒不計）；44 次 ask、10 個模組；模組迴圈 498.98 秒，佔 60.9%；上限 1.84×（4 個 builder）、2.55×（無限）；十個檔案都由 engineer_build 寫出。  
-  17:34:12 → 17:34:12 UTC · 文字紀錄 [90-run4-measure.txt](steps/90-run4-measure.txt)  
+  2026-10-20 17:34:12（事後） → 17:34:12 UTC · 文字紀錄 [90-run4-measure.txt](steps/90-run4-measure.txt)  
   ![步驟 90](steps/90-run4-measure.png)
 
 - **步驟 91 · page-check-script** — 驗證用腳本：以 Chromium 三種方式開啟 Run 4 建出的頁面並截圖；live 模式由腳本以驗證 TLS 的 urllib 轉送頁面的真實請求  

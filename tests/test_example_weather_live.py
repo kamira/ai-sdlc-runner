@@ -88,6 +88,7 @@ def test_runner_yaml_names_the_model_and_effort_and_grants_no_write_and_no_netwo
     assert command[command.index("--model") + 1] == "claude-sonnet-5-5"
     assert command[command.index("--effort") + 1] == "medium"
     assert config["agent_retries"] == 0
+    assert command[command.index("--output-format") + 1] == "json", "without it no spend is recorded"
     assert int(config["agent_timeout"]) >= 1800
     granted = command[command.index("--allowedTools") + 1].split()
     refused = command[command.index("--disallowedTools") + 1].split()
@@ -116,8 +117,10 @@ def test_the_write_capable_command_is_the_default_plus_write_and_edit_and_nothin
     refused = command[command.index("--disallowedTools") + 1].split()
     assert set(granted) == {"Read", "Glob", "Grep", "Write", "Edit"}
     assert set(refused) == {"Bash", "WebFetch", "WebSearch"}
+    assert command[command.index("--output-format") + 1] == "json"
     stripped = [w for w in command if w not in ("--allowedTools", "--disallowedTools")]
     assert [w for w in default if w not in ("--allowedTools", "--disallowedTools")][:6] == stripped[:6]
+    assert default[-2:] == command[-2:] == ["--output-format", "json"]
 
 
 def test_through_the_runners_resolution_only_the_build_and_the_nodes_that_follow_it_can_write():
@@ -356,15 +359,15 @@ def test_drive_walks_the_plan_to_its_end_and_stops_only_at_merge(tmp_path):
     seen = tmp_path / "nodes.txt"
 
     done = _run("--runner-yaml", str(config), "--workdir", str(work),
-                "--on-node", shlex.join([sys.executable, str(hook), str(seen)])
+                "--state-dir", str(tmp_path / "state"), "--on-node", shlex.join([sys.executable, str(hook), str(seen)])
                 if os.name != "nt" else subprocess.list2cmdline([sys.executable, str(hook), str(seen)]), cwd=tmp_path)
 
     assert done.returncode == 0, done.stdout + done.stderr
     assert "final node:  done  (state finished" in done.stdout
     assert done.stdout.count("stopped at gate") == 1 and "gate merge" in done.stdout
-    token = (work / ".runner" / "operator.token").read_text(encoding="utf-8").strip()
+    token = (tmp_path / "state" / "operator.token").read_text(encoding="utf-8").strip()
     assert token and token not in done.stdout, "the token must not be printed"
-    assert (work / "brief.md").is_file() and (work / "plan.json").is_file()
+    assert (tmp_path / "state" / "brief.md").is_file() and (tmp_path / "state" / "plan.json").is_file()
     nodes = [line.split()[0] for line in seen.read_text(encoding="utf-8").splitlines()]
     assert nodes.count("engineer_build") == len(MODULES), (
         "one build per module the plan declared; the frontier is empty after the tenth")
@@ -385,7 +388,7 @@ def test_start_when_asks_nothing_until_the_file_appears(tmp_path):
     work, go = tmp_path / "work", tmp_path / "go"
     proc = subprocess.Popen(
         [sys.executable, str(DRIVE), "--runner-yaml", str(config), "--workdir", str(work),
-         "--start-when", str(go)], cwd=str(tmp_path), stdout=subprocess.PIPE,
+         "--state-dir", str(tmp_path / "state"), "--start-when", str(go)], cwd=str(tmp_path), stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
         env={**os.environ, "PYTHONUTF8": "1"})
     lines = []
@@ -396,7 +399,7 @@ def test_start_when_asks_nothing_until_the_file_appears(tmp_path):
                 break
         assert any("serving" in l for l in lines) and "waiting for" in lines[-1]
         time.sleep(2)                       # long enough for a run that ignored the flag to ask
-        asks = work / ".runner" / "asks"
+        asks = tmp_path / "state" / "asks"
         assert not (asks.is_dir() and list(asks.glob("*.json")))
         assert not (work / ".built").exists()
         assert proc.poll() is None
@@ -407,7 +410,7 @@ def test_start_when_asks_nothing_until_the_file_appears(tmp_path):
             proc.kill()
     assert proc.returncode == 0, "".join(lines) + rest
     assert "final node:  done  (state finished" in rest
-    assert list((work / ".runner" / "asks").glob("*.json"))
+    assert list((tmp_path / "state" / "asks").glob("*.json"))
 
 
 def test_drive_copies_the_models_file_and_the_build_is_asked_through_it(tmp_path):
@@ -428,10 +431,11 @@ def test_drive_copies_the_models_file_and_the_build_is_asked_through_it(tmp_path
         "id": "sonnet-writer", "vendor": "test", "name": "stand-in", "transport": "cli",
         "command": [sys.executable, str(wrapper)]}]}), encoding="utf-8")
     work = tmp_path / "work"
-    done = _run("--runner-yaml", str(config), "--workdir", str(work), cwd=tmp_path)
+    done = _run("--runner-yaml", str(config), "--workdir", str(work),
+                "--state-dir", str(tmp_path / "state"), cwd=tmp_path)
     assert done.returncode == 0, done.stdout + done.stderr
     assert "final node:  done  (state finished" in done.stdout
-    assert (work / ".runner" / "models.json").is_file()
+    assert (tmp_path / "state" / "models.json").is_file()
     asked = marker.read_text(encoding="utf-8").split()
     assert set(asked) == {"engineer_build", "engineer_selfverify"}, "only the build and what follows it"
     assert asked.count("engineer_build") == len(MODULES)
@@ -453,7 +457,7 @@ def _start_unsafe(tmp_path, *extra):
     work = tmp_path / "work"
     proc = subprocess.Popen(
         [sys.executable, str(DRIVE), "--runner-yaml", str(_stand_in_config(tmp_path)),
-         "--workdir", str(work), *extra], cwd=str(tmp_path), stdout=subprocess.PIPE,
+         "--workdir", str(work), "--state-dir", str(tmp_path / "state"), *extra], cwd=str(tmp_path), stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
         env={**os.environ, "PYTHONUTF8": "1", "STAND_IN_UNSAFE": "1"})
     lines = []
@@ -488,7 +492,7 @@ def test_an_unsafe_stop_waits_for_the_person_and_proceeds_only_on_their_file(tmp
     assert re.search(r"^PERSON-ANSWERED proceed \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$", rest, re.M), out
     assert out.count("AWAITING-PERSON") == 1
     assert "final node:  done  (state finished" in out and "gate merge" in out
-    token = (work / ".runner" / "operator.token").read_text(encoding="utf-8").strip()
+    token = (tmp_path / "state" / "operator.token").read_text(encoding="utf-8").strip()
     assert token not in out
 
 
@@ -510,7 +514,7 @@ def test_a_person_dir_inside_the_workdir_is_refused(tmp_path):
     done = _run("--runner-yaml", str(_stand_in_config(tmp_path)), "--workdir", str(work),
                 "--person-dir", str(work / "sub" / ".." / "person"), cwd=tmp_path)
     assert done.returncode != 0 and "inside the workdir" in done.stdout + done.stderr
-    assert not (work / ".runner").exists(), "nothing was started"
+    assert not work.exists(), "nothing was started"
 
 
 def test_a_proceed_that_exists_before_the_stop_does_not_answer_it(tmp_path):
@@ -577,12 +581,13 @@ def test_an_existing_empty_workdir_is_used(tmp_path):
 
 def test_drive_prints_the_servers_models_line_where_the_commands_go_and_the_relaxations(tmp_path):
     work = tmp_path / "work"
-    done = _run("--runner-yaml", str(_stand_in_config(tmp_path)), "--workdir", str(work), cwd=tmp_path)
+    done = _run("--runner-yaml", str(_stand_in_config(tmp_path)), "--workdir", str(work),
+                "--state-dir", str(tmp_path / "state"), cwd=tmp_path)
     assert done.returncode == 0, done.stdout + done.stderr
     out = done.stdout
     assert re.search(r"^server: models +\d+ registered, \d+ of which leave this machine", out, re.M)
     assert "agent_command: python" in out
-    token = (work / ".runner" / "operator.token").read_text(encoding="utf-8").strip()
+    token = (tmp_path / "state" / "operator.token").read_text(encoding="utf-8").strip()
     assert token not in out and "#token=" not in out
     assert re.search(r"^relaxation:  ", out, re.M)
 
@@ -597,3 +602,100 @@ def test_the_reach_line_names_the_program():
 def test_the_relaxations_are_read_from_the_conversation(tmp_path):
     drive = _drive_module()
     assert drive.relaxations(tmp_path) == []
+
+
+# ── the state directory, the --on-node hook, and the envelope the real command asks for ───────────
+
+def _paths_under(root):
+    return sorted(p for p in root.rglob("*")) if root.exists() else []
+
+
+def test_everything_serve_writes_is_in_the_state_dir_and_not_in_the_workdir(tmp_path):
+    work, state = tmp_path / "work", tmp_path / "state"
+    done = _run("--runner-yaml", str(_stand_in_config(tmp_path)), "--workdir", str(work),
+                "--state-dir", str(state), cwd=tmp_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert f"is in {state.resolve()}" in done.stdout and done.stdout.count(str(state.resolve())) >= 1
+    for name in ("operator.token", "config.sqlite", "plan.json", "runner.yaml"):
+        assert (state / name).is_file(), name
+    assert (state / "conv").is_dir() and list((state / "asks").glob("*.json"))
+    names = {p.name for p in _paths_under(work)}
+    assert names <= {".built", ".unsafe-said"}, f"serve wrote into the workdir: {sorted(names)}"
+    assert not (work / ".runner").exists() and not (work / "config").exists()
+    # the temporary default is outside the workdir too
+    other = _run("--runner-yaml", str(_stand_in_config(tmp_path)), "--workdir", str(tmp_path / "w2"),
+                 cwd=tmp_path)
+    assert other.returncode == 0, other.stdout + other.stderr
+    printed = re.search(r"serve's state .* is in (.+)$", other.stdout, re.M).group(1)
+    assert Path(printed).is_dir() and (tmp_path / "w2").resolve() not in Path(printed).parents
+    assert {p.name for p in _paths_under(tmp_path / "w2")} <= {".built", ".unsafe-said"}
+
+
+def test_a_state_dir_inside_the_workdir_is_refused(tmp_path):
+    work = tmp_path / "work"
+    done = _run("--runner-yaml", str(_stand_in_config(tmp_path)), "--workdir", str(work),
+                "--state-dir", str(work / "sub" / ".." / "state"), cwd=tmp_path)
+    assert done.returncode != 0 and "inside the workdir" in done.stdout + done.stderr
+    assert not work.exists(), "nothing was started"
+
+
+def test_measure_reads_the_state_dir_drive_used(tmp_path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "measure_for_state", ROOT / "docs" / "measurements" / "CHG-20261019-01" / "measure.py")
+    measure = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(measure)
+    work, state = tmp_path / "work", tmp_path / "state"
+    done = _run("--runner-yaml", str(_stand_in_config(tmp_path)), "--workdir", str(work),
+                "--state-dir", str(state), cwd=tmp_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+    numbers = measure.measure(measure.turns_of(measure.open_store(work, state)),
+                              measure.graph.module_cycle())
+    assert numbers["modules_built"] == len(MODULES)
+
+
+def test_on_node_tokens_lose_one_pair_of_quotes_only_where_the_split_keeps_them():
+    drive = _drive_module()
+    line = '"C:\\Program Files\\hook.exe" \'two words\' plain "a\'b"'
+    assert drive.split_hook(line, posix=False) == [
+        "C:\\Program Files\\hook.exe", "two words", "plain", "a'b"]
+    assert drive.split_hook('"/opt/my hook/run" plain', posix=True) == ["/opt/my hook/run", "plain"]
+    assert drive.split_hook('"" x', posix=False) == ["", "x"]
+    with pytest.raises(ValueError):
+        drive.split_hook('"', posix=False)
+
+
+def test_on_node_follows_os_name(monkeypatch):
+    drive = _drive_module()
+    monkeypatch.setattr(drive.os, "name", "nt")
+    assert drive.split_hook('"a b" c') == ["a b", "c"]
+    monkeypatch.setattr(drive.os, "name", "posix")
+    assert drive.split_hook('"a b" c') == ["a b", "c"]
+
+
+def test_a_hook_that_cannot_start_is_one_line_and_not_the_end_of_the_walk(tmp_path, capsys):
+    drive = _drive_module()
+    drive.run_hook([str(tmp_path / "no such program")], "intake", "10:00:00Z")
+    out = capsys.readouterr().out
+    assert out.count("\n") == 1 and "--on-node hook could not start" in out
+
+
+def test_a_walk_goes_on_when_the_on_node_hook_cannot_start(tmp_path):
+    work = tmp_path / "work"
+    done = _run("--runner-yaml", str(_stand_in_config(tmp_path)), "--workdir", str(work),
+                "--state-dir", str(tmp_path / "state"),
+                "--on-node", json.dumps(str(tmp_path / "no such program")), cwd=tmp_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "final node:  done  (state finished" in done.stdout
+    assert "--on-node hook could not start" in done.stdout
+
+
+def test_the_envelope_the_real_command_asks_for_is_unwrapped_to_the_answer_text():
+    """`--output-format json` is safe to add because `_unwrap_envelope` hands the node `result`
+    (tests/test_usage.py covers the walk and the cost); the answer text is what it was without."""
+    from ai_sdlc_runner import cli
+
+    answer = json.dumps({"verdict": "pass", "why": "ok"})
+    envelope = json.dumps({"type": "result", "is_error": False, "result": answer,
+                           "total_cost_usd": 0.1, "usage": {"input_tokens": 1, "output_tokens": 2}})
+    assert cli._unwrap_envelope(envelope) == (answer, False)

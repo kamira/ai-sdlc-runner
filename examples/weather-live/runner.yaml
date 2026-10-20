@@ -20,6 +20,11 @@
 # change did not test. drive.py prints at the end whether the asks ran
 # unsandboxed.
 #
+# SPEND. `--output-format json` makes claude print one JSON envelope per ask, with its cost and
+# tokens; the runner reads the usage from it and unwraps `result` back to the model's answer text
+# (`cli._unwrap_envelope`), so the node sees the same text as without the flag. The measured runs
+# (run 4 and before) ran WITHOUT the flag, which is why their spend was not recorded.
+#
 # WHO WRITES. `models.json` (beside this file) holds one model, `sonnet-writer`: this same command
 # plus `Write Edit`, and `plan.json`'s `node_models` gives it to `engineer_build`, a pool of one.
 # `engineer_selfverify` and `fix_pass` are `follows engineer_build` in the runner's flow, so the
@@ -29,7 +34,7 @@
 # build's last ask (`engine._followed_model`) and never from the plan. Closing it takes a change in
 # src/. Its spec tells it to correct only the module just built, and `measure.py`'s "writes" check
 # flags a file it wrote otherwise.
-agent_command: ["claude", "-p", "--model", "claude-sonnet-5-5", "--effort", "medium", "--allowedTools", "Read Glob Grep", "--disallowedTools", "Write Edit Bash WebFetch WebSearch"]
+agent_command: ["claude", "-p", "--model", "claude-sonnet-5-5", "--effort", "medium", "--allowedTools", "Read Glob Grep", "--disallowedTools", "Write Edit Bash WebFetch WebSearch", "--output-format", "json"]
 # One ask, not the run. A module build with a medium effort is minutes at most; this is the ceiling
 # for a hung process, as the README says of the default.
 agent_timeout: 1800

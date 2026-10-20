@@ -1,9 +1,11 @@
 """Measure a run from its own conversation record. (CHG-20261019-01, the way CHG-20260827-21 Task 6 did)
 
-    python3 docs/measurements/CHG-20261019-01/measure.py WORKDIR [--json OUT]
+    python3 docs/measurements/CHG-20261019-01/measure.py WORKDIR [--state-dir DIR] [--json OUT]
 
-WORKDIR is the directory `examples/weather-live/drive.py` ran in (`runner serve` wrote its store
-under `WORKDIR/conv`); a store root given directly works too. Every number comes from the `ASK` and
+WORKDIR is the directory `examples/weather-live/drive.py` ran in. `drive.py` keeps the conversation
+store in a state directory outside it, which it prints at the start: pass that as `--state-dir`
+(the store is `DIR/conv`). Without `--state-dir` the store is `WORKDIR/conv`, where runs before
+that change (run 4) kept it; a store root given directly works too. Every number comes from the `ASK` and
 `ANSWER` turns, read through the runner's own `conversations` backend, paired by `ask_id`. Which
 nodes are "the module loop" is derived from the flow by `graph.module_cycle()`, not listed here.
 The "writes" check lists every file under `WORKDIR/site/` with its modification time, attributed to
@@ -50,9 +52,11 @@ def _when(stamp: object) -> float:
     return datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
 
 
-def open_store(workdir: Path) -> conversations.Backend:
-    """`WORKDIR/conv` if it is there (what drive.py passes to serve), else WORKDIR itself."""
-    root = workdir / "conv" if (workdir / "conv").is_dir() else workdir
+def open_store(workdir: Path, state_dir: Optional[Path] = None) -> conversations.Backend:
+    """`STATE/conv` with `--state-dir`; else `WORKDIR/conv` if it is there (run 4's layout), else
+    WORKDIR itself."""
+    base = state_dir if state_dir is not None else workdir
+    root = base / "conv" if (base / "conv").is_dir() else base
     for kind in conversations.BACKENDS:
         try:
             back = conversations.backend(kind, root=str(root))
@@ -298,12 +302,15 @@ def render(m: dict) -> str:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("workdir", type=Path, help="the directory drive.py ran in (or a store root)")
+    ap.add_argument("--state-dir", type=Path, default=None, metavar="DIR",
+                    help="the state directory drive.py printed (its conversation store is DIR/conv); "
+                         "omit for a run whose store is under WORKDIR")
     ap.add_argument("--json", type=Path, default=None, metavar="OUT", help="also write the numbers as JSON")
     ap.add_argument("--drive-log", type=Path, default=None, metavar="FILE",
                     help="drive.py's output; its PERSON-ANSWERED lines time when a person answered")
     args = ap.parse_args(argv)
     workdir = args.workdir.resolve()
-    turns = turns_of(open_store(workdir))
+    turns = turns_of(open_store(workdir, args.state_dir.resolve() if args.state_dir else None))
     answered = answered_in(args.drive_log.read_text(encoding="utf-8", errors="replace")) if args.drive_log else []
     m = measure(turns, graph.module_cycle(), answered)
     m["writes"] = writes(asks_of(turns), workdir)

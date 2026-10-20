@@ -6,6 +6,7 @@ point; the counts, the loop's membership and that the shares add up are.
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -33,7 +34,8 @@ def run_dir(tmp_path_factory):
                       + "\nagent_timeout: 60\n", encoding="utf-8")
     work = tmp / "work"
     done = subprocess.run([sys.executable, str(DRIVE), "--runner-yaml", str(config),
-                           "--workdir", str(work)], cwd=str(tmp), capture_output=True, text=True,
+                           "--workdir", str(work), "--state-dir", str(tmp / "state")],
+                          cwd=str(tmp), capture_output=True, text=True,
                           encoding="utf-8", errors="replace", timeout=600,
                           env={**os.environ, "PYTHONUTF8": "1"})
     assert done.returncode == 0, done.stdout + done.stderr
@@ -42,7 +44,7 @@ def run_dir(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def numbers(run_dir):
-    return measure.measure(measure.turns_of(measure.open_store(run_dir)), measure.graph.module_cycle())
+    return measure.measure(measure.turns_of(measure.open_store(run_dir, run_dir.parent / "state")), measure.graph.module_cycle())
 
 
 def test_the_loop_is_derived_from_the_graph_and_contains_the_known_nodes(numbers):
@@ -81,7 +83,8 @@ def test_amdahl_matches_the_formula_and_task_6s_table():
 
 def test_cli_prints_the_block_and_writes_json(run_dir, tmp_path):
     out = tmp_path / "m.json"
-    done = subprocess.run([sys.executable, str(TOOL), str(run_dir), "--json", str(out)],
+    done = subprocess.run([sys.executable, str(TOOL), str(run_dir), "--state-dir",
+                           str(run_dir.parent / "state"), "--json", str(out)],
                           capture_output=True, text=True, encoding="utf-8", timeout=120,
                           env={**os.environ, "PYTHONUTF8": "1"})
     assert done.returncode == 0, done.stderr
@@ -98,7 +101,7 @@ def test_cli_prints_the_block_and_writes_json(run_dir, tmp_path):
 
 def _site(tmp_path, run_dir, placements):
     """Files under tmp_path/site whose mtime is the midpoint of the n-th ask (None: after the run)."""
-    rows = measure.asks_of(measure.turns_of(measure.open_store(run_dir)))
+    rows = measure.asks_of(measure.turns_of(measure.open_store(run_dir, run_dir.parent / "state")))
     (tmp_path / "site").mkdir()
     for name, ask in placements.items():
         path = tmp_path / "site" / name
@@ -113,7 +116,7 @@ def _first(rows, node, after=-1):
 
 
 def test_writes_attributes_each_file_to_its_ask_and_flags_only_what_is_not_allowed(tmp_path, run_dir):
-    rows = measure.asks_of(measure.turns_of(measure.open_store(run_dir)))
+    rows = measure.asks_of(measure.turns_of(measure.open_store(run_dir, run_dir.parent / "state")))
     build = _first(rows, "engineer_build")
     built = rows[build]["result"]["module"]
     verify = _first(rows, "engineer_selfverify", build)
@@ -128,7 +131,7 @@ def test_writes_attributes_each_file_to_its_ask_and_flags_only_what_is_not_allow
 
 
 def test_selfverify_may_write_the_module_its_build_just_built(tmp_path, run_dir):
-    rows = measure.asks_of(measure.turns_of(measure.open_store(run_dir)))
+    rows = measure.asks_of(measure.turns_of(measure.open_store(run_dir, run_dir.parent / "state")))
     build = _first(rows, "engineer_build")
     verify = _first(rows, "engineer_selfverify", build)
     built = rows[build]["result"]["module"]
@@ -138,11 +141,11 @@ def test_selfverify_may_write_the_module_its_build_just_built(tmp_path, run_dir)
 
 
 def test_writes_is_in_the_output_and_the_json(tmp_path, run_dir):
-    rows = measure.asks_of(measure.turns_of(measure.open_store(run_dir)))
+    rows = measure.asks_of(measure.turns_of(measure.open_store(run_dir, run_dir.parent / "state")))
     build = _first(rows, "engineer_build")
     _site(tmp_path, run_dir, {"index.html": build, "bad.js": _first(rows, "pm_plan")})
     try:
-        (tmp_path / "conv").symlink_to(run_dir / "conv", target_is_directory=True)
+        (tmp_path / "conv").symlink_to(run_dir.parent / "state" / "conv", target_is_directory=True)
     except OSError:
         pytest.skip("this platform cannot make a symlink here")
     out = tmp_path / "m.json"
@@ -157,7 +160,7 @@ def test_writes_is_in_the_output_and_the_json(tmp_path, run_dir):
 
 
 def test_no_site_directory_is_no_writes(tmp_path, run_dir):
-    rows = measure.asks_of(measure.turns_of(measure.open_store(run_dir)))
+    rows = measure.asks_of(measure.turns_of(measure.open_store(run_dir, run_dir.parent / "state")))
     assert measure.writes(rows, tmp_path) == []
 
 
@@ -238,7 +241,8 @@ def person_run(tmp_path_factory):
     work, log = tmp / "work", tmp / "drive.log"
     with log.open("w", encoding="utf-8") as out:
         proc = subprocess.Popen([sys.executable, str(DRIVE), "--runner-yaml", str(config),
-                                 "--workdir", str(work), "--person-dir", str(tmp / "person")],
+                                 "--workdir", str(work), "--person-dir", str(tmp / "person"),
+                                 "--state-dir", str(tmp / "state")],
                                 cwd=str(tmp), stdout=out,
                                 stderr=subprocess.STDOUT, env={**os.environ, "PYTHONUTF8": "1",
                                                                "STAND_IN_UNSAFE": "1"})
@@ -255,7 +259,7 @@ def person_run(tmp_path_factory):
 
 def test_a_real_unsafe_stop_is_reported_as_waiting_for_a_person_not_as_overhead(person_run):
     work, log = person_run
-    turns = measure.turns_of(measure.open_store(work))
+    turns = measure.turns_of(measure.open_store(work, work.parent / "state"))
     [w] = measure.person_waits(turns)
     assert w["node"] == "intake_review" and 3 <= w["seconds"] < 30
     [wl] = measure.person_waits(turns, measure.answered_in(log.read_text(encoding="utf-8")))
@@ -270,13 +274,28 @@ def test_a_real_unsafe_stop_is_reported_as_waiting_for_a_person_not_as_overhead(
 def test_cli_prints_the_waiting_line_and_takes_a_drive_log(person_run, tmp_path):
     work, log = person_run
     out = tmp_path / "m.json"
-    done = subprocess.run([sys.executable, str(TOOL), str(work), "--drive-log", str(log),
-                           "--json", str(out)], capture_output=True, text=True, encoding="utf-8",
+    done = subprocess.run([sys.executable, str(TOOL), str(work), "--state-dir", str(work.parent / "state"),
+                           "--drive-log", str(log), "--json", str(out)], capture_output=True, text=True, encoding="utf-8",
                           timeout=120, env={**os.environ, "PYTHONUTF8": "1"})
     assert done.returncode == 0, done.stderr
     assert "waiting for a person" in done.stdout and "1 stop(s)" in done.stdout
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["person_stops"][0]["source"] == "drive log"
+
+
+def test_cli_takes_the_state_dir_drive_printed_and_still_reads_the_old_layout(run_dir, tmp_path):
+    state = run_dir.parent / "state"
+    out = tmp_path / "m.json"
+    done = subprocess.run([sys.executable, str(TOOL), str(run_dir), "--state-dir", str(state),
+                           "--json", str(out)], capture_output=True, text=True, encoding="utf-8",
+                          timeout=120, env={**os.environ, "PYTHONUTF8": "1"})
+    assert done.returncode == 0, done.stderr
+    assert json.loads(out.read_text(encoding="utf-8"))["modules_built"] == len(MODULES)
+    old = tmp_path / "old-run"                      # run 4's layout: the store in the workdir
+    old.mkdir()
+    shutil.copytree(state / "conv", old / "conv")
+    assert len(measure.turns_of(measure.open_store(old))) == len(
+        measure.turns_of(measure.open_store(run_dir, state)))
 
 
 # ── the window starts at the brief, not at the conversation opening ──────────────────────────────
@@ -309,7 +328,7 @@ def test_start_when_idle_time_does_not_enter_wall_or_overhead(tmp_path):
     work, go = tmp_path / "work", tmp_path / "go"
     proc = subprocess.Popen(
         [sys.executable, str(DRIVE), "--runner-yaml", str(config), "--workdir", str(work),
-         "--start-when", str(go)], cwd=str(tmp_path), stdout=subprocess.PIPE,
+         "--state-dir", str(tmp_path / "state"), "--start-when", str(go)], cwd=str(tmp_path), stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
         env={**os.environ, "PYTHONUTF8": "1"})
     try:
@@ -323,7 +342,7 @@ def test_start_when_idle_time_does_not_enter_wall_or_overhead(tmp_path):
         if proc.poll() is None:
             proc.kill()
     assert proc.returncode == 0
-    turns = measure.turns_of(measure.open_store(work))
+    turns = measure.turns_of(measure.open_store(work, work.parent / "state"))
     m = measure.measure(turns, measure.graph.module_cycle())
     brief = next(t for t in turns if t["kind"] == "instruction")
     assert m["opened_to_brief_seconds"] >= 5

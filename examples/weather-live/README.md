@@ -120,13 +120,16 @@ the whole-change nodes name all ten.
 comparable with another's. The default command is **read-only**: `Read Glob Grep` are granted, and
 `Write`, `Edit`, `Bash`, `WebFetch` and `WebSearch` are refused by name — a work order asks for a
 file and an answer, and the page fetches its own data. `agent_timeout: 1800` is the ceiling for one
-ask; `agent_retries: 0` so a measured run counts each ask once. The file comments say why of each.
+ask; `agent_retries: 0` so a measured run counts each ask once. Both commands end in
+`--output-format json`: claude then prints its cost and tokens in an envelope, which the runner records
+as each ask's usage and unwraps back to the model's answer text. **The measured runs (run 4 and before)
+ran without the flag, which is why their spend was not recorded.** The file comments say why of each.
 
 ### Who can write
 
 `models.json` holds `sonnet-writer`: the same model and effort, plus `Write Edit`. `plan.json`'s
 `node_models` gives it to `engineer_build` (a pool of one), and `drive.py` copies `models.json` to
-`.runner/models.json` in the work directory, where `serve` reads it. Every other node uses the
+`models.json` in the state directory (below), where `serve` reads it. Every other node uses the
 read-only default, and each node's spec says so: `engineer_build` builds only the first missing file
 and touches no other; every other node, one line, must not create or change a file.
 
@@ -136,7 +139,7 @@ dispatches them with the model that answered the build, which is `sonnet-writer`
 only correct the module just built and must not create another file, but nothing stops it. It cannot
 be closed from here, because a `follows` node takes the build's model (`engine._followed_model`) and
 `node_models` is not consulted for it; closing it takes a change in `src/`. So it is *measured*
-instead: `docs/measurements/CHG-20261019-01/measure.py WORKDIR` has a "writes" check that attributes
+instead: `docs/measurements/CHG-20261019-01/measure.py WORKDIR --state-dir STATE` has a "writes" check that attributes
 each file under `site/` to the ask whose interval holds its modification time and flags any file
 written by a node other than `engineer_build`/`fix_pass`, or by `engineer_selfverify` for a file
 other than the module its build just built.
@@ -157,16 +160,20 @@ not empty, and why the end of its output says whether the asks ran unsandboxed.
 python3 examples/weather-live/drive.py --keep-serving
 ```
 
-From anywhere. It copies `plan.json`, `runner.yaml`, `models.json` and `brief.md` into a new temporary directory
-(`--workdir` chooses another, and must be new or empty: a directory with anything in it is refused and
-nothing is copied), starts `runner serve` there on a free port, types the brief, starts the
+From anywhere. `--workdir` (default a new temporary directory; must be new or empty, or it is refused and
+nothing is copied) is where `serve` runs and the page is built. Everything else `serve` reads or writes is in
+a **state directory outside the workdir**, printed once at the start: it copies `plan.json`, `runner.yaml`,
+`models.json` and `brief.md` there, and `serve` keeps `settings.json` (re-read at every walk), the operator
+token, `config.sqlite`, `attachments/`, the conversation store `conv/` and the ask journal `asks/` there too,
+because the build model can write inside the workdir and must not be able to change them. `--state-dir`
+chooses it and is refused if it is inside the workdir. It starts `runner serve` on a free port, types the brief, starts the
 run and approves each ordinary gate it stops at (`merge`). A stop that needs a person to read something
 (a seat called the requirement unsafe, an incomplete requirement, a tied panel) is never answered by the
 script: it writes the server's text to `<NNN>-<node>.md` in a new temporary directory **outside the workdir** (the build
 model can write inside it, so it must not be able to answer; the path is printed at start), prints
 `AWAITING-PERSON <path>` and waits for `<NNN>-<node>.proceed` (or `.stop`) beside it. `--person-dir` chooses
 the directory and is refused if it is inside the workdir; a `.proceed` that exists before the stop is
-written is refused, not taken as the answer. `--on-node` is split like a shell command line, so quote a path with spaces. It prints the server's own startup lines (how many models are registered and how many leave this machine; the
+written is refused, not taken as the answer. `--on-node` is split like a shell command line, so quote a path with spaces (on Windows one pair of surrounding quotes is stripped from each token); a hook that cannot start is reported on one line and the walk goes on. It prints the server's own startup lines (how many models are registered and how many leave this machine; the
 token line is left out) and a line naming the program each work order goes to (`agent_command: claude — leaves this
 machine`). It prints a line per node with the UTC time, then the run id,
 the final node, where `site/` is, and the conversation's `relaxation` turns (the engine records
@@ -178,6 +185,7 @@ the **path** of the operator token file (never the token), so the run can be wat
 | `--runner-yaml PATH` | build with another backend |
 | `--models PATH` | the registry `node_models` names (default: `models.json` beside `--runner-yaml`) |
 | `--workdir DIR` | run in `DIR`, which must be new or empty |
+| `--state-dir DIR` | where `serve` keeps its settings, token, stores and journal; must be outside `--workdir` |
 | `--keep-serving` | stay up after the end |
 | `--on-node CMD` | run `CMD <node-id> <utc-time>` on every node change, e.g. to take a screenshot |
 | `--dry-run` | check the plan, `runner.yaml` and brief, start nothing, spend nothing |

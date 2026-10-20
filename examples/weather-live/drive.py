@@ -16,6 +16,13 @@ the workdir, so it must not be able to answer), prints `AWAITING-PERSON <that pa
 `<NNN>-<node>.proceed` (its text is the instruction, or the branch, where the route takes one) or
 `<NNN>-<node>.stop` beside it. A `.proceed` that already exists when the stop is written is refused.
 
+Everything `serve` reads or writes for the run except `site/` lives in a state directory outside the
+workdir (`--state-dir`, default a new temporary directory, printed once at the start; refused if it
+is inside the workdir, like `--person-dir`): `settings.json` (re-read at the start of every walk),
+the operator token, `config.sqlite`, `models.json`, `plan.json`, `runner.yaml`, `attachments/`, the
+conversation store `conv/` and the ask journal `asks/`. The build model can write inside the workdir,
+so none of them may be there. `measure.py --state-dir` reads the record from it.
+
 `--workdir` must be new or empty: the model that writes can write anywhere inside it, so a project
 tree is refused rather than built into. The server's own startup lines (how many models are
 registered and how many leave this machine) are printed, with the operator token left out, and so is
@@ -118,6 +125,25 @@ def validate(runner_yaml: Path, models: Path | None) -> str:
     if missing:
         raise SystemExit(f"brief.md does not name {', '.join(missing)}")
     return brief
+
+
+def split_hook(command: str, posix: bool | None = None) -> list:
+    """`--on-node`'s command as argv. `posix=False` (Windows) keeps the quote characters in each
+    token, so one surrounding pair is stripped from each, or the program would be named with a quote."""
+    posix = (os.name != "nt") if posix is None else posix
+    tokens = shlex.split(command, posix=posix)
+    if not posix:
+        tokens = [t[1:-1] if len(t) >= 2 and t[0] == t[-1] and t[0] in "\"'" else t for t in tokens]
+    return tokens
+
+
+def run_hook(hook: list, node: str, stamp: str) -> None:
+    """Run the `--on-node` command. One that cannot start is one line, and the walk goes on."""
+    try:
+        subprocess.run([*hook, node, stamp], check=False)
+    except OSError as exc:
+        print(f"{utc()}  --on-node hook could not start ({hook[0] if hook else '(empty)'}): {exc}",
+              flush=True)
 
 
 class Refused(Exception):
@@ -245,32 +271,37 @@ def relay_startup(proc) -> Startup:
     return startup
 
 
-def start_server(work: Path, runner_yaml: Path, brief: str, models: Path | None):
+def start_server(work: Path, state: Path, runner_yaml: Path, brief: str, models: Path | None):
+    """Start `serve` with its cwd in `work` and every file it reads or writes in `state`."""
     work.mkdir(parents=True, exist_ok=True)
+    state.mkdir(parents=True, exist_ok=True)
     if models is not None:
-        # `serve` reads `<token dir>/models.json`, and the token dir is `.runner`.
-        (work / ".runner").mkdir(exist_ok=True)
-        shutil.copy(models, work / ".runner" / "models.json")
-        shutil.copy(HERE / "plan.json", work / "plan.json")
+        shutil.copy(models, state / "models.json")
+        shutil.copy(HERE / "plan.json", state / "plan.json")
     else:
         stripped = json.loads((HERE / "plan.json").read_text(encoding="utf-8"))
         stripped.pop("node_models", None)
-        (work / "plan.json").write_text(json.dumps(stripped, indent=2) + "\n", encoding="utf-8")
-    shutil.copy(runner_yaml, work / "runner.yaml")
-    (work / "brief.md").write_text(brief, encoding="utf-8")
+        (state / "plan.json").write_text(json.dumps(stripped, indent=2) + "\n", encoding="utf-8")
+    shutil.copy(runner_yaml, state / "runner.yaml")
+    (state / "brief.md").write_text(brief, encoding="utf-8")
     port = free_port()
     env = dict(os.environ, PYTHONUTF8="1", PYTHONUNBUFFERED="1", PYTHONPATH=str(REPO / "src"))
     proc = subprocess.Popen(
         [sys.executable, "-m", "ai_sdlc_runner.cli",
-         "--config", str(work / "runner.yaml"), "serve",
-         "--plan", str(work / "plan.json"), "--port", str(port),
+         "--config", str(state / "runner.yaml"), "serve",
+         "--plan", str(state / "plan.json"), "--port", str(port),
          "--project", "一週氣象 Taipei live",
-         "--store-root", str(work / "conv"),
-         "--ask-journal", str(work / ".runner" / "asks")],
+         "--settings", str(state / "settings.json"),
+         "--token-dir", str(state),
+         "--models", str(state / "models.json"),
+         "--assignment-store", str(state / "config.sqlite"),
+         "--attachments", str(state / "attachments"),
+         "--store-root", str(state / "conv"),
+         "--ask-journal", str(state / "asks")],
         cwd=str(work), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         encoding="utf-8", errors="replace")
     proc.startup = relay_startup(proc)
-    token_file = work / ".runner" / "operator.token"
+    token_file = state / "operator.token"
     for _ in range(120):
         if token_file.exists() and proc.poll() is None:
             break
@@ -324,7 +355,7 @@ def walk(console: Console, brief: str, journal: Path, on_node, person_dir: Path,
             stamp = utc()
             print(f"{stamp}  {node}", flush=True)
             if on_node:
-                subprocess.run([*on_node, node, stamp], check=False)
+                run_hook(on_node, node, stamp)
 
     def press(path, body):
         """A button press. The server answers only when the walk it starts has come to rest, so the
@@ -400,13 +431,13 @@ def walk(console: Console, brief: str, journal: Path, on_node, person_dir: Path,
     return state, run_id
 
 
-def relaxations(work: Path) -> list:
+def relaxations(state: Path) -> list:
     """The text of every `relaxation` turn in the run's conversation (the engine writes
     "N ask(s) ran unsandboxed …" there when this machine could not bound the asks)."""
     sys.path.insert(0, str(REPO / "src"))
     from ai_sdlc_runner import conversations
 
-    root = work / "conv"
+    root = state / "conv"
     for kind in conversations.BACKENDS:
         try:
             back = conversations.backend(kind, root=str(root))
@@ -434,6 +465,9 @@ def main(argv=None) -> int:
                          "beside --runner-yaml; none there means agent_command answers every node)")
     ap.add_argument("--workdir", type=Path, default=None,
                     help="where the run lives; must be new or empty (default: a new temporary directory)")
+    ap.add_argument("--state-dir", type=Path, default=None, metavar="DIR",
+                    help="where serve keeps settings, token, config store, conversation store and "
+                         "ask journal; must be outside --workdir (default: a new temporary directory)")
     ap.add_argument("--keep-serving", action="store_true",
                     help="stay up after the end and print the console URL and the token file's path")
     ap.add_argument("--on-node", default=None, metavar="CMD",
@@ -451,6 +485,10 @@ def main(argv=None) -> int:
     runner_yaml = args.runner_yaml.resolve()
     models = args.models.resolve() if args.models else models_beside(runner_yaml)
     brief = validate(runner_yaml, models)
+    try:
+        hook = split_hook(args.on_node) or None if args.on_node else None
+    except ValueError as exc:
+        raise SystemExit(f"--on-node {args.on_node!r} cannot be split: {exc}")
     if args.dry_run:
         print(f"ok: plan, {runner_yaml.name} and brief ({len(MODULES)} modules named) are valid; "
               f"nothing was started")
@@ -470,9 +508,17 @@ def main(argv=None) -> int:
     else:
         person_dir = Path(tempfile.mkdtemp(prefix="weather-live-person-")).resolve()
         print(f"{utc()}  a stop that needs a person is written to {person_dir}", flush=True)
+    if args.state_dir:
+        state_dir = args.state_dir.resolve()
+        if state_dir == work or work in state_dir.parents:
+            raise SystemExit(f"--state-dir {state_dir} is inside the workdir {work}, where the build "
+                             f"model can write; choose a directory outside it")
+    else:
+        state_dir = Path(tempfile.mkdtemp(prefix="weather-live-state-")).resolve()
+    print(f"{utc()}  serve's state (settings, token, stores, journal) is in {state_dir}", flush=True)
     for label, prog in command_programs(runner_yaml, models):
         print(reach_line(label, prog), flush=True)
-    proc, console, token_file = start_server(work, runner_yaml, brief, models)
+    proc, console, token_file = start_server(work, state_dir, runner_yaml, brief, models)
     try:
         print(f"{utc()}  serving {console.base} in {work}", flush=True)
         if args.start_when:
@@ -483,9 +529,8 @@ def main(argv=None) -> int:
                 time.sleep(0.5)
         run_id, failure, ended = None, None, False
         try:
-            state, run_id = walk(console, brief, work / ".runner" / "asks",
-                                 shlex.split(args.on_node, posix=(os.name != "nt"))
-                                 if args.on_node else None, person_dir, proc)
+            state, run_id = walk(console, brief, state_dir / "asks",
+                                 hook, person_dir, proc)
         except PersonStop as exc:
             failure, ended = str(exc), True
         except Refused as exc:
@@ -498,7 +543,7 @@ def main(argv=None) -> int:
               f"{len(state.get('visited') or [])} nodes walked)")
         site = work / "site"
         print(f"site/:       {site}" + ("" if site.exists() else "  (nothing was built)"))
-        recorded = relaxations(work)
+        recorded = relaxations(state_dir)
         for text in recorded:
             print(f"relaxation:  {text}")
         if not recorded:
