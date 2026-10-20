@@ -7,7 +7,9 @@ CHG says it does, that the recorded response is what the README describes -- and
 walks the plan to its end, against a stand-in backend that knows nothing about weather.
 """
 import json
+import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -326,8 +328,8 @@ def test_drive_walks_the_plan_to_its_end_and_stops_only_at_merge(tmp_path):
     backend = tmp_path / "stand_in.py"
     backend.write_text(STAND_IN, encoding="utf-8")
     config = tmp_path / "runner.yaml"
-    config.write_text(f'agent_command: ["{sys.executable}", "{backend.as_posix()}"]\n'
-                      f"agent_timeout: 60\n", encoding="utf-8")
+    config.write_text("agent_command: " + json.dumps([sys.executable, backend.as_posix()])
+                      + "\nagent_timeout: 60\n", encoding="utf-8")
     work = tmp_path / "work"
     hook = tmp_path / "hook.py"
     hook.write_text("import sys\nopen(sys.argv[1], 'a').write(' '.join(sys.argv[2:]) + '\\n')\n",
@@ -335,7 +337,8 @@ def test_drive_walks_the_plan_to_its_end_and_stops_only_at_merge(tmp_path):
     seen = tmp_path / "nodes.txt"
 
     done = _run("--runner-yaml", str(config), "--workdir", str(work),
-                "--on-node", f"{sys.executable} {hook} {seen}", cwd=tmp_path)
+                "--on-node", shlex.join([sys.executable, str(hook), str(seen)])
+                if os.name != "nt" else subprocess.list2cmdline([sys.executable, str(hook), str(seen)]), cwd=tmp_path)
 
     assert done.returncode == 0, done.stdout + done.stderr
     assert "final node:  done  (state finished" in done.stdout
@@ -358,8 +361,8 @@ def test_start_when_asks_nothing_until_the_file_appears(tmp_path):
     backend = tmp_path / "stand_in.py"
     backend.write_text(STAND_IN, encoding="utf-8")
     config = tmp_path / "runner.yaml"
-    config.write_text(f'agent_command: ["{sys.executable}", "{backend.as_posix()}"]\n'
-                      f"agent_timeout: 60\n", encoding="utf-8")
+    config.write_text("agent_command: " + json.dumps([sys.executable, backend.as_posix()])
+                      + "\nagent_timeout: 60\n", encoding="utf-8")
     work, go = tmp_path / "work", tmp_path / "go"
     proc = subprocess.Popen(
         [sys.executable, str(DRIVE), "--runner-yaml", str(config), "--workdir", str(work),
@@ -400,8 +403,8 @@ def test_drive_copies_the_models_file_and_the_build_is_asked_through_it(tmp_path
                        "input=raw, text=True, capture_output=True)\nsys.stdout.write(r.stdout)\n",
                        encoding="utf-8")
     config = tmp_path / "runner.yaml"
-    config.write_text(f'agent_command: ["{sys.executable}", "{backend.as_posix()}"]\n'
-                      f"agent_timeout: 60\n", encoding="utf-8")
+    config.write_text("agent_command: " + json.dumps([sys.executable, backend.as_posix()])
+                      + "\nagent_timeout: 60\n", encoding="utf-8")
     (tmp_path / "models.json").write_text(json.dumps({"models": [{
         "id": "sonnet-writer", "vendor": "test", "name": "stand-in", "transport": "cli",
         "command": [sys.executable, str(wrapper)]}]}), encoding="utf-8")
@@ -421,8 +424,8 @@ def _stand_in_config(tmp_path):
     backend = tmp_path / "stand_in.py"
     backend.write_text(STAND_IN, encoding="utf-8")
     config = tmp_path / "runner.yaml"
-    config.write_text(f'agent_command: ["{sys.executable}", "{backend.as_posix()}"]\n'
-                      f"agent_timeout: 60\n", encoding="utf-8")
+    config.write_text("agent_command: " + json.dumps([sys.executable, backend.as_posix()])
+                      + "\nagent_timeout: 60\n", encoding="utf-8")
     return config
 
 
@@ -448,7 +451,8 @@ def test_an_unsafe_stop_waits_for_the_person_and_proceeds_only_on_their_file(tmp
     try:
         assert lines[-1].startswith("AWAITING-PERSON "), "".join(lines)
         text = Path(lines[-1].split(" ", 1)[1].strip())
-        assert text == work / ".runner" / "person" / "001-intake_review.md"
+        assert text.name == "001-intake_review.md"
+        assert work.resolve() not in text.resolve().parents, "the build model must not reach it"
         said = text.read_text(encoding="utf-8")
         assert "risk" in said and "the key goes in the URL query string" in said
         assert "intake_review" in said and "POST /run/proceed" in said
@@ -480,6 +484,29 @@ def test_a_stop_file_ends_the_run_with_a_nonzero_exit(tmp_path):
     assert proc.returncode != 0
     assert "STOPPED-BY-PERSON" in rest and "PERSON-ANSWERED" not in rest
     assert not (work / "site").exists()
+
+
+def test_a_person_dir_inside_the_workdir_is_refused(tmp_path):
+    work = tmp_path / "work"
+    done = _run("--runner-yaml", str(_stand_in_config(tmp_path)), "--workdir", str(work),
+                "--person-dir", str(work / "sub" / ".." / "person"), cwd=tmp_path)
+    assert done.returncode != 0 and "inside the workdir" in done.stdout + done.stderr
+    assert not (work / ".runner").exists(), "nothing was started"
+
+
+def test_a_proceed_that_exists_before_the_stop_does_not_answer_it(tmp_path):
+    where = tmp_path / "elsewhere"
+    where.mkdir()
+    (where / "001-intake_review.proceed").write_text("", encoding="utf-8")
+    proc, work, lines = _start_unsafe(tmp_path, "--person-dir", str(where))
+    try:
+        rest, _ = proc.communicate(timeout=120)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    out = "".join(lines) + rest
+    assert proc.returncode != 0 and "already existed" in out, out
+    assert "PERSON-ANSWERED" not in out and not (work / "site").exists()
 
 
 def test_person_dir_moves_the_files(tmp_path):

@@ -11,9 +11,10 @@ independent.
 A stop that asks a person to read something is never answered here. Those are a seat calling the
 requirement unsafe (`POST /run/proceed`), an incomplete requirement (`POST /run/instruct`) and a
 panel that tied (`POST /run/decide`). drive.py writes the server's text to
-`<workdir>/.runner/person/<NNN>-<node>.md`, prints `AWAITING-PERSON <that path>`, and waits for
+`<NNN>-<node>.md` in a temporary directory outside the workdir (the build model can write inside
+the workdir, so it must not be able to answer), prints `AWAITING-PERSON <that path>`, and waits for
 `<NNN>-<node>.proceed` (its text is the instruction, or the branch, where the route takes one) or
-`<NNN>-<node>.stop` beside it.
+`<NNN>-<node>.stop` beside it. A `.proceed` that already exists when the stop is written is refused.
 
 `--dry-run` checks the plan, `runner.yaml` and the brief, starts nothing and spends nothing.
 """
@@ -22,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import socket
 import subprocess
@@ -279,8 +281,11 @@ def walk(console: Console, brief: str, journal: Path, on_node, person_dir: Path,
         node = stop.get("node_id")
         person_dir.mkdir(parents=True, exist_ok=True)
         text_path = person_dir / f"{number:03d}-{node}.md"
-        text_path.write_text(person_text(state, kind, number), encoding="utf-8")
         proceed, halt = text_path.with_suffix(".proceed"), text_path.with_suffix(".stop")
+        if proceed.exists():
+            raise Refused(f"{proceed} already existed before the stop at {node} was written; "
+                          f"an answer must come after the question, so it is not taken")
+        text_path.write_text(person_text(state, kind, number), encoding="utf-8")
         print(f"{utc()}  stopped at {node} for a person to read ({kind})", flush=True)
         print(f"AWAITING-PERSON {text_path}", flush=True)
         said = ""
@@ -338,7 +343,8 @@ def main(argv=None) -> int:
                     help="once serving, wait until PATH exists before typing the brief")
     ap.add_argument("--person-dir", type=Path, default=None, metavar="DIR",
                     help="where a stop that needs a person is written, and where their .proceed or "
-                         ".stop file is looked for (default: <workdir>/.runner/person)")
+                         ".stop file is looked for; must be outside --workdir "
+                         "(default: a new temporary directory)")
     ap.add_argument("--dry-run", action="store_true",
                     help="validate the plan, runner.yaml and brief, then exit without a run")
     args = ap.parse_args(argv)
@@ -352,6 +358,14 @@ def main(argv=None) -> int:
         return 0
 
     work = (args.workdir or Path(tempfile.mkdtemp(prefix="weather-live-"))).resolve()
+    if args.person_dir:
+        person_dir = args.person_dir.resolve()
+        if person_dir == work or work in person_dir.parents:
+            raise SystemExit(f"--person-dir {person_dir} is inside the workdir {work}, where the "
+                             f"build model can write; choose a directory outside it")
+    else:
+        person_dir = Path(tempfile.mkdtemp(prefix="weather-live-person-")).resolve()
+        print(f"{utc()}  a stop that needs a person is written to {person_dir}", flush=True)
     proc, console, token_file = start_server(work, runner_yaml, brief, models)
     try:
         print(f"{utc()}  serving {console.base} in {work}", flush=True)
@@ -364,8 +378,8 @@ def main(argv=None) -> int:
         run_id, failure, ended = None, None, False
         try:
             state, run_id = walk(console, brief, work / ".runner" / "asks",
-                                 args.on_node.split() if args.on_node else None,
-                                 (args.person_dir or work / ".runner" / "person").resolve(), proc)
+                                 shlex.split(args.on_node, posix=(os.name != "nt"))
+                                 if args.on_node else None, person_dir, proc)
         except PersonStop as exc:
             failure, ended = str(exc), True
         except Refused as exc:

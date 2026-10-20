@@ -29,8 +29,8 @@ def run_dir(tmp_path_factory):
     backend = tmp / "stand_in.py"
     backend.write_text(STAND_IN, encoding="utf-8")
     config = tmp / "runner.yaml"
-    config.write_text(f'agent_command: ["{sys.executable}", "{backend.as_posix()}"]\n'
-                      f"agent_timeout: 60\n", encoding="utf-8")
+    config.write_text("agent_command: " + json.dumps([sys.executable, backend.as_posix()])
+                      + "\nagent_timeout: 60\n", encoding="utf-8")
     work = tmp / "work"
     done = subprocess.run([sys.executable, str(DRIVE), "--runner-yaml", str(config),
                            "--workdir", str(work)], cwd=str(tmp), capture_output=True, text=True,
@@ -140,7 +140,10 @@ def test_writes_is_in_the_output_and_the_json(tmp_path, run_dir):
     rows = measure.asks_of(measure.turns_of(measure.open_store(run_dir)))
     build = _first(rows, "engineer_build")
     _site(tmp_path, run_dir, {"index.html": build, "bad.js": _first(rows, "pm_plan")})
-    (tmp_path / "conv").symlink_to(run_dir / "conv", target_is_directory=True)
+    try:
+        (tmp_path / "conv").symlink_to(run_dir / "conv", target_is_directory=True)
+    except OSError:
+        pytest.skip("this platform cannot make a symlink here")
     out = tmp_path / "m.json"
     done = subprocess.run([sys.executable, str(TOOL), str(tmp_path), "--json", str(out)],
                           capture_output=True, text=True, encoding="utf-8")
@@ -229,15 +232,16 @@ def person_run(tmp_path_factory):
     backend = tmp / "stand_in.py"
     backend.write_text(STAND_IN, encoding="utf-8")
     config = tmp / "runner.yaml"
-    config.write_text(f'agent_command: ["{sys.executable}", "{backend.as_posix()}"]\n'
-                      f"agent_timeout: 60\n", encoding="utf-8")
+    config.write_text("agent_command: " + json.dumps([sys.executable, backend.as_posix()])
+                      + "\nagent_timeout: 60\n", encoding="utf-8")
     work, log = tmp / "work", tmp / "drive.log"
     with log.open("w", encoding="utf-8") as out:
         proc = subprocess.Popen([sys.executable, str(DRIVE), "--runner-yaml", str(config),
-                                 "--workdir", str(work)], cwd=str(tmp), stdout=out,
+                                 "--workdir", str(work), "--person-dir", str(tmp / "person")],
+                                cwd=str(tmp), stdout=out,
                                 stderr=subprocess.STDOUT, env={**os.environ, "PYTHONUTF8": "1",
                                                                "STAND_IN_UNSAFE": "1"})
-        asked = work / ".runner" / "person" / "001-intake_review.md"
+        asked = tmp / "person" / "001-intake_review.md"
         for _ in range(240):
             if asked.exists():
                 break

@@ -154,9 +154,11 @@ From anywhere. It copies `plan.json`, `runner.yaml`, `models.json` and `brief.md
 (`--workdir` chooses another), starts `runner serve` there on a free port, types the brief, starts the
 run and approves each ordinary gate it stops at (`merge`). A stop that needs a person to read something
 (a seat called the requirement unsafe, an incomplete requirement, a tied panel) is never answered by the
-script: it writes the server's text to `<workdir>/.runner/person/<NNN>-<node>.md`, prints
-`AWAITING-PERSON <path>` and waits for `<NNN>-<node>.proceed` (or `.stop`) beside it; `--person-dir` moves
-the directory. It prints a line per node with the UTC time, then the run id,
+script: it writes the server's text to `<NNN>-<node>.md` in a new temporary directory **outside the workdir** (the build
+model can write inside it, so it must not be able to answer; the path is printed at start), prints
+`AWAITING-PERSON <path>` and waits for `<NNN>-<node>.proceed` (or `.stop`) beside it. `--person-dir` chooses
+the directory and is refused if it is inside the workdir; a `.proceed` that exists before the stop is
+written is refused, not taken as the answer. `--on-node` is split like a shell command line, so quote a path with spaces. It prints a line per node with the UTC time, then the run id,
 the final node and where `site/` is. With `--keep-serving` it stays up and prints the console URL and
 the **path** of the operator token file (never the token), so the run can be watched in the console.
 

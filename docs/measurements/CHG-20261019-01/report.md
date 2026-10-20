@@ -20,6 +20,16 @@
 - 要拿到這些時間，得做 CHG-20260827-21 列出的 commit graph 合併、`last_word` 合取等工作。
 - 下面第 4 節列出的 runner 修正項，多數比並行更急，也更便宜。
 - 這是單次實測，數字有波動空間。如果你想用重複幾次的結果來決定，可以再跑。
+- 1.80 倍是上限。十個模組並非互相獨立：brief 允許後面的模組呼叫前面模組提供的東西，所以實際加速會更低。
+- 不靠並行就能省時間的地方：`engineer_selfverify` 共 10 次 ask、148.6 秒，佔整個 run 的 18%，而這次它沒有改動任何檔案。
+
+**花費沒有量到。** 範例的指令沒有加 `--output-format json`，runner 拿不到用量，console 只顯示「not reported by this backend」。目前知道的是 ask 次數：
+- Run 1：8 次
+- Run 2：2 次
+- Run 3：12 次
+- Run 4：44 次
+
+共 66 次。從第一次探測到最後一次頁面驗證，總共花了 91 分鐘。提案原本估計單次 run「一小時內」完成。Run 4 沒有碰到任何速率限制，但沒有量測離上限還有多遠。
 
 ## 2. 量測結果（Run 4）
 
@@ -119,12 +129,20 @@ modules built 10   asks 44   asks in the loop 30
    - **建議**：每次 ask 開始和結束都推送一次事件。
 10. **run id 是 ask journal 的路徑，不是短 id。**
     - **建議**：給每個 run 一個短 id，報告、console 和 API 都用同一個。
+11. **claude 後端沒有回報用量時，什麼提示都沒有。**
+    - **現象**：`claude -p` 沒加 `--output-format json` 時不會印出用量。runner 只在 console 寫一行「not reported」，所以四次 run 的花費都沒留下紀錄。
+    - **建議**：runner 遇到已知能回報用量、卻沒開啟的指令時，在啟動時發出警告，或自動補上這個旗標。
+12. **流程中有可以省掉的 ask。**
+    - **現象**：
+      - `engineer_selfverify` 佔 Run 4 的 18%，緊接著的 `lead_task_review` 做的是同類檢查，而這次 selfverify 沒有改動任何檔案。
+      - `pr`（12.7 秒）和 `merge`（31.9 秒）是機械性步驟，卻也各問了一次模型。
+    - **建議**：讓 plan 可以合併或略過 selfverify，並讓機械性節點不經過模型。
 
 ## 5. 四次 run 的經過
 
 | Run | 時間（UTC） | 結果 | 原因與處理 |
 |---|---|---|---|
-| 1 | 10:37–10:42 | 手動中止，8 次 ask | 所有節點都有寫檔權限，規劃節點寫完十個檔案。改成預設唯讀、只有建置節點可寫（你選的） |
+| 1 | 10:37–10:42 | 手動中止，8 次 ask | 所有節點都有寫檔權限。`lead_assess` 回報自己寫好了十個檔案；從檔案最後寫入時間看，`pm_signoff` 最後寫了其中 5 個，第一次 `engineer_selfverify` 最後寫了另外 5 個（步驟 14）。改成預設唯讀、只有建置節點可寫（你選的） |
 | 2 | 11:17–11:18 | `drive.py` 結束 | risk 席位標 unsafe，`drive.py` 當成一般閘門處理被拒。改成每次停下都問你（你選的） |
 | 3 | 11:32–11:41 | 手動中止 | unsafe 停止點問你，你回「繼續」；之後 `pm_signoff` 用整體驗收條件否決計畫，進入迴圈。改成各節點依階段給規格 |
 | 4 | 11:50–12:04 | **完整跑完**，`done` | 量測用 |
@@ -136,6 +154,9 @@ Run 1–3 的工作目錄保留在 session 暫存區裡，不進 repository。�
 - **錄影**：CHG 第 5 項寫了「整段 run 的 console 錄影」，這次**沒有做**。即時畫面改用每 45–60 秒或換節點時的截圖，同步推送到即時頁面，這些截圖都收在 `steps/` 的 20、40、60、80 組。
 - **只跑了一次**：量測用的完整 run 只有 Run 4 一次。
 - **CWA**：沒有用真實授權碼驗證。
+- **花費與速率限制**：都沒有量測，見第 1 節。
+- **Run 3 的執行指令沒有在當下擷取**：擷取用的包裝程式和 run 一起被結束了。Run 3 的執行紀錄、交給你閱讀的停止全文、你的回覆，以及這兩個檔案的寫入時間，事後從保留的工作目錄補擷取，見步驟 52、56、57、58。
+- **停止點的範圍**：「每次停下都問我」，你在 2026-10-20 確認是指需要人閱讀的停止點。plan 裡的一般閘門（例如 Run 4 的 merge）仍由 `drive.py` 代為核准。
 - **驗證腳本**：`page_check.py` 由 orchestrator 撰寫，不是 coder，因為它只是驗證步驟用的程式。內容在步驟 91，有完整截圖。
 - **Run 1 的 `drive.py` 狀態**：Run 1 跑的時候還沒有「停下問人」的處理，Run 2 之後才加上。
 
@@ -301,6 +322,11 @@ Run 1–3 的工作目錄保留在 session 暫存區裡，不進 repository。�
   11:31:48 → 11:31:48 UTC · 文字紀錄 [51-run3-drive-dry-run.txt](steps/51-run3-drive-dry-run.txt)  
   ![步驟 51](steps/51-run3-drive-dry-run.png)
 
+- **步驟 52 · run3-drive-log** — Run 3 的執行輸出（drive.py 的完整紀錄）。原本的擷取包裝在中止 run 時被一併結束，沒有寫出；這是事後從保留的紀錄檔擷取  
+  檔案：`$S/run3.log`（sha256 `1ca37d8a8a31…`）  
+  11:56:55 → 11:57:21 UTC · 文字紀錄 [52-run3-drive-log.txt](steps/52-run3-drive-log.txt)  
+  ![步驟 52](steps/52-run3-drive-log.png)
+
 - **步驟 53 · run3-console-before-run** — Run 3：run 開始前的 runner console  
   畫面：runner console（Chromium 擷取；operator token 只在網址片段裡，不進截圖或文字檔）  
   11:31:59 → 11:32:00 UTC · 文字紀錄 [53-run3-console-before-run.txt](steps/53-run3-console-before-run.txt)  
@@ -315,6 +341,21 @@ Run 1–3 的工作目錄保留在 session 暫存區裡，不進 repository。�
   指令：`cd $S/run3/.runner/asks && for f in *pm_signoff*.json; do echo "== $f"; python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['result']['stdout'])" $f; done`  
   11:40:32 → 11:40:32 UTC · 文字紀錄 [55-run3-signoff-verdicts.txt](steps/55-run3-signoff-verdicts.txt)  
   ![步驟 55](steps/55-run3-signoff-verdicts.png)
+
+- **步驟 56 · run3-person-stop** — Run 3：intake_review 停下時交給使用者閱讀的全文（事後擷取）（擷取內容有遮蔽）  
+  檔案：`$S/run3/.runner/person/001-intake_review.md`（sha256 `81eb23b21c88…`）  
+  11:57:21 → 11:57:23 UTC · 文字紀錄 [56-run3-person-stop.txt](steps/56-run3-person-stop.txt)  
+  ![步驟 56](steps/56-run3-person-stop.png)
+
+- **步驟 57 · run3-person-answer** — Run 3：使用者的回覆「繼續」，11:39:12 UTC 寫入（事後擷取；檔案時間見文字紀錄）  
+  檔案：`$S/run3/.runner/person/001-intake_review.proceed`（sha256 `8e0adec90d6e…`）  
+  11:57:23 → 11:57:25 UTC · 文字紀錄 [57-run3-person-answer.txt](steps/57-run3-person-answer.txt)  
+  ![步驟 57](steps/57-run3-person-answer.png)
+
+- **步驟 58 · run3-person-file-times** — Run 3：停止檔與回覆檔的寫入時間（UTC），佐證 11:33:19 停下、11:39:12 回覆  
+  指令：`TZ=UTC ls -la --time-style=+%FT%TZ $S/run3/.runner/person/`  
+  11:57:34 → 11:57:34 UTC · 文字紀錄 [58-run3-person-file-times.txt](steps/58-run3-person-file-times.txt)  
+  ![步驟 58](steps/58-run3-person-file-times.png)
 
 **執行中的 console**：每 45–60 秒或換節點時自動擷取，共 10 張。
 
