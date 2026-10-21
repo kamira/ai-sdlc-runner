@@ -3,7 +3,7 @@
 - **日期**：2026-10-19（UTC）
 - **程式版本**：分支 `local/chg-loop-measure`。量測用的 Run 4 跑在 `7b834e0` 上（步驟 70）。
 - **後端**：每個節點都是 `claude-sonnet-5-5`、effort `medium`，每次 ask 是一個 `claude -p` 程序。
-- **範例**：`examples/weather-live`。這個範例只放人交給 runner 的東西：brief、plan、`runner.yaml`、`models.json`。頁面完全由 runner 實跑時建出，沒有範例 agent。
+- **範例**：`examples/weather-live`。範例裡有：人交給 runner 的 brief、plan、`runner.yaml`、`models.json`，代替操作員驅動 `serve` 的 `drive.py`，README，以及頁面離線驗證用的錄製回應（`fixtures/`）。沒有範例 agent，也沒有預先寫好的頁面；頁面完全由 runner 實跑時建出。
 - **操作方式**：用 `drive.py` 透過 `runner serve` 和 console 操作 run，就像操作員在 console 上做的一樣。執行中，console 由 Chromium 定時擷取，同步推送到即時頁面。
 - **截圖與紀錄**：指令、設定和畫面都附有圖片和文字紀錄，放在 `steps/`；下方「操作流程」逐步列出。有幾項沒在當下擷取，或事後無法補回，第 6 節逐一列出。截圖已用 `capture.py check` 掃過，沒有任何密鑰。
 
@@ -164,7 +164,8 @@ Run 1–3 的工作目錄保留在 session 暫存區裡，不進 repository。�
 
 - **錄影**：CHG 第 5 項寫了「整段 run 的 console 錄影」，這次**沒有做**。即時畫面改用每 45–60 秒或換節點時的截圖，同步推送到即時頁面，這些截圖都收在 `steps/` 的 20、40、60、80 組。
 - **只跑了一次**：量測用的完整 run 只有 Run 4 一次。
-- **CWA**：沒有用真實授權碼驗證。
+- **CWA**：沒有用真實授權碼驗證。你在 2026-10-21 決定保留這條路徑並標明未驗證，之後在帶授權碼的 session 驗證。
+- **`engineer_selfverify` 有寫檔權限**：你在 2026-10-21 接受這個已知缺口，修正 runner 的部分會另開 CHG 處理（第 4 節第 2 項）。Run 4 中它沒有寫入任何檔案。
 - **花費與速率限制**：都沒有量測，見第 1 節。
 - **Run 3 的執行指令沒有在當下擷取**：擷取用的包裝程式和 run 一起被結束了。Run 3 的執行紀錄、交給你閱讀的停止全文、你的回覆，以及這兩個檔案的寫入時間，事後從保留的工作目錄補擷取，見步驟 52、56、57、58。
 - **Run 4 開跑前的設定**：Run 4 當時只截了 plan（步驟 72）和 console（步驟 74）。runner.yaml 和 models.json 事後從 Run 4 所用的 commit `7b834e0` 補擷取（步驟 75、76），sha256 和 Run 2 的擷取（步驟 32、33）完全相同。Run 4 伺服器上的 `GET /models`、`GET /config/nodes`、`GET /config/seats` 沒有在當下擷取，事後無法補回；Run 2 的擷取（步驟 37、38）是相同設定下的結果。

@@ -11,7 +11,7 @@ its README is a measurement the suite repeats. This example is the other half.
 | who writes the page | `agent.py`, scripted | a real model (`claude-sonnet-5-5`, effort `medium`) through `runner.yaml` |
 | the numbers on the page | generated, labelled as a sample curve | **fetched by the page in the browser at run time** |
 | modules | four | ten |
-| what is in the directory | an agent, a plan, a `runner.yaml`, scenarios | **only what a person gives the runner**: a brief, a plan, a `runner.yaml` |
+| what is in the directory | an agent, a plan, a `runner.yaml`, scenarios | what a person gives the runner (a brief, a plan, `runner.yaml`, `models.json`), `drive.py` to drive `serve` as an operator does, and a recorded response in `fixtures/`; **no agent and no page code** |
 | what the suite runs | all of it | what the repository holds; never the real backend |
 
 **There is no `agent.py` here and no page code written in advance.** The runner builds the page: it
