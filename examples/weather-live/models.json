@@ -1,0 +1,16 @@
+{
+  "models": [
+    {
+      "id": "sonnet-writer",
+      "vendor": "anthropic",
+      "name": "claude-sonnet-5-5",
+      "transport": "cli",
+      "command": ["claude", "-p", "--model", "claude-sonnet-5-5", "--effort", "medium",
+                  "--allowedTools", "Read Glob Grep Write Edit",
+                  "--disallowedTools", "Bash WebFetch WebSearch",
+                  "--output-format", "json"],
+      "declared_reach": "external",
+      "note": "runner.yaml's agent_command plus Write and Edit (and the same --output-format json, so its spend is recorded); engineer_build's, and so fix_pass's and engineer_selfverify's"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+$ python3 --version; grep -m1 '^version' pyproject.toml; PYTHONPATH=src python3 -m ai_sdlc_runner.cli --help | head -2; claude --version
+# started 2026-10-19T10:36:27Z
+# ended   2026-10-19T10:36:27Z
+# exit    0
+
+Python 3.11.15
+version = "0.1.0"
+usage: runner [-h] [--config CONFIG] [--settings SETTINGS]
+              {flow,policy,settings,setup,serve,run,conversations,emergencies,export}
+2.1.303 (Claude Code)

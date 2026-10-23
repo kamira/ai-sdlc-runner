@@ -1,0 +1,62 @@
+$ curl -sS -H @$HDR http://127.0.0.1:43669/config/nodes | python3 -m json.tool
+# started 2026-10-19T11:16:57Z
+# ended   2026-10-19T11:16:57Z
+# exit    0
+
+{
+    "node_models": {
+        "engineer_build": [
+            "sonnet-writer"
+        ]
+    },
+    "seat_models": {},
+    "by_model": {
+        "sonnet-writer": {
+            "nodes": [
+                {
+                    "node_id": "engineer_build",
+                    "mode": "pool"
+                }
+            ],
+            "seats": [],
+            "known": true
+        }
+    },
+    "models": [
+        {
+            "id": "sonnet-writer",
+            "vendor": "anthropic",
+            "name": "claude-sonnet-5-5",
+            "transport": "cli",
+            "command": [
+                "claude",
+                "-p",
+                "--model",
+                "claude-sonnet-5-5",
+                "--effort",
+                "medium",
+                "--allowedTools",
+                "Read Glob Grep Write Edit",
+                "--disallowedTools",
+                "Bash WebFetch WebSearch"
+            ],
+            "endpoint": "",
+            "key_env": "",
+            "note": "runner.yaml's agent_command plus Write and Edit; engineer_build's, and so fix_pass's and engineer_selfverify's",
+            "tier": "",
+            "effort_argv": [],
+            "declared_reach": "external",
+            "reach": "external",
+            "leaves_this_machine": true,
+            "reach_guessed": false
+        }
+    ],
+    "source": {
+        "node_models.engineer_build": "plan"
+    },
+    "assignable": [
+        "single",
+        "model_panel",
+        "pool"
+    ]
+}

@@ -582,7 +582,7 @@ that you did.
 ### A plan you can actually run
 
 The snippets above are illustrative and **will not run** — they are `jsonc`, and `plan.json` is
-parsed with `json.loads`. Three complete, comment-free, working examples are in
+parsed with `json.loads`. Three complete, comment-free, working examples, and a fourth that is built by a real model, are in
 [`examples/`](examples/README.md), each with its own README:
 
 | | what it shows | |
@@ -590,6 +590,7 @@ parsed with `json.loads`. Three complete, comment-free, working examples are in
 | **minimal** | the smallest plan this runner accepts, and the answer contract | [read](examples/minimal/README.md) |
 | **tide-spa** | one brief run five times, each differing by a single field — **where a run stops and why** | [read](examples/tide-spa/README.md) |
 | **weather-spa** | the **console** path: a brief typed by a person, a gate approved by clicking | [read](examples/weather-spa/README.md) |
+| **weather-live** | the same page built by a **real model** through the console, showing **live data** — no example agent | [read](examples/weather-live/README.md) |
 
 The pages they build are at [`examples/demo/`](examples/demo/index.html), along with
 [a console-driven run replayed](examples/demo/recording.html) — what a person typed, what the model
@@ -912,7 +913,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 3131 tests
+pytest -q          # 3208 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

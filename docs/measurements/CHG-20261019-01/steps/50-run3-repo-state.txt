@@ -1,0 +1,6 @@
+$ git log -1 '--format=%H %s'
+# started 2026-10-19T11:31:47Z
+# ended   2026-10-19T11:31:47Z
+# exit    0
+
+d062e4d3a692e4bcf26a35baeca06502e7349c8e fix: drive.py asks the user at every stop that needs a person; run 2 recorded (CHG-20261019-01)

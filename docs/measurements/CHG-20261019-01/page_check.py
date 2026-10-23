@@ -1,0 +1,52 @@
+"""Open the page run 4 built, three ways, and screenshot each: live Open-Meteo, the recorded
+response, and a failing response. Usage: page_check.py SITE_DIR FIXTURE OUT_DIR MODE"""
+import http.server, json, os, socketserver, sys, threading, functools, datetime
+from pathlib import Path
+from playwright.sync_api import sync_playwright
+
+site, fixture, out, mode = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4]
+handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(site))
+httpd = socketserver.TCPServer(("127.0.0.1", 0), handler)
+threading.Thread(target=httpd.serve_forever, daemon=True).start()
+url = "http://127.0.0.1:%d/index.html" % httpd.server_address[1]
+requests = []
+with sync_playwright() as p:
+    b = p.chromium.launch(executable_path="/opt/pw-browsers/chromium", args=["--no-sandbox"])  # the build this image ships
+    pg = b.new_page(viewport={"width": 1100, "height": 900})
+    pg.on("request", lambda r: requests.append(r.url.split("?")[0]))
+    if mode == "live":
+        # This Chromium does not trust the session proxy's CA (ERR_CERT_AUTHORITY_INVALID), and TLS
+        # checks stay on. So the page's own request is relayed: the same URL is fetched live with
+        # urllib, which verifies against the session CA bundle, and its real answer handed back.
+        import ssl, urllib.request
+        ctx = ssl.create_default_context(cafile=os.environ.get("SSL_CERT_FILE") or None)
+        def relay(route):
+            with urllib.request.urlopen(route.request.url, timeout=30, context=ctx) as resp:
+                route.fulfill(status=resp.status, body=resp.read(), headers={
+                    "content-type": resp.headers.get("content-type", "application/json"),
+                    "access-control-allow-origin": "*"})
+        pg.route("https://api.open-meteo.com/**", relay)
+    if mode == "recorded":
+        body = fixture.read_text(encoding="utf-8")
+        pg.route("https://api.open-meteo.com/**", lambda r: r.fulfill(
+            status=200, body=body, headers={"content-type": "application/json",
+                                            "access-control-allow-origin": "*"}))
+    elif mode == "failing":
+        pg.route("https://api.open-meteo.com/**", lambda r: r.fulfill(
+            status=500, body="{}", headers={"access-control-allow-origin": "*"}))
+    pg.goto(url)
+    pg.wait_for_timeout(6000)
+    png = out / ("page-%s.png" % mode)
+    pg.screenshot(path=str(png), full_page=True)
+    text = pg.inner_text("body")
+    b.close()
+httpd.shutdown()
+print("mode:", mode)
+print("utc:", datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+print("page:", url)
+print("requests (query strings removed):")
+for r in sorted(set(requests)):
+    print("  ", r)
+print("visible text:")
+print(text)
+print("screenshot:", png.name)

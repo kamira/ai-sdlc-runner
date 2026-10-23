@@ -1,0 +1,6 @@
+$ git log -1 '--format=%H %s'
+# started 2026-10-19T11:16:34Z
+# ended   2026-10-19T11:16:34Z
+# exit    0
+
+add8f7ff64651ad4a021c6ecc328fb02aceaeb99 fix: only the build nodes get a write-capable command; run 1 recorded (CHG-20261019-01)

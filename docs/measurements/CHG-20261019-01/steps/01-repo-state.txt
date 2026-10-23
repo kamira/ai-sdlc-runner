@@ -1,0 +1,6 @@
+$ git log -1 '--format=%H %s'
+# started 2026-10-19T10:36:04Z
+# ended   2026-10-19T10:36:04Z
+# exit    0
+
+2e8297dc071892d35d519fa11a74eb50e204b437 feat: drive.py waits for a start signal, and measure.py reads the run's timings (CHG-20261019-01)

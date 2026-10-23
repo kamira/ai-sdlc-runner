@@ -1,0 +1,17 @@
+$ curl -sS -H @$HDR http://127.0.0.1:49777/config/nodes | python3 -m json.tool
+# started 2026-10-19T10:37:03Z
+# ended   2026-10-19T10:37:03Z
+# exit    0
+
+{
+    "node_models": {},
+    "seat_models": {},
+    "by_model": {},
+    "models": [],
+    "source": {},
+    "assignable": [
+        "single",
+        "model_panel",
+        "pool"
+    ]
+}

@@ -1,0 +1,15 @@
+file   /tmp/claude-0/-home-user-ai-sdlc-runner/e9610bf5-653a-5d17-821e-d8ca61c6322a/scratchpad/cleanenv.sh
+sha256 d458eedc3fbcaf0c34974ed39f0f4117666044422f22892eb8934b32054fe133
+time   2026-10-20T17:31:15Z
+
+#!/bin/bash
+# Run a command with only the variables a child `claude`/`codex` needs. Inheriting this session's
+# CLAUDE_* variables makes every child append to this session's env file (codex plugin hook), which
+# grows until every shell fails with E2BIG.
+args=()
+for v in HOME PATH TERM LANG USER HTTPS_PROXY HTTP_PROXY NO_PROXY https_proxy http_proxy no_proxy \
+         SSL_CERT_FILE SSL_CERT_DIR NODE_EXTRA_CA_CERTS REQUESTS_CA_BUNDLE CURL_CA_BUNDLE \
+         ANTHROPIC_BASE_URL CODEX_HOME PYTHONPATH; do
+  [ -n "${!v+x}" ] && args+=("$v=${!v}")
+done
+exec env -i "${args[@]}" "$@"
