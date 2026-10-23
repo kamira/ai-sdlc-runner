@@ -87,7 +87,7 @@ def test_runner_yaml_names_the_model_and_effort_and_grants_no_write_and_no_netwo
     assert command[:2] == ["claude", "-p"]
     assert command[command.index("--model") + 1] == "claude-sonnet-5-5"
     assert command[command.index("--effort") + 1] == "medium"
-    assert config["agent_retries"] == 0
+    assert int(config["agent_retries"]) == 0
     assert command[command.index("--output-format") + 1] == "json", "without it no spend is recorded"
     assert int(config["agent_timeout"]) >= 1800
     granted = command[command.index("--allowedTools") + 1].split()
