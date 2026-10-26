@@ -736,3 +736,40 @@ def test_every_ask_runs_in_the_workdir_default_or_registry(tmp_path):
     by_node = {n: os.path.realpath(c) for n, c in rows}
     assert "engineer_build" in by_node and len(by_node) > 3, "a default ask and a registry ask both ran"
     assert {c for c in by_node.values()} == {os.path.realpath(work)}, by_node
+
+
+def test_drive_runs_in_a_non_ascii_workdir_through_the_runners_own_reader(tmp_path):
+    work = tmp_path / "台北" / "weather"
+    done = _run("--runner-yaml", str(_stand_in_config(tmp_path)), "--workdir", str(work),
+                "--state-dir", str(tmp_path / "state"), cwd=tmp_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (work / ".built").exists(), "the default asks did not start in the workdir"
+
+
+@pytest.mark.parametrize("name", ["weather#4", "it's", 'a"b', "back\\slash", "trail "])
+def test_drive_refuses_a_workdir_the_fallback_reader_would_misread(tmp_path, name):
+    done = _run("--runner-yaml", str(_stand_in_config(tmp_path)), "--workdir", str(tmp_path / name),
+                "--state-dir", str(tmp_path / "state"), cwd=tmp_path)
+    assert done.returncode != 0
+    assert "Nothing was copied" in done.stdout + done.stderr
+    assert not (tmp_path / "state").exists() and not (tmp_path / name).exists()
+
+
+@pytest.mark.parametrize("forced", [False, True])
+def test_read_back_accepts_a_non_ascii_path_with_either_loader(tmp_path, monkeypatch, forced):
+    drive = _drive_module()
+    if forced:
+        monkeypatch.setitem(sys.modules, "yaml", None)
+    target = str(tmp_path / "台北" / "weather")
+    config = tmp_path / "runner.yaml"
+    config.write_text("agent_cwd: " + json.dumps(target, ensure_ascii=False) + "\n", encoding="utf-8")
+    drive.read_back(config, target)
+
+
+def test_read_back_refuses_to_start_when_agent_cwd_is_not_what_was_written(tmp_path):
+    drive = _drive_module()
+    config = tmp_path / "runner.yaml"
+    config.write_text("agent_cwd: " + json.dumps(str(tmp_path / "other")) + "\n", encoding="utf-8")
+    with pytest.raises(SystemExit) as stopped:
+        drive.read_back(config, str(tmp_path / "work"))
+    assert "refusing to start" in str(stopped.value)

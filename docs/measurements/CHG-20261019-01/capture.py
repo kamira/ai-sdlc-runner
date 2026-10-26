@@ -219,11 +219,29 @@ class LiveRedactor:
         return redact(out)[0]
 
 
+def _redact_value(value, hit: List[bool]):
+    """`value` with every string in it redacted; `hit` gets True if any of them changed."""
+    if isinstance(value, str):
+        value, changed = redact(value)
+        if changed:
+            hit.append(True)
+        return value
+    if isinstance(value, list):
+        return [_redact_value(v, hit) for v in value]
+    if isinstance(value, dict):
+        return {k: _redact_value(v, hit) for k, v in value.items()}
+    return value
+
+
 def _entry(step, slug, kind, why, what: dict, start, end, code, files, redacted) -> dict:
-    e = {"step": step, "slug": slug, "kind": kind, "why": redact(why)[0],
-         "started_utc": start, "ended_utc": end, "exit_code": code,
-         "files": files, "redacted": bool(redacted)}
+    """The record of one step. Every string in it (a path, a URL and a command included, not only
+    the captured text) goes through `redact` before it is kept."""
+    e = {"step": step, "slug": slug, "kind": kind, "why": why,
+         "started_utc": start, "ended_utc": end, "exit_code": code, "files": files}
     e.update(what)
+    hit: List[bool] = []
+    e = _redact_value(e, hit)
+    e["redacted"] = bool(redacted) or bool(hit)
     return e
 
 
@@ -271,7 +289,7 @@ def run_cmd(out: Out, step: int, slug: str, why: str, argv: Optional[Sequence[st
     if body and not body.endswith("\n"):
         text += "\n"
     files, changed = _text_and_image(out, step, slug, text, image)
-    entry = _entry(step, slug, "cmd", why, {"command": redact(shown)[0]}, start, end, code,
+    entry = _entry(step, slug, "cmd", why, {"command": shown}, start, end, code,
                    files, changed)
     out.record(entry)
     return entry

@@ -272,6 +272,53 @@ def relay_startup(proc) -> Startup:
     return startup
 
 
+def unreadable_char(value: str) -> str | None:
+    """The first character of `value` that the runner's PyYAML-free reader would not give back.
+
+    That reader drops everything after a `#`, strips surrounding quotes and decodes no escapes, so
+    `#`, both quotes and `\\` change a value; a control or line-break character ends its line.
+    """
+    for ch in value:
+        if ch in "#\"'\\" or not ch.isprintable():
+            return ch
+    return None
+
+
+def refuse_unreadable(value: str, what: str) -> None:
+    ch = unreadable_char(value)
+    if ch is None and value != value.strip():
+        ch = " "
+    if ch is not None:
+        raise SystemExit(f"{what} {value!r} holds {ch!r} (U+{ord(ch):04X}), which the runner's "
+                         f"PyYAML-free config reader would not read back as written; choose a "
+                         f"path without it. Nothing was copied.")
+
+
+def read_back(config: Path, expected: str) -> None:
+    """Load `config` as the runner does, with PyYAML if there is any and without it, and refuse
+    to start unless `agent_cwd` is exactly `expected`."""
+    from ai_sdlc_runner import cli
+    try:
+        import yaml  # noqa: F401
+        readers = [("with PyYAML", False), ("without PyYAML", True)]
+    except ImportError:
+        readers = [("without PyYAML", True)]
+    saved = sys.modules.get("yaml")
+    try:
+        for label, forced in readers:
+            if forced:
+                sys.modules["yaml"] = None  # makes `import yaml` raise ImportError
+            got = cli.load_config(str(config)).get("agent_cwd")
+            if got != expected:
+                raise SystemExit(f"{config} was written with agent_cwd {expected!r} but the runner "
+                                 f"reads {got!r} {label}; refusing to start")
+    finally:
+        if saved is None:
+            sys.modules.pop("yaml", None)
+        else:
+            sys.modules["yaml"] = saved
+
+
 def start_server(work: Path, state: Path, runner_yaml: Path, brief: str, models: Path | None):
     """Start `serve` with its cwd in `work` and every file it reads or writes in `state`."""
     work.mkdir(parents=True, exist_ok=True)
@@ -290,7 +337,9 @@ def start_server(work: Path, state: Path, runner_yaml: Path, brief: str, models:
     if kept and not kept.endswith("\n"):
         kept += "\n"
     (state / "runner.yaml").write_text(
-        kept + "agent_cwd: " + json.dumps(str(work.resolve())) + "\n", encoding="utf-8")
+        kept + "agent_cwd: " + json.dumps(str(work.resolve()), ensure_ascii=False) + "\n",
+        encoding="utf-8")
+    read_back(state / "runner.yaml", str(work.resolve()))
     (state / "brief.md").write_text(brief, encoding="utf-8")
     port = free_port()
     env = dict(os.environ, PYTHONUTF8="1", PYTHONUNBUFFERED="1", PYTHONPATH=str(REPO / "src"))
@@ -513,7 +562,10 @@ def main(argv=None) -> int:
         if existing.exists() and (not existing.is_dir() or any(existing.iterdir())):
             raise SystemExit(f"--workdir {existing} exists and is not empty; the model that writes can "
                              f"write anywhere in it, so choose a new or empty directory. Nothing was copied.")
+    if args.workdir:
+        refuse_unreadable(str(args.workdir.resolve()), "--workdir")
     work = (args.workdir or Path(tempfile.mkdtemp(prefix="weather-live-"))).resolve()
+    refuse_unreadable(str(work), "the workdir")
     if args.person_dir:
         person_dir = args.person_dir.resolve()
         if person_dir == work or work in person_dir.parents:

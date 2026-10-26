@@ -233,3 +233,28 @@ def test_check_finds_one_line_of_a_multiline_secret(tmp_path, monkeypatch):
     (tmp_path / "a.txt").write_text("x KcwggSjAgEAAoIBAQC7VJTUt9Us8cKj y\n", encoding="utf-8")
     (tmp_path / "b.txt").write_text("nothing here\n", encoding="utf-8")
     assert [b.split(":")[0] for b in capture.check_tree(tmp_path)] == ["a.txt"]
+
+
+def test_steps_jsonl_redacts_the_path_the_url_and_the_command(tmp_path, monkeypatch):
+    for name in list(capture.env_secrets()):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("DEPLOY_SECRET", "envsecretvalue42")
+    root = tmp_path / "m"
+    named = tmp_path / "CWA-0123456789abcdef01234567"
+    named.mkdir()
+    f = named / "in.yaml"
+    f.write_text("a: 1\n", encoding="utf-8")
+    assert capture.main(["--root", str(root), "file", "--step", "1", "--slug", "cfg", "--why", "w",
+                         "--no-image", str(f)]) == 0
+    assert capture.main(["--root", str(root), "cmd", "--step", "2", "--slug", "c", "--why", "w",
+                         "--no-image", "--", sys.executable, "-c", "print('envsecretvalue42')"]) == 0
+    # The page capture needs a browser; its record is built by the same `_entry`, from `strip_url`.
+    url = capture.strip_url("http://h/CWA-0123456789abcdef01234567/x?k=1")
+    entry = capture._entry(3, "pg", "page", "w", {"url": url}, "s", "e", 0, [], False)
+    capture.Out(root).record(entry)
+    assert entry["redacted"] is True and "CWA-0123" not in entry["url"]
+    text = (root / "steps" / "steps.jsonl").read_text(encoding="utf-8")
+    assert "CWA-0123456789abcdef01234567" not in text and "envsecretvalue42" not in text
+    lines = [json.loads(l) for l in text.splitlines()]
+    assert [e["redacted"] for e in lines] == [True, True, True]
+    assert capture.main(["--root", str(root), "check"]) == 0
