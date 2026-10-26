@@ -571,12 +571,12 @@ def main(argv=None) -> int:
                              f"assignments would outlive this run's, so choose a new or empty "
                              f"directory. Nothing was copied.")
     if args.workdir:
+        # before any resolve(): Python 3.9 on Windows raises OSError on such a name
+        refuse_unreadable(config_path(args.workdir.absolute()), "--workdir")
         existing = args.workdir.resolve()
         if existing.exists() and (not existing.is_dir() or any(existing.iterdir())):
             raise SystemExit(f"--workdir {existing} exists and is not empty; the model that writes can "
                              f"write anywhere in it, so choose a new or empty directory. Nothing was copied.")
-    if args.workdir:
-        refuse_unreadable(config_path(args.workdir.resolve()), "--workdir")
     work = (args.workdir or Path(tempfile.mkdtemp(prefix="weather-live-"))).resolve()
     refuse_unreadable(config_path(work), "the workdir")
     if args.person_dir:
