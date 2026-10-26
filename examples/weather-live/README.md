@@ -71,8 +71,8 @@ this directory looks like a CWA key (`CWA-` followed by twenty or more hex chara
 
 The CWA's response shape and whether the API answers a browser's cross-origin request are **not
 confirmed here**. The measurement (CHG-20261019-01, task 1a) happened, but no key reached that
-session, so the CWA was neither confirmed nor left out: `cwa.js` was built from the API's
-documentation and has not been run against a live response. A person with a key is the check.
+session, so the CWA was neither confirmed nor left out: the model wrote `cwa.js`, and its field
+names were not checked against a live response. A person with a key is the check.
 
 ### The recorded response
 

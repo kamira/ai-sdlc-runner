@@ -321,6 +321,9 @@ STAND_IN = '''
 import json, os, sys
 from pathlib import Path
 order = json.loads(sys.stdin.read())
+if os.environ.get("STAND_IN_CWD_LOG"):
+    with open(os.environ["STAND_IN_CWD_LOG"], "a", encoding="utf-8") as f:
+        f.write(order["node_id"] + " " + os.getcwd() + "\\n")
 node, seat = order["node_id"], order.get("seat")
 MODULES = %r
 def say(payload):
@@ -499,6 +502,7 @@ def test_an_unsafe_stop_waits_for_the_person_and_proceeds_only_on_their_file(tmp
 def test_a_stop_file_ends_the_run_with_a_nonzero_exit(tmp_path):
     proc, work, lines = _start_unsafe(tmp_path)
     try:
+        assert lines and lines[-1].startswith("AWAITING-PERSON "), "".join(lines)
         Path(lines[-1].split(" ", 1)[1].strip()).with_suffix(".stop").write_text("", encoding="utf-8")
         rest, _ = proc.communicate(timeout=120)
     finally:
@@ -711,3 +715,24 @@ def test_the_envelope_the_real_command_asks_for_is_unwrapped_to_the_answer_text(
     envelope = json.dumps({"type": "result", "is_error": False, "result": answer,
                            "total_cost_usd": 0.1, "usage": {"input_tokens": 1, "output_tokens": 2}})
     assert cli._unwrap_envelope(envelope) == (answer, False)
+
+
+def test_every_ask_runs_in_the_workdir_default_or_registry(tmp_path):
+    backend = tmp_path / "stand_in.py"
+    backend.write_text(STAND_IN, encoding="utf-8")
+    wrapper = tmp_path / "writer.py"
+    wrapper.write_text("import sys, subprocess\nraw = sys.stdin.read()\n"
+                       f"r = subprocess.run([{sys.executable!r}, {str(backend)!r}], input=raw, "
+                       "text=True, capture_output=True)\nsys.stdout.write(r.stdout)\n", encoding="utf-8")
+    config = _stand_in_config(tmp_path)
+    (tmp_path / "models.json").write_text(json.dumps({"models": [{
+        "id": "sonnet-writer", "vendor": "test", "name": "stand-in", "transport": "cli",
+        "command": [sys.executable, str(wrapper)]}]}), encoding="utf-8")
+    work, log = tmp_path / "work", tmp_path / "cwds.txt"
+    done = _run("--runner-yaml", str(config), "--workdir", str(work),
+                "--state-dir", str(tmp_path / "state"), cwd=tmp_path, env={"STAND_IN_CWD_LOG": str(log)})
+    assert done.returncode == 0, done.stdout + done.stderr
+    rows = [l.split(" ", 1) for l in log.read_text(encoding="utf-8").splitlines()]
+    by_node = {n: os.path.realpath(c) for n, c in rows}
+    assert "engineer_build" in by_node and len(by_node) > 3, "a default ask and a registry ask both ran"
+    assert {c for c in by_node.values()} == {os.path.realpath(work)}, by_node

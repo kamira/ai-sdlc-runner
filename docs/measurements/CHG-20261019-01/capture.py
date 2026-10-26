@@ -186,10 +186,9 @@ def render_text(text: str, png: Path) -> None:
 
 # -- the steps ---------------------------------------------------------------------------------
 class LiveRedactor:
-    """Redacts streamed output without letting a secret split across two reads through: text is
-    emitted only up to the last newline, redacted whole. A line with no newline for longer than
-    any secret or pattern match is expected to run is emitted too, but for a held-back tail."""
-    HOLD = 512
+    """Redacts streamed output without letting a secret split across two reads through: a line is
+    held until its newline (or the flush at EOF) and redacted whole, so no match is ever cut by
+    where the output was released."""
 
     def __init__(self):
         self.pending = ""
@@ -197,9 +196,6 @@ class LiveRedactor:
     def feed(self, piece: str) -> str:
         self.pending += piece
         cut = self.pending.rfind("\n") + 1
-        if not cut:
-            hold = max([self.HOLD] + [len(v) for v in env_secrets().values()])
-            cut = len(self.pending) - hold if len(self.pending) > 2 * hold else 0
         out, self.pending = self.pending[:cut], self.pending[cut:]
         return redact(out)[0]
 

@@ -283,7 +283,14 @@ def start_server(work: Path, state: Path, runner_yaml: Path, brief: str, models:
         stripped = json.loads((HERE / "plan.json").read_text(encoding="utf-8"))
         stripped.pop("node_models", None)
         (state / "plan.json").write_text(json.dumps(stripped, indent=2) + "\n", encoding="utf-8")
-    shutil.copy(runner_yaml, state / "runner.yaml")
+    # The runner resolves a config command's cwd against the config file's directory, which is
+    # `state`; pin it to the workdir so every ask, default or registry, runs where the site is.
+    given = runner_yaml.read_text(encoding="utf-8")
+    kept = "".join(l for l in given.splitlines(True) if not l.startswith("agent_cwd:"))
+    if kept and not kept.endswith("\n"):
+        kept += "\n"
+    (state / "runner.yaml").write_text(
+        kept + "agent_cwd: " + json.dumps(str(work.resolve())) + "\n", encoding="utf-8")
     (state / "brief.md").write_text(brief, encoding="utf-8")
     port = free_port()
     env = dict(os.environ, PYTHONUTF8="1", PYTHONUNBUFFERED="1", PYTHONPATH=str(REPO / "src"))

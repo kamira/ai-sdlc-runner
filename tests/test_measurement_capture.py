@@ -167,3 +167,31 @@ def test_live_redactor_flushes_an_unterminated_tail_redacted(monkeypatch):
     assert live.feed("abc supersec") == ""
     assert live.feed("retvalue") == ""
     assert live.flush() == "abc [redacted:SOME_SECRET]"
+
+
+def _live(pieces):
+    live = capture.LiveRedactor()
+    return "".join(live.feed(p) for p in pieces) + live.flush()
+
+
+def test_live_redactor_never_splits_a_secret_on_a_long_line_without_a_newline(monkeypatch):
+    secret = "supersecretvalue"
+    monkeypatch.setenv("SOME_SECRET", secret)
+    for text in ("x" * 510 + secret + "y" * 499, "x" * 600 + secret + "y" * 505):
+        for size in (1, 7, 100, 513, 4096):
+            pieces = [text[i:i + size] for i in range(0, len(text), size)]
+            out = _live(pieces)
+            assert "super" not in out.replace("[redacted:SOME_SECRET]", "") and "retvalue" not in out
+            assert out == text.replace(secret, "[redacted:SOME_SECRET]")
+        live = capture.LiveRedactor()
+        emitted = live.feed(text)
+        assert secret[:5] not in emitted.replace("[redacted:SOME_SECRET]", "")
+
+
+def test_live_redactor_never_splits_a_cwa_key_across_the_boundary():
+    key = "CWA-0123456789ABCDEF0123456789ABCDEF"
+    for pad in (480, 510, 600, 1100):
+        text = "x" * pad + key + "y" * 700
+        out = _live([text[i:i + 64] for i in range(0, len(text), 64)])
+        assert "CWA-0" not in out and "0123456789ABCDEF" not in out
+        assert out == capture.redact(text)[0]
