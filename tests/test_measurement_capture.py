@@ -195,3 +195,41 @@ def test_live_redactor_never_splits_a_cwa_key_across_the_boundary():
         out = _live([text[i:i + 64] for i in range(0, len(text), 64)])
         assert "CWA-0" not in out and "0123456789ABCDEF" not in out
         assert out == capture.redact(text)[0]
+
+
+PEM = ("-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj\n"
+       "\nshort\nAbCdEfGhIjKlMnOpQrStUvWx==\n-----END PRIVATE KEY-----")
+
+
+def test_live_redactor_releases_no_line_of_a_two_line_secret(monkeypatch):
+    monkeypatch.setenv("SOME_SECRET", "abcdefgh\nijklmnop")
+    live = capture.LiveRedactor()
+    out = live.feed("abcdefgh\n") + live.feed("ijklmnop\n") + live.flush()
+    assert "abcdefgh" not in out and "ijklmnop" not in out
+    assert out.count("[redacted:") == 2
+
+
+def test_live_redactor_hides_every_line_of_a_pem_value_at_any_chunk_size(monkeypatch):
+    monkeypatch.setenv("PRIVATE_KEY", PEM)
+    text = "before\n" + PEM + "\nafter\n"
+    for size in (1, 5, 17, 64, 4096):
+        out = _live([text[i:i + size] for i in range(0, len(text), size)])
+        for line in PEM.splitlines():
+            if len(line) >= capture.MIN_SECRET:
+                assert line not in out
+        assert out.startswith("before\n") and out.endswith("\nafter\n")
+    assert capture.redact(text)[0] == _live([text])
+    prefixed = "".join("> " + line + "\n" for line in PEM.splitlines())  # whole value never matches
+    for size in (1, 5, 17, 4096):
+        out = _live([prefixed[i:i + size] for i in range(0, len(prefixed), size)])
+        for line in PEM.splitlines():
+            if len(line) >= capture.MIN_SECRET:
+                assert line not in out
+        assert "> short\n" in out  # under the floor: cannot be matched alone
+
+
+def test_check_finds_one_line_of_a_multiline_secret(tmp_path, monkeypatch):
+    monkeypatch.setenv("PRIVATE_KEY", PEM)
+    (tmp_path / "a.txt").write_text("x KcwggSjAgEAAoIBAQC7VJTUt9Us8cKj y\n", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("nothing here\n", encoding="utf-8")
+    assert [b.split(":")[0] for b in capture.check_tree(tmp_path)] == ["a.txt"]

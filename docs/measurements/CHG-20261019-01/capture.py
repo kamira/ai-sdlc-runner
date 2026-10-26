@@ -60,9 +60,24 @@ def utc_now() -> str:
 
 # -- redaction ---------------------------------------------------------------------------------
 def env_secrets(env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
-    """name -> value for every environment variable that looks like a secret and is long enough."""
+    """name -> value for every environment variable that looks like a secret and is long enough.
+    A multiline value also yields each of its lines that is long enough, as "NAME#<n>": output
+    is released a line at a time, so every line must be matchable on its own. Lines shorter than
+    MIN_SECRET (a blank line, a short PEM footer fragment) cannot be matched alone; they carry no
+    usable secret and are left as they are."""
     env = os.environ if env is None else env
-    return {n: v for n, v in env.items() if SECRET_NAME.search(n) and len(v) >= MIN_SECRET}
+    found: Dict[str, str] = {}
+    for n, v in env.items():
+        if not SECRET_NAME.search(n):
+            continue
+        if len(v) >= MIN_SECRET:
+            found[n] = v
+        lines = v.splitlines()
+        if len(lines) > 1:
+            for i, line in enumerate(lines, 1):
+                if len(line.strip()) >= MIN_SECRET:
+                    found["%s#%d" % (n, i)] = line.strip()
+    return found
 
 
 def redact(text: str, env: Optional[Dict[str, str]] = None) -> Tuple[str, bool]:
