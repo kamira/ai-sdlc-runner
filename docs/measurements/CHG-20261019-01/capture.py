@@ -26,6 +26,7 @@ would show a secret.
 from __future__ import annotations
 
 import argparse
+import codecs
 import hashlib
 import html
 import json
@@ -184,6 +185,29 @@ def render_text(text: str, png: Path) -> None:
 
 
 # -- the steps ---------------------------------------------------------------------------------
+class LiveRedactor:
+    """Redacts streamed output without letting a secret split across two reads through: text is
+    emitted only up to the last newline, redacted whole. A line with no newline for longer than
+    any secret or pattern match is expected to run is emitted too, but for a held-back tail."""
+    HOLD = 512
+
+    def __init__(self):
+        self.pending = ""
+
+    def feed(self, piece: str) -> str:
+        self.pending += piece
+        cut = self.pending.rfind("\n") + 1
+        if not cut:
+            hold = max([self.HOLD] + [len(v) for v in env_secrets().values()])
+            cut = len(self.pending) - hold if len(self.pending) > 2 * hold else 0
+        out, self.pending = self.pending[:cut], self.pending[cut:]
+        return redact(out)[0]
+
+    def flush(self) -> str:
+        out, self.pending = self.pending, ""
+        return redact(out)[0]
+
+
 def _entry(step, slug, kind, why, what: dict, start, end, code, files, redacted) -> dict:
     e = {"step": step, "slug": slug, "kind": kind, "why": redact(why)[0],
          "started_utc": start, "ended_utc": end, "exit_code": code,
@@ -218,15 +242,17 @@ def run_cmd(out: Out, step: int, slug: str, why: str, argv: Optional[Sequence[st
         code = 127
     else:
         assert proc.stdout is not None
+        decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        live = LiveRedactor()
         while True:
-            data = os.read(proc.stdout.fileno(), 65536)
-            if not data:
-                break
-            piece = data.decode("utf-8", "replace")
+            data = _read_chunk(proc.stdout.fileno())
+            piece = decoder.decode(data, final=not data)
             chunks.append(piece)
             if echo:
-                sys.stdout.write(redact(piece)[0])
+                sys.stdout.write(live.feed(piece) if data else live.flush())
                 sys.stdout.flush()
+            if not data:
+                break
         code = proc.wait()
     end = utc_now()
     body = "".join(chunks)
@@ -238,6 +264,10 @@ def run_cmd(out: Out, step: int, slug: str, why: str, argv: Optional[Sequence[st
                    files, changed)
     out.record(entry)
     return entry
+
+
+def _read_chunk(fd: int) -> bytes:
+    return os.read(fd, 65536)
 
 
 def _quote(a: str) -> str:
@@ -258,11 +288,21 @@ def run_file(out: Out, step: int, slug: str, why: str, path: str, image: bool = 
     return entry
 
 
+# What the fields hold: `innerText` leaves out an input's value, yet the screenshot shows it.
+_FIELDS_JS = """
+() => Array.from(document.querySelectorAll('input, textarea, select, [contenteditable]'))
+  .filter(e => !(e.type === 'password'))
+  .map(e => (e.isContentEditable && !('value' in e)) ? (e.textContent || '') : (e.value || ''))
+"""
+
 _HIDE_JS = """
 (secrets) => {
   document.querySelectorAll('input[type=password]').forEach(i => { i.value = ''; });
-  document.querySelectorAll('input, textarea').forEach(i => {
+  document.querySelectorAll('input, textarea, select').forEach(i => {
     if (secrets.some(s => (i.value || '').includes(s))) i.value = '';
+  });
+  document.querySelectorAll('[contenteditable]').forEach(e => {
+    if (!('value' in e) && secrets.some(s => (e.textContent || '').includes(s))) e.textContent = '';
   });
   // Hide the innermost elements that show a secret, not the whole page above them.
   const all = Array.from(document.body.querySelectorAll('*'));
@@ -302,10 +342,13 @@ def capture_page(out: Out, step: int, slug: str, why: str, url: str, wait_for: O
             if wait_for:
                 pg.wait_for_selector(wait_for, timeout=30000)
             pg.wait_for_timeout(400)
-            shown = secret_literals(pg.inner_text("body"), extra=extra)
+            fields = "\n".join(pg.evaluate(_FIELDS_JS))
+            shown = secret_literals(pg.inner_text("body") + "\n" + fields, extra=extra)
+            in_fields = bool(secret_literals(fields, extra=extra))
             secrets = shown + [s for s in (list(env_secrets().values()) + extra) if s not in shown]
             visible = pg.evaluate(_HIDE_JS, secrets)
-            leaked = [s for s in secret_literals(visible, extra=extra)]
+            held = "\n".join(pg.evaluate(_FIELDS_JS))
+            leaked = [s for s in secret_literals(visible + "\n" + held, extra=extra)]
             if leaked:
                 raise Refused("the page still shows a secret value after hiding; nothing written")
             out.steps.mkdir(parents=True, exist_ok=True)
@@ -320,7 +363,7 @@ def capture_page(out: Out, step: int, slug: str, why: str, url: str, wait_for: O
     out.write_text(txt, text)
     files = [out.rel(txt)] + ([out.rel(png)] if image else [])
     entry = _entry(step, slug, "page", why, {"url": strip_url(url)}, start, end, 0, files,
-                   changed or bool(shown))
+                   changed or bool(shown) or in_fields)
     out.record(entry)
     return entry
 

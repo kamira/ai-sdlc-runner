@@ -115,3 +115,55 @@ def test_page_refuses_when_a_secret_stays_visible(tmp_path, monkeypatch):
     assert "visiblesecret99" not in txt and "ok" in txt
     e = json.loads((tmp_path / "m" / "steps" / "steps.jsonl").read_text(encoding="utf-8"))
     assert e["redacted"] is True and "?" not in e["url"]
+
+
+def test_page_hides_a_secret_held_only_in_a_form_value(tmp_path, monkeypatch):
+    need_chromium()
+    for name in list(capture.env_secrets()):
+        monkeypatch.delenv(name, raising=False)
+    page = tmp_path / "f.html"
+    page.write_text("<p>ok</p><input id=i type=text value='CWA-0123456789abcdef01234567'>"
+                    "<textarea>sk-abcdefghijklmnopqrstuv</textarea>"
+                    "<div contenteditable>Bearer abcdefgh12345678</div>", encoding="utf-8")
+    assert capture.main(["--root", str(tmp_path / "m"), "page", "--step", "1", "--slug", "pg",
+                         "--why", "w", page.as_uri(), "--no-image"]) == 0
+    e = json.loads((tmp_path / "m" / "steps" / "steps.jsonl").read_text(encoding="utf-8"))
+    assert e["redacted"] is True
+    assert capture.check_tree(tmp_path / "m") == []
+
+
+def test_page_form_value_is_blanked_before_the_screenshot(tmp_path, monkeypatch):
+    need_chromium()
+    from playwright.sync_api import sync_playwright
+    page = tmp_path / "f.html"
+    page.write_text("<input type=text value='CWA-0123456789abcdef01234567'>", encoding="utf-8")
+    with sync_playwright() as p:
+        b = capture._launch(p)
+        try:
+            pg = b.new_page()
+            pg.goto(page.as_uri())
+            pg.evaluate(capture._HIDE_JS, ["CWA-0123456789abcdef01234567"])
+            assert pg.evaluate(capture._FIELDS_JS) == [""]
+        finally:
+            b.close()
+
+
+def test_live_output_never_shows_a_secret_split_across_two_reads(tmp_path, monkeypatch, capsys):
+    secret = "supersecretvalue"
+    monkeypatch.setenv("SOME_SECRET", secret)
+    reads = iter([b"before super", b"secretvalue after\nnext line\n", b""])
+    monkeypatch.setattr(capture, "_read_chunk", lambda fd: next(reads))
+    out = capture.Out(tmp_path)
+    capture.run_cmd(out, 1, "split", "w", argv=[sys.executable, "-c", "pass"], image=False)
+    live = capsys.readouterr().out
+    assert secret not in live and "super" not in live.replace("[redacted:SOME_SECRET]", "")
+    assert "[redacted:SOME_SECRET] after" in live and live.endswith("next line\n")
+    assert secret not in (tmp_path / "steps" / "01-split.txt").read_text(encoding="utf-8")
+
+
+def test_live_redactor_flushes_an_unterminated_tail_redacted(monkeypatch):
+    monkeypatch.setenv("SOME_SECRET", "supersecretvalue")
+    live = capture.LiveRedactor()
+    assert live.feed("abc supersec") == ""
+    assert live.feed("retvalue") == ""
+    assert live.flush() == "abc [redacted:SOME_SECRET]"

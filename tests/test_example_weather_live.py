@@ -572,6 +572,18 @@ def test_a_workdir_that_is_not_empty_is_refused_and_nothing_is_copied(tmp_path):
     assert sorted(p.name for p in work.iterdir()) == ["keep.txt"]
 
 
+def test_a_state_dir_that_is_not_empty_is_refused_before_anything_is_copied(tmp_path):
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "config.sqlite").write_text("old", encoding="utf-8")
+    work = tmp_path / "work"
+    done = _run("--runner-yaml", str(_stand_in_config(tmp_path)), "--workdir", str(work),
+                "--state-dir", str(state), cwd=tmp_path)
+    assert done.returncode != 0 and "--state-dir" in done.stdout + done.stderr
+    assert "not empty" in done.stdout + done.stderr
+    assert [p.name for p in state.iterdir()] == ["config.sqlite"] and not work.exists()
+
+
 def test_an_existing_empty_workdir_is_used(tmp_path):
     work = tmp_path / "empty"
     work.mkdir()

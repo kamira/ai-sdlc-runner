@@ -18,7 +18,8 @@ the workdir, so it must not be able to answer), prints `AWAITING-PERSON <that pa
 
 Everything `serve` reads or writes for the run except `site/` lives in a state directory outside the
 workdir (`--state-dir`, default a new temporary directory, printed once at the start; refused if it
-is inside the workdir, like `--person-dir`): `settings.json` (re-read at the start of every walk),
+is inside the workdir, like `--person-dir`, and refused if it exists and is not empty, like
+`--workdir`, so no old settings or assignments carry over): `settings.json` (re-read at the start of every walk),
 the operator token, `config.sqlite`, `models.json`, `plan.json`, `runner.yaml`, `attachments/`, the
 conversation store `conv/` and the ask journal `asks/`. The build model can write inside the workdir,
 so none of them may be there. `measure.py --state-dir` reads the record from it.
@@ -494,6 +495,12 @@ def main(argv=None) -> int:
               f"nothing was started")
         return 0
 
+    if args.state_dir:
+        old = args.state_dir.resolve()
+        if old.exists() and (not old.is_dir() or any(old.iterdir())):
+            raise SystemExit(f"--state-dir {old} exists and is not empty; its settings, registry and "
+                             f"assignments would outlive this run's, so choose a new or empty "
+                             f"directory. Nothing was copied.")
     if args.workdir:
         existing = args.workdir.resolve()
         if existing.exists() and (not existing.is_dir() or any(existing.iterdir())):
