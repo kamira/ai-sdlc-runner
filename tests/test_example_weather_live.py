@@ -746,7 +746,11 @@ def test_drive_runs_in_a_non_ascii_workdir_through_the_runners_own_reader(tmp_pa
     assert (work / ".built").exists(), "the default asks did not start in the workdir"
 
 
-@pytest.mark.parametrize("name", ["weather#4", "it's", 'a"b', "back\\slash", "trail "])
+@pytest.mark.parametrize("name", [
+    "weather#4", "it's", 'a"b', "trail ",
+    pytest.param("back\\slash", marks=pytest.mark.skipif(
+        os.name == "nt", reason="a backslash is the path separator on Windows")),
+])
 def test_drive_refuses_a_workdir_the_fallback_reader_would_misread(tmp_path, name):
     done = _run("--runner-yaml", str(_stand_in_config(tmp_path)), "--workdir", str(tmp_path / name),
                 "--state-dir", str(tmp_path / "state"), cwd=tmp_path)
@@ -764,6 +768,20 @@ def test_read_back_accepts_a_non_ascii_path_with_either_loader(tmp_path, monkeyp
     config = tmp_path / "runner.yaml"
     config.write_text("agent_cwd: " + json.dumps(target, ensure_ascii=False) + "\n", encoding="utf-8")
     drive.read_back(config, target)
+
+
+def test_a_windows_style_workdir_is_written_with_forward_slashes_and_reads_back_equal(monkeypatch):
+    import ntpath
+    import pathlib
+    import types
+    drive = _drive_module()
+    monkeypatch.setattr(drive, "os", types.SimpleNamespace(path=ntpath))
+    win = "C:\\Users\\me\\weather"
+    written = drive.config_path(pathlib.PureWindowsPath(win))
+    assert written == "C:/Users/me/weather"
+    assert drive.unreadable_char(written) is None
+    assert drive.same_path(written, win)
+    assert not drive.same_path(written, "C:\\Users\\me\\other")
 
 
 def test_read_back_refuses_to_start_when_agent_cwd_is_not_what_was_written(tmp_path):

@@ -294,9 +294,22 @@ def refuse_unreadable(value: str, what: str) -> None:
                          f"path without it. Nothing was copied.")
 
 
+def config_path(path: Path) -> str:
+    """`path` as written into runner.yaml: forward slashes, which Windows accepts too, so the
+    fallback reader never meets a backslash it would have to decode."""
+    return path.as_posix()
+
+
+def same_path(a: object, b: object) -> bool:
+    """Whether two path strings name the same place (`C:/x/y` and `C:\\x\\y` do on Windows)."""
+    if not isinstance(a, str) or not isinstance(b, str):
+        return False
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
 def read_back(config: Path, expected: str) -> None:
     """Load `config` as the runner does, with PyYAML if there is any and without it, and refuse
-    to start unless `agent_cwd` is exactly `expected`."""
+    to start unless `agent_cwd` is the same path as `expected`."""
     from ai_sdlc_runner import cli
     try:
         import yaml  # noqa: F401
@@ -309,7 +322,7 @@ def read_back(config: Path, expected: str) -> None:
             if forced:
                 sys.modules["yaml"] = None  # makes `import yaml` raise ImportError
             got = cli.load_config(str(config)).get("agent_cwd")
-            if got != expected:
+            if not same_path(got, expected):
                 raise SystemExit(f"{config} was written with agent_cwd {expected!r} but the runner "
                                  f"reads {got!r} {label}; refusing to start")
     finally:
@@ -337,7 +350,7 @@ def start_server(work: Path, state: Path, runner_yaml: Path, brief: str, models:
     if kept and not kept.endswith("\n"):
         kept += "\n"
     (state / "runner.yaml").write_text(
-        kept + "agent_cwd: " + json.dumps(str(work.resolve()), ensure_ascii=False) + "\n",
+        kept + "agent_cwd: " + json.dumps(config_path(work.resolve()), ensure_ascii=False) + "\n",
         encoding="utf-8")
     read_back(state / "runner.yaml", str(work.resolve()))
     (state / "brief.md").write_text(brief, encoding="utf-8")
@@ -563,9 +576,9 @@ def main(argv=None) -> int:
             raise SystemExit(f"--workdir {existing} exists and is not empty; the model that writes can "
                              f"write anywhere in it, so choose a new or empty directory. Nothing was copied.")
     if args.workdir:
-        refuse_unreadable(str(args.workdir.resolve()), "--workdir")
+        refuse_unreadable(config_path(args.workdir.resolve()), "--workdir")
     work = (args.workdir or Path(tempfile.mkdtemp(prefix="weather-live-"))).resolve()
-    refuse_unreadable(str(work), "the workdir")
+    refuse_unreadable(config_path(work), "the workdir")
     if args.person_dir:
         person_dir = args.person_dir.resolve()
         if person_dir == work or work in person_dir.parents:
