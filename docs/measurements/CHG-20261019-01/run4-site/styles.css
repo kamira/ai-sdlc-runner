@@ -1,0 +1,127 @@
+:root {
+  --bg: #f4f7fb;
+  --card: #ffffff;
+  --text: #1c2733;
+  --muted: #5d6b7a;
+  --line: #dbe3ec;
+  --accent: #1f6fd1;
+  --error-bg: #fdecec;
+  --error-text: #8a1c1c;
+  --error-line: #e5a3a3;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12181f;
+    --card: #1b242e;
+    --text: #e8eef4;
+    --muted: #9aa8b6;
+    --line: #2e3b48;
+    --accent: #6aaeff;
+    --error-bg: #3a1c1c;
+    --error-text: #ffb4b4;
+    --error-line: #7a3a3a;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 16px;
+  font-family: system-ui, -apple-system, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+#header, main, #footer {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+#header { text-align: center; padding: 8px 0 16px; }
+#header h1 { margin: 0; font-size: 1.5rem; }
+.coords { margin: 4px 0 0; color: var(--muted); font-size: 0.875rem; }
+
+.block {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.block:empty { display: none; }
+
+/* 現在 */
+#now { text-align: center; }
+#now .now-temp { font-size: 4rem; font-weight: 600; line-height: 1.1; }
+#now .now-humidity { font-size: 1.25rem; color: var(--muted); margin-top: 4px; }
+#now .now-extra { font-size: 0.875rem; color: var(--muted); margin-top: 4px; }
+
+/* 七天清單 */
+#week ul { list-style: none; margin: 0; padding: 0; }
+#week li {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+#week li:last-child { border-bottom: 0; }
+#week .day-name { font-weight: 600; }
+#week .day-high { font-weight: 600; }
+#week .day-low, #week .day-rain { color: var(--muted); }
+
+/* 曲線 */
+#chart h2, #week h2 { margin: 0 0 8px; font-size: 1rem; }
+#chart svg { width: 100%; height: auto; display: block; }
+#chart .line { fill: none; stroke: var(--accent); stroke-width: 2; }
+#chart .axis, #chart .tick { stroke: var(--line); stroke-width: 1; }
+#chart text { fill: var(--muted); font-size: 11px; }
+
+/* 載入中與錯誤狀態 */
+.status {
+  padding: 12px 16px;
+  border-radius: 12px;
+  margin-bottom: 16px;
+  text-align: center;
+}
+.status[hidden] { display: none; }
+
+.status-loading {
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.status-error {
+  background: var(--error-bg);
+  border: 1px solid var(--error-line);
+  color: var(--error-text);
+  font-weight: 600;
+  text-align: left;
+}
+
+@keyframes pulse {
+  50% { opacity: 0.5; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-loading { animation: none; }
+}
+
+/* 頁尾 */
+#footer {
+  color: var(--muted);
+  font-size: 0.875rem;
+  padding-bottom: 24px;
+}
+#footer p { margin: 2px 0; }
+#cwa-settings { margin-top: 12px; }
+#cwa-settings summary { cursor: pointer; }
+#cwa-settings input { margin: 4px 4px 4px 8px; padding: 4px 8px; }
+#cwa-settings .hint { margin-top: 8px; }

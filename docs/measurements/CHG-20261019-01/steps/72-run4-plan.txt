@@ -1,0 +1,500 @@
+file   examples/weather-live/plan.json
+sha256 221b5970139892a3b9f2970b50276d8da31c7d71fc564d92545680523dba7f99
+time   2026-10-19T11:50:16Z
+
+{
+  "risk": "low",
+  "decisions": {
+    "next_module": "frontier",
+    "feedback": "done"
+  },
+  "node_specs": {
+    "intake": {
+      "scope": "The plan for a one-week Taipei weather page, judged before anything is built: ten modules in site/ in the brief's numbered order, one file each, no build step, no external libraries, and no network request but to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw. Nothing is built at this stage, so site/ is empty and that is expected: judge the plan, not files.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Read the brief as the plan's starting point. Do not create or change any file.",
+      "done_criteria": "the plan lists exactly the ten modules the brief numbers, in the brief's order, each with one clear job; it keeps the data rules (Open-Meteo by default, CWA only when the person types a key, the key only in the browser's localStorage and in no file, the source and the fetch time shown, a failed request shown as an error state naming the source with no made-up numbers); and it adds nothing the brief did not ask for",
+      "acceptance_predicate": "the plan names the ten modules, in order, no more and no fewer, and keeps the brief's data rules: no key in any file, only the two named API hosts, an error state and no made-up numbers when a request fails",
+      "input_artifacts": [],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "intake_review": {
+      "scope": "The plan for a one-week Taipei weather page, judged before anything is built: ten modules in site/ in the brief's numbered order, one file each, no build step, no external libraries, and no network request but to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw. Nothing is built at this stage, so site/ is empty and that is expected: judge the plan, not files.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Judge the requirement, not any file: nothing exists to read yet. Do not create or change any file.",
+      "done_criteria": "the plan lists exactly the ten modules the brief numbers, in the brief's order, each with one clear job; it keeps the data rules (Open-Meteo by default, CWA only when the person types a key, the key only in the browser's localStorage and in no file, the source and the fetch time shown, a failed request shown as an error state naming the source with no made-up numbers); and it adds nothing the brief did not ask for",
+      "acceptance_predicate": "the plan names the ten modules, in order, no more and no fewer, and keeps the brief's data rules: no key in any file, only the two named API hosts, an error state and no made-up numbers when a request fails",
+      "input_artifacts": [],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "pm_plan": {
+      "scope": "The plan for a one-week Taipei weather page, judged before anything is built: ten modules in site/ in the brief's numbered order, one file each, no build step, no external libraries, and no network request but to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw. Nothing is built at this stage, so site/ is empty and that is expected: judge the plan, not files.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Write the plan only. Declare the modules in the answer's modules list: the ten file names the brief numbers, in that order, and no others. Do not create or change any file.",
+      "done_criteria": "the plan lists exactly the ten modules the brief numbers, in the brief's order, each with one clear job; it keeps the data rules (Open-Meteo by default, CWA only when the person types a key, the key only in the browser's localStorage and in no file, the source and the fetch time shown, a failed request shown as an error state naming the source with no made-up numbers); and it adds nothing the brief did not ask for",
+      "acceptance_predicate": "the plan names the ten modules, in order, no more and no fewer, and keeps the brief's data rules: no key in any file, only the two named API hosts, an error state and no made-up numbers when a request fails",
+      "input_artifacts": [],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "pm_confirm": {
+      "scope": "The plan for a one-week Taipei weather page, judged before anything is built: ten modules in site/ in the brief's numbered order, one file each, no build step, no external libraries, and no network request but to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw. Nothing is built at this stage, so site/ is empty and that is expected: judge the plan, not files.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Confirm the plan: the ten-module list, its order, its scope and the data rules. Nothing is built yet, so an empty site/ is not a reason to say no. Do not create or change any file.",
+      "done_criteria": "the plan lists exactly the ten modules the brief numbers, in the brief's order, each with one clear job; it keeps the data rules (Open-Meteo by default, CWA only when the person types a key, the key only in the browser's localStorage and in no file, the source and the fetch time shown, a failed request shown as an error state naming the source with no made-up numbers); and it adds nothing the brief did not ask for",
+      "acceptance_predicate": "the plan names the ten modules, in order, no more and no fewer, and keeps the brief's data rules: no key in any file, only the two named API hosts, an error state and no made-up numbers when a request fails",
+      "input_artifacts": [],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "lead_assess": {
+      "scope": "The plan for a one-week Taipei weather page, judged before anything is built: ten modules in site/ in the brief's numbered order, one file each, no build step, no external libraries, and no network request but to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw. Nothing is built at this stage, so site/ is empty and that is expected: judge the plan, not files.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Assess whether the plan is feasible and how risky it is: the ten modules, their order and the data rules. Nothing is built yet, so do not look for files. Do not create or change any file.",
+      "done_criteria": "the plan lists exactly the ten modules the brief numbers, in the brief's order, each with one clear job; it keeps the data rules (Open-Meteo by default, CWA only when the person types a key, the key only in the browser's localStorage and in no file, the source and the fetch time shown, a failed request shown as an error state naming the source with no made-up numbers); and it adds nothing the brief did not ask for",
+      "acceptance_predicate": "the plan names the ten modules, in order, no more and no fewer, and keeps the brief's data rules: no key in any file, only the two named API hosts, an error state and no made-up numbers when a request fails",
+      "input_artifacts": [],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "pm_signoff": {
+      "scope": "The plan for a one-week Taipei weather page, judged before anything is built: ten modules in site/ in the brief's numbered order, one file each, no build step, no external libraries, and no network request but to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw. Nothing is built at this stage, so site/ is empty and that is expected: judge the plan, not files.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Sign off on the plan: the ten-module list, its order, its scope and the data rules. Judge the plan itself; no lead assessment is attached to this order, so do not ask for one. Nothing is built yet, so an empty site/ is expected and is not a reason to say no. Say no only if the plan is wrong or incomplete, and say what. Do not create or change any file.",
+      "done_criteria": "the plan lists exactly the ten modules the brief numbers, in the brief's order, each with one clear job; it keeps the data rules (Open-Meteo by default, CWA only when the person types a key, the key only in the browser's localStorage and in no file, the source and the fetch time shown, a failed request shown as an error state naming the source with no made-up numbers); and it adds nothing the brief did not ask for",
+      "acceptance_predicate": "the plan names the ten modules, in order, no more and no fewer, and keeps the brief's data rules: no key in any file, only the two named API hosts, an error state and no made-up numbers when a request fails",
+      "input_artifacts": [],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "next_module": {
+      "scope": "One module of the ten in the brief's numbered list, built in the brief's order, one file at a time under site/. The module in hand is the first file in the brief's numbered list that does not yet exist under site/. No build step, no external libraries, and no network request but to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Do not create or change any file.",
+      "done_criteria": "the module in hand exists under site/, does the one job the brief gives it, and uses only what the modules before it already provide; it holds no API key and makes no request to any host but the two named; where it handles data it shows an error and never a made-up number",
+      "acceptance_predicate": "the module in hand exists under site/ and parses, holds no API key, and requests nothing but the two named API hosts",
+      "input_artifacts": [],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "engineer_build": {
+      "scope": "One module of the ten in the brief's numbered list, built in the brief's order, one file at a time under site/. The module in hand is the first file in the brief's numbered list that does not yet exist under site/. No build step, no external libraries, and no network request but to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Build one module per ask: the first file in the brief's numbered list that does not yet exist under site/, writing it to site/. Build only that first missing file and touch no other file. Answer {\"module\": \"<that file name>\"}. When all ten files already exist, write nothing and answer {\"module\": \"\"}.",
+      "done_criteria": "the module in hand exists under site/, does the one job the brief gives it, and uses only what the modules before it already provide; it holds no API key and makes no request to any host but the two named; where it handles data it shows an error and never a made-up number",
+      "acceptance_predicate": "the module in hand exists under site/ and parses, holds no API key, and requests nothing but the two named API hosts",
+      "input_artifacts": [],
+      "expected_outputs": "site/<the first file in the brief's numbered list that does not yet exist>",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "engineer_selfverify": {
+      "scope": "One module of the ten in the brief's numbered list, built in the brief's order, one file at a time under site/. The module in hand is the module just built: the file highest in the brief's numbered list that exists under site/. No build step, no external libraries, and no network request but to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Check the module just built against its done criteria and the brief's rules. You may only correct the module just built; you must not create any other file.",
+      "done_criteria": "the module in hand exists under site/, does the one job the brief gives it, and uses only what the modules before it already provide; it holds no API key and makes no request to any host but the two named; where it handles data it shows an error and never a made-up number",
+      "acceptance_predicate": "the module in hand exists under site/ and parses, holds no API key, and requests nothing but the two named API hosts",
+      "input_artifacts": [],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "lead_task_review": {
+      "scope": "One module of the ten in the brief's numbered list, built in the brief's order, one file at a time under site/. The module in hand is the module just built: the file highest in the brief's numbered list that exists under site/. No build step, no external libraries, and no network request but to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Review the module just built, and only it, against its done criteria and the brief's rules. Do not create or change any file.",
+      "done_criteria": "the module in hand exists under site/, does the one job the brief gives it, and uses only what the modules before it already provide; it holds no API key and makes no request to any host but the two named; where it handles data it shows an error and never a made-up number",
+      "acceptance_predicate": "the module in hand exists under site/ and parses, holds no API key, and requests nothing but the two named API hosts",
+      "input_artifacts": [],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "record_module": {
+      "scope": "One module of the ten in the brief's numbered list, built in the brief's order, one file at a time under site/. The module in hand is the module just built: the file highest in the brief's numbered list that exists under site/. No build step, no external libraries, and no network request but to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Do not create or change any file.",
+      "done_criteria": "the module in hand exists under site/, does the one job the brief gives it, and uses only what the modules before it already provide; it holds no API key and makes no request to any host but the two named; where it handles data it shows an error and never a made-up number",
+      "acceptance_predicate": "the module in hand exists under site/ and parses, holds no API key, and requests nothing but the two named API hosts",
+      "input_artifacts": [],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "fix_pass": {
+      "scope": "One module of the ten in the brief's numbered list, built in the brief's order, one file at a time under site/. The module in hand is the module just built: the file highest in the brief's numbered list that exists under site/. No build step, no external libraries, and no network request but to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Fix only what the lead's review named, in the module just built, and answer with the same module name.",
+      "done_criteria": "the module in hand exists under site/, does the one job the brief gives it, and uses only what the modules before it already provide; it holds no API key and makes no request to any host but the two named; where it handles data it shows an error and never a made-up number",
+      "acceptance_predicate": "the module in hand exists under site/ and parses, holds no API key, and requests nothing but the two named API hosts",
+      "input_artifacts": [],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "re_review": {
+      "scope": "One module of the ten in the brief's numbered list, built in the brief's order, one file at a time under site/. The module in hand is the module just built: the file highest in the brief's numbered list that exists under site/. No build step, no external libraries, and no network request but to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Review the module just built again, and only it, for what the first review named. Do not create or change any file.",
+      "done_criteria": "the module in hand exists under site/, does the one job the brief gives it, and uses only what the modules before it already provide; it holds no API key and makes no request to any host but the two named; where it handles data it shows an error and never a made-up number",
+      "acceptance_predicate": "the module in hand exists under site/ and parses, holds no API key, and requests nothing but the two named API hosts",
+      "input_artifacts": [],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "halt_second_fail": {
+      "scope": "One module of the ten in the brief's numbered list, built in the brief's order, one file at a time under site/. The module in hand is the module just built: the file highest in the brief's numbered list that exists under site/. No build step, no external libraries, and no network request but to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Do not create or change any file.",
+      "done_criteria": "the module in hand exists under site/, does the one job the brief gives it, and uses only what the modules before it already provide; it holds no API key and makes no request to any host but the two named; where it handles data it shows an error and never a made-up number",
+      "acceptance_predicate": "the module in hand exists under site/ and parses, holds no API key, and requests nothing but the two named API hosts",
+      "input_artifacts": [],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "lead_review": {
+      "scope": "the whole built page: ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Judge the built page as a whole against the acceptance predicate. Do not create or change any file.",
+      "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
+      "acceptance_predicate": "all ten files exist and parse, no file holds an API key, the page requests nothing but the two named API hosts, and a failed request shows an error state naming the source with no made-up numbers",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/sources.js, site/openmeteo.js, site/cwa.js, site/normalize.js, site/now.js, site/week.js, site/chart.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "review_failed": {
+      "scope": "the whole built page: ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. The review did not pass the page; judge it as a whole. Do not create or change any file.",
+      "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
+      "acceptance_predicate": "all ten files exist and parse, no file holds an API key, the page requests nothing but the two named API hosts, and a failed request shows an error state naming the source with no made-up numbers",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/sources.js, site/openmeteo.js, site/cwa.js, site/normalize.js, site/now.js, site/week.js, site/chart.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "qa_verify": {
+      "scope": "the whole built page: ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Verify the built page as a whole against the acceptance predicate: the ten files, the key rule, the two hosts, the error state. Do not create or change any file.",
+      "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
+      "acceptance_predicate": "all ten files exist and parse, no file holds an API key, the page requests nothing but the two named API hosts, and a failed request shows an error state naming the source with no made-up numbers",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/sources.js, site/openmeteo.js, site/cwa.js, site/normalize.js, site/now.js, site/week.js, site/chart.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "qa_accept": {
+      "scope": "the whole built page: ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Accept or reject the built page against the full acceptance predicate. Do not create or change any file.",
+      "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
+      "acceptance_predicate": "all ten files exist and parse, no file holds an API key, the page requests nothing but the two named API hosts, and a failed request shows an error state naming the source with no made-up numbers",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/sources.js, site/openmeteo.js, site/cwa.js, site/normalize.js, site/now.js, site/week.js, site/chart.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "acceptance_failed": {
+      "scope": "the whole built page: ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Acceptance failed; judge the built page as a whole. Do not create or change any file.",
+      "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
+      "acceptance_predicate": "all ten files exist and parse, no file holds an API key, the page requests nothing but the two named API hosts, and a failed request shows an error state naming the source with no made-up numbers",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/sources.js, site/openmeteo.js, site/cwa.js, site/normalize.js, site/now.js, site/week.js, site/chart.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "pr": {
+      "scope": "the whole built page: ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Open the pull request for the built page. Do not create or change any file.",
+      "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
+      "acceptance_predicate": "all ten files exist and parse, no file holds an API key, the page requests nothing but the two named API hosts, and a failed request shows an error state naming the source with no made-up numbers",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/sources.js, site/openmeteo.js, site/cwa.js, site/normalize.js, site/now.js, site/week.js, site/chart.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "merge": {
+      "scope": "the whole built page: ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Merge the built page. Do not create or change any file.",
+      "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
+      "acceptance_predicate": "all ten files exist and parse, no file holds an API key, the page requests nothing but the two named API hosts, and a failed request shows an error state naming the source with no made-up numbers",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/sources.js, site/openmeteo.js, site/cwa.js, site/normalize.js, site/now.js, site/week.js, site/chart.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "close_out": {
+      "scope": "the whole built page: ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Close out the finished page. Do not create or change any file.",
+      "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
+      "acceptance_predicate": "all ten files exist and parse, no file holds an API key, the page requests nothing but the two named API hosts, and a failed request shows an error state naming the source with no made-up numbers",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/sources.js, site/openmeteo.js, site/cwa.js, site/normalize.js, site/now.js, site/week.js, site/chart.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "feedback": {
+      "scope": "the whole built page: ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Do not create or change any file.",
+      "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
+      "acceptance_predicate": "all ten files exist and parse, no file holds an API key, the page requests nothing but the two named API hosts, and a failed request shows an error state naming the source with no made-up numbers",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/sources.js, site/openmeteo.js, site/cwa.js, site/normalize.js, site/now.js, site/week.js, site/chart.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "done": {
+      "scope": "the whole built page: ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Do not create or change any file.",
+      "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
+      "acceptance_predicate": "all ten files exist and parse, no file holds an API key, the page requests nothing but the two named API hosts, and a failed request shows an error state naming the source with no made-up numbers",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/sources.js, site/openmeteo.js, site/cwa.js, site/normalize.js, site/now.js, site/week.js, site/chart.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    }
+  },
+  "operations": {
+    "intake": [
+      {
+        "description": "intake: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "intake_review": [
+      {
+        "description": "intake_review: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "pm_plan": [
+      {
+        "description": "pm_plan: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "pm_confirm": [
+      {
+        "description": "pm_confirm: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "lead_assess": [
+      {
+        "description": "lead_assess: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "pm_signoff": [
+      {
+        "description": "pm_signoff: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "next_module": [
+      {
+        "description": "next_module: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "engineer_build": [
+      {
+        "description": "write one module file",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "engineer_selfverify": [
+      {
+        "description": "engineer_selfverify: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "lead_task_review": [
+      {
+        "description": "lead_task_review: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "record_module": [
+      {
+        "description": "record_module: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "fix_pass": [
+      {
+        "description": "fix_pass: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "re_review": [
+      {
+        "description": "re_review: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "halt_second_fail": [
+      {
+        "description": "halt_second_fail: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "lead_review": [
+      {
+        "description": "lead_review: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "review_failed": [
+      {
+        "description": "review_failed: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "qa_verify": [
+      {
+        "description": "qa_verify: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "qa_accept": [
+      {
+        "description": "qa_accept: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "acceptance_failed": [
+      {
+        "description": "acceptance_failed: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "pr": [
+      {
+        "description": "pr: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "merge": [
+      {
+        "description": "merge: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "close_out": [
+      {
+        "description": "close_out: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "feedback": [
+      {
+        "description": "feedback: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "done": [
+      {
+        "description": "done: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ]
+  },
+  "node_models": {
+    "engineer_build": [
+      "sonnet-writer"
+    ]
+  }
+}

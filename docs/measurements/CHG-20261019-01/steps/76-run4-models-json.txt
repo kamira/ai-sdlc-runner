@@ -1,0 +1,24 @@
+$ git show 7b834e0:examples/weather-live/models.json; echo; echo '--- sha256 at 7b834e0 / at add8f7f (run 2):'; git show 7b834e0:examples/weather-live/models.json | sha256sum; git show add8f7f:examples/weather-live/models.json | sha256sum
+# started 2026-10-20T23:28:46Z
+# ended   2026-10-20T23:28:46Z
+# exit    0
+
+{
+  "models": [
+    {
+      "id": "sonnet-writer",
+      "vendor": "anthropic",
+      "name": "claude-sonnet-5-5",
+      "transport": "cli",
+      "command": ["claude", "-p", "--model", "claude-sonnet-5-5", "--effort", "medium",
+                  "--allowedTools", "Read Glob Grep Write Edit",
+                  "--disallowedTools", "Bash WebFetch WebSearch"],
+      "declared_reach": "external",
+      "note": "runner.yaml's agent_command plus Write and Edit; engineer_build's, and so fix_pass's and engineer_selfverify's"
+    }
+  ]
+}
+
+--- sha256 at 7b834e0 / at add8f7f (run 2):
+3ff9bc7305d9ec961b024428878785fb2d93415d56f8b778aea107379ca09de6  -
+3ff9bc7305d9ec961b024428878785fb2d93415d56f8b778aea107379ca09de6  -

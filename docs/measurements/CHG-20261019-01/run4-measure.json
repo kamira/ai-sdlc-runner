@@ -1,0 +1,189 @@
+{
+  "wall_seconds": 819.875,
+  "window_start": "2026-10-19T11:50:43.199Z",
+  "window_end": "2026-10-19T12:04:23.074Z",
+  "opened_to_brief_seconds": 19.63599991798401,
+  "inside_asks_seconds": 819.7219996452332,
+  "module_loop_seconds": 498.98200011253357,
+  "everything_else_seconds": 320.7399995326996,
+  "waiting_for_person_seconds": 0.0,
+  "working_seconds": 819.875,
+  "person_stops": [],
+  "runner_overhead_seconds": 0.1530003547668457,
+  "loop_nodes": [
+    "engineer_build",
+    "engineer_selfverify",
+    "fix_pass",
+    "lead_task_review",
+    "re_review"
+  ],
+  "per_node": {
+    "engineer_build": {
+      "asks": 10,
+      "total": 204.54599976539612,
+      "mean": 20.454599976539612,
+      "loop": true
+    },
+    "engineer_selfverify": {
+      "asks": 10,
+      "total": 148.6100001335144,
+      "mean": 14.86100001335144,
+      "loop": true
+    },
+    "lead_task_review": {
+      "asks": 10,
+      "total": 145.82600021362305,
+      "mean": 14.582600021362305,
+      "loop": true
+    },
+    "lead_review": {
+      "asks": 3,
+      "total": 110.47799968719482,
+      "mean": 36.825999895731606,
+      "loop": false
+    },
+    "intake_review": {
+      "asks": 3,
+      "total": 66.26199984550476,
+      "mean": 22.08733328183492,
+      "loop": false
+    },
+    "qa_verify": {
+      "asks": 1,
+      "total": 43.92799997329712,
+      "mean": 43.92799997329712,
+      "loop": false
+    },
+    "merge": {
+      "asks": 1,
+      "total": 31.8510000705719,
+      "mean": 31.8510000705719,
+      "loop": false
+    },
+    "qa_accept": {
+      "asks": 1,
+      "total": 28.82100009918213,
+      "mean": 28.82100009918213,
+      "loop": false
+    },
+    "pr": {
+      "asks": 1,
+      "total": 12.696000099182129,
+      "mean": 12.696000099182129,
+      "loop": false
+    },
+    "pm_plan": {
+      "asks": 1,
+      "total": 8.063999891281128,
+      "mean": 8.063999891281128,
+      "loop": false
+    },
+    "pm_signoff": {
+      "asks": 1,
+      "total": 7.190999984741211,
+      "mean": 7.190999984741211,
+      "loop": false
+    },
+    "lead_assess": {
+      "asks": 1,
+      "total": 7.158999919891357,
+      "mean": 7.158999919891357,
+      "loop": false
+    },
+    "pm_confirm": {
+      "asks": 1,
+      "total": 4.289999961853027,
+      "mean": 4.289999961853027,
+      "loop": false
+    }
+  },
+  "modules_built": 10,
+  "asks_total": 44,
+  "asks_in_loop": 30,
+  "formula": "ceiling(n) = 1 / ((1 - s) + s / n)      s = the loop's share; n = builders (inf: 1 / (1 - s))",
+  "builders": 4,
+  "share_time": 0.6086074098033646,
+  "share_asks": 0.6818181818181818,
+  "ceiling": {
+    "time": {
+      "at_builders": 1.8397759622547813,
+      "at_infinity": 2.5549793865479176
+    },
+    "asks": {
+      "at_builders": 2.046511627906977,
+      "at_infinity": 3.1428571428571423
+    }
+  },
+  "writes": [
+    {
+      "file": "site/app.js",
+      "mtime": 1792411184.8711364,
+      "node": "engineer_build",
+      "ask": 35,
+      "flag": ""
+    },
+    {
+      "file": "site/chart.js",
+      "mtime": 1792411136.2391376,
+      "node": "engineer_build",
+      "ask": 32,
+      "flag": ""
+    },
+    {
+      "file": "site/cwa.js",
+      "mtime": 1792410907.5071428,
+      "node": "engineer_build",
+      "ask": 20,
+      "flag": ""
+    },
+    {
+      "file": "site/index.html",
+      "mtime": 1792410747.4231465,
+      "node": "engineer_build",
+      "ask": 8,
+      "flag": ""
+    },
+    {
+      "file": "site/normalize.js",
+      "mtime": 1792410977.9751413,
+      "node": "engineer_build",
+      "ask": 23,
+      "flag": ""
+    },
+    {
+      "file": "site/now.js",
+      "mtime": 1792411045.1191397,
+      "node": "engineer_build",
+      "ask": 26,
+      "flag": ""
+    },
+    {
+      "file": "site/openmeteo.js",
+      "mtime": 1792410865.7751439,
+      "node": "engineer_build",
+      "ask": 17,
+      "flag": ""
+    },
+    {
+      "file": "site/sources.js",
+      "mtime": 1792410833.2271445,
+      "node": "engineer_build",
+      "ask": 14,
+      "flag": ""
+    },
+    {
+      "file": "site/styles.css",
+      "mtime": 1792410782.4551456,
+      "node": "engineer_build",
+      "ask": 11,
+      "flag": ""
+    },
+    {
+      "file": "site/week.js",
+      "mtime": 1792411087.2191386,
+      "node": "engineer_build",
+      "ask": 29,
+      "flag": ""
+    }
+  ]
+}

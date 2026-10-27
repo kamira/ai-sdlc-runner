@@ -1,0 +1,39 @@
+$ curl -sS -H @$HDR http://127.0.0.1:43669/models | python3 -m json.tool
+# started 2026-10-19T11:16:56Z
+# ended   2026-10-19T11:16:56Z
+# exit    0
+
+{
+    "models": [
+        {
+            "id": "sonnet-writer",
+            "vendor": "anthropic",
+            "name": "claude-sonnet-5-5",
+            "transport": "cli",
+            "command": [
+                "claude",
+                "-p",
+                "--model",
+                "claude-sonnet-5-5",
+                "--effort",
+                "medium",
+                "--allowedTools",
+                "Read Glob Grep Write Edit",
+                "--disallowedTools",
+                "Bash WebFetch WebSearch"
+            ],
+            "endpoint": "",
+            "key_env": "",
+            "note": "runner.yaml's agent_command plus Write and Edit; engineer_build's, and so fix_pass's and engineer_selfverify's",
+            "tier": "",
+            "effort_argv": [],
+            "declared_reach": "external",
+            "reach": "external",
+            "leaves_this_machine": true,
+            "reach_guessed": false
+        }
+    ],
+    "leaving": [
+        "sonnet-writer"
+    ]
+}

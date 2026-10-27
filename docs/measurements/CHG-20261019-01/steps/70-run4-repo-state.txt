@@ -1,0 +1,6 @@
+$ git log -1 '--format=%H %s'
+# started 2026-10-19T11:50:13Z
+# ended   2026-10-19T11:50:13Z
+# exit    0
+
+7b834e022dac8e75715abcd5e9f00f65e11c9ba1 fix: each node's spec in weather-live says what it judges at its stage; run 3 recorded (CHG-20261019-01)

@@ -1,0 +1,9 @@
+$ curl -sS -H @$HDR http://127.0.0.1:49777/models | python3 -m json.tool
+# started 2026-10-19T10:37:02Z
+# ended   2026-10-19T10:37:02Z
+# exit    0
+
+{
+    "models": [],
+    "leaving": []
+}
