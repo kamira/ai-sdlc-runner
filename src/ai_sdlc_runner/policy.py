@@ -1771,3 +1771,137 @@ def read_dispositions(raw: object) -> List[Dict[str, object]]:
             row["disposition_said"] = "refute"
         rows.append(row)
     return rows
+
+
+#: The `source` of a finding the auditor raised itself (`audit_read`); a seat's is its name.
+AUDITOR_SOURCE = "auditor"
+
+
+def _seat_of(source: str) -> str:
+    """The seat a finding's source names: `defect[opus]` is the `defect` seat."""
+    return source.split("[", 1)[0]
+
+
+def dispose(findings: Sequence[Mapping[str, object]], dispositions: Sequence[Mapping[str, object]],
+            panel: Mapping[str, object]) -> Dict[str, object]:
+    """The review's decision: the seats' view, every finding and the auditor's rows, tallied in code.
+
+    **Pure, and the one place the audit is decided** (CHG-20261028-01, step 5). No model gives an
+    overall verdict: the auditor disposes per finding and this function does the sum.
+
+    ``findings`` are the normalised findings of both the seats and the auditor (`read_findings`),
+    ``dispositions`` the auditor's rows (`read_dispositions`), and ``panel`` the seats' own
+    `adjudicate` result (its ``outcome`` and ``verdicts``) -- the *panel's view*, which no longer
+    routes by itself. The rules, in order:
+
+    **5.1 Every finding has exactly one disposition.** A missing row, a duplicate row or a row for an
+    id nobody raised means the answer is unreached, and this raises `PolicyError` naming the ids
+    (the engine stops the run with it, as it does a seat that names no verdict). A dropped finding is
+    not a refuted one.
+
+    **5.2 The veto cannot be refuted away.** A veto seat that did not pass, whose every finding the
+    auditor refuted, is a disagreement: the outcome is `undecided` and reaches a person. It never
+    becomes `pass`, and it is decided here, before anything else is counted, so confirmed findings
+    from other seats do not turn a refuted veto into a `fail` the veto never asked for.
+
+    **5.3 Confirmed `important` + `introduced` findings fail the review.** A seat's finding counts
+    when its row is `confirm`; its text goes to the rework.
+
+    **5.4 The auditor's own findings count directly.** An `important` + `introduced` finding the
+    auditor raised itself counts as confirmed by its author, whatever its row says, because no other
+    voice checked it (Q4: no second disposition session). A finding without a `trigger` is never
+    `important` (`read_findings`), so it does not count.
+
+    **5.5 What does not fail the change is still kept.** Refuted, `cannot-verify`, `nit` and
+    `pre-existing` findings are returned under ``kept`` with why they were; none is a reason to
+    send the change back.
+
+    **5.6 The panel's view and the audit disagree: `undecided`.** The audit result of 5.1-5.5 is
+    `fail` if anything counts and `pass` otherwise. If the seats' outcome differs from it, nothing
+    is waived: the result is `undecided`, and a person sees both. Read literally: any difference,
+    including seats that pass beside a confirmed finding, and seats that fail with no finding behind
+    them.
+    """
+    view = str(panel.get("outcome"))
+    if view not in OUTCOMES:
+        raise PolicyError(f"the panel's view is {view!r}, which is not one of {list(OUTCOMES)}")
+    # 5.1
+    raised = [str(f["id"]) for f in findings]
+    twice = sorted({i for i in raised if raised.count(i) > 1})
+    if twice:
+        raise PolicyError(f"finding id(s) {twice} appear more than once in the findings file; "
+                          f"an id names one finding")
+    said: Dict[str, List[Mapping[str, object]]] = {}
+    for row in dispositions:
+        said.setdefault(str(row.get("id")), []).append(row)
+    missing = sorted(i for i in raised if i not in said)
+    repeated = sorted(i for i, rows in said.items() if len(rows) > 1 and i in raised)
+    stray = sorted(i for i in said if i not in raised)
+    if missing or repeated or stray:
+        parts = []
+        if missing:
+            parts.append(f"no disposition for {missing}")
+        if repeated:
+            parts.append(f"more than one disposition for {repeated}")
+        if stray:
+            parts.append(f"a disposition for {stray}, which nobody raised")
+        raise PolicyError(
+            "the audit is unreached: " + "; ".join(parts) + ". Every finding has exactly one "
+            "disposition -- a dropped finding is not a refuted one")
+    row_of = {i: rows[0] for i, rows in said.items()}
+    verdicts = {str(k): str(v) for k, v in (panel.get("verdicts") or {}).items()}
+
+    def _entry(finding, why=None):
+        row = row_of[str(finding["id"])]
+        out = {"id": finding["id"], "source": finding["source"], "file": finding["file"],
+               "line": finding["line"], "claim": finding["claim"], "trigger": finding["trigger"],
+               "severity": finding["severity"], "origin": finding["origin"],
+               "disposition": row["disposition"], "evidence": row.get("evidence", ""),
+               "evidence_file": row.get("file"), "evidence_line": row.get("line")}
+        if why:
+            out["why"] = why
+        return out
+
+    # 5.3, 5.4, 5.5: classified first, so every outcome below can say what it kept.
+    confirmed: List[Dict[str, object]] = []
+    kept: List[Dict[str, object]] = []
+    for f in findings:
+        row = row_of[str(f["id"])]
+        counts = f["severity"] == "important" and f["origin"] == "introduced"
+        if counts and f["source"] == AUDITOR_SOURCE:
+            confirmed.append(_entry(f, "raised by the auditor itself"))
+        elif counts and row["disposition"] == "confirm":
+            confirmed.append(_entry(f, "confirmed by the auditor"))
+        elif row["disposition"] != "confirm":
+            kept.append(_entry(f, "refuted" if row["disposition"] == "refute" else "cannot-verify"))
+        elif f["severity"] != "important":
+            kept.append(_entry(f, "nit"))
+        else:
+            kept.append(_entry(f, "pre-existing"))
+    # 5.2: before the sum, so confirmed findings from other seats cannot turn a refuted veto into a
+    # `fail` the veto never asked for.
+    for seat in (s.name for s in SEATS if s.veto):
+        if verdicts.get(seat, PASS) == PASS:
+            continue
+        behind = [f for f in findings if _seat_of(str(f["source"])) == seat]
+        if behind and all(row_of[str(f["id"])]["disposition"] == "refute" for f in behind):
+            return {
+                "outcome": UNDECIDED, "panel_view": view, "audit_result": None,
+                "reason": (f"{seat} did not pass and the auditor refuted every finding behind it "
+                           f"({', '.join(str(f['id']) for f in behind)}): a veto is not audited "
+                           f"away, so the disagreement goes to a person"),
+                "confirmed": confirmed, "kept": kept, "verdicts": verdicts}
+    audit = FAIL if confirmed else PASS
+    # 5.6
+    if view != audit:
+        return {
+            "outcome": UNDECIDED, "panel_view": view, "audit_result": audit,
+            "reason": (f"the seats' view is {view} and the audit result is {audit} "
+                       f"({len(confirmed)} confirmed finding(s)): nothing is waived, a person "
+                       f"sees both"),
+            "confirmed": confirmed, "kept": kept, "verdicts": verdicts}
+    return {
+        "outcome": audit, "panel_view": view, "audit_result": audit,
+        "reason": (f"the seats {view} it and the audit agrees "
+                   f"({len(confirmed)} confirmed finding(s), {len(kept)} kept)"),
+        "confirmed": confirmed, "kept": kept, "verdicts": verdicts}

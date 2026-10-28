@@ -23,6 +23,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from ai_sdlc_runner import engine, graph, policy  # noqa: E402
+from test_flow import _confirm_all, _seat_reply  # noqa: E402
 
 SPEC = {"objective": "o", "instructions": "i", "done_when": "d"}
 
@@ -198,8 +199,10 @@ class Rejecting:
             if node_id == "intake_review":
                 return {"problems": [], "missing": [], "unsafe": []}
             if node_id in self.reject and self._rejecting():
-                return {"verdict": "fail"}
+                return _seat_reply(order["seat"], "fail")
             return {"verdict": "pass"}
+        if node_id == "audit_dispose":
+            return _confirm_all(order)
         if node_id == "engineer_build":
             return {"module": "alpha"}
         if node_id in self.reject and self._rejecting():

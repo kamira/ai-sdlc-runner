@@ -59,8 +59,30 @@ def _cfg(**kw):
     return engine.RunConfig(**base)
 
 
+def _seat_reply(seat, verdict):
+    """A seat's answer. A failing seat points at something (CHG-20261028-01): `dispose` has no way
+    to act on a fail that names no file and line, so the stand-in gives each failing seat one."""
+    reply = {"verdict": verdict}
+    if verdict != SEAT_PASS:
+        reply["findings"] = [{"id": "F1", "file": "pkg/a.py", "line": "7", "claim": f"{seat} objects",
+                              "trigger": "a=1 gives 2, should be 3", "severity": "important",
+                              "origin": "introduced"}]
+    return reply
+
+
+def _confirm_all(order):
+    """The auditor's answer to `audit_dispose`: every finding in the file it was handed, confirmed."""
+    import json
+    found = json.loads(open(order["input_artifacts"][0], encoding="utf-8").read())["findings"]
+    return {"dispositions": [{"id": f["id"], "disposition": "confirm", "file": f["file"],
+                              "line": f["line"], "evidence": "read it", "input": "", "result": ""}
+                             for f in found]}
+
+
 def _answer(order, answers=None):
     """The answer a model would give to this order — a branch where the node needs one."""
+    if order["node_id"] == "audit_dispose":
+        return _confirm_all(order)
     if order.get("seat"):
         if order["node_id"] == "intake_review":
             # A survey, not a panel — the same distinction `Recorder._answer` makes forty lines
@@ -119,7 +141,7 @@ class Recorder:
                 if seat == policy.seat_names(policy.SEAT_FLOOR)[0]:
                     self._panels += 1
                 if self._panels <= 1:
-                    return {"verdict": self.seat_verdicts.get(seat, SEAT_PASS)}
+                    return _seat_reply(seat, self.seat_verdicts.get(seat, SEAT_PASS))
             return {"verdict": SEAT_PASS}
 
         node_id = order["node_id"]

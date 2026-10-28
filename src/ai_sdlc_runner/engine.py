@@ -3199,19 +3199,34 @@ def _decide_review(node: graph.Node, report: "RunReport",
                    review: _ReviewLap) -> Tuple[str, Optional[Dict[str, object]]]:
     """The branch `review_decide` takes, and the rework to carry.
 
-    **The runner adjudicates and no model does** (CHG-20261028-01, step 5). This is the node's one
-    place of decision; the rules live in `policy`.
+    **The runner adjudicates and no model does** (CHG-20261028-01, step 5). The sum is
+    `policy.dispose`: the seats' view, every finding of the lap and the auditor's rows. A refusal
+    from it -- a finding with no disposition, a duplicate, an id nobody raised -- is the run's, as a
+    seat that names no verdict is (`_adjudicate`): an unreached answer stops the run and names the
+    ids, and is never read as `pass`.
     """
     if not review.panel:
         raise EngineError(f"{node.id!r} was reached with no panel view: the seats were not asked "
                           f"in this review")
     panel = review.panel
-    outcome = str(panel["outcome"])
-    entry = {**panel, "node_id": node.id, "panel_view": outcome}
+    try:
+        decided = policy.dispose(review.all_findings(), review.dispositions, panel)
+    except policy.PolicyError as exc:
+        raise EngineError(f"{node.id!r}: {exc}") from exc
+    outcome = str(decided["outcome"])
+    if outcome not in policy.OUTCOMES:
+        raise EngineError(
+            f"{node.id!r} decided {outcome!r}, which is not an outcome this engine knows how to "
+            f"route. An unrecognised outcome is not a failure and must not be treated as one.")
+    entry = {key: value for key, value in panel.items() if key not in ("outcome", "reason")}
+    entry.update({"node_id": node.id, "outcome": outcome, "reason": decided["reason"],
+                  "panel_view": decided["panel_view"], "audit_result": decided["audit_result"],
+                  "confirmed": list(decided["confirmed"]), "kept": list(decided["kept"]),
+                  "lap": review.n})
     report.adjudications.append(entry)
     rework = None
-    if outcome != policy.PASS:
-        rework = _send_back(node, report, panel, dict(panel.get("verdicts") or {}))
+    if outcome == policy.FAIL:
+        rework = _send_back(node, report, entry, dict(panel.get("verdicts") or {}))
     return outcome, rework
 
 

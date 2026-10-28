@@ -488,6 +488,10 @@ input and result, `disposition_said: "refute"` beside `disposition: "cannot-veri
 `confirm`, `refute` or `cannot-verify` (`policy.DISPOSITIONS`); `file` and `line` are where the
 evidence is. `[]` when no finding was raised: the auditor is not asked to dispose of nothing.
 
+The adjudication entry for `review_decide` (`policy.dispose`) adds `panel_view` (the seats' result),
+`audit_result` (`pass`, `fail` or `null` when a veto was refuted), `confirmed` and `kept` (each a
+finding with its source and, for `kept`, a `why`: `refuted`, `cannot-verify`, `nit` or `pre-existing`).
+
 `usage` (CHG-20261006-01) is one entry per ask whose session reported usage — `{ask_id, node_id, seat,
 model, kind, cost_usd, tokens, remaining, note}`, `kind` being `claude`, `codex` or `unreported`;
 an unknown figure is `null`, never `0`. Sessions with no usage attribute (the stub) add nothing.

@@ -141,7 +141,9 @@ def test_review_decide_asks_nobody():
 
 
 def test_the_seats_are_still_asked_and_their_view_is_recorded_not_routed():
-    report = _walk(Audit(verdicts={"defect": "fail", "risk": "fail"}), decisions=dict(TWO_PASSES))
+    seats = {"defect": [dict(FINDING, id="D1")], "risk": [dict(FINDING, id="R1")]}
+    report = _walk(Audit(seat_findings=seats, verdicts={"defect": "fail", "risk": "fail"}),
+                   decisions=dict(TWO_PASSES))
     view = [a for a in report.adjudications if a["node_id"] == "lead_review"][0]
     assert view["outcome"] != "pass" and view["verdicts"]["defect"] == "fail"
     decided = [a for a in report.adjudications if a["node_id"] == "review_decide"]

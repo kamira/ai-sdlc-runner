@@ -181,7 +181,11 @@ a majority is needed to pass, and a tie does not pass. That result is the **pane
 audit: `audit_read` (the `auditor` role reads the change blind, in its own session), `audit_dispose`
 (a new session disposes of every finding the seats and the auditor raised, from one file the runner
 wrote, referenced by path) and `review_decide`, the runner's own decision carrying the `lead_review`
-gate. Nobody is asked at `review_decide`.
+gate. Nobody is asked at `review_decide`: it calls `policy.dispose`, a pure function that applies the
+rules (every finding has exactly one disposition; a refuted veto is `undecided`; a confirmed
+important, introduced finding fails the review; the auditor's own triggered findings count directly;
+refuted, cannot-verify, nit and pre-existing findings are kept and not sent to rework; a panel view
+that differs from the audit result is `undecided`). `undecided` takes the existing ruling path.
 
 The floor may be lowered only through an explicit high-risk mode — set in `runner settings`, or per
 run with `--high-risk-mode` — and the run records that it was.

@@ -12,7 +12,7 @@ import subprocess
 import pytest
 
 from ai_sdlc_runner import cli, engine, graph, policy
-from test_flow import DECISIONS, SPEC
+from test_flow import DECISIONS, SPEC, _confirm_all, _seat_reply
 
 
 def _walk(dispatch, **cfg_kw):
@@ -48,7 +48,9 @@ def _seats(verdicts):
             rounds[order["seat"]] = rounds.get(order["seat"], 0) + 1
             if rounds[order["seat"]] > 1:
                 return {"verdict": "pass"}       # the rework landed
-            return {"verdict": verdicts.get(order["seat"], "pass")}
+            return _seat_reply(order["seat"], verdicts.get(order["seat"], "pass"))
+        if order["node_id"] == "audit_dispose":
+            return _confirm_all(order)
         if order["node_id"] == "pm_plan":
             return {"modules": ["only-one"]}
         if order["node_id"] == "engineer_build":
