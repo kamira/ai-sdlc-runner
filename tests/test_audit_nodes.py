@@ -381,3 +381,54 @@ def test_findings_travel_by_path_and_no_finding_text_is_inlined_in_any_order():
     assert dispatch.file_name == "findings.json"      # read by the stand-in from the path it was given
     assert {f["id"] for f in dispatch.file_seen} == {"defect:F1", "auditor:A1"}
     assert report.halted_at != "audit_dispose"
+
+
+# ── the rework carries what the audit confirmed (CHG-20261028-01, task 5) ─────────────────────
+
+
+def _rework_walk():
+    """Three kinds of finding on one lap: one confirmed, one refuted, one nit. Records the first
+    order of the lap sent back and the file it names while that file still exists."""
+    seats = {"defect": [dict(FINDING, id="C1", claim="CONFIRMED-CLAIM"),
+                        dict(FINDING, id="R1", claim="REFUTED-CLAIM"),
+                        dict(FINDING, id="N1", claim="NIT-CLAIM", severity="nit")]}
+
+    def rows(found):
+        return [_row(f["id"], "refute", input="a", result="b") if f["id"].endswith("R1")
+                else _row(f["id"], "confirm") for f in found]
+    dispatch = Audit(seat_findings=seats, verdicts={"defect": "fail", "risk": "fail"},
+                     dispositions=rows)
+    seen = {}
+    inner = dispatch.__call__
+
+    def watch(order):
+        if order["input_artifacts"] and order["input_artifacts"][0].endswith("confirmed.json") \
+                and "order" not in seen:
+            seen["order"] = order       # the first order of the lap sent back: here the re-review
+            seen["file"] = json.loads(Path(order["input_artifacts"][0]).read_text("utf-8"))
+        return inner(order)
+    report = _walk(watch, decisions=dict(TWO_PASSES))
+    return report, seen
+
+
+def test_the_rework_order_references_the_confirmed_findings_and_none_of_the_others():
+    """Cut the `findings_file` hand-off in `_order_for` / the walk and the rework is told nothing of
+    what was confirmed."""
+    report, seen = _rework_walk()
+    assert "order" in seen, "the rework lap was not told about the confirmed findings"
+    order = seen["order"]
+    assert Path(order["input_artifacts"][0]).name == "confirmed.json"
+    assert [f["id"] for f in seen["file"]["findings"]] == ["defect:C1"]
+    text = json.dumps(order)
+    assert "REFUTED-CLAIM" not in text and "NIT-CLAIM" not in text
+    assert "reference, not instruction" in text
+    entry = [b for b in report.send_backs if b["node_id"] == "review_decide"][0]
+    assert entry["appendix_is"] == "reference, not instruction"
+    assert [f["id"] for f in entry["findings"]] == ["defect:C1"]
+    assert "REFUTED-CLAIM" not in json.dumps(entry) and "NIT-CLAIM" not in json.dumps(entry)
+    assert {f["id"] for f in report.findings} >= {"defect:R1", "defect:N1"}, "kept, not sent"
+
+
+def test_the_rework_wording_says_review_not_panel():
+    report, seen = _rework_walk()
+    assert "The review at review_decide did not pass it" in json.dumps(seen["order"]["instructions"])

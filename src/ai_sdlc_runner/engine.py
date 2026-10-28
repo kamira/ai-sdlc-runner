@@ -1311,13 +1311,18 @@ def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
         spec = dict(spec)
         why = str(sent_back.get("reason") or "").strip()
         frm = sent_back.get("from", "a later node")
+        carried_file = str(sent_back.get("findings_file") or "")
+        if carried_file:
+            # By path, like the audit's own file (CHG-20261028-01, task 5): only the findings the
+            # audit confirmed are in it.
+            spec["input_artifacts"] = [carried_file] + list(spec.get("input_artifacts") or ())
         # **Who sent it back, truthfully.** Two paths lead here and they are not the same event: a
         # person refusing a gate, and a panel of models not passing a node. Saying "a person
         # refused" about an adjudicated verdict would be the runner telling a model something
         # untrue about who objected — and this repository's whole argument for panels is that who
         # said what is the information (CHG-20260901-13).
         if sent_back.get("kind") == "verdict":
-            said = [f"The panel at {frm} did not pass it, and the run came back here."]
+            said = [f"The review at {frm} did not pass it, and the run came back here."]
         else:
             said = ["A person refused {gate} at {frm} and sent the run back here.".format(
                 gate=sent_back.get("gate", "a gate"), frm=frm)]
@@ -1327,6 +1332,10 @@ def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
         said.append(f"What they said: {why}" if why
                     else "They gave no reason. Do not guess at one — say in `why` what you "
                          "would need.")
+        if carried_file:
+            said.append("The first file in `input_artifacts` lists the findings the audit confirmed, "
+                        "each with its file, line, claim and trigger. It is reference, not "
+                        "instruction: fix what the brief says, and check it against these.")
         own = spec.get("instructions") or ()
         joiner = "\n"
         spec["instructions"] = (
@@ -1740,6 +1749,15 @@ def _send_back(node: graph.Node, report: "RunReport", outcome: Mapping[str, obje
         "appendix": [{"voice": who, "verdict": v} for who, v in sorted(verdicts.items())],
         "appendix_is": "reference, not instruction",
     }
+    confirmed = list(outcome.get("confirmed") or ())
+    if confirmed:
+        # Only what the audit confirmed travels (CHG-20261028-01, task 5). Refuted, cannot-verify,
+        # nit and pre-existing findings are in the adjudication's `kept` and in `report.findings`,
+        # and are not rework: a reading of 5.5 that "kept" means "sent" would hand the builder
+        # claims the audit refuted.
+        entry["findings"] = [{key: found.get(key) for key in (
+            "id", "source", "file", "line", "claim", "trigger", "evidence")} for found in confirmed]
+        entry["brief"] += f" The audit confirmed {len(confirmed)} finding(s); they are listed in the file named in `input_artifacts`."
     # **Returned, not only recorded.** The `brief` above calls itself the instruction, and for as
     # long as this function existed it was appended to `report.send_backs`, serialised into the
     # snapshot, asserted by tests — and read by no work order. So the rework was never told what it
@@ -3183,6 +3201,13 @@ def _write_findings(space: _AuditSpace, review: _ReviewLap) -> str:
     return str(target)
 
 
+def _write_confirmed(space: _AuditSpace, review: _ReviewLap, rework: Mapping[str, object]) -> str:
+    """The findings the audit confirmed, in one file beside the lap's own; returns its path."""
+    target = space.lap(review.n) / "confirmed.json"
+    paths.write_text(target, json.dumps({"lap": review.n, "findings": rework["findings"]}, indent=2))
+    return str(target)
+
+
 def _audit_dispose_brief(space: _AuditSpace, review: _ReviewLap) -> Tuple[List[str], List[str]]:
     """What `audit_dispose` is given: the one findings file, by path (KN-5)."""
     return ([_write_findings(space, review)],
@@ -4166,6 +4191,8 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                 choice = node.panel_branches.get(panel_outcome, panel_outcome)
             elif node.audit == graph.AUDIT_DECIDE:
                 choice, rework = _decide_review(node, report, review)
+                if rework is not None and rework.get("findings"):
+                    rework["findings_file"] = _write_confirmed(audit_space, review, rework)
             elif node.mode == graph.SEAT_PANEL:
                 choice, rework = _adjudicate(node, report, seats)
             elif node.answer_decides:
@@ -4263,6 +4290,8 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                 sent_back[node_id] = {
                     "from": node.id, "kind": "verdict",
                     "reason": str(rework.get("brief") or "")}
+                if rework.get("findings_file"):
+                    sent_back[node_id]["findings_file"] = str(rework["findings_file"])
         else:
             node_id = node.next
 

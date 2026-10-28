@@ -488,6 +488,13 @@ input and result, `disposition_said: "refute"` beside `disposition: "cannot-veri
 `confirm`, `refute` or `cannot-verify` (`policy.DISPOSITIONS`); `file` and `line` are where the
 evidence is. `[]` when no finding was raised: the auditor is not asked to dispose of nothing.
 
+A `send_backs` entry from `review_decide` (CHG-20261028-01) adds `findings` (only the confirmed
+findings: `id`, `source`, `file`, `line`, `claim`, `trigger`, `evidence`) and `findings_file`, the path
+of `confirmed.json` beside the lap's `findings.json`, which the rework's order lists in
+`input_artifacts`. Refuted, cannot-verify, nit and pre-existing findings are in `findings` of the
+report and in the adjudication's `kept`, and do not travel. The appendix stays *reference, not
+instruction*.
+
 The adjudication entry for `review_decide` (`policy.dispose`) adds `panel_view` (the seats' result),
 `audit_result` (`pass`, `fail` or `null` when a veto was refuted), `confirmed` and `kept` (each a
 finding with its source and, for `kept`, a `why`: `refuted`, `cannot-verify`, `nit` or `pre-existing`).
