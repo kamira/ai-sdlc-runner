@@ -164,3 +164,12 @@ def test_a_line_that_is_not_a_line_is_refused(bad):
                "severity": "important", "origin": "introduced"}
     with pytest.raises(policy.PolicyError):
         policy.read_findings([finding], source="defect")
+
+
+def test_the_summary_names_the_first_cut_files_and_counts_the_rest():
+    cut = [f"f{i}.py" for i in range(25)]
+    scope = {"cap": 1, "total_chars": 99, "read_chars": 0, "cut": cut,
+             "files": [{"path": p, "state": "cut"} for p in cut], "notes": []}
+    [line] = [l for l in auditscope.summary(scope) if "CUT" in l]
+    assert "f0.py" in line and "f9.py" in line and "f10.py" not in line
+    assert "and 15 more" in line

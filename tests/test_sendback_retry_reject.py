@@ -65,10 +65,10 @@ def test_a_failed_panel_records_a_brief_and_the_originals():
     names = policy.seat_names(3)
     report = _walk(_seats({names[0]: "fail", names[1]: "fail"}),
                    review_seats=3, high_risk_mode=True)
-    back = [b for b in report.send_backs if b["node_id"] == "lead_review"]
+    back = [b for b in report.send_backs if b["node_id"] == "review_decide"]
     assert back, "a panel that did not pass should have said what the rework is for"
     entry = back[-1]
-    assert entry["brief"].startswith("lead_review did not pass")
+    assert entry["brief"].startswith("review_decide did not pass")  # the node that routes (CHG-20261028-01)
     assert entry["appendix_is"] == "reference, not instruction"
 
 
@@ -77,7 +77,7 @@ def test_the_appendix_carries_every_voice_not_only_the_objections():
     names = policy.seat_names(3)
     report = _walk(_seats({names[0]: "fail", names[1]: "fail"}),
                    review_seats=3, high_risk_mode=True)
-    entry = [b for b in report.send_backs if b["node_id"] == "lead_review"][-1]
+    entry = [b for b in report.send_backs if b["node_id"] == "review_decide"][-1]
     voices = {row["voice"]: row["verdict"] for row in entry["appendix"]}
     assert len(voices) == 3
     assert sorted(v for v in voices.values() if v == "fail")
@@ -89,13 +89,13 @@ def test_the_brief_names_who_objected():
     names = policy.seat_names(3)
     report = _walk(_seats({names[0]: "fail", names[1]: "fail"}),
                    review_seats=3, high_risk_mode=True)
-    entry = [b for b in report.send_backs if b["node_id"] == "lead_review"][-1]
+    entry = [b for b in report.send_backs if b["node_id"] == "review_decide"][-1]
     assert names[0] in entry["brief"] and names[1] in entry["brief"]
 
 
 def test_a_panel_that_passes_sends_nothing_back():
     report = _walk(_seats({}), review_seats=3, high_risk_mode=True)
-    assert not [b for b in report.send_backs if b["node_id"] == "lead_review"]
+    assert not [b for b in report.send_backs if b["node_id"] == "review_decide"]
 
 
 def test_the_send_back_survives_serialisation():
@@ -200,7 +200,7 @@ def test_the_targets_are_the_ones_that_can_act_on_a_refusal():
     """Not one universal target: `pm_plan` is right for a plan, wrong for a failed QA run."""
     assert graph.BY_ID["pm_confirm"].rejects_to == "pm_plan"
     assert graph.BY_ID["qa_verify"].rejects_to == "next_module"
-    assert graph.BY_ID["lead_review"].rejects_to == "review_failed"
+    assert graph.BY_ID["review_decide"].rejects_to == "review_failed"  # moved from lead_review (CHG-20261028-01)
 
 
 def test_merge_and_pr_cannot_be_rejected():

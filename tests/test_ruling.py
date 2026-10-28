@@ -29,7 +29,11 @@ from test_flow import DECISIONS, SPEC
 
 
 def _run(seat_verdicts, **cfg_kw):
-    """Walk with the seats answering as given, so `lead_review` reaches the outcome under test."""
+    """Walk with the seats answering as given, so the review reaches the outcome under test.
+
+    The decision is `review_decide`'s since CHG-20261028-01: `lead_review` records the panel's view
+    and a tie suspends the run, and takes its ruling, at the node that routes.
+    """
     base = dict(node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
                 decisions=dict(DECISIONS), risk="low", undeclared="allow",
                 review_seats=len(seat_verdicts), high_risk_mode=True)
@@ -64,7 +68,7 @@ def test_a_tie_suspends_rather_than_stopping_dead():
     """
     report = _run(_split())
     assert report.state == engine.SUSPENDED
-    assert report.halted_at == "lead_review"
+    assert report.halted_at == "review_decide"
 
 
 def test_the_suspension_says_what_an_answer_would_have_to_look_like():
@@ -90,7 +94,7 @@ def test_a_gate_suspension_and_a_tie_suspension_are_distinguishable():
 
 def test_the_runner_never_picks_the_branch_itself():
     report = _run(_split())
-    assert report.halted_at == "lead_review"
+    assert report.halted_at == "review_decide"
     assert "qa_verify" not in report.visited, "the pass branch was taken with nobody deciding"
     assert "review_failed" not in report.visited, "the fail branch was taken with nobody deciding"
 
@@ -98,8 +102,8 @@ def test_the_runner_never_picks_the_branch_itself():
 # --- the ruling ------------------------------------------------------------------------------
 
 def test_a_ruling_routes_the_run_and_is_credited_to_the_person():
-    report = _run(_split(), rulings=[engine.Ruling(node_id="lead_review", branch="pass")])
-    assert report.halted_at != "lead_review", "the ruling should have carried the run onward"
+    report = _run(_split(), rulings=[engine.Ruling(node_id="review_decide", branch="pass")])
+    assert report.halted_at != "review_decide", "the ruling should have carried the run onward"
     assert any("a person chose 'pass'" in r for r in report.rulings)
 
 
@@ -109,14 +113,14 @@ def test_the_panel_is_not_credited_with_a_verdict_it_did_not_reach():
     The adjudication still records what the panel actually did — nothing — and the ruling is filed
     separately as the person's. Merging them would let a later reader conclude the seats agreed.
     """
-    report = _run(_split(), rulings=[engine.Ruling(node_id="lead_review", branch="pass")])
+    report = _run(_split(), rulings=[engine.Ruling(node_id="review_decide", branch="pass")])
     panel = [a for a in report.adjudications if a["node_id"] == "lead_review"][-1]
     assert panel["outcome"] == policy.UNDECIDED
     assert report.rulings, "the person's decision must be recorded somewhere"
 
 
 def test_a_ruling_is_not_filed_as_a_gate_confirmation():
-    report = _run(_split(), rulings=[engine.Ruling(node_id="lead_review", branch="pass")])
+    report = _run(_split(), rulings=[engine.Ruling(node_id="review_decide", branch="pass")])
     assert not any("lead_review" in c and "confirmed by the operator" in c
                    for c in report.confirmations), (
         "a ruling filed under confirmations would make the report claim a gate was confirmed when "
@@ -131,12 +135,12 @@ def test_either_branch_can_be_chosen():
     """
     report = _run(_split(),
                   decisions={"next_module": ["module", "none", "none"], "feedback": "done"},
-                  rulings=[engine.Ruling(node_id="lead_review", branch="fail")])
+                  rulings=[engine.Ruling(node_id="review_decide", branch="fail")])
     assert "review_failed" in report.visited
 
 
 def test_a_ruling_is_spent_once():
-    report = _run(_split(), rulings=[engine.Ruling(node_id="lead_review", branch="pass")])
+    report = _run(_split(), rulings=[engine.Ruling(node_id="review_decide", branch="pass")])
     assert len(report.rulings) == 1
 
 
@@ -148,14 +152,14 @@ def test_a_ruling_for_an_unknown_node_is_refused():
 def test_a_ruling_for_a_branch_the_node_does_not_offer_is_refused():
     """Refused, not coerced to the nearest branch. A branch nobody wrote down is not a decision."""
     with pytest.raises(engine.EngineError, match="does not offer"):
-        _run(_split(), rulings=[engine.Ruling(node_id="lead_review", branch="maybe")])
+        _run(_split(), rulings=[engine.Ruling(node_id="review_decide", branch="maybe")])
 
 
 def test_a_ruling_from_another_run_is_refused(tmp_path):
     journal = engine.AskJournal(tmp_path / "asks")
     with pytest.raises(engine.EngineError, match="another run"):
         _run(_split(), journal=journal,
-             rulings=[engine.Ruling(node_id="lead_review", branch="pass",
+             rulings=[engine.Ruling(node_id="review_decide", branch="pass",
                                     run_id="/somewhere/else")])
 
 
@@ -163,7 +167,7 @@ def test_a_ruling_naming_this_run_is_accepted(tmp_path):
     journal = engine.AskJournal(tmp_path / "asks")
     run_id = engine.RunConfig(node_specs={}, decisions={}, journal=journal).run_id
     report = _run(_split(), journal=journal,
-                  rulings=[engine.Ruling(node_id="lead_review", branch="pass", run_id=run_id)])
+                  rulings=[engine.Ruling(node_id="review_decide", branch="pass", run_id=run_id)])
     assert report.rulings
 
 
@@ -175,13 +179,13 @@ def test_a_ruling_does_nothing_where_the_panel_actually_decided():
     """
     names = policy.seat_names(2)
     agreed = {names[0]: "pass", names[1]: "pass"}
-    report = _run(agreed, rulings=[engine.Ruling(node_id="lead_review", branch="fail")])
+    report = _run(agreed, rulings=[engine.Ruling(node_id="review_decide", branch="fail")])
     assert not report.rulings, "a ruling was spent at a node that decided for itself"
     assert "review_failed" not in report.visited
 
 
 def test_the_ruling_survives_serialisation():
-    report = _run(_split(), rulings=[engine.Ruling(node_id="lead_review", branch="pass")])
+    report = _run(_split(), rulings=[engine.Ruling(node_id="review_decide", branch="pass")])
     assert report.as_dict()["rulings"] == report.rulings
 
 
@@ -190,8 +194,8 @@ def test_the_ruling_survives_serialisation():
 def test_the_cli_parses_a_ruling():
     from ai_sdlc_runner import cli
 
-    assert cli._rulings(["lead_review=pass"]) == [
-        engine.Ruling(node_id="lead_review", branch="pass")]
+    assert cli._rulings(["review_decide=pass"]) == [
+        engine.Ruling(node_id="review_decide", branch="pass")]
 
 
 def test_the_cli_refuses_a_malformed_ruling():

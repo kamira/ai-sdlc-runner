@@ -41,7 +41,10 @@ def _todays(seat):
 def _cfg(**kw):
     base = dict(node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
                 decisions={"next_module": ["module", "none"], "feedback": "done"},
-                risk="low", undeclared="allow", confirmed=("merge",))
+                risk="low", undeclared="allow", confirmed=("merge",),
+                # Three seats: these tests are about what each seat is sent, and `risk` is one of
+                # the seats they name. The default panel is two since CHG-20261028-01.
+                review_seats=3)
     base.update(kw)
     return engine.RunConfig(**base)
 

@@ -28,13 +28,12 @@ from . import paths
 #: CHG-20261019-01 -- a figure that the record, and not this comment, should change.
 AUDIT_SCOPE_MAX_CHARS = 200_000
 
-#: Why a file is in scope, in the order the cap is spent: the change first, then what it calls,
-#: then what calls it.
-REASONS = ("diff", "callee", "caller")
-
 #: Directories never walked for callers: not the project's source, and often large.
 _SKIPPED = {".git", "__pycache__", "node_modules", ".venv", "venv", ".tox", "build", "dist",
             ".mypy_cache", ".pytest_cache"}
+
+#: How many cut files the one-line summary names; the full list is in the record.
+_PRINTED_CUT = 10
 
 #: A repository with more Python files than this is not walked for callers (the scope says so).
 _MAX_PY_FILES = 5000
@@ -102,47 +101,81 @@ def _dotted(rel: str) -> List[str]:
     return names
 
 
+#: What a file said, keyed by where it is and when it was last written: `(characters, imports)`.
+#: Parsing every Python file of a repository for every review is the whole cost of a scope, and a
+#: file that has not changed has not changed what it imports. The key is the file's identity on
+#: disk (path, mtime, size), so an edited file is read again and nothing is ever served stale.
+_READ: Dict[Tuple[str, int, int], Tuple[Optional[int], Tuple[Tuple[int, str, str], ...]]] = {}
+
+
+def _read(root: str, rel: str) -> Tuple[Optional[int], Tuple[Tuple[int, str, str], ...]]:
+    """`(characters, imports)` of one file: `None` characters when it is not text.
+
+    ``imports`` is every `import` the file makes as `(level, module, name)` triples: the module and
+    name an `ast.ImportFrom` carries, with `name` empty for a plain `import`. Resolving them to
+    files needs the whole repository's names and is `_imports`' job.
+    """
+    path = Path(root) / rel
+    try:
+        stat = path.stat()
+    except OSError:
+        return None, ()
+    key = (str(path), stat.st_mtime_ns, stat.st_size)
+    if key in _READ:
+        return _READ[key]
+    try:
+        text = paths.read_text(path, encoding="utf-8")
+    except (OSError, ValueError):
+        return _READ.setdefault(key, (None, ()))
+    found: List[Tuple[int, str, str]] = []
+    if rel.endswith(".py"):
+        try:
+            tree = ast.parse(text)
+        except (ValueError, SyntaxError):
+            tree = None
+        for node in ast.walk(tree) if tree is not None else ():
+            if isinstance(node, ast.Import):
+                found.extend((0, a.name, "") for a in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                found.extend((node.level, node.module or "", a.name) for a in node.names)
+    if len(_READ) > 20000:                      # a long-lived process: start over rather than grow
+        _READ.clear()
+    return _READ.setdefault(key, (len(text), tuple(found)))
+
+
 def _imports(root: str, rel: str, known: Dict[str, str]) -> Set[str]:
     """The repo-relative files `rel` imports, through names in `known`."""
-    try:
-        tree = ast.parse(paths.read_text(Path(root) / rel, encoding="utf-8"))
-    except (OSError, ValueError, SyntaxError):
-        return set()
     package = _dotted(rel)[-1].split(".") if _dotted(rel) else []
     if not rel.endswith("/__init__.py") and package:
         package = package[:-1]                  # a module's package is its parent
     wanted: List[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            wanted.extend(a.name for a in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            if node.level:
-                base = package[:len(package) - (node.level - 1)] if node.level > 1 else package
-                stem = ".".join(base + ([node.module] if node.module else []))
-            else:
-                stem = node.module or ""
-            if stem:
-                wanted.append(stem)
-            for a in node.names:                # `from pkg import module` names a file
-                wanted.append(f"{stem}.{a.name}" if stem else a.name)
+    for level, module, name in _read(root, rel)[1]:
+        if not name:                            # `import a.b`
+            wanted.append(module)
+            continue
+        if level:
+            base = package[:len(package) - (level - 1)] if level > 1 else package
+            stem = ".".join(base + ([module] if module else []))
+        else:
+            stem = module
+        if stem:
+            wanted.append(stem)
+        wanted.append(f"{stem}.{name}" if stem else name)   # `from pkg import module` is a file
     return {known[w] for w in wanted if w in known and known[w] != rel}
 
 
 def _size(root: str, rel: str) -> Optional[int]:
     """Characters in a text file, or `None` when it cannot be read as text."""
-    try:
-        return len(paths.read_text(Path(root) / rel, encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+    return _read(root, rel)[0]
 
 
 def assemble(workdir: str = ".", base: Optional[str] = None, *,
              max_chars: int = AUDIT_SCOPE_MAX_CHARS) -> Dict[str, object]:
     """The audit scope as a file list: each file with why it is there, its size, and `read`/`cut`.
 
-    The cap is spent in `REASONS` order, file by file; a file that does not fit is `cut` and a
-    smaller one after it may still be `read`, so the record says exactly which files the auditor
-    was given. ``total_chars`` is the size of everything in scope and ``read_chars`` of what fit.
+    The cap is spent in the order the files are listed in -- the change, what it calls, what calls
+    it -- file by file; a file that does not fit is `cut` and a smaller one after it may still be
+    `read`, so the record says exactly which files the auditor was given. ``total_chars`` is the size of everything in scope and ``read_chars`` of what fit.
     """
     notes: List[str] = []
     root = _top(workdir)
@@ -203,7 +236,7 @@ def assemble(workdir: str = ".", base: Optional[str] = None, *,
             read_chars += size
         else:
             entry["state"] = "cut"
-    return {"base": base, "cap": max_chars, "total_chars": total, "read_chars": read_chars,
+    return {"root": root, "base": base, "cap": max_chars, "total_chars": total, "read_chars": read_chars,
             "files": entries,
             "cut": [str(e["path"]) for e in entries if e["state"] == "cut"],
             "notes": notes}
@@ -225,7 +258,10 @@ def summary(scope: Dict[str, object]) -> List[str]:
              f"{scope.get('read_chars', 0)} of {scope.get('total_chars', 0)} characters "
              f"(cap {scope.get('cap')})"]
     if cut:
-        lines.append("audit scope CUT, the auditor did not read: " + ", ".join(cut))
+        # The record (`scope.json`, the report) holds every name; the terminal shows the first few.
+        shown = ", ".join(cut[:_PRINTED_CUT])
+        more = f", and {len(cut) - _PRINTED_CUT} more" if len(cut) > _PRINTED_CUT else ""
+        lines.append(f"audit scope CUT, the auditor did not read: {shown}{more}")
     for note in scope.get("notes") or []:
         lines.append(f"audit scope note: {note}")
     return lines

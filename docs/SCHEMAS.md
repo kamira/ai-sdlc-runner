@@ -33,7 +33,7 @@ miscounts its own subject is the thing it warns about, so the count is now check
 
 ## 1 · Node — the flow
 
-31 of these, one kind of work each. `validate()` enforces cross-rules over them — the count is not
+34 of these, one kind of work each. `validate()` enforces cross-rules over them — the count is not
 stated here because no partition of that function yields the number revision 1 claimed, which a seat
 checked and could not reproduce. A decorative number is a small lie about a real mechanism.
 
@@ -55,6 +55,7 @@ mode: str                   # one of MODES — DECLARED, never inferred from the
 main: Optional[str]         # a ROLE, for pool dispatch
 follows: Optional[str]      # a NODE ID, for FOLLOWS mode
 rejects_to: Optional[str]   # where a refusal sends the run
+audit: Optional[str]        # "read" | "dispose" | "decide": which step of the whole-change audit this is
 note: str
 ```
 
@@ -62,7 +63,10 @@ note: str
 `survey` is the only mode that reaches **no verdict**: it is a union of answers, not an adjudication.
 
 Two biconditionals `validate()` checks rather than infers:
-`role is None ⟺ mode == RUNNER`, and `role == "seat" ⟺ mode in (SEAT_PANEL, SURVEY)`.
+`role is None ⟺ mode == RUNNER`, and `role == "seat" ⟺ mode in (SEAT_PANEL, SURVEY)`. A node with an
+`audit` step is one auditor session (`audit` is `read` or `dispose`: role `auditor`, mode `SINGLE`) or the
+runner's decision (`decide`: mode `RUNNER`, a `DECISION` with `pass` and `fail` branches), and the
+`auditor` role appears at no other node.
 
 ## 2 · Plan file — **closed**
 
@@ -184,6 +188,8 @@ always offered):
 | a decision node, a panel of models | `verdict` ∈ `pass`/`fail`/`undecided` — `policy.adjudicate` |
 | a `grades_risk` node, a panel of models | `risk` ∈ `low`/`medium`/`high` — `policy.adjudicate_grade` |
 | a seat on the review panel | `verdict` ∈ `pass`/`fail`/`undecided` — `policy.adjudicate`; and `findings`, a list of findings — `policy.read_findings` (below) |
+| `audit_read`, the auditor reading blind | `findings`, in a finding's shape (below) — `policy.read_findings`; no verdict |
+| `audit_dispose`, the auditor in a new session | `dispositions`, one row per finding id — `policy.read_dispositions` (below); no verdict on the change |
 | a seat at intake | `missing` (aspect ids), `problems`, `unsafe` — the order requires all three; `intake.collect` still accepts **at least one**, for backends written before it |
 | the intake option ask | `options`, at least 3 distinct — `intake.read_options` |
 | `engineer_build` | `module`, and `error` for a build that failed — `_stop_on_failed_build`, `_module_built`, `_frontier` |
@@ -201,6 +207,15 @@ always offered):
 | `trigger` | the concrete input and the wrong result it produces. May be empty — but **a finding with no `trigger` can never be `important`**: it is recorded as a `nit` and `severity_said` keeps the word the seat used |
 | `severity` | `important` or `nit` (`policy.SEVERITIES`) |
 | `origin` | `introduced` (this change caused it) or `pre-existing` (`policy.ORIGINS`) |
+
+**A disposition** (CHG-20261028-01) is the auditor's answer about one finding, read by
+`policy.read_dispositions`: `{id, disposition, file, line, evidence, input, result}`, all required.
+`id` is the finding's id exactly as the findings file gives it; `disposition` is `confirm`, `refute`
+or `cannot-verify`; `file` and `line` are where the evidence is, on every row. For a `refute`, `input`
+and `result` are the concrete input and the right result it produces — a `refute` without both is read
+as `cannot-verify`, and `disposition_said` keeps the word the auditor used. The findings file the
+auditor reads is `<run directory>/audit/lap-NNN/findings.json`, written by the runner and named in
+the order's `input_artifacts` by path; its scope is `scope.json` beside it.
 
 The seat keeps its verdict: `policy.adjudicate` counts it exactly as before. Findings are not votes.
 An answer that omits `findings` is read as none found, for backends written before it; the order
@@ -454,7 +469,7 @@ confirmations · adjudications · single_model_panels · seat_models · seat_bri
 · intake_asked_somebody · dispatches · effort_not_applied · usage · usage_summary · survey · options
 · panel_rounds · send_backs · rejections · rulings · store_errors · change_class ·
 relaxations_by_class · risk_proposed · risk_settled · risk_agreed · halts · class_authorised_by ·
-relaxation_authorisers · findings · audit_scope`
+relaxation_authorisers · findings · audit_scope · dispositions`
 
 `findings` (CHG-20261028-01) is one entry per finding the whole-change review raised, per lap: the
 finding as `policy.read_findings` reads it (`id`, `source` — the seat or `auditor` — `file`, `line`,
@@ -466,6 +481,12 @@ and the `lap` it belongs to.
 `diff`, `callee` or `caller`; `state` is `read` (inside `AUDIT_SCOPE_MAX_CHARS`) or `cut` (left out
 because the cap was reached). `{}` until `audit_read` runs. A scope with `cut` files is printed beside
 the review's outcome. Callers and callees are resolved for Python only; `notes` says where they were not.
+
+`dispositions` (CHG-20261028-01) is what the auditor said about each finding, one entry per finding
+per lap: `{id, disposition, file, line, evidence, input, result, lap}` and, where a `refute` showed no
+input and result, `disposition_said: "refute"` beside `disposition: "cannot-verify"`. `disposition` is
+`confirm`, `refute` or `cannot-verify` (`policy.DISPOSITIONS`); `file` and `line` are where the
+evidence is. `[]` when no finding was raised: the auditor is not asked to dispose of nothing.
 
 `usage` (CHG-20261006-01) is one entry per ask whose session reported usage — `{ask_id, node_id, seat,
 model, kind, cost_usd, tokens, remaining, note}`, `kind` being `claude`, `codex` or `unreported`;

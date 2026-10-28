@@ -12,9 +12,9 @@ whether that step may proceed on its own or has to stop and ask a person.
 It exists so that running this flow needs no other company's agent, and it holds no skill, prompt
 pack, or vendored contract. The flow and the governance are its own, in two files:
 
-- **`policy.py`** — six roles with capability flags, 10 gates × three risk grades, six
-  never-automated actions, fifteen review seats (three open by default) and the rule that adjudicates them.
-- **`graph.py`** — 31 nodes, one kind of work each.
+- **`policy.py`** — seven roles with capability flags, 10 gates × three risk grades, six
+  never-automated actions, fifteen review seats (two open by default) and the rule that adjudicates them.
+- **`graph.py`** — 34 nodes, one kind of work each.
 
 Nothing points outside this repository. The dependency graph closes inside `src/`.
 
@@ -176,7 +176,12 @@ its own session, asked separately and blind to the others — their instructions
 A seat passes only when every one of its models passes, and the seats' verdicts are then adjudicated.
 
 Verdicts are **adjudicated, not averaged**: the `conformance` seat has a veto and cannot be outvoted,
-a majority is needed to pass, and a tie does not pass. The engine routes the flow on the result.
+a majority is needed to pass, and a tie does not pass. That result is the **panel's view**
+(CHG-20261028-01): `lead_review` records it and no longer routes on it. The flow continues into an
+audit: `audit_read` (the `auditor` role reads the change blind, in its own session), `audit_dispose`
+(a new session disposes of every finding the seats and the auditor raised, from one file the runner
+wrote, referenced by path) and `review_decide`, the runner's own decision carrying the `lead_review`
+gate. Nobody is asked at `review_decide`.
 
 The floor may be lowered only through an explicit high-risk mode — set in `runner settings`, or per
 run with `--high-risk-mode` — and the run records that it was.
@@ -250,7 +255,7 @@ dying inside it — coverage counted the lines while no assertion ever ran.
 `ai-sdlc-runner` 是一個**受治理的開發代理**:跑一條普通的開發流程(PM → 主管 → 工程師 → 自我驗證 →
 主管 review → 審議席 → QA → 回饋回 PM),並在每一步判斷這一步能不能自己走。
 
-它**不依賴其他公司的 agent**,repo 內**不存放也不讀取任何 skill**。流程在 `graph.py`(31 節點,一個
+它**不依賴其他公司的 agent**,repo 內**不存放也不讀取任何 skill**。流程在 `graph.py`(34 節點,一個
 節點只做一種工作),治理在 `policy.py`(角色、10 個閘門 × 3 個風險等級、6 個永久停點、審議席與裁決)。
 
 四件事是這個設計的重點:**閘門會真的擋住流程**(而且停下來之後可以用 `--confirm` 續走,並留下紀錄);

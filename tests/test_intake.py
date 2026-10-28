@@ -182,6 +182,7 @@ def _walk_with_journal(journal, options, resume, history=None):
         node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
         decisions={"next_module": engine.FRONTIER, "feedback": "done"},
         risk="low", undeclared="allow", journal=journal, resume=resume,
+        review_seats=3,   # three survey seats: the default panel is two since CHG-20261028-01
         intake_history=list(history if history is not None else [{"missing": ["flow"]}] * 3))
     try:
         return engine.walk(cfg, dispatch, enabled=True), dispatched, None
@@ -528,7 +529,8 @@ def _walk(seat_answers, **cfg_kw):
 
     base = dict(node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
                 decisions={"next_module": engine.FRONTIER, "feedback": "done"},
-                risk="low", undeclared="allow", confirmed=("merge",))
+                risk="low", undeclared="allow", confirmed=("merge",),
+                review_seats=3)   # the survey is asked of three seats; the default is two now
     base.update(cfg_kw)
     return engine.walk(engine.RunConfig(**base), dispatch, enabled=True)
 

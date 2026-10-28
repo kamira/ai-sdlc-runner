@@ -183,9 +183,10 @@ def test_the_undecided_stop_is_a_return_like_every_other_halt():
 def test_lead_review_has_no_undecided_branch_which_is_why_it_stops():
     """The structural fact behind the stop, so the reason survives the code.
 
-    `lead_review` offers `pass` and `fail`. There is no third edge for a tie, and inventing one
-    would be the runner deciding where undecided work goes — which is a person's call and is task 13.
+    The review's decision offers `pass` and `fail` -- it is `review_decide`'s since CHG-20261028-01.
+    There is no third edge for a tie, and inventing one would be the runner deciding where
+    undecided work goes — which is a person's call and is task 13.
     """
-    node = graph.BY_ID["lead_review"]
+    node = graph.BY_ID["review_decide"]
     assert sorted(node.branches) == ["fail", "pass"]
     assert policy.UNDECIDED not in node.branches

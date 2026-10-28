@@ -108,6 +108,11 @@ ROLES: Tuple[Role, ...] = (
     Role("seat", "審議席 / review seat", can_spawn=False, can_write=False, can_execute=True,
          note="one review seat; several of them cross-check each other, which is the whole reason "
               "they exist"),
+    Role("auditor", "審計員 / auditor", can_spawn=False, can_write=False, can_execute=True,
+         note="reads the whole change blind, then disposes of every finding in a new session "
+              "(CHG-20261028-01). The seat's flags, deliberately: it reads and runs, it cannot "
+              "write, so it cannot fix what it audits. It disposes per finding and never gives a "
+              "verdict on the change -- the tally is the runner's"),
 )
 
 #: A role that plans one workstream (CHG-20260827-22). `can_spawn=False` is the bound: the PM
@@ -1698,3 +1703,71 @@ def read_findings(raw: object, *, source: str) -> List[Dict[str, object]]:
             finding["severity_said"] = "important"
         found.append(finding)
     return found
+
+
+#: What the auditor may say about one finding (CHG-20261028-01, step 4). Never an overall verdict on
+#: the change: the tally is `dispose`'s, in code.
+DISPOSITIONS = ("confirm", "refute", "cannot-verify")
+
+#: The keys of one disposition row as the auditor writes it. `file` and `line` are the evidence's
+#: location and are required on every row ("every disposition carries a location too"). `input` and
+#: `result` are the concrete input and the right result it produces: they may be empty, but a
+#: `refute` without both is read as `cannot-verify`.
+DISPOSITION_FIELDS = ("id", "disposition", "file", "line", "evidence", "input", "result")
+
+
+def read_dispositions(raw: object) -> List[Dict[str, object]]:
+    """The rows an `audit_dispose` answer carries, validated shape by shape.
+
+    Only the shape is checked here: a closed object per row with every key in `DISPOSITION_FIELDS`,
+    a non-blank ``id`` and ``file``, a ``line`` that is a positive integer, and a ``disposition``
+    from `DISPOSITIONS`. Whether each finding has exactly one row is not this function's question --
+    it cannot know the findings -- and is rule 5.1 of `dispose`.
+
+    **A refute that does not show its work is not a refute.** A `refute` whose ``input`` or
+    ``result`` is blank is read as `cannot-verify`, with the word the auditor used kept in
+    ``disposition_said`` so the downgrade is visible. Chosen over refusing the answer for the reason
+    `read_findings` demotes a trigger-less `important`: the spec's sentence is about how the row
+    reads, and refusing would stop the run over wording and lose the row.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, (list, tuple)):
+        raise PolicyError(f"`dispositions` is {type(raw).__name__}, not a list of rows. Say [] when "
+                          f"there were no findings to dispose of")
+    rows: List[Dict[str, object]] = []
+    for position, item in enumerate(raw, start=1):
+        where = f"disposition {position}"
+        if not isinstance(item, Mapping):
+            raise PolicyError(f"{where} is {type(item).__name__}, not an object with "
+                              f"{list(DISPOSITION_FIELDS)}")
+        missing = [k for k in DISPOSITION_FIELDS if k not in item]
+        extra = sorted(k for k in item if k not in DISPOSITION_FIELDS)
+        if missing or extra:
+            raise PolicyError(
+                f"{where} must carry exactly {list(DISPOSITION_FIELDS)}"
+                + (f"; missing {missing}" if missing else "")
+                + (f"; not part of a disposition: {extra}" if extra else ""))
+        finding_id = _text(item["id"])
+        if not finding_id:
+            raise PolicyError(f"{where} has a blank `id`")
+        where = f"disposition of {finding_id!r}"
+        said = item["disposition"]
+        if said not in DISPOSITIONS:
+            raise PolicyError(f"{where} says {said!r}; it is one of {list(DISPOSITIONS)}")
+        if not _text(item["file"]):
+            raise PolicyError(f"{where} has a blank `file` -- every disposition carries the "
+                              f"location of its evidence")
+        number = _line_number(item["line"])
+        if number is None:
+            raise PolicyError(f"{where} has `line` {item['line']!r}, which is not a line number "
+                              f"(a positive integer)")
+        row: Dict[str, object] = {
+            "id": finding_id, "disposition": said, "file": _text(item["file"]), "line": number,
+            "evidence": _text(item["evidence"]), "input": _text(item["input"]),
+            "result": _text(item["result"])}
+        if said == "refute" and not (row["input"] and row["result"]):
+            row["disposition"] = "cannot-verify"
+            row["disposition_said"] = "refute"
+        rows.append(row)
+    return rows

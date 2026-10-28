@@ -260,6 +260,14 @@ ALLOWED_DIRECT_WRITES = {
         "`shutil.*` rule the seats asked for, and kept broad: a rule that enumerated only the "
         "writing half of shutil would be the kind of list that goes stale, which is worse than one "
         "false positive with a reason beside it",
+    ("auditscope.py", "shutil.which"):
+        "not a write at all — it asks whether `git` is on PATH before the audit scope is read from "
+        "it (CHG-20261028-01). The same deliberately broad `shutil.*` rule as `worktree.py` above",
+    ("engine.py", "tempfile.TemporaryDirectory"):
+        "the scratch directory for a walk that keeps no journal and no brief store, holding the "
+        "audit's findings file for the ask that reads it (CHG-20261028-01). A fixed prefix under the "
+        "system temp root and removed with the walk; the files inside it are written through "
+        "`paths`, so no repository path is ever joined to it",
     ("tui.py", "shutil.get_terminal_size"):
         "not a write at all — `runner setup` asks how wide the terminal is so it can wrap a "
         "menu's body. Caught by the same deliberately broad `shutil.*` rule as `shutil.which` above",
@@ -749,7 +757,8 @@ def test_every_exception_a_person_reads_goes_through_plain_in():
     assert not unstripped, (
         "these let an exception reach a person with the extended-length prefix still on it: "
         + ", ".join(unstripped))
-    assert modules == 24, f"the survey read {modules} modules; the package had 24"
+    # 24 → 25 in CHG-20261028-01, which added `auditscope.py`.
+    assert modules == 25, f"the survey read {modules} modules; the package had 25"
     assert in_scope == 17, (
         f"the survey looked inside {in_scope} in-scope handlers; there were 17. It cannot "
         f"report a clean tree over handlers it did not open")

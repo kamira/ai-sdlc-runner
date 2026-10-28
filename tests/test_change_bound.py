@@ -215,7 +215,8 @@ def _walk(reject=("lead_review",), times=None, decisions=None):
 
     cfg = engine.RunConfig(
         node_specs={n.id: dict(FLOW_SPEC) for n in graph.NODES if n.role},
-        decisions={**ROUND_TWICE, **(decisions or {})}, risk="low", undeclared="allow")
+        decisions={**ROUND_TWICE, **(decisions or {})}, risk="low", undeclared="allow",
+        review_seats=3)   # "three seats, one panel" below; the default is two (CHG-20261028-01)
     return engine.walk(cfg, Rejecting(reject, times), enabled=True)
 
 

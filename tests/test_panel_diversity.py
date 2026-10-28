@@ -81,7 +81,8 @@ class _Undescribed:
 def _cfg(**kw):
     base = dict(node_specs={n.id: dict(SPEC) for n in graph.NODES if n.role},
                 decisions={"next_module": ["module", "none"], "feedback": "done"},
-                risk="low", undeclared="allow", confirmed=("merge",))
+                risk="low", undeclared="allow", confirmed=("merge",),
+                review_seats=3)   # these tests name three seats; the default is two (CHG-20261028-01)
     base.update(kw)
     return engine.RunConfig(**base)
 

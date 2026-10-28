@@ -51,12 +51,12 @@ The whole graph, so the console can draw it without embedding a copy.
                "mode": …, "main": …, "follows": …, "rejects_to": …,
                "branches": { "<label>": "<node id>" }, "next": …,
                "permanent": …,
-               "capabilities": { "can_spawn": …, "can_write": …, "can_execute": … } | null } ],  // all 31
+               "capabilities": { "can_spawn": …, "can_write": …, "can_execute": … } | null } ],  // all 34
   "gates": { "<gate>": { "<risk>": "<verdict>" } },                     // all 10
   "modes": [ "runner", "single", "seat_panel", … ] }                    // all 7
 ```
 
-Thirteen of `Node`'s eighteen fields. `answer_decides`, `note`, `grades_risk`, `settles_risk` and `panel_branches` are **not** sent.
+Thirteen of `Node`'s nineteen fields. `answer_decides`, `note`, `grades_risk`, `settles_risk`, `panel_branches` and `audit` are **not** sent.
 
 `capabilities` (CHG-20261005-03) is not a `Node` field: it is `policy.capabilities(node.role)`, the three flags a work order may carry for the node's role, or `null` for a node with no role. **Read-only** — the console's node panel shows it, and no route changes it, because a role's capabilities are governance (`policy.py`) and a click must not rewrite what a node is allowed to do.
 

@@ -337,7 +337,10 @@ def test_a_single_workstream_plan_still_finishes_untouched(tmp_path):
     base["risk"] = "low"
     out = _run(tmp_path, "plain", base)
     assert "state:         finished" in out, out[-900:]
-    assert "sub_plan" not in out, "a one-workstream plan entered the second tier"
+    # The audit-scope lines name repository files (CHG-20261028-01), and a file can be called
+    # anything; the second tier is what the other lines say.
+    walked = "\n".join(l for l in out.splitlines() if not l.startswith("audit scope"))
+    assert "sub_plan" not in walked, "a one-workstream plan entered the second tier"
 
 
 def test_the_bound_is_enforced_on_a_run_not_only_available_as_a_function(monkeypatch):
