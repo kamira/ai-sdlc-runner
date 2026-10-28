@@ -2580,6 +2580,9 @@ NOT_ON_THE_CONSOLE = {
                    "and the run record, and is printed by `runner run`, not drawn on the console yet",
     "dispositions": "what the auditor said about each finding, with its evidence; reaches the "
                     "report and the run record, not the console yet",
+    "audit_counts": "findings per source, rows per disposition and the refute rate, derived from "
+                    "`findings` and `dispositions`; printed by `runner run`, not drawn on the "
+                    "console yet",
     "audit_same_backend": "the auditor ran on the builder's or a seat's backend; printed by "
                           "`runner run` as `audit backend:`, not drawn on the console yet",
     # trust and the store
@@ -2728,7 +2731,7 @@ def test_the_inventory_is_exact_and_the_two_renamed_ones_are_not_in_it():
     # 19 → 20 in CHG-20261028-01, which added `findings` (the seats' located claims);
     # 20 → 21 for `audit_scope` (the files the auditor read and the ones the cap cut);
     # 21 → 22 for `dispositions` (what the auditor said about each finding).
-    assert len(NOT_ON_THE_CONSOLE) == 23, (
+    assert len(NOT_ON_THE_CONSOLE) == 24, (
         f"the inventory is {len(NOT_ON_THE_CONSOLE)} entries; if the console grew a view, delete "
         f"the entry rather than leaving it — the test above already refuses a listed-and-rendered "
         f"field, and this number is what a reader checks the record against")

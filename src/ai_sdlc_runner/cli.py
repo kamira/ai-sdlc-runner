@@ -1894,6 +1894,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"single model:  {line}")
     for line in report.audit_same_backend:
         print(f"audit backend: {line}")
+    if report.findings:
+        counts = engine.audit_counts(report.findings, report.dispositions)
+        rate = counts["refute_rate"]
+        print("audit counts:  findings " + ", ".join(
+            f"{src}={n}" for src, n in sorted(counts["findings_by_source"].items()))
+            + "; dispositions " + ", ".join(
+                f"{k}={v}" for k, v in sorted(counts["by_disposition"].items()))
+            + "; refute rate " + ("n/a" if rate is None else f"{rate:.0%}"))
     # What the auditor read and what the cap cut (CHG-20261028-01): printed beside the review's
     # outcome so an audit that passed over code it never saw does not read as a full one.
     for line in auditscope.summary(report.audit_scope):

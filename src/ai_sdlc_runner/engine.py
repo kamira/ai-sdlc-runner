@@ -659,6 +659,7 @@ class RunReport:
             "adjudications": [dict(a) for a in self.adjudications],
             "single_model_panels": list(self.single_model_panels),
             "audit_same_backend": list(self.audit_same_backend),
+            "audit_counts": audit_counts(self.findings, self.dispositions),
             "seat_models": {n: {s: list(m) for s, m in seats.items()}
                             for n, seats in self.seat_models.items()},
             "seat_briefs": [dict(b) for b in self.seat_briefs],
@@ -2788,6 +2789,29 @@ def _note_panel_diversity(node: graph.Node, report: "RunReport", opened_for_pane
             f"{node.id}: every voice was answered by the same backend ({kinds.pop()}). The "
             f"sessions were independent; the model was not, so they share whatever it cannot see. "
             f"{remedy}")
+
+
+def audit_counts(findings: Sequence[Mapping[str, object]],
+                 dispositions: Sequence[Mapping[str, object]]) -> Dict[str, object]:
+    """What the audit did, in numbers, from the record alone (CHG-20261028-01, task 7).
+
+    ``findings_by_source`` counts every finding raised, by seat (or `auditor`); ``by_disposition``
+    counts the auditor's rows by `confirm` / `refute` / `cannot-verify`; ``refute_rate`` is refuted
+    over disposed, `None` when nothing was disposed -- a rate of nothing is not zero. A `refute` that
+    showed no work was read as `cannot-verify` and counts as that, because the record says so.
+    """
+    by_source: Dict[str, int] = {}
+    for found in findings:
+        source = str(found.get("source") or "")
+        by_source[source] = by_source.get(source, 0) + 1
+    by_disposition = {name: 0 for name in policy.DISPOSITIONS}
+    for row in dispositions:
+        name = str(row.get("disposition") or "")
+        by_disposition[name] = by_disposition.get(name, 0) + 1
+    disposed = sum(by_disposition.values())
+    return {"findings_by_source": by_source, "by_disposition": by_disposition,
+            "disposed": disposed,
+            "refute_rate": (by_disposition.get("refute", 0) / disposed) if disposed else None}
 
 
 def _note_audit_backend(report: "RunReport", ran: Mapping[str, Set[str]]) -> None:

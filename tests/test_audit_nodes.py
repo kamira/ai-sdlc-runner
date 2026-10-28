@@ -432,3 +432,41 @@ def test_the_rework_order_references_the_confirmed_findings_and_none_of_the_othe
 def test_the_rework_wording_says_review_not_panel():
     report, seen = _rework_walk()
     assert "The review at review_decide did not pass it" in json.dumps(seen["order"]["instructions"])
+
+
+# ── the audit counts (CHG-20261028-01, task 7) ────────────────────────────────────────────────
+
+
+def test_the_audit_counts_are_reproduced_from_the_run_record():
+    """Cut the `audit_counts` entry from `as_dict` (or miscount) and the figures stop matching."""
+    seats = {"defect": [dict(FINDING, id="C1"), dict(FINDING, id="R1"), dict(FINDING, id="R2")],
+             "conformance": [dict(FINDING, id="K1")]}
+
+    def rows(found):
+        out = []
+        for f in found:
+            if f["id"].endswith("R1"):
+                out.append(_row(f["id"], "refute", input="a", result="b"))
+            elif f["id"].endswith("R2"):
+                out.append(_row(f["id"], "cannot-verify"))
+            else:
+                out.append(_row(f["id"], "confirm"))
+        return out
+    report = _walk(Audit(seat_findings=seats, auditor_findings=[OWN], dispositions=rows,
+                         verdicts={"defect": "fail", "conformance": "fail"}),
+                   decisions=dict(TWO_PASSES))
+    counts = report.as_dict()["audit_counts"]
+    # The first lap, by hand from the stand-in's script: 3 defect, 1 conformance, 1 auditor.
+    lap_one = [f for f in report.findings if f["lap"] == 1]
+    assert {s: sum(1 for f in lap_one if f["source"] == s) for s in ("defect", "conformance",
+                                                                      "auditor")} == \
+        {"defect": 3, "conformance": 1, "auditor": 1}
+    assert counts == engine.audit_counts(report.findings, report.dispositions)
+    laps = len({f["lap"] for f in report.findings})
+    assert counts["findings_by_source"] == {"defect": 3 * laps, "conformance": laps, "auditor": laps}
+    assert counts["by_disposition"] == {"confirm": 3 * laps, "refute": laps, "cannot-verify": laps}
+    assert counts["disposed"] == 5 * laps and counts["refute_rate"] == pytest.approx(1 / 5)
+
+
+def test_a_refute_rate_of_nothing_is_none_not_zero():
+    assert engine.audit_counts([], [])["refute_rate"] is None

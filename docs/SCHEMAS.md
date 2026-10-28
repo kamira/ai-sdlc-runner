@@ -469,7 +469,7 @@ confirmations · adjudications · single_model_panels · seat_models · seat_bri
 · intake_asked_somebody · dispatches · effort_not_applied · usage · usage_summary · survey · options
 · panel_rounds · send_backs · rejections · rulings · store_errors · change_class ·
 relaxations_by_class · risk_proposed · risk_settled · risk_agreed · halts · class_authorised_by ·
-relaxation_authorisers · findings · audit_scope · dispositions · audit_same_backend`
+relaxation_authorisers · findings · audit_scope · dispositions · audit_same_backend · audit_counts`
 
 `findings` (CHG-20261028-01) is one entry per finding the whole-change review raised, per lap: the
 finding as `policy.read_findings` reads it (`id`, `source` — the seat or `auditor` — `file`, `line`,
@@ -480,6 +480,11 @@ and the `lap` it belongs to.
 that the auditor's session reported itself as sharing a backend with (`describe()`, as
 `single_model_panels` is judged). `[]` when it was independent or did not run. The CLI prints each on an
 `audit backend:` line. `--audit-model COMMAND`, or `audit_model` in the plan, routes the auditor.
+
+`audit_counts` (CHG-20261028-01) is `engine.audit_counts` over `findings` and `dispositions`:
+`{findings_by_source: {source: n}, by_disposition: {confirm, refute, cannot-verify: n}, disposed,
+refute_rate}`. `refute_rate` is refuted over disposed and `null` when nothing was disposed. It is
+derived, so it can always be reproduced from the two lists beside it.
 
 `audit_scope` (CHG-20261028-01) is what the auditor was given to read: `auditscope.assemble`'s record,
 `{base, cap, total_chars, read_chars, files: [{path, why, chars, state}], cut, notes}`. `why` is
