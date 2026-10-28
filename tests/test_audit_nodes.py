@@ -362,3 +362,22 @@ def test_the_commit_the_change_is_measured_from_is_taken_at_the_first_build_and_
     _walk(Audit(), journal=journal, resume=True)
     assert got == ["first", "first"], "a resume does not move the line the diff is measured from"
     assert (tmp_path / "asks" / "audit" / "base.json").is_file()
+
+
+# ── the findings file (CHG-20261028-01, task 4) ───────────────────────────────────────────────
+
+
+def test_findings_travel_by_path_and_no_finding_text_is_inlined_in_any_order():
+    """Cut `_write_findings` (inline the text in `instructions`/`done_when`) and the claim shows up
+    in an order, or the closed field list grows; both fail here."""
+    from ai_sdlc_runner import workorder
+    dispatch = Audit(seat_findings={"defect": [FINDING]}, auditor_findings=[OWN])
+    report = _walk(dispatch)
+    [order] = dispatch.of("audit_dispose")
+    assert sorted(order) == sorted(workorder.WORK_ORDER_FIELDS)
+    text = json.dumps({k: v for k, v in order.items() if k != "input_artifacts"})
+    assert "SEAT-CLAIM-XYZ" not in text and "AUDITOR-CLAIM-QQQ" not in text
+    assert len(workorder.WORK_ORDER_FIELDS) == 18, "the closed order did not grow for this change"
+    assert dispatch.file_name == "findings.json"      # read by the stand-in from the path it was given
+    assert {f["id"] for f in dispatch.file_seen} == {"defect:F1", "auditor:A1"}
+    assert report.halted_at != "audit_dispose"
