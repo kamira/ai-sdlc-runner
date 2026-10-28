@@ -186,6 +186,12 @@ rules (every finding has exactly one disposition; a refuted veto is `undecided`;
 important, introduced finding fails the review; the auditor's own triggered findings count directly;
 refuted, cannot-verify, nit and pre-existing findings are kept and not sent to rework; a panel view
 that differs from the audit result is `undecided`). `undecided` takes the existing ruling path.
+The auditor is routed by `--audit-model COMMAND` or the plan's `audit_model`, in
+`cli.session_factory` only (never in an order). `RunReport.audit_same_backend` records an auditor that
+reported the same backend as the builder or a seat, `audit_counts` the findings per source, the rows
+per disposition and the refute rate, and `audit_scope` which files the auditor read and which the cap
+cut. A rework is sent the confirmed findings by path, never the refuted, cannot-verify, nit or
+pre-existing ones.
 
 The floor may be lowered only through an explicit high-risk mode — set in `runner settings`, or per
 run with `--high-risk-mode` — and the run records that it was.
