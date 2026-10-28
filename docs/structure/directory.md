@@ -27,6 +27,7 @@ ai-sdlc-runner/
 │   ├── ship.py                # the ordered ship sequence, each effect paired with its probe
 │   ├── intake.py              # what each seat was asked and what it called unsafe
 │   ├── attachments.py         # what the operator hands the runner; the stored leaf is a hash
+│   ├── auditscope.py          # what the auditor is given to read, and what the cap cut (CHG-20261028-01)
 │   ├── server.py              # the console's HTTP surface: loopback only, one operator token
 │   ├── conversations.py       # the durable record of a run, and its exports
 │   ├── store.py               # where conversations live; sqlite only

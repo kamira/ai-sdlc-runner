@@ -720,6 +720,7 @@ src/ai_sdlc_runner/
   store.py        the SQLite store: the registry, and which node or seat gets which model
   conversations.py  every turn of every conversation, append-only, categorised by project
   attachments.py  content-addressed storage; the filename never becomes a path
+  auditscope.py   what the auditor reads: the diff and its neighbours, `read` or `cut` by a cap
   server.py       the local-only back end
   effects.py      ordered effects, each admitted only if probeable
   probes.py       postconditions read from the world: git, the forge, the ledger
@@ -915,7 +916,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 3287 tests
+pytest -q          # 3302 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

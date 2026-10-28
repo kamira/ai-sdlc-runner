@@ -38,7 +38,7 @@ from . import plan as plan_mod
 from . import store as store_mod
 from . import usage as usage_mod
 from . import intake as intake_mod
-from . import detect, engine, models as models_mod, graph, policy, seatspec
+from . import auditscope, detect, engine, models as models_mod, graph, policy, seatspec
 from . import settings as settings_mod, ship, tui, workorder
 
 DEFAULT_CONFIG = "config/runner.yaml"
@@ -1874,6 +1874,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"confirmed:     {line}")
     for line in report.single_model_panels:
         print(f"single model:  {line}")
+    # What the auditor read and what the cap cut (CHG-20261028-01): printed beside the review's
+    # outcome so an audit that passed over code it never saw does not read as a full one.
+    for line in auditscope.summary(report.audit_scope):
+        print(line)
     for node_id, by_seat in sorted(report.seat_models.items()):
         print(f"seat models:   {node_id}: " + "; ".join(
             f"{seat}={', '.join(labels)}" for seat, labels in by_seat.items()))

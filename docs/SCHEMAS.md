@@ -454,12 +454,18 @@ confirmations · adjudications · single_model_panels · seat_models · seat_bri
 · intake_asked_somebody · dispatches · effort_not_applied · usage · usage_summary · survey · options
 · panel_rounds · send_backs · rejections · rulings · store_errors · change_class ·
 relaxations_by_class · risk_proposed · risk_settled · risk_agreed · halts · class_authorised_by ·
-relaxation_authorisers · findings`
+relaxation_authorisers · findings · audit_scope`
 
 `findings` (CHG-20261028-01) is one entry per finding the whole-change review raised, per lap: the
 finding as `policy.read_findings` reads it (`id`, `source` — the seat or `auditor` — `file`, `line`,
 `claim`, `trigger`, `severity`, `origin`, and `severity_said` where a missing trigger demoted it)
 and the `lap` it belongs to.
+
+`audit_scope` (CHG-20261028-01) is what the auditor was given to read: `auditscope.assemble`'s record,
+`{base, cap, total_chars, read_chars, files: [{path, why, chars, state}], cut, notes}`. `why` is
+`diff`, `callee` or `caller`; `state` is `read` (inside `AUDIT_SCOPE_MAX_CHARS`) or `cut` (left out
+because the cap was reached). `{}` until `audit_read` runs. A scope with `cut` files is printed beside
+the review's outcome. Callers and callees are resolved for Python only; `notes` says where they were not.
 
 `usage` (CHG-20261006-01) is one entry per ask whose session reported usage — `{ask_id, node_id, seat,
 model, kind, cost_usd, tokens, remaining, note}`, `kind` being `claude`, `codex` or `unreported`;

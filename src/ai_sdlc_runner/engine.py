@@ -628,6 +628,10 @@ class RunReport:
     #: severity and origin, and the lap it belongs to. A finding with no trigger is recorded as the
     #: `nit` it can be, with `severity_said` keeping the word the voice used.
     findings: List[Dict[str, object]] = field(default_factory=list)
+    #: What the auditor was given to read and what the cap left out (CHG-20261028-01, task 2a):
+    #: `auditscope.assemble`'s record -- every file in scope, `read` or `cut`, with the cap and the
+    #: total. Empty until `audit_read` runs. A cut scope is printed beside the review's outcome.
+    audit_scope: Dict[str, object] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, object]:
         return {
@@ -679,6 +683,7 @@ class RunReport:
             "class_authorised_by": self.class_authorised_by,
             "relaxation_authorisers": dict(self.relaxation_authorisers),
             "findings": [dict(f) for f in self.findings],
+            "audit_scope": dict(self.audit_scope),
         }
 
 

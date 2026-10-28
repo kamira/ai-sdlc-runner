@@ -2574,6 +2574,8 @@ NOT_ON_THE_CONSOLE = {
     # CHG-20261028-01. What the whole-change review found, and what became of it.
     "findings": "every finding the review raised, with where it is, its trigger and its lap; "
                 "reaches the report and the run record, not the console yet",
+    "audit_scope": "what the auditor was given to read and what the cap cut; reaches the report "
+                   "and the run record, and is printed by `runner run`, not drawn on the console yet",
     # trust and the store
     "on_trust": "targets accepted because the operator vouched for the command",
     "store_errors": "writes to the conversation store that failed",
@@ -2717,8 +2719,9 @@ def test_the_inventory_is_exact_and_the_two_renamed_ones_are_not_in_it():
     # 18 → 17 in CHG-20261005-03, which took `seat_models` off the list (see the note there);
     # 17 → 18 in CHG-20261006-01, which added `usage_summary` (drawn from `GET /usage`, not the report).
     # 18 → 19 in CHG-20261016-01, which added `seat_briefs` (the report's and the journal's).
-    # 19 → 20 in CHG-20261028-01, which added `findings` (the seats' located claims).
-    assert len(NOT_ON_THE_CONSOLE) == 20, (
+    # 19 → 20 in CHG-20261028-01, which added `findings` (the seats' located claims);
+    # 20 → 21 for `audit_scope` (the files the auditor read and the ones the cap cut).
+    assert len(NOT_ON_THE_CONSOLE) == 21, (
         f"the inventory is {len(NOT_ON_THE_CONSOLE)} entries; if the console grew a view, delete "
         f"the entry rather than leaving it — the test above already refuses a listed-and-rendered "
         f"field, and this number is what a reader checks the record against")
