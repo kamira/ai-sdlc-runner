@@ -167,9 +167,11 @@ vouched for as ordinary, because the name says nothing about what it will do.
 
 ### Review seats
 
-Fifteen seats, each answering a **different question**; **three open by default** (`conformance`,
-`defect`, `risk`) and an install that sets nothing opens exactly those. The floor is three; going
-below it needs an explicit high-risk-mode bypass, which is recorded. `review_seats` opens the first
+Fifteen seats, each answering a **different question**; **two open by default** (`conformance`,
+`defect`) and an install that sets nothing opens exactly those; `review_seats 3` adds `risk`. The
+floor is three and counts the seats plus the auditor, which counts only when its backend differs from
+the builder's and from every open seat's (CHG-20261028-01); going below it needs an explicit
+high-risk-mode bypass, which is recorded. `review_seats` opens the first
 N of the twelve seats that are not opt-in (at most 12). `review_dimensions` in
 `config/settings.json` (or `runner settings`) names the seats you want, in order, and replaces the
 `review_seats` count while it is set; it must include `conformance`, the veto seat, unless high-risk
@@ -913,7 +915,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 3259 tests
+pytest -q          # 3287 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

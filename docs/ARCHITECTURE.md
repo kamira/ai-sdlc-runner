@@ -169,7 +169,8 @@ continuing somebody else's is worse than one starting over.
 ## 6. The panel
 
 One or many of fifteen seats, opened either by a count (the first N of the twelve that are not
-opt-in, never fewer than the floor of 3 unless high-risk mode is on) or by the user's own list, `review_dimensions`,
+opt-in; the default is 2, and the floor of 3 counts the seats plus an auditor on an independent backend, so
+fewer needs high-risk mode) or by the user's own list, `review_dimensions`,
 which can also open the three opt-in seats. Each seat may have several models; every (seat, model) is
 its own session, asked separately and blind to the others — their instructions say so explicitly.
 A seat passes only when every one of its models passes, and the seats' verdicts are then adjudicated.

@@ -2717,7 +2717,8 @@ def test_the_inventory_is_exact_and_the_two_renamed_ones_are_not_in_it():
     # 18 → 17 in CHG-20261005-03, which took `seat_models` off the list (see the note there);
     # 17 → 18 in CHG-20261006-01, which added `usage_summary` (drawn from `GET /usage`, not the report).
     # 18 → 19 in CHG-20261016-01, which added `seat_briefs` (the report's and the journal's).
-    assert len(NOT_ON_THE_CONSOLE) == 19, (
+    # 19 → 20 in CHG-20261028-01, which added `findings` (the seats' located claims).
+    assert len(NOT_ON_THE_CONSOLE) == 20, (
         f"the inventory is {len(NOT_ON_THE_CONSOLE)} entries; if the console grew a view, delete "
         f"the entry rather than leaving it — the test above already refuses a listed-and-rendered "
         f"field, and this number is what a reader checks the record against")

@@ -227,7 +227,7 @@ def confirm_high_risk(requested: int, floor: int, *, input_fn=input, stream_out=
     making is not one they made. Cancelling means no.
     """
     choice = select(
-        f"Review is set to {requested} seat(s); the shipped floor is {floor}.",
+        f"Review is set to {requested} seat(s); the shipped minimum is {floor}.",
         [
             ("Keep the floor", f"open {floor} seat(s) — the shipped default"),
             ("Enable high-risk mode",

@@ -220,7 +220,9 @@ def test_the_defaults_are_the_safe_end_of_every_axis():
     s = settings_mod.Settings()
     assert s.review_seats is None
     assert s.high_risk_mode is False
-    assert s.seats() == policy.SEAT_FLOOR
+    # The default is the necessary seats, and beside an independent auditor that meets the floor
+    # (CHG-20261028-01), so it is not "below the floor" as far as a settings file can say.
+    assert s.seats() == policy.SEAT_DEFAULT
     assert not s.below_floor()
 
 
@@ -283,7 +285,9 @@ def test_saving_and_loading_round_trips(tmp_path):
 
 def test_the_floor_still_applies_without_the_bypass():
     """The whole point: a seat count below the floor does nothing on its own."""
-    assert settings_mod.Settings(review_seats=1).seats() == policy.SEAT_FLOOR
+    # Raised to the least that can meet the floor (CHG-20261028-01): one seat is below it whatever
+    # the auditor is, and two are not.
+    assert settings_mod.Settings(review_seats=1).seats() == policy.SEAT_DEFAULT
     assert settings_mod.Settings(review_seats=1, high_risk_mode=True).seats() == 1
 
 
@@ -698,7 +702,7 @@ def test_crossing_the_floor_asks_first_and_declining_leaves_it_off():
     picks = _Picks("High-risk mode", "Keep the floor", "Save and close")
     result = settings_mod.edit(start, input_fn=picks, stream_out=picks.stream)
     assert result.high_risk_mode is False
-    assert result.seats() == policy.SEAT_FLOOR
+    assert result.seats() == policy.SEAT_DEFAULT
 
 
 def test_crossing_the_floor_when_confirmed_turns_it_on():
@@ -760,7 +764,9 @@ def test_one_seat_makes_undecided_unreachable_and_that_is_disclosed():
         said = {name: ("pass" if i % 2 == 0 else "fail") for i, name in enumerate(names)}
         return policy.adjudicate(said)["outcome"], len(names)
 
-    assert outcome(None, False) == ("pass", 3)
+    # The default is two seats now (CHG-20261028-01): a split there is undecided, as at any two.
+    assert outcome(None, False) == ("undecided", policy.SEAT_DEFAULT)
+    assert outcome(3, False) == ("pass", 3)
     assert outcome(2, True) == ("undecided", 2), "two seats can still disagree"
     assert outcome(1, True) == ("pass", 1), (
         "at one seat `undecided` is unreachable — if this ever returns `undecided`, the "

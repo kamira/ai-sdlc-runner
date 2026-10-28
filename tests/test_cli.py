@@ -666,7 +666,7 @@ def test_undeclared_defaults_to_refusing(tmp_path, py_stub, capsys):
 def test_settings_show_prints_the_current_state(capsys, tmp_path):
     assert cli.main(["--settings", str(tmp_path / "none.json"), "settings", "--show"]) == 0
     out = capsys.readouterr().out
-    assert "review seats: 3" in out
+    assert "review seats: 2" in out  # SEAT_DEFAULT (CHG-20261028-01 task 1a)
     assert "high-risk mode: off" in out
 
 

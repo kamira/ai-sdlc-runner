@@ -163,7 +163,8 @@ def test_the_floor_holds_without_high_risk_mode():
         policy.resolve_seats(1, high_risk_mode=False)
     assert "high-risk mode" in str(exc.value)
     assert policy.resolve_seats(1, high_risk_mode=True) == 1
-    assert policy.resolve_seats(None, high_risk_mode=False) == policy.SEAT_FLOOR
+    # The default count is the necessary seats, not the floor (CHG-20261028-01, Q1).
+    assert policy.resolve_seats(None, high_risk_mode=False) == policy.SEAT_DEFAULT
 
 
 def test_more_seats_than_exist_is_refused():

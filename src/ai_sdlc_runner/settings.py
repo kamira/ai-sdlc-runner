@@ -122,7 +122,8 @@ class SettingsError(Exception):
 class Settings:
     """What the user has chosen. Defaults are the safe end of every axis."""
 
-    #: How many review seats open. ``None`` means the floor.
+    #: How many review seats open. ``None`` means `policy.SEAT_DEFAULT`: the necessary seats
+    #: (`conformance`, `defect`) and no more (CHG-20261028-01, Q1).
     review_seats: Optional[int] = None
     #: Whether the seat floor may be crossed at all. Off unless somebody turned it on.
     high_risk_mode: bool = False
@@ -162,33 +163,41 @@ class Settings:
 
         `policy.resolve_seats` **raises** on a request below the floor without the bypass — it will
         not lower a floor on its own authority, which is right for the policy. Settings answer a
-        different question: "what happens if I run now", and the answer is the floor. Raising a
-        count is the safe direction and is the only clamping done here; `describe()` says out loud
-        when a request was raised, so it is reported rather than quietly overridden.
+        different question: "what happens if I run now", and the answer is the least that can meet
+        the floor. Raising a count is the safe direction and is the only clamping done here;
+        `describe()` says out loud when a request was raised, so it is reported rather than quietly
+        overridden.
+
+        **"The least that can meet the floor" is `policy.SEAT_LEAST`, not `SEAT_FLOOR`**
+        (CHG-20261028-01). The floor now counts the seats plus an independent auditor, and the
+        auditor is routed by `--audit-model` and the plan, which this file does not hold. What it
+        can say is that one seat is below the floor whatever the auditor is, and that two are not
+        — `cmd_run` judges the rest, with the routing in hand. The default is `SEAT_DEFAULT`.
         """
         if self.review_dimensions is not None:
             return len(self.review_dimensions)
         if self.review_seats is None:
-            return policy.SEAT_FLOOR
-        if self.review_seats < policy.SEAT_FLOOR and not self.high_risk_mode:
-            return policy.SEAT_FLOOR
-        return policy.resolve_seats(self.review_seats, self.high_risk_mode)
+            return policy.SEAT_DEFAULT
+        if self.review_seats < policy.SEAT_LEAST and not self.high_risk_mode:
+            return policy.SEAT_DEFAULT
+        return policy.resolve_seats(self.review_seats, self.high_risk_mode, True)
 
     def raised_to_the_floor(self) -> bool:
-        """Is a request below the floor currently being ignored because the bypass is off?"""
+        """Is a request below the least that can meet the floor being ignored (bypass off)?"""
         return (self.review_dimensions is None
                 and self.review_seats is not None
-                and self.review_seats < policy.SEAT_FLOOR
+                and self.review_seats < policy.SEAT_LEAST
                 and not self.high_risk_mode)
 
     def seats_requested(self) -> int:
         """What this file asks for, before the floor is applied. `seats()` is what it gets."""
         if self.review_dimensions is not None:
             return len(self.review_dimensions)
-        return self.review_seats if self.review_seats is not None else policy.SEAT_FLOOR
+        return self.review_seats if self.review_seats is not None else policy.SEAT_DEFAULT
 
     def below_floor(self) -> bool:
-        return self.seats() < policy.SEAT_FLOOR
+        """Fewer seats than can meet the floor even beside an independent auditor."""
+        return self.seats() < policy.SEAT_LEAST
 
     def as_dict(self) -> dict:
         return {"review_seats": self.review_seats, "high_risk_mode": self.high_risk_mode,
@@ -205,10 +214,12 @@ class Settings:
             line += (f" ({', '.join(self.review_dimensions)} — review_dimensions is set, so "
                      f"review_seats is ignored)")
         elif self.review_seats is None:
-            line += " (the floor; nothing set)"
+            line += (f" (the default: {', '.join(policy.seat_names(policy.SEAT_DEFAULT))}; nothing "
+                     f"set. Beside an auditor on a different backend this meets the floor of "
+                     f"{policy.SEAT_FLOOR})")
         elif self.raised_to_the_floor():
-            line += (f" ({self.review_seats} requested, raised to the floor — turn on high-risk "
-                     f"mode to actually run {self.review_seats})")
+            line += (f" ({self.review_seats} requested, raised to the least that can meet the "
+                     f"floor — turn on high-risk mode to actually run {self.review_seats})")
         no_veto = (policy.vetoes_missing(self.review_dimensions)
                    if self.review_dimensions is not None else [])
         if no_veto:
@@ -216,7 +227,8 @@ class Settings:
         if self.high_risk_mode:
             line += "  |  high-risk mode: ON"
             if self.below_floor():
-                line += f" — running {seats} below the floor of {policy.SEAT_FLOOR}"
+                line += (f" — running {seats} seat(s), below the floor of {policy.SEAT_FLOOR} even "
+                         f"beside an independent auditor")
         else:
             line += "  |  high-risk mode: off"
         if self.ordinary_commands:
@@ -314,7 +326,9 @@ def _check_dimensions(value, high_risk_mode: bool, *, where: str = "settings"):
         raise SettingsError(f"{where}: review_dimensions must be a list of seat names or null, "
                             f"got {value!r}")
     try:
-        return tuple(policy.resolve_dimensions(value, high_risk_mode))
+        # `auditor_independent=True`: the file cannot see the routing, so it holds a list to the
+        # least that can meet the floor beside an independent auditor; the run checks the rest.
+        return tuple(policy.resolve_dimensions(value, high_risk_mode, True))
     except policy.PolicyError as exc:
         raise SettingsError(f"{where}: review_dimensions: {exc}") from exc
 
@@ -460,7 +474,8 @@ def _screen(current: Settings):
     `test_every_setting_is_reachable_from_the_screen`, which reads `FIELDS` rather than counting.
     """
     return [
-        ("Review seats", f"currently {current.seats()}; the floor is {policy.SEAT_FLOOR}",
+        ("Review seats",
+         f"currently {current.seats()}; the floor is {policy.SEAT_FLOOR} counting the auditor",
          _edit_seats),
         ("Review dimensions",
          ", ".join(current.review_dimensions) if current.review_dimensions is not None
@@ -505,19 +520,21 @@ def _seat_options():
     `extra <= policy.MAX_SEAT_COUNT` written twice, so a value could drift from the label above it and
     nothing would say so (CHG-20260904-17).
     """
-    rows = [(f"{policy.SEAT_FLOOR} (the floor)", "every seat the panel is meant to have",
-             policy.SEAT_FLOOR)]
-    for n in range(1, policy.SEAT_FLOOR):
+    rows = [(f"{policy.SEAT_DEFAULT} (the default)",
+             "the necessary seats; with an auditor on a different backend this meets the floor",
+             policy.SEAT_DEFAULT)]
+    for n in range(1, policy.SEAT_LEAST):
         rows.append((f"{n}", "below the floor — needs high-risk mode, and the run records it", n))
-    for n in range(policy.SEAT_FLOOR + 1, policy.MAX_SEAT_COUNT + 1):
-        rows.append((f"{n}", "more review than the floor asks for", n))
+    for n in range(policy.SEAT_DEFAULT + 1, policy.MAX_SEAT_COUNT + 1):
+        rows.append((f"{n}", "more review than the default asks for", n))
     return rows
 
 
 def _edit_seats(current: Settings, *, input_fn, stream_out, notes=None) -> Settings:
     """Pick a seat count. The options below the floor say so in the option itself."""
     rows = _seat_options()
-    choice = tui.select(f"How many review seats? (floor {policy.SEAT_FLOOR})",
+    choice = tui.select(f"How many review seats? (default {policy.SEAT_DEFAULT}; the floor is "
+                        f"{policy.SEAT_FLOOR} counting the auditor)",
                         [row[:2] for row in rows], input_fn=input_fn, stream_out=stream_out)
     if choice is None:
         return current
@@ -541,7 +558,8 @@ def _edit_dimensions(current: Settings, *, input_fn, stream_out, notes=None) -> 
                  seat.name) for seat in policy.SEATS]
         rows.append(("Done", f"open {len(chosen)} seat(s), in the order ticked", None))
         rows.append(("Clear", "unset review_dimensions; review_seats decides again", ""))
-        choice = tui.select(f"Review dimensions (floor {policy.SEAT_FLOOR})",
+        choice = tui.select(f"Review dimensions (at least {policy.SEAT_LEAST}; the floor is "
+                            f"{policy.SEAT_FLOOR} counting the auditor)",
                             [row[:2] for row in rows], input_fn=input_fn, stream_out=stream_out)
         if choice is None:
             return current
@@ -564,8 +582,8 @@ def _edit_dimensions(current: Settings, *, input_fn, stream_out, notes=None) -> 
         _refused(f"not kept: {', '.join(missing)} is the veto seat, and a list without it needs "
                  f"high-risk mode. Turn that on first, or tick {missing[0]}.", notes, stream_out)
         return current
-    if len(chosen) < policy.SEAT_FLOOR and not current.high_risk_mode:
-        if not tui.confirm_high_risk(len(chosen), policy.SEAT_FLOOR,
+    if len(chosen) < policy.SEAT_LEAST and not current.high_risk_mode:
+        if not tui.confirm_high_risk(len(chosen), policy.SEAT_LEAST,
                                      input_fn=input_fn, stream_out=stream_out):
             return current
         after = replace(after, high_risk_mode=True)
@@ -673,11 +691,12 @@ def _toggle_high_risk(current: Settings, *, input_fn, stream_out, notes=None) ->
     """
     if current.high_risk_mode:
         if (current.review_dimensions is not None
-                and len(current.review_dimensions) < policy.SEAT_FLOOR):
+                and len(current.review_dimensions) < policy.SEAT_LEAST):
             # Not clamped, as a seat count is: a named list cannot be raised to the floor without
             # choosing seats for the user, and `load` refuses it. Say so rather than write it.
             _refused(f"kept on: review_dimensions names {len(current.review_dimensions)} seat(s), "
-                     f"below the floor of {policy.SEAT_FLOOR}. Choose more first.",
+                     f"below the floor of {policy.SEAT_FLOOR} even beside an independent auditor. "
+                     f"Choose more first.",
                      notes, stream_out)
             return current
         if (current.review_dimensions is not None
@@ -708,7 +727,7 @@ def _crossing(before: Settings, after: Settings, *, input_fn, stream_out) -> Set
     """
     if not after.below_floor() or before.below_floor():
         return after
-    if tui.confirm_high_risk(after.seats_requested(), policy.SEAT_FLOOR,
+    if tui.confirm_high_risk(after.seats_requested(), policy.SEAT_LEAST,
                              input_fn=input_fn, stream_out=stream_out):
         return after
     return before

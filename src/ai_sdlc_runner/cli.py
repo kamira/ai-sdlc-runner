@@ -340,6 +340,63 @@ def check_seat_models(seat_models: Dict[str, object],
                 raise CliError(f"seat {seat!r}: {exc}") from exc
 
 
+def backend_key(entry, registry: Optional["models_mod.Registry"], default) -> Tuple[str, ...]:
+    """What one routing entry would run, as a tuple two entries can be compared by.
+
+    ``entry`` is a registry model id, an argv, or ``None``/empty for the default backend
+    (`agent_command`). Compared as the command that would run and not as the name it was given: a
+    model id and the argv it expands to are the same backend, and a panel that counted them as two
+    would credit an auditor with an independence it does not have (CHG-20261028-01). A backend with
+    no command at all — the dry-run stub — is one backend, spelled `("(stub)",)`.
+    """
+    argv = None
+    if entry:
+        if isinstance(entry, str):
+            if registry is not None:
+                try:
+                    argv = list(registry.get(entry).command)
+                except models_mod.ModelError:
+                    argv = entry.split()
+            else:
+                argv = entry.split()
+        else:
+            argv = list(entry)
+    else:
+        argv = list(default) if isinstance(default, (list, tuple)) else (
+            str(default).split() if default else [])
+    return tuple(argv) if argv else ("(stub)",)
+
+
+def auditor_independent(config: dict, registry: Optional["models_mod.Registry"], *,
+                        audit_entry, seat_models: Mapping[str, object],
+                        open_seats: Sequence[str],
+                        node_models: Mapping[str, Sequence[str]]) -> bool:
+    """Does the auditor run on a different backend from the builder and from every open seat?
+
+    Judged from the routing — the same entries `session_factory` resolves — so the run's floor can
+    be decided before anything is asked (CHG-20261028-01, step 2). The engine records what the
+    sessions then reported about themselves; this is what the configuration promises.
+
+    The builder is `engineer_build`'s models; a node with none is the default backend. A seat with
+    no model routed to it is the default backend too, which is why an auditor left on the default
+    is independent only of a panel and a builder all routed elsewhere.
+    """
+    default = config.get("agent_command")
+    auditor = backend_key(audit_entry, registry, default)
+    others = set()
+    builders = list(node_models.get("engineer_build") or ())
+    for entry in (builders or [None]):
+        others.add(backend_key(entry, registry, default))
+    for seat in open_seats:
+        try:
+            entries = models_mod.seat_entries(seat_models.get(seat), registry, legacy_argv=True)
+        except models_mod.ModelError as exc:
+            raise CliError(str(exc)) from exc
+        for entry in (entries or [None]):
+            others.add(backend_key(entry, registry, default))
+    return auditor not in others
+
+
 def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = None,
                     registry: Optional["models_mod.Registry"] = None,
                     risk: str = "high", require_sandbox: bool = False,
@@ -615,7 +672,9 @@ def cmd_policy(args: argparse.Namespace) -> int:
     print("\ngates (risk → verdict)")
     for gate, grades in policy.GATES.items():
         print(f"  {gate:22s} " + "  ".join(f"{r}:{grades[r]}" for r in policy.RISKS))
-    print(f"\nseats (floor {policy.SEAT_FLOOR})")
+    print(f"\nseats (default {policy.SEAT_DEFAULT}: "
+          f"{', '.join(policy.seat_names(policy.SEAT_DEFAULT))}; floor {policy.SEAT_FLOOR}, "
+          f"counting the auditor where it runs on a different backend)")
     width = max(len(seat.name) for seat in policy.SEATS)
     for seat in policy.SEATS:
         print(f"  {seat.name:{width}s} {'veto' if seat.veto else '    '}  {seat.label}"
@@ -1500,6 +1559,47 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 2
     for notice in coder_notices:
         print(f"note:          {notice}")
+    # Where each seat is routed, read before the floor is judged: the floor counts the auditor, and
+    # the auditor counts only when its backend differs from the builder's and every open seat's
+    # (CHG-20261028-01). Judged from the routing here, because a run that cannot meet the floor must
+    # be stopped, or sized up, before anybody is asked.
+    seat_models = dict(resolved_assignments.get("seat_models") or {})
+    try:
+        check_seat_models(seat_models, config_registry)
+    except CliError as exc:
+        print(f"error: {exc}")
+        return 2
+    for pair in args.seat_model or ():
+        seat, _, command = pair.partition("=")
+        if not command:
+            print(f"error: --seat-model wants SEAT=COMMAND, got {pair!r}")
+            return 2
+        if seat not in policy.BY_SEAT:
+            print(f"error: no seat {seat!r}; this runner defines {sorted(policy.BY_SEAT)}")
+            return 2
+        seat_models[seat] = command.split()         # the legacy form: one argv
+    audit_entry = None
+
+    def _independent() -> bool:
+        """Is the auditor, as routed, a different backend from the builder and the seats now open?"""
+        try:
+            names = (list(dimensions) if dimensions is not None else policy.seat_names(
+                seats if seats is not None else policy.SEAT_DEFAULT))
+        except policy.PolicyError:
+            names = []                  # a count the engine will refuse by name, with the reason
+        return auditor_independent(config, config_registry, audit_entry=audit_entry,
+                                   seat_models=seat_models, open_seats=names,
+                                   node_models=built_models)
+
+    def _keep_the_floor() -> int:
+        """The seats to open so the floor holds, with the auditor credited only where it counts."""
+        return policy.SEAT_FLOOR - (1 if _independent() else 0)
+
+    try:
+        independent = _independent()
+    except CliError as exc:
+        print(f"error: {exc}")
+        return 2
     # `--no-high-risk-mode` turns a saved bypass off for this run. Without it the file and the flag
     # were OR-ed, so a bypass persisted in settings could not be declined for a single run — a
     # verifier pointed out that "a flag beats the file" held only in the relaxing direction, which
@@ -1509,25 +1609,36 @@ def cmd_run(args: argparse.Namespace) -> int:
         # below-floor seat count in place sent the operator straight into the confirmation prompt
         # they had just declined on the command line — a flag that reopens the question it answers.
         high_risk = False
-        if seats is not None and seats < policy.SEAT_FLOOR:
+        if seats is not None and not policy.floor_met(seats, independent):
             print(f"note:          --no-high-risk-mode: {seats} seat(s) is below the floor, "
-                  f"opening {policy.SEAT_FLOOR}")
+                  f"opening {_keep_the_floor()}")
             seats = None
-        if dimensions is not None and len(dimensions) < policy.SEAT_FLOOR:
+        if dimensions is not None and not policy.floor_met(len(dimensions), independent):
             print(f"note:          --no-high-risk-mode: review_dimensions names {len(dimensions)} "
-                  f"seat(s), below the floor, opening {policy.SEAT_FLOOR}")
+                  f"seat(s), below the floor, opening {_keep_the_floor()}")
             dimensions = None
         if dimensions is not None and policy.vetoes_missing(dimensions):
             print(f"note:          --no-high-risk-mode: review_dimensions leaves out "
                   f"{', '.join(policy.vetoes_missing(dimensions))}, the veto seat, opening "
-                  f"{policy.SEAT_FLOOR}")
+                  f"{_keep_the_floor()}")
             dimensions = None
     else:
         high_risk = bool(args.high_risk_mode) or saved.high_risk_mode
-    if seats is not None and seats < policy.SEAT_FLOOR and not high_risk:
-        high_risk = tui.confirm_high_risk(seats, policy.SEAT_FLOOR)
+    if seats is not None and not policy.floor_met(seats, independent) and not high_risk:
+        high_risk = tui.confirm_high_risk(seats, _keep_the_floor())
         if not high_risk:
             seats = None
+    if seats is None and dimensions is None:
+        # **The default panel, sized so the floor holds** (CHG-20261028-01, step 2): two seats meet
+        # it beside an auditor on a different backend, and a third seat is what is missing when
+        # there is none. Under high-risk mode it stays two, and the engine records that it did.
+        sized = policy.default_seats(_independent(), high_risk)
+        if sized != policy.SEAT_DEFAULT:
+            seats = sized
+            print(f"note:          the auditor is not on a different backend from the builder and "
+                  f"every seat, so it does not count toward the floor of {policy.SEAT_FLOOR}: "
+                  f"opening {seats} seats. Route it with --audit-model, or turn on high-risk mode "
+                  f"to open {policy.SEAT_DEFAULT}.")
 
     conversation = _open_conversation(
         args, journal_dir=args.ask_journal,
@@ -1560,6 +1671,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         autonomy=plan.get("autonomy"),
         review_seats=seats,
         review_dimensions=dimensions,
+        # What the routing says about the auditor, for the floor (CHG-20261028-01).
+        auditor_independent=_independent(),
         # The user's role and spec per seat: the settings file over the console's store, per level
         # (CHG-20261016-01). Read here for the same reason as everything else in this config.
         seat_specs=seatspec.merge(saved.seat_specs, stored_specs)[0],
@@ -1602,21 +1715,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         unsafe_shown=tuple(journal.unsafe_shown()) if journal else (),
         proceed_unsafe="--proceed-unsafe" if getattr(args, "proceed_unsafe", False) else "",
     )
-    seat_models = dict(resolved_assignments.get("seat_models") or {})
-    try:
-        check_seat_models(seat_models, config_registry)
-    except CliError as exc:
-        print(f"error: {exc}")
-        return 2
-    for pair in args.seat_model or ():
-        seat, _, command = pair.partition("=")
-        if not command:
-            print(f"error: --seat-model wants SEAT=COMMAND, got {pair!r}")
-            return 2
-        if seat not in policy.BY_SEAT:
-            print(f"error: no seat {seat!r}; this runner defines {sorted(policy.BY_SEAT)}")
-            return 2
-        seat_models[seat] = command.split()         # the legacy form: one argv
     trees = None            # bound before the try: the except path closes it
     try:
         # **With the registry.** Without it `session_factory` cannot turn a stored model id into
@@ -2142,6 +2240,26 @@ def cmd_serve(args: argparse.Namespace) -> int:
                                agent_command=bool(config.get("agent_command")))
         for notice in coder[2]:
             print(f"note: {notice}")
+        # The floor counts the auditor where it runs on a different backend (CHG-20261028-01), judged
+        # from this walk's routing the way `cmd_run` does, and the default panel is sized the same
+        # way: two seats beside an independent auditor, three when there is none.
+        current_seat_models = current_assignments().get("seat_models") or {}
+        live_seats = live.review_seats
+        try:
+            def _live_independent(count):
+                names = (list(live.review_dimensions) if live.review_dimensions is not None
+                         else policy.seat_names(count))
+                return auditor_independent(
+                    config, store_mod.load_registry(db) or registry, audit_entry=None,
+                    seat_models=current_seat_models, open_seats=names, node_models=coder[0])
+            live_independent = _live_independent(live_seats or policy.SEAT_DEFAULT)
+            if live_seats is None and live.review_dimensions is None:
+                sized = policy.default_seats(live_independent, live.high_risk_mode)
+                if sized != policy.SEAT_DEFAULT:
+                    live_seats = sized
+                    live_independent = _live_independent(live_seats)
+        except (policy.PolicyError, CliError) as exc:
+            raise CliError(f"{exc} — this walk is not started") from exc
         return engine.RunConfig(
             conversation=conversation,
             node_specs=plan.get("node_specs", {}),
@@ -2159,8 +2277,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
             # `serve` reads the file and nothing else, so the file is the source.
             seats_from=(args.settings if (live.review_seats is not None
                                           or live.review_dimensions is not None) else ""),
-            review_seats=live.review_seats,
+            review_seats=live_seats,
             review_dimensions=live.review_dimensions,
+            auditor_independent=live_independent,
             # Per walk, like the rest of the live file: the settings file and the store both change
             # while `serve` runs (CHG-20261016-01).
             seat_specs=seatspec.merge(live.seat_specs, store_mod.seat_specs(db))[0],
@@ -2491,7 +2610,9 @@ def build_parser() -> argparse.ArgumentParser:
     pr = sub.add_parser("run", help="walk the flow for one change")
     pr.add_argument("--plan", default=None, help="JSON plan: node_specs, decisions, risk")
     pr.add_argument("--review-seats", "--seats", type=int, default=None, dest="review_seats",
-                    help=f"how many review seats to open (default: the floor, {policy.SEAT_FLOOR})")
+                    help=f"how many review seats to open (default: {policy.SEAT_DEFAULT}, the "
+                         f"necessary ones; the floor of {policy.SEAT_FLOOR} counts the auditor "
+                         f"where it runs on a different backend)")
     pr.add_argument("--risk", choices=list(policy.RISKS), default=None,
                     help="grade this change, overriding the plan's own risk")
     pr.add_argument("--seat-model", action="append", default=None, metavar="SEAT=COMMAND",

@@ -399,7 +399,7 @@ to guess. `save()` strips them, and `models.py` says why on `models.COMPUTED`'s 
 closed all along and revision 1 of this page did not say so.
 
 ```jsonc
-{ "review_seats": null,          // null = the floor (3)
+{ "review_seats": null,          // null = 2 (conformance, defect); the floor is 3 counting an independent auditor
   "high_risk_mode": false,       // may the floor be crossed at all
   "ordinary_commands": [],       // tools the operator vouches for — the TOOL, never a command line
   "coder_model": "",             // registry id for engineer_build when nothing is assigned; "" = the only mid model (unless agent_command is set); "none" = no default
@@ -417,10 +417,10 @@ Role at most 500 characters, spec at most 8000 (a file at most 32768 bytes). The
 (`seatspec.parse`) reads the file, the settings screen, the store and `POST /config/seat_specs`.
 
 `review_dimensions` (CHG-20261005-02) is a list of names from `policy.SEATS` — fifteen, of which the
-first three (`conformance`, `defect`, `risk`) open by default, `review_seats` takes a prefix of the
+first two (`conformance`, `defect`) open by default, `review_seats` takes a prefix of the
 twelve that are not opt-in, and `observability`, `supply_chain` and `i18n` open only when named. When
 it is set it **replaces** the `review_seats` prefix and `review_seats` is ignored (`runner settings
---show` says so). An unknown name, a repeat, fewer names than the floor (3), or a list that leaves out
+--show` says so). An unknown name, a repeat, fewer names than the floor (3, counting an independent auditor, so at least 2 here), or a list that leaves out
 `conformance` (the veto seat) is refused at load and at save; high-risk mode allows the last two, as
 it does for a count, and a run without `conformance` records that in `relaxations`.
 `intake_review` asks the same seats.

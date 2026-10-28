@@ -1088,9 +1088,39 @@ PREFIX_SEATS: Tuple[Seat, ...] = tuple(s for s in SEATS if not s.opt_in)
 #: The largest `review_seats` there is.
 MAX_SEAT_COUNT = len(PREFIX_SEATS)
 
-#: The floor: how many seats open by default. Fewer than this needs the user's explicit high-risk
-#: mode, because a single reviewer is exactly the single point of view the panel exists to avoid.
+#: The floor: how many independent views a review needs. Fewer than this needs the user's explicit
+#: high-risk mode, because a single reviewer is exactly the single point of view the panel exists to
+#: avoid.
+#:
+#: **What it counts changed in CHG-20261028-01.** It was "seats opened by default"; it is now the
+#: seats **plus the auditor**, and the auditor counts only when its backend differs from the
+#: builder's and from every open seat's (`floor_met`). The number is the same on purpose: lowering it
+#: to 2 would discard the reason it exists, and an auditor on a different backend *is* a third point
+#: of view, which is all the floor ever asked for.
 SEAT_FLOOR = 3
+
+#: How many seats open when the user has not said (CHG-20261028-01, Q1): the seats without which the
+#: review cannot work — `conformance`, which holds the veto, and `defect`, whose question (a concrete
+#: input and the wrong result) is the standard every finding is now held to. They are the first two
+#: of the opening order, so `seat_names(SEAT_DEFAULT)` is them. Everything else, `risk` included,
+#: opens only when the user asks for it through `review_seats` or `review_dimensions`.
+SEAT_DEFAULT = 2
+
+#: The fewest seats that can meet the floor at all: with an independent auditor beside them, one
+#: fewer than the floor. The settings file cannot see how the auditor is routed, so this is the
+#: floor it can judge on its own — one seat is below it whatever the auditor is.
+SEAT_LEAST = SEAT_FLOOR - 1
+
+
+def floor_met(seats: int, auditor_independent: Optional[bool]) -> bool:
+    """Do these seats, plus the auditor where it is independent, make the floor?
+
+    ``auditor_independent`` is ``True`` only when the auditor's backend differs from the builder's
+    and from every open seat's. ``None`` — the caller has not said — counts as ``False``: an auditor
+    nobody has shown to be a different backend is the same model reading again, which is not a
+    third view (CHG-20261028-01, step 2: *the floor is unmet, not silently met*).
+    """
+    return seats + (1 if auditor_independent else 0) >= SEAT_FLOOR
 
 
 def role(name: str) -> Role:
@@ -1218,11 +1248,13 @@ def seat_names(count: int) -> List[str]:
     return [s.name for s in PREFIX_SEATS[:count]]
 
 
-def resolve_dimensions(names: Sequence[str], high_risk_mode: bool) -> List[str]:
+def resolve_dimensions(names: Sequence[str], high_risk_mode: bool,
+                       auditor_independent: Optional[bool] = None) -> List[str]:
     """The seats a user *named*, in the order they named them, under the same floor as a count.
 
     `review_dimensions` replaces the `review_seats` prefix, so it is held to the rule the prefix is:
-    fewer than `SEAT_FLOOR` needs high-risk mode, with `resolve_seats`' message. Unknown names and
+    a list that does not meet `SEAT_FLOOR` (`floor_met`: the names, plus the auditor where it is
+    independent) needs high-risk mode, with `resolve_seats`' message. Unknown names and
     duplicates are refused rather than dropped — a seat that silently did not open is a panel that
     reads smaller than it was configured to be.
 
@@ -1241,11 +1273,8 @@ def resolve_dimensions(names: Sequence[str], high_risk_mode: bool) -> List[str]:
         raise PolicyError(f"seat(s) {repeated} named more than once; a seat opens once")
     if not chosen:
         raise PolicyError("a review needs at least one seat")
-    if len(chosen) < SEAT_FLOOR and not high_risk_mode:
-        raise PolicyError(
-            f"{len(chosen)} seat(s) is below the floor of {SEAT_FLOOR}. Enable high-risk mode to go "
-            f"below it — one reviewer is the single point of view the panel exists to avoid, so "
-            f"this runner does not lower the floor by itself.")
+    if not floor_met(len(chosen), auditor_independent) and not high_risk_mode:
+        raise PolicyError(_below_floor_message(len(chosen), auditor_independent))
     missing = vetoes_missing(chosen)
     if missing and not high_risk_mode:
         raise PolicyError(
@@ -1261,7 +1290,35 @@ def vetoes_missing(chosen: Sequence[str]) -> List[str]:
     return [s.name for s in SEATS if s.veto and s.name not in chosen]
 
 
-def resolve_seats(requested: Optional[int], high_risk_mode: bool) -> int:
+def default_seats(auditor_independent: Optional[bool], high_risk_mode: bool) -> int:
+    """How many seats a run opens when nobody asked for a count, so that the floor holds.
+
+    `SEAT_DEFAULT` when the auditor makes it a floor-sized panel, or when high-risk mode is on (the
+    run then records that it is below the floor). Otherwise `SEAT_FLOOR`: an auditor that is not on
+    a different backend is the same model reading again, which is not a third view, and the third
+    view has to be a seat (CHG-20261028-01, step 2). Chosen over refusing a run nobody configured —
+    the user is told which it is (`cli`), and can route the auditor instead.
+    """
+    if floor_met(SEAT_DEFAULT, auditor_independent) or high_risk_mode:
+        return SEAT_DEFAULT
+    return SEAT_FLOOR
+
+
+def _below_floor_message(seats: int, auditor_independent: Optional[bool]) -> str:
+    """The refusal for a panel under the floor. One sentence in two places, so they cannot drift."""
+    if auditor_independent:
+        counted = f"{seats} seat(s) and an independent auditor make {seats + 1}"
+    else:
+        counted = (f"{seats} seat(s), and an auditor that is not on a different backend from the "
+                   f"builder and every seat does not count as a view")
+    return (f"{seats} seat(s) is below the floor of {SEAT_FLOOR} ({counted}). Enable high-risk "
+            f"mode to go below it, open another seat, or route the auditor to a different backend "
+            f"— one reviewer is the single point of view the panel exists to avoid, so this "
+            f"runner does not lower the floor by itself.")
+
+
+def resolve_seats(requested: Optional[int], high_risk_mode: bool,
+                  auditor_independent: Optional[bool] = None) -> int:
     """How many seats a run opens, refusing to go below the floor on its own authority.
 
     **At one seat the panel can no longer return `undecided`, and nothing said so**
@@ -1284,12 +1341,12 @@ def resolve_seats(requested: Optional[int], high_risk_mode: bool) -> int:
     and the thing that lifts it are two lines of one file edited by one hand.
     """
     if requested is None:
-        return SEAT_FLOOR
-    if requested < SEAT_FLOOR and not high_risk_mode:
-        raise PolicyError(
-            f"{requested} seat(s) is below the floor of {SEAT_FLOOR}. Enable high-risk mode to go "
-            f"below it — one reviewer is the single point of view the panel exists to avoid, so "
-            f"this runner does not lower the floor by itself.")
+        # `SEAT_DEFAULT`, and not a floor check: nobody asked for this count, so there is no request
+        # to refuse. Whether the auditor makes the default panel a floor-sized one is the caller's
+        # to see — `cli.cmd_run` sizes the panel up when it is not (CHG-20261028-01).
+        return SEAT_DEFAULT
+    if not floor_met(requested, auditor_independent) and not high_risk_mode:
+        raise PolicyError(_below_floor_message(requested, auditor_independent))
     seat_names(requested)        # raises if the count is not one this runner can actually open
     return requested
 

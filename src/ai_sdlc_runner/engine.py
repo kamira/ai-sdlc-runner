@@ -693,6 +693,14 @@ class RunConfig:
     #: The change's autonomy override. Tighten-only; `policy.verdict` enforces that.
     autonomy: Optional[str] = None
     review_seats: Optional[int] = None
+    #: Whether the auditor's backend differs from the builder's and from every open seat's, as the
+    #: caller's routing says it does (CHG-20261028-01). It decides whether the auditor counts toward
+    #: `policy.SEAT_FLOOR`. `None` — the caller has not said, which is every library caller — counts
+    #: as not independent, so an explicit seat count under the floor is refused exactly as it was;
+    #: an implicit one is the default panel and is not judged here (`policy.resolve_seats`). What the
+    #: sessions actually were is recorded separately, at the audit, from what they describe
+    #: themselves as (`RunReport.audit_same_backend`).
+    auditor_independent: Optional[bool] = None
     #: The seats the user named, in opening order (CHG-20261005-02). When set it replaces the
     #: `review_seats` prefix, which is then ignored; `None` is today's behaviour exactly.
     review_dimensions: Optional[Tuple[str, ...]] = None
@@ -3018,13 +3026,26 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
 
     if cfg.review_dimensions is not None:
         # The user named the seats, so the count is theirs and `review_seats` is not read at all.
-        seat_list = policy.resolve_dimensions(cfg.review_dimensions, cfg.high_risk_mode)
+        seat_list = policy.resolve_dimensions(cfg.review_dimensions, cfg.high_risk_mode,
+                                              cfg.auditor_independent)
         seats = len(seat_list)
-        below_floor = seats < policy.SEAT_FLOOR
+        below_floor = not policy.floor_met(seats, cfg.auditor_independent)
     else:
-        seats = policy.resolve_seats(cfg.review_seats, cfg.high_risk_mode)
+        if cfg.review_seats is None and cfg.auditor_independent is False:
+            # The caller has said the auditor does not count, so the default panel is below the
+            # floor. Refused unless high-risk mode is on, as the same two seats asked for by count
+            # would be (CHG-20261028-01). The CLI sizes the panel up before it gets here.
+            policy.resolve_seats(policy.SEAT_DEFAULT, cfg.high_risk_mode, False)
+        seats = policy.resolve_seats(cfg.review_seats, cfg.high_risk_mode, cfg.auditor_independent)
         seat_list = policy.seat_names(seats)
-        below_floor = cfg.review_seats is not None and cfg.review_seats < policy.SEAT_FLOOR
+        # An implicit count is the default panel and was nobody's request (CHG-20261028-01): it is
+        # below the floor only when the caller has said the auditor does not count, and then the
+        # run says so under high-risk mode rather than refusing a panel nobody configured.
+        counted = cfg.review_seats
+        if counted is None and cfg.auditor_independent is False:
+            counted = policy.SEAT_DEFAULT
+        below_floor = (counted is not None
+                       and not policy.floor_met(counted, cfg.auditor_independent))
     if below_floor:
         # **What the pair does, not what the seat count does** (CHG-20260904-18, risk seat).
         # `resolve_seats`' docstring records that `undecided` becomes unreachable at one seat.
@@ -3037,9 +3058,13 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
         # The seats not opened are not seats that abstained; they are seats that never voted, and
         # the panel reads their absence as agreement.
         which = ", ".join(seat_list)
+        # Counted against what the floor asks of the seats once the auditor is credited where it is
+        # independent (CHG-20261028-01), so the sentence is not "1 not opened" about a panel the
+        # auditor has already made up.
+        short = policy.SEAT_FLOOR - seats - (1 if cfg.auditor_independent else 0)
         note = (f"high-risk mode: review opened with {seats} seat(s) ({which}), below the floor "
                 f"of {policy.SEAT_FLOOR}. A panel of {seats} reads a verdict from the seats it "
-                f"opened, so the {policy.SEAT_FLOOR - seats} not opened cannot dissent")
+                f"opened, so the {short} not opened cannot dissent")
         report.relaxations.append(note)
         if cfg.seats_from:
             report.relaxation_authorisers[note] = cfg.seats_from
