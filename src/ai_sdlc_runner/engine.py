@@ -36,7 +36,7 @@ import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from . import auditscope
 from . import conversations as conversations_mod
@@ -519,6 +519,10 @@ class RunReport:
     #: each other's context either way; they are not independent of one model's blind spots, and
     #: that is most of what a panel is for.
     single_model_panels: List[str] = field(default_factory=list)
+    #: Said out loud when the auditor ran on the same backend as the builder or as a seat
+    #: (CHG-20261028-01, task 6). Judged from what the sessions reported about themselves, as
+    #: `single_model_panels` is. Empty when it was independent, or when it did not run.
+    audit_same_backend: List[str] = field(default_factory=list)
     #: Which models answered which seat, per node: `{node_id: {seat: [model, ...]}}`
     #: (CHG-20261005-02). A seat nobody routed is answered by `DEFAULT_BACKEND`. The disclosure that
     #: the panel was cross-model is this and `single_model_panels` together.
@@ -654,6 +658,7 @@ class RunReport:
             "confirmations": list(self.confirmations),
             "adjudications": [dict(a) for a in self.adjudications],
             "single_model_panels": list(self.single_model_panels),
+            "audit_same_backend": list(self.audit_same_backend),
             "seat_models": {n: {s: list(m) for s, m in seats.items()}
                             for n, seats in self.seat_models.items()},
             "seat_briefs": [dict(b) for b in self.seat_briefs],
@@ -1522,7 +1527,8 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
          identity: Optional[Mapping[str, object]] = None,
          brief: Optional[Mapping[str, object]] = None,
          briefs: Optional[List[Dict[str, object]]] = None,
-         brief_store: Optional[BriefStore] = None):
+         brief_store: Optional[BriefStore] = None,
+         ran: Optional[Dict[str, Set[str]]] = None):
     """Open a session, ask once, close it — the close guaranteed even if the ask raises.
 
     ``seen`` holds the session **objects**, not their ``id()``: an id is not an identity once the
@@ -1666,6 +1672,13 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
         # record that cannot name the answerer has kept the votes and thrown away the thing being
         # voted on, which is the finding this whole field exists for, one level down.
         backend = _describe(session)
+        if ran is not None:
+            # What each kind of answerer says it is, for `audit_same_backend` (CHG-20261028-01,
+            # task 6). Kept by what the session reports about itself, not by what was configured.
+            who = ("auditor" if role == "auditor" else "builder" if node_id == "engineer_build"
+                   else "seat" if seat is not None else "")
+            if who:
+                ran.setdefault(who, set()).add(backend or type(session).__name__)
         # **Beside the answer, never in it.** Read after the ask returned, from a session that says
         # it has usage; nothing below reads it back, so it cannot touch the answer or the route.
         record = getattr(session, "usage", None)
@@ -2777,6 +2790,24 @@ def _note_panel_diversity(node: graph.Node, report: "RunReport", opened_for_pane
             f"{remedy}")
 
 
+def _note_audit_backend(report: "RunReport", ran: Mapping[str, Set[str]]) -> None:
+    """Record when the auditor was answered by the same backend as the builder or a seat.
+
+    Stated, not refused: the floor already took the routing's word (`RunConfig.auditor_independent`)
+    and this is what the sessions then said they were. A disagreement between the two is the point
+    of recording it. Written once per review lap, replacing the last lap's line.
+    """
+    auditor = ran.get("auditor") or set()
+    report.audit_same_backend = []
+    for other, name in (("builder", "the builder"), ("seat", "a review seat")):
+        shared = sorted(auditor & (ran.get(other) or set()))
+        if shared:
+            report.audit_same_backend.append(
+                f"the auditor ran on the same backend as {name} ({shared[0]}). It read the change "
+                f"in its own session, but through the same model, so it shares what that model "
+                f"cannot see. Use --audit-model COMMAND to audit on a different one.")
+
+
 def _adjudicate(node: graph.Node, report: "RunReport", seats: int,
                 carry: bool = True) -> Tuple[str, Optional[Dict[str, object]]]:
     """The branch the seats' verdicts reach, and the rework to carry, through `policy.adjudicate`.
@@ -3270,6 +3301,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
     policy.check_dispatch_depth(graph.dispatch_edges(), graph.roles_asked_directly())
     factory = _as_factory(dispatch)
     opened: List[object] = []
+    ran_on: Dict[str, Set[str]] = {}
     taken: Dict[str, int] = {}
     report = RunReport() if cfg.usage is None else RunReport(usage=cfg.usage)
     # The class in force, settled once and recorded (CHG-20260827-20 tasks 3 and 4). Once per run
@@ -3751,7 +3783,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                                   opened, journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                                   answered=already, model=model, asked_before=asked_before,
                                   conversation=cfg.conversation, role=node.role, resumed=report.resumed,
-                                  usage=report.usage,
+                                  usage=report.usage, ran=ran_on,
                                   workspace=_workspace(node, build_cycles),
                                   heard=lambda a, _n=node: _heard(_n, MODELS, a))
                     report.asks.append(Ask(node.id, node.role, None, result, model=model))
@@ -3833,7 +3865,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                                       node_id=node.id, answered=already, model=model,
                                       asked_before=asked_before,
                                       conversation=cfg.conversation, role=node.role, resumed=report.resumed,
-                                      usage=report.usage,
+                                      usage=report.usage, ran=ran_on,
                                   workspace=_workspace(node, build_cycles),
                                   heard=lambda a, _n=node: _heard(_n, MODELS, a))
                         report.asks.append(Ask(node.id, node.role, None, result, model=model))
@@ -3909,7 +3941,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                             journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                             answered=already, asked_before=asked_before,
                             conversation=cfg.conversation, role=node.role, resumed=report.resumed,
-                            usage=report.usage,
+                            usage=report.usage, ran=ran_on,
                                       workspace=_workspace(node, build_cycles),
                                       heard=lambda a, _n=node: _heard(_n, SURVEY, a),
                                       position=position, voice=label,
@@ -3976,7 +4008,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                             opened, journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                             answered=already, asked_before=asked_before,
                             conversation=cfg.conversation, role=node.role, resumed=report.resumed,
-                            usage=report.usage,
+                            usage=report.usage, ran=ran_on,
                                   workspace=_workspace(node, build_cycles),
                             accept=lambda a, _for=aspect: intake_mod.read_options(a, _for))
                         report.asks.append(Ask(node.id, node.role, None, answer))
@@ -4036,7 +4068,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                             asked_before=asked_before,
                             accept=lambda a, _source=source: _read_findings(a, _source),
                             conversation=cfg.conversation, role=node.role, resumed=report.resumed,
-                            usage=report.usage,
+                            usage=report.usage, ran=ran_on,
                                       workspace=_workspace(node, build_cycles),
                                       heard=lambda a, _n=node: _heard(_n, SEATS, a),
                                       position=position, voice=label,
@@ -4093,7 +4125,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                     ask_id=ask_id, node_id=node.id, answered=already, model=model,
                     asked_before=asked_before,
                     conversation=cfg.conversation, role=node.role, resumed=report.resumed,
-                    usage=report.usage,
+                    usage=report.usage, ran=ran_on,
                                   workspace=_workspace(node, build_cycles),
                                   heard=lambda a, _n=node: _heard(_n, ONE, a),
                                   accept=_accept_for(node, cfg, report),
@@ -4190,6 +4222,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                 # consults instead of looking.
                 choice = node.panel_branches.get(panel_outcome, panel_outcome)
             elif node.audit == graph.AUDIT_DECIDE:
+                _note_audit_backend(report, ran_on)
                 choice, rework = _decide_review(node, report, review)
                 if rework is not None and rework.get("findings"):
                     rework["findings_file"] = _write_confirmed(audit_space, review, rework)

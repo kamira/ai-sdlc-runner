@@ -400,8 +400,11 @@ def auditor_independent(config: dict, registry: Optional["models_mod.Registry"],
 def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = None,
                     registry: Optional["models_mod.Registry"] = None,
                     risk: str = "high", require_sandbox: bool = False,
-                    trees: Optional["worktree.Trees"] = None):
+                    trees: Optional["worktree.Trees"] = None, audit_model: Optional[str] = None):
     """Build the factory the engine opens a session from, routing by seat or by model.
+
+    ``audit_model`` routes the `auditor` role (CHG-20261028-01): a registry model id or a command.
+    It is read here and nowhere in the engine, so it cannot reach a work order.
 
     Three ways to name a backend, and they are tried most-specific first: the **model** a node's mode
     picked, then the **seat**, then the default. Routing lives here and never in the work order —
@@ -554,6 +557,20 @@ def session_factory(config: dict, seat_models: Optional[Dict[str, List[str]]] = 
         # that predates a seat having several.
         entries = seat_models.get(seat) or []
         entry = entries[position or 0] if (position or 0) < len(entries) else None
+        if role == "auditor" and audit_model:
+            # The auditor is routed by the audit flag and by nothing else: it is never a seat and a
+            # node's model list does not name it. A string that is a registry id runs that model;
+            # any other string is a command, as `--seat-model`'s is.
+            entries = [audit_model]
+            entry = audit_model if isinstance(audit_model, str) else list(audit_model)
+            if isinstance(entry, str) and registry is not None:
+                try:
+                    registry.get(entry)
+                    model = entry
+                except models_mod.ModelError:
+                    entry = entry.split()
+            elif isinstance(entry, str):
+                entry = entry.split()
         argv = None
         #: Did `effort` reach the argv? Only a registry model with an `effort_argv` can say yes.
         effort_applied = False
@@ -1578,7 +1595,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"error: no seat {seat!r}; this runner defines {sorted(policy.BY_SEAT)}")
             return 2
         seat_models[seat] = command.split()         # the legacy form: one argv
-    audit_entry = None
+    # The auditor's backend: the flag over the plan, and nowhere else (CHG-20261028-01, task 6).
+    audit_entry = (getattr(args, "audit_model", None) or plan.get("audit_model") or "").strip() or None
 
     def _independent() -> bool:
         """Is the auditor, as routed, a different backend from the builder and the seats now open?"""
@@ -1739,7 +1757,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         factory = session_factory(config, seat_models, registry=config_registry,
                                   risk=cfg.risk,
                                   require_sandbox=bool(getattr(args, "sandbox", False)),
-                                  trees=trees)
+                                  trees=trees, audit_model=audit_entry)
         report = engine.walk(cfg, factory, enabled=True)
     # `IntakeError` belongs here and was missing (CHG-20260901-17, defect seat). It is raised from
     # `intake.collect` when a seat names an aspect this runner does not define — a requirement
@@ -1874,6 +1892,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"confirmed:     {line}")
     for line in report.single_model_panels:
         print(f"single model:  {line}")
+    for line in report.audit_same_backend:
+        print(f"audit backend: {line}")
     # What the auditor read and what the cap cut (CHG-20261028-01): printed beside the review's
     # outcome so an audit that passed over code it never saw does not read as a full one.
     for line in auditscope.summary(report.audit_scope):
@@ -2162,6 +2182,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     except plan_mod.PlanError as exc:
         print(f"error: {exc}")
         return 2
+    serve_audit = str(plan.get("audit_model") or "").strip() or None   # the plan only: `serve` has no flag
     try:
         saved = settings_mod.load(args.settings)
     except settings_mod.SettingsError as exc:
@@ -2254,7 +2275,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
                 names = (list(live.review_dimensions) if live.review_dimensions is not None
                          else policy.seat_names(count))
                 return auditor_independent(
-                    config, store_mod.load_registry(db) or registry, audit_entry=None,
+                    config, store_mod.load_registry(db) or registry, audit_entry=serve_audit,
                     seat_models=current_seat_models, open_seats=names, node_models=coder[0])
             live_independent = _live_independent(live_seats or policy.SEAT_DEFAULT)
             if live_seats is None and live.review_dimensions is None:
@@ -2471,7 +2492,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         return session_factory(config, seats_now,
                                risk=args.risk or plan.get("risk", "high"),
                                require_sandbox=bool(getattr(args, "sandbox", False)),
-                               registry=live)
+                               registry=live, audit_model=serve_audit)
     operator = server.Operator.mint(Path(args.token_dir))
     runner = server.Runner(walk=lambda cfg: engine.walk(cfg, build_factory(), enabled=True),
                            make_config=make_config, store=store)
@@ -2622,6 +2643,11 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--seat-model", action="append", default=None, metavar="SEAT=COMMAND",
                     help="route one review seat to a different command; repeatable. The same "
                          "question, different answerers — which is what cross-model review means.")
+    pr.add_argument("--audit-model", default=None, metavar="COMMAND", dest="audit_model",
+                    help="route the auditor to a registry model id or a command (the plan's "
+                         "`audit_model` does the same). The auditor counts toward the floor of "
+                         f"{policy.SEAT_FLOOR} only where it runs on a different backend from the "
+                         "builder and every open seat")
     pr.add_argument("--high-risk-mode", action="store_true",
                     help="allow fewer seats than the floor; the run records that it did")
     pr.add_argument("--rule", action="append", default=None, metavar="NODE=BRANCH",

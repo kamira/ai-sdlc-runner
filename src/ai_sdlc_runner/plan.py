@@ -64,6 +64,7 @@ FIELDS: Tuple[str, ...] = (
     "node_models",   # {node id: [model id]}
     "seat_models",   # {seat: model id, or a list of them}
     "ship",          # the side effects — see SHIP_FIELDS
+    "audit_model",   # the auditor's backend: a registry model id, or a command (CHG-20261028-01)
     "workstreams",   # {name: grade} — CHG-20260827-18; the run's own `risk` still applies to
                      # anything outside them, at the strictest of them
     "node_workstream",  # {node id: workstream name}
@@ -122,6 +123,13 @@ def check(payload: Mapping[str, object], where: str = "the plan") -> Dict[str, o
             f"setting look configured and do nothing — and the case that decides it is `ship`: a "
             f"misspelt one makes a run perform no side effects and report `finished`. "
             f"This runner reads {list(FIELDS)}.")
+
+    audit = payload.get("audit_model")
+    if audit is not None and not (isinstance(audit, str) and audit.strip()):
+        raise PlanError(
+            f"{where} has 'audit_model' as {audit!r}; it names the auditor's backend as a model id "
+            f"or a command, in one non-empty string. Anything else would read as configured and "
+            f"leave the auditor on the default backend.")
 
     for key in _MAPPINGS:
         value = payload.get(key)
