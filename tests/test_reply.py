@@ -159,7 +159,8 @@ def test_a_survey_seat_is_asked_for_findings_and_a_review_seat_for_a_verdict():
     _walk(agent)
     assert agent.schemas("intake_review", seat=True)[0]["required"] == ["missing", "problems",
                                                                          "unsafe"]
-    assert agent.schemas("lead_review", seat=True)[0]["required"] == ["verdict"]
+    # CHG-20261028-01: a review seat also says what it found, and says `[]` when nothing.
+    assert agent.schemas("lead_review", seat=True)[0]["required"] == ["findings", "verdict"]
 
 
 def test_an_ask_the_run_reads_nothing_from_says_so():
@@ -213,7 +214,9 @@ def test_the_seats_of_one_node_share_their_reply():
      "'string' or 'array'"),
     ({**NOTHING_READ, "properties": {"x": {"type": "string", "enum": [], "description": "d"}}},
      "must list its words"),
-    ({**NOTHING_READ, "properties": {"x": {"type": "array", "items": {"type": "object"},
+    # An array of numbers. This row used `{"type": "object"}` until CHG-20261028-01 made a closed
+    # object a legal item; a bare object still is not (see test_findings.py).
+    ({**NOTHING_READ, "properties": {"x": {"type": "array", "items": {"type": "number"},
                                            "description": "d"}}}, "`items` must be"),
     ({**NOTHING_READ, "properties": {"x": {"type": "string", "format": "email",
                                            "description": "d"}}}, "outside"),

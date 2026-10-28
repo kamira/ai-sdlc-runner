@@ -2571,6 +2571,9 @@ NOT_ON_THE_CONSOLE = {
                              "a reader would need to check it, is four lines above in this same "
                              "inventory",
     "single_model_panels": "panels that ran on one voice because that is all there was",
+    # CHG-20261028-01. What the whole-change review found, and what became of it.
+    "findings": "every finding the review raised, with where it is, its trigger and its lap; "
+                "reaches the report and the run record, not the console yet",
     # trust and the store
     "on_trust": "targets accepted because the operator vouched for the command",
     "store_errors": "writes to the conversation store that failed",

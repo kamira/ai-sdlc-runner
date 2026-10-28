@@ -1530,3 +1530,114 @@ def adjudicate(verdicts: Mapping[str, str], *, voices: str = "seats") -> Dict[st
     return {"outcome": FAIL,
             "reason": f"only {passes}/{len(verdicts)} seats passed",
             "vetoed": []}
+
+
+# --------------------------------------------------------------------------------------------
+# Findings (CHG-20261028-01)
+#
+# A seat reports what it found as well as its verdict, and the auditor reports what it found on
+# its own reading. `adjudicate` above still counts the seats' verdicts; findings are the other half
+# of what a seat says, and they are not votes. These are the words they are written in and the one
+# function that reads them.
+# --------------------------------------------------------------------------------------------
+
+#: How much a finding matters. `important` is the only value that can fail a change; a `nit` is kept
+#: and never sent to the rework (CHG-20261028-01, 5.5).
+SEVERITIES = ("important", "nit")
+
+#: Whose doing it is: `introduced` by this change, or `pre-existing` and merely noticed.
+ORIGINS = ("introduced", "pre-existing")
+
+#: The keys of one finding as a model writes it. `file` and `line` are required and non-blank
+#: (Q2): a finding with no location cannot be passed on and cannot be disposed. `trigger` is the
+#: concrete input and the wrong result it produces; it is a key every finding carries, and it may be
+#: empty — but then the finding cannot be `important`.
+FINDING_FIELDS = ("id", "file", "line", "claim", "trigger", "severity", "origin")
+
+
+def _text(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _line_number(value: object) -> Optional[int]:
+    """A line as a positive integer, from an int or from digits. A bool is not a number here."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 1 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        number = int(value.strip())
+        return number if number >= 1 else None
+    return None
+
+
+def read_findings(raw: object, *, source: str) -> List[Dict[str, object]]:
+    """The findings one answer carries, validated and attributed to ``source``.
+
+    ``raw`` is the answer's ``findings`` value. **Absent is no findings** (`None`); anything else
+    that is not a list is refused, and so is any entry that is not a closed object with every key in
+    `FINDING_FIELDS`, a non-blank ``file``, ``claim`` and local ``id``, a ``line`` that is a
+    positive integer, and a ``severity`` and ``origin`` from their vocabularies. A finding with no
+    location is refused at parse time rather than carried (CHG-20261028-01 Q2).
+
+    **A finding with no ``trigger`` can never be `important`.** It is kept and reported — the spec
+    says it "may still be reported" — as a `nit`, with what the seat said recorded in
+    ``severity_said`` so the demotion is visible rather than silent. Chosen over refusing the
+    answer: refusing would stop the run over a seat's wording and would lose the finding, and the
+    spec's sentence is about what the finding can *be*, not about whether it can be said.
+
+    Ids are the seat's own, unique within one answer; the id the rest of the run uses is
+    ``"<source>:<id>"``, so two seats that both number their findings from `F1` do not collide.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, (list, tuple)):
+        raise PolicyError(
+            f"{source}: `findings` is {type(raw).__name__}, not a list of findings. Say [] when "
+            f"there is nothing to report")
+    found: List[Dict[str, object]] = []
+    seen: List[str] = []
+    for position, item in enumerate(raw, start=1):
+        where = f"{source}: finding {position}"
+        if not isinstance(item, Mapping):
+            raise PolicyError(f"{where} is {type(item).__name__}, not an object with "
+                              f"{list(FINDING_FIELDS)}")
+        missing = [k for k in FINDING_FIELDS if k not in item]
+        extra = sorted(k for k in item if k not in FINDING_FIELDS)
+        if missing or extra:
+            raise PolicyError(
+                f"{where} must carry exactly {list(FINDING_FIELDS)}"
+                + (f"; missing {missing}" if missing else "")
+                + (f"; not part of a finding: {extra}" if extra else ""))
+        local = _text(item["id"])
+        if not local:
+            raise PolicyError(f"{where} has a blank `id`")
+        where = f"{source}: finding {local!r}"
+        if local in seen:
+            raise PolicyError(f"{where} appears twice in one answer; a finding's id is its own")
+        seen.append(local)
+        for key in ("file", "claim"):
+            if not _text(item[key]):
+                raise PolicyError(f"{where} has a blank `{key}`"
+                                  + (" — a finding with no location cannot be passed on or "
+                                     "disposed" if key == "file" else ""))
+        number = _line_number(item["line"])
+        if number is None:
+            raise PolicyError(f"{where} has `line` {item['line']!r}, which is not a line number "
+                              f"(a positive integer). A finding with no location is refused")
+        severity, origin = item["severity"], item["origin"]
+        if severity not in SEVERITIES:
+            raise PolicyError(f"{where} has `severity` {severity!r}; it is one of "
+                              f"{list(SEVERITIES)}")
+        if origin not in ORIGINS:
+            raise PolicyError(f"{where} has `origin` {origin!r}; it is one of {list(ORIGINS)}")
+        finding: Dict[str, object] = {
+            "id": f"{source}:{local}", "local_id": local, "source": source,
+            "file": _text(item["file"]), "line": number, "claim": _text(item["claim"]),
+            "trigger": _text(item["trigger"]), "severity": severity, "origin": origin}
+        if severity == "important" and not finding["trigger"]:
+            # Never important without a trigger (CHG-20261028-01, 1). The seat's word is kept.
+            finding["severity"] = "nit"
+            finding["severity_said"] = "important"
+        found.append(finding)
+    return found

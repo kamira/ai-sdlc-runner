@@ -623,6 +623,11 @@ class RunReport:
     #: different question — "which branch" rather than "may this pass a gate" — and merging them
     #: would make the audit trail say a gate was confirmed when nobody confirmed anything.
     rulings: List[str] = field(default_factory=list)
+    #: Every finding the whole-change review raised, one entry per finding per lap
+    #: (CHG-20261028-01): the seat or the auditor that raised it, where, the claim and its trigger,
+    #: severity and origin, and the lap it belongs to. A finding with no trigger is recorded as the
+    #: `nit` it can be, with `severity_said` keeping the word the voice used.
+    findings: List[Dict[str, object]] = field(default_factory=list)
 
     def as_dict(self) -> Dict[str, object]:
         return {
@@ -673,6 +678,7 @@ class RunReport:
             "halts": [dict(h) for h in self.halts],
             "class_authorised_by": self.class_authorised_by,
             "relaxation_authorisers": dict(self.relaxation_authorisers),
+            "findings": [dict(f) for f in self.findings],
         }
 
 
@@ -1075,6 +1081,35 @@ WHY = {"type": "string",
                       "nothing on it"}
 
 
+def _finding_item() -> Dict[str, object]:
+    """The `items` of an array of findings: `policy.FINDING_FIELDS`, every one required.
+
+    `line` is a string here because a reply schema has no number type (`workorder.FIELD_KEYS`);
+    `policy.read_findings` reads digits as the integer they are.
+    """
+    fields: Dict[str, Dict[str, object]] = {name: {"type": "string"}
+                                            for name in policy.FINDING_FIELDS}
+    fields["severity"] = {"type": "string", "enum": list(policy.SEVERITIES)}
+    fields["origin"] = {"type": "string", "enum": list(policy.ORIGINS)}
+    return {"type": "object", "properties": fields,
+            "required": list(policy.FINDING_FIELDS), "additionalProperties": False}
+
+
+#: What a seat, and the auditor reading blind, say they found (CHG-20261028-01). The words of
+#: `severity` and `origin` and the keys are `policy`'s, so the order cannot promise a word
+#: `policy.read_findings` refuses. The description carries the rules the reader enforces.
+FINDINGS_PROPERTY = {
+    "type": "array", "items": _finding_item(),
+    "description": "what you found, one object per finding; [] when there is nothing. `id`: your "
+                   "own label, unique within this answer. `file` and `line`: where the problem "
+                   "is — a finding with no location is refused. `claim`: what is wrong. "
+                   "`trigger`: the concrete input and the wrong result it produces; a finding "
+                   "without one is recorded as a `nit` and can never be `important`. `severity`: "
+                   "`important` or `nit`. `origin`: `introduced` when this change caused it, "
+                   "`pre-existing` when it was already there. Your `verdict` is still your own; "
+                   "findings are what you saw, not votes"}
+
+
 def _answer_schema(node: graph.Node, cfg: "RunConfig", voices: str) -> Dict[str, object]:
     """The schema of the answer this ask's reader will act on — the order's `reply.schema`.
 
@@ -1135,6 +1170,10 @@ def _answer_schema(node: graph.Node, cfg: "RunConfig", voices: str) -> Dict[str,
             said += f", and from the `{vetoes[0]}` seat, which holds a veto, it is a veto"
         properties = {"verdict": {"type": "string", "enum": list(policy.VERDICTS),
                                   "description": said}}
+        if voices == SEATS:
+            # A seat says what it found as well as how it votes (CHG-20261028-01). The verdict is
+            # still counted by `policy.adjudicate`; the findings are read by `policy.read_findings`.
+            properties["findings"] = dict(FINDINGS_PROPERTY)
     elif node.answer_decides:
         properties = {"verdict": {"type": "string", "enum": sorted(node.branches),
                                   "description": "the branch you choose"}}
@@ -2573,6 +2612,21 @@ def _record_seat_model(report: "RunReport", node: graph.Node, seat: str,
     report.seat_models.setdefault(node.id, {}).setdefault(seat, []).append(label or DEFAULT_BACKEND)
 
 
+def _read_findings(result: object, source: str) -> List[Dict[str, object]]:
+    """The findings an answer carries, through `policy.read_findings` (CHG-20261028-01).
+
+    An answer that is not an object says nothing about findings here; the reader of its verdict
+    refuses it by name. A refusal from `policy.read_findings` is the run's: a finding with no
+    location, or one that names a severity nobody wrote down, is not carried and not dropped.
+    """
+    if not isinstance(result, Mapping):
+        return []
+    try:
+        return policy.read_findings(result.get("findings"), source=source)
+    except policy.PolicyError as exc:
+        raise EngineError(str(exc)) from exc
+
+
 def _seat_verdict(spoken: Sequence[str]) -> str:
     """One seat's word from its models' words: every one passes, or the seat does not.
 
@@ -2919,6 +2973,20 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
         raise
 
 
+@dataclass
+class _ReviewLap:
+    """What one pass through the whole-change review has gathered so far (CHG-20261028-01).
+
+    Local to a walk and rebuilt by it: a resumed run re-walks the review and every answer comes
+    back from the journal, so nothing here needs to outlive the walk. Reset each time `lead_review`
+    is entered, because a change sent back and reviewed again is judged on this lap's findings and
+    not on every lap's — the rule `_adjudicate` already applies to the seats' verdicts.
+    """
+
+    n: int = 0
+    findings: List[Dict[str, object]] = field(default_factory=list)
+
+
 def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunReport:
     """The walk itself. `walk` is the wrapper that closes the record when this does not."""
     if cfg.conversation is not None:
@@ -3134,6 +3202,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
             ("a refusal", unspent_rejections)) if entries}
 
     node_id: Optional[str] = "intake"
+    review = _ReviewLap()
     #: How many modules have started building (CHG-20260827-21). Counted on `engineer_build`
     #: because that is where a module's work begins; `fix_pass` re-asks the engineer about the
     #: **same** module and must land in the same tree, so it must not increment.
@@ -3655,11 +3724,15 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
             elif node.mode == graph.SEAT_PANEL:
                 panel_sessions: List[object] = []
                 before = len(opened)
+                review = _ReviewLap(n=review.n + 1)
                 for seat in seat_list:
                     # One session per (seat, model), each its own ask and journal entry (KN-7).
                     voices = _seat_voices(factory, seat)
                     for position, label in voices:
                         brief = seatspec.brief_for(specs_loaded, seat, label)
+                        # Who raised a finding: the seat, and the model where a seat has several,
+                        # so two sessions of one seat do not share an id (CHG-20261028-01).
+                        source = _survey_key(seat, voices, position, label)
                         result = _ask(
                             factory, _order_for(node, cfg, verdict, seat, sent_back=came_back,
                                                 voices=SEATS, brief=brief),
@@ -3667,6 +3740,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                             journal=cfg.journal, node_id=node.id, answered=already,
                             ask_id=_seat_ask_id(report, node, seat, position, len(voices)),
                             asked_before=asked_before,
+                            accept=lambda a, _source=source: _read_findings(a, _source),
                             conversation=cfg.conversation, role=node.role, resumed=report.resumed,
                             usage=report.usage,
                                       workspace=_workspace(node, build_cycles),
@@ -3679,6 +3753,10 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                                                model=label, position=position))
                         _record_seat_model(report, node, seat, label)
                         answers.append(result)
+                        for found in _read_findings(result, source):
+                            found["lap"] = review.n
+                            review.findings.append(found)
+                            report.findings.append(found)
                 panel_sessions = opened[before:]
                 _note_panel_diversity(node, report, panel_sessions)
             else:

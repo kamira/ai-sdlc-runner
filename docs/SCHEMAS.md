@@ -159,7 +159,9 @@ and `unattended` are two fixed sentences (`workorder.REPLY_FORMAT`, `workorder.R
 `schema` is the answer's **JSON Schema, in a closed subset**: exactly `type: "object"`,
 `properties`, `required` and `additionalProperties: false`; each property is `type: "string"`
 (with an optional `enum`) or `type: "array"` of strings (with optional `enum` items, `minItems`
-and `uniqueItems: true`), and always has a `description`. Every schema offers `why` (text), which
+and `uniqueItems: true`) **or of closed objects** (CHG-20261028-01: `type: "object"` with exactly
+`properties`, `required` and `additionalProperties: false`, each field a string with an optional
+`enum` and no `description`), and always has a `description`. Every schema offers `why` (text), which
 no router reads. `workorder.reply` refuses anything outside the subset. `required: []` says
 nothing in the answer is acted on.
 
@@ -181,12 +183,28 @@ always offered):
 | a decision node, one voice | `verdict` ∈ the node's branches — read by `_answered_branch` |
 | a decision node, a panel of models | `verdict` ∈ `pass`/`fail`/`undecided` — `policy.adjudicate` |
 | a `grades_risk` node, a panel of models | `risk` ∈ `low`/`medium`/`high` — `policy.adjudicate_grade` |
-| a seat on the review panel | `verdict` ∈ `pass`/`fail`/`undecided` — `policy.adjudicate` |
+| a seat on the review panel | `verdict` ∈ `pass`/`fail`/`undecided` — `policy.adjudicate`; and `findings`, a list of findings — `policy.read_findings` (below) |
 | a seat at intake | `missing` (aspect ids), `problems`, `unsafe` — the order requires all three; `intake.collect` still accepts **at least one**, for backends written before it |
 | the intake option ask | `options`, at least 3 distinct — `intake.read_options` |
 | `engineer_build` | `module`, and `error` for a build that failed — `_stop_on_failed_build`, `_module_built`, `_frontier` |
 | `pm_plan`, with a `"frontier"` decision | `modules` — `_frontier` |
 | every other ask | `required: []` — nothing acted on; `why` still offered |
+
+**A finding** (CHG-20261028-01) is what a review seat saw, as an object of exactly
+`{id, file, line, claim, trigger, severity, origin}`, all required, read by `policy.read_findings`:
+
+| Key | Meaning |
+|---|---|
+| `id` | the seat's own label, unique within one answer; the run's id for it is `<seat>:<id>` |
+| `file`, `line` | where the problem is. **Required and non-blank**; `line` is a positive integer written as digits (a reply schema has no number type). A finding without a location is refused and stops the run, because it can be neither passed on nor disposed |
+| `claim` | what is wrong |
+| `trigger` | the concrete input and the wrong result it produces. May be empty — but **a finding with no `trigger` can never be `important`**: it is recorded as a `nit` and `severity_said` keeps the word the seat used |
+| `severity` | `important` or `nit` (`policy.SEVERITIES`) |
+| `origin` | `introduced` (this change caused it) or `pre-existing` (`policy.ORIGINS`) |
+
+The seat keeps its verdict: `policy.adjudicate` counts it exactly as before. Findings are not votes.
+An answer that omits `findings` is read as none found, for backends written before it; the order
+asks for the key, and `[]` is how a seat says it found nothing.
 
 **The intake row is enforced, and the row above it is why it had to be.** A seat at intake and a
 seat on a panel are one line apart in this table and answer with different shapes, and an agent
@@ -436,7 +454,12 @@ confirmations · adjudications · single_model_panels · seat_models · seat_bri
 · intake_asked_somebody · dispatches · effort_not_applied · usage · usage_summary · survey · options
 · panel_rounds · send_backs · rejections · rulings · store_errors · change_class ·
 relaxations_by_class · risk_proposed · risk_settled · risk_agreed · halts · class_authorised_by ·
-relaxation_authorisers`
+relaxation_authorisers · findings`
+
+`findings` (CHG-20261028-01) is one entry per finding the whole-change review raised, per lap: the
+finding as `policy.read_findings` reads it (`id`, `source` — the seat or `auditor` — `file`, `line`,
+`claim`, `trigger`, `severity`, `origin`, and `severity_said` where a missing trigger demoted it)
+and the `lap` it belongs to.
 
 `usage` (CHG-20261006-01) is one entry per ask whose session reported usage — `{ask_id, node_id, seat,
 model, kind, cost_usd, tokens, remaining, note}`, `kind` being `claude`, `codex` or `unreported`;
