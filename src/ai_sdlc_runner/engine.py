@@ -33,10 +33,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
+from . import auditscope
 from . import conversations as conversations_mod
 from . import paths
 from . import effects as effects_mod
@@ -517,6 +519,10 @@ class RunReport:
     #: each other's context either way; they are not independent of one model's blind spots, and
     #: that is most of what a panel is for.
     single_model_panels: List[str] = field(default_factory=list)
+    #: Said out loud when the auditor ran on the same backend as the builder or as a seat
+    #: (CHG-20261028-01, task 6). Judged from what the sessions reported about themselves, as
+    #: `single_model_panels` is. Empty when it was independent, or when it did not run.
+    audit_same_backend: List[str] = field(default_factory=list)
     #: Which models answered which seat, per node: `{node_id: {seat: [model, ...]}}`
     #: (CHG-20261005-02). A seat nobody routed is answered by `DEFAULT_BACKEND`. The disclosure that
     #: the panel was cross-model is this and `single_model_panels` together.
@@ -623,6 +629,20 @@ class RunReport:
     #: different question — "which branch" rather than "may this pass a gate" — and merging them
     #: would make the audit trail say a gate was confirmed when nobody confirmed anything.
     rulings: List[str] = field(default_factory=list)
+    #: Every finding the whole-change review raised, one entry per finding per lap
+    #: (CHG-20261028-01): the seat or the auditor that raised it, where, the claim and its trigger,
+    #: severity and origin, and the lap it belongs to. A finding with no trigger is recorded as the
+    #: `nit` it can be, with `severity_said` keeping the word the voice used.
+    findings: List[Dict[str, object]] = field(default_factory=list)
+    #: What the auditor was given to read and what the cap left out (CHG-20261028-01, task 2a):
+    #: `auditscope.assemble`'s record -- every file in scope, `read` or `cut`, with the cap and the
+    #: total. Empty until `audit_read` runs. A cut scope is printed beside the review's outcome.
+    audit_scope: Dict[str, object] = field(default_factory=dict)
+    #: What the auditor said about each finding, one row per finding per lap (CHG-20261028-01): the
+    #: finding's id, `confirm` / `refute` / `cannot-verify`, the location and text of the evidence,
+    #: and the lap. A refute without its input and result is recorded as `cannot-verify` with
+    #: `disposition_said`.
+    dispositions: List[Dict[str, object]] = field(default_factory=list)
 
     def as_dict(self) -> Dict[str, object]:
         return {
@@ -638,6 +658,8 @@ class RunReport:
             "confirmations": list(self.confirmations),
             "adjudications": [dict(a) for a in self.adjudications],
             "single_model_panels": list(self.single_model_panels),
+            "audit_same_backend": list(self.audit_same_backend),
+            "audit_counts": audit_counts(self.findings, self.dispositions),
             "seat_models": {n: {s: list(m) for s, m in seats.items()}
                             for n, seats in self.seat_models.items()},
             "seat_briefs": [dict(b) for b in self.seat_briefs],
@@ -673,6 +695,9 @@ class RunReport:
             "halts": [dict(h) for h in self.halts],
             "class_authorised_by": self.class_authorised_by,
             "relaxation_authorisers": dict(self.relaxation_authorisers),
+            "findings": [dict(f) for f in self.findings],
+            "audit_scope": dict(self.audit_scope),
+            "dispositions": [dict(d) for d in self.dispositions],
         }
 
 
@@ -687,6 +712,14 @@ class RunConfig:
     #: The change's autonomy override. Tighten-only; `policy.verdict` enforces that.
     autonomy: Optional[str] = None
     review_seats: Optional[int] = None
+    #: Whether the auditor's backend differs from the builder's and from every open seat's, as the
+    #: caller's routing says it does (CHG-20261028-01). It decides whether the auditor counts toward
+    #: `policy.SEAT_FLOOR`. `None` — the caller has not said, which is every library caller — counts
+    #: as not independent, so an explicit seat count under the floor is refused exactly as it was;
+    #: an implicit one is the default panel and is not judged here (`policy.resolve_seats`). What the
+    #: sessions actually were is recorded separately, at the audit, from what they describe
+    #: themselves as (`RunReport.audit_same_backend`).
+    auditor_independent: Optional[bool] = None
     #: The seats the user named, in opening order (CHG-20261005-02). When set it replaces the
     #: `review_seats` prefix, which is then ignored; `None` is today's behaviour exactly.
     review_dimensions: Optional[Tuple[str, ...]] = None
@@ -1075,6 +1108,70 @@ WHY = {"type": "string",
                       "nothing on it"}
 
 
+def _finding_item() -> Dict[str, object]:
+    """The `items` of an array of findings: `policy.FINDING_FIELDS`, every one required.
+
+    `line` is a string here because a reply schema has no number type (`workorder.FIELD_KEYS`);
+    `policy.read_findings` reads digits as the integer they are.
+    """
+    fields: Dict[str, Dict[str, object]] = {name: {"type": "string"}
+                                            for name in policy.FINDING_FIELDS}
+    fields["severity"] = {"type": "string", "enum": list(policy.SEVERITIES)}
+    fields["origin"] = {"type": "string", "enum": list(policy.ORIGINS)}
+    return {"type": "object", "properties": fields,
+            "required": list(policy.FINDING_FIELDS), "additionalProperties": False}
+
+
+#: What a seat, and the auditor reading blind, say they found (CHG-20261028-01). The words of
+#: `severity` and `origin` and the keys are `policy`'s, so the order cannot promise a word
+#: `policy.read_findings` refuses. The description carries the rules the reader enforces.
+FINDINGS_PROPERTY = {
+    "type": "array", "items": _finding_item(),
+    "description": "what you found, one object per finding; [] when there is nothing. `id`: your "
+                   "own label, unique within this answer. `file` and `line`: where the problem "
+                   "is — a finding with no location is refused. `claim`: what is wrong. "
+                   "`trigger`: the concrete input and the wrong result it produces; a finding "
+                   "without one is recorded as a `nit` and can never be `important`. `severity`: "
+                   "`important` or `nit`. `origin`: `introduced` when this change caused it, "
+                   "`pre-existing` when it was already there. Your `verdict` is still your own; "
+                   "findings are what you saw, not votes"}
+
+
+#: What the auditor says when it reads blind: findings of its own, in the seats' shape
+#: (CHG-20261028-01, step 3). No verdict: the auditor is never asked how the change stands.
+AUDITOR_FINDINGS_PROPERTY = dict(FINDINGS_PROPERTY, description=(
+    "what you found reading the change yourself, one object per finding; [] when there is nothing. "
+    "`id`: your own label, unique within this answer. `file` and `line`: where the problem is -- a "
+    "finding with no location is refused. `claim`: what is wrong. `trigger`: the concrete input "
+    "and the wrong result it produces; a finding without one is recorded as a `nit` and can never "
+    "be `important`. `severity`: `important` or `nit`. `origin`: `introduced` when this change "
+    "caused it, `pre-existing` when it was already there"))
+
+
+def _disposition_item() -> Dict[str, object]:
+    """The `items` of the auditor's dispositions: `policy.DISPOSITION_FIELDS`, every one required."""
+    fields: Dict[str, Dict[str, object]] = {name: {"type": "string"}
+                                            for name in policy.DISPOSITION_FIELDS}
+    fields["disposition"] = {"type": "string", "enum": list(policy.DISPOSITIONS)}
+    return {"type": "object", "properties": fields,
+            "required": list(policy.DISPOSITION_FIELDS), "additionalProperties": False}
+
+
+#: One row per finding id in the findings file (CHG-20261028-01, step 4). The words are
+#: `policy`'s, so the order cannot promise one `policy.read_dispositions` refuses.
+DISPOSITIONS_PROPERTY = {
+    "type": "array", "items": _disposition_item(),
+    "description": "one row for every finding id in the findings file named in `input_artifacts`, "
+                   "no more and no fewer, each id once; [] only when the file holds no findings. "
+                   "`id`: the finding's id exactly as the file gives it. `disposition`: `confirm` "
+                   "when you checked the code and the finding is right; `refute` when you checked "
+                   "and it is wrong; `cannot-verify` when you could not decide. `file` and `line`: "
+                   "where your evidence is -- every row carries one. `evidence`: what you read "
+                   "there. For a `refute`, `input` and `result` are the concrete input and the "
+                   "right result it produces; a refute without both is read as `cannot-verify`. "
+                   "Never a verdict on the change as a whole"}
+
+
 def _answer_schema(node: graph.Node, cfg: "RunConfig", voices: str) -> Dict[str, object]:
     """The schema of the answer this ask's reader will act on — the order's `reply.schema`.
 
@@ -1135,6 +1232,14 @@ def _answer_schema(node: graph.Node, cfg: "RunConfig", voices: str) -> Dict[str,
             said += f", and from the `{vetoes[0]}` seat, which holds a veto, it is a veto"
         properties = {"verdict": {"type": "string", "enum": list(policy.VERDICTS),
                                   "description": said}}
+        if voices == SEATS:
+            # A seat says what it found as well as how it votes (CHG-20261028-01). The verdict is
+            # still counted by `policy.adjudicate`; the findings are read by `policy.read_findings`.
+            properties["findings"] = dict(FINDINGS_PROPERTY)
+    elif node.audit == graph.AUDIT_READ:
+        properties = {"findings": dict(AUDITOR_FINDINGS_PROPERTY)}
+    elif node.audit == graph.AUDIT_DISPOSE:
+        properties = {"dispositions": dict(DISPOSITIONS_PROPERTY)}
     elif node.answer_decides:
         properties = {"verdict": {"type": "string", "enum": sorted(node.branches),
                                   "description": "the branch you choose"}}
@@ -1163,7 +1268,15 @@ def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
                seat: Optional[str] = None,
                carried: Optional[Sequence[Mapping[str, str]]] = None,
                sent_back: Optional[Mapping[str, str]] = None, *,
-               voices: str, brief: Optional[Mapping[str, object]] = None) -> Dict[str, object]:
+               voices: str, brief: Optional[Mapping[str, object]] = None,
+               inputs: Sequence[str] = (), lines: Sequence[str] = ()) -> Dict[str, object]:
+    """The work order for one ask.
+
+    ``inputs`` and ``lines`` are what the runner adds beyond the node's own spec: paths appended to
+    `input_artifacts` and sentences appended to `instructions`. The audit uses them to hand the
+    auditor a file **by path** (CHG-20261028-01, KN-5); nothing is inlined and
+    `workorder.WORK_ORDER_FIELDS` is untouched.
+    """
     spec = cfg.node_specs.get(node.id)
     if spec is None:
         raise EngineError(
@@ -1171,6 +1284,14 @@ def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
             f"engine cannot template is a hard error naming the node — never a fall back to a "
             f"generic prompt.")
     spec = _brief(spec, cfg)
+    if inputs or lines:
+        spec = dict(spec)
+        if inputs:
+            spec["input_artifacts"] = list(inputs) + list(spec.get("input_artifacts") or ())
+        if lines:
+            own = spec.get("instructions") or ()
+            spec["instructions"] = ("\n".join([own] + list(lines)) if isinstance(own, str)
+                                    else list(own) + list(lines))
     if carried:
         # Both sides, named. "Somebody objected" is not something a reviewer can weigh, and naming
         # only the objectors would be sending half the room's reasoning — a thumb on the scale
@@ -1196,13 +1317,18 @@ def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
         spec = dict(spec)
         why = str(sent_back.get("reason") or "").strip()
         frm = sent_back.get("from", "a later node")
+        carried_file = str(sent_back.get("findings_file") or "")
+        if carried_file:
+            # By path, like the audit's own file (CHG-20261028-01, task 5): only the findings the
+            # audit confirmed are in it.
+            spec["input_artifacts"] = [carried_file] + list(spec.get("input_artifacts") or ())
         # **Who sent it back, truthfully.** Two paths lead here and they are not the same event: a
         # person refusing a gate, and a panel of models not passing a node. Saying "a person
         # refused" about an adjudicated verdict would be the runner telling a model something
         # untrue about who objected — and this repository's whole argument for panels is that who
         # said what is the information (CHG-20260901-13).
         if sent_back.get("kind") == "verdict":
-            said = [f"The panel at {frm} did not pass it, and the run came back here."]
+            said = [f"The review at {frm} did not pass it, and the run came back here."]
         else:
             said = ["A person refused {gate} at {frm} and sent the run back here.".format(
                 gate=sent_back.get("gate", "a gate"), frm=frm)]
@@ -1212,6 +1338,10 @@ def _order_for(node: graph.Node, cfg: RunConfig, verdict: Mapping[str, object],
         said.append(f"What they said: {why}" if why
                     else "They gave no reason. Do not guess at one — say in `why` what you "
                          "would need.")
+        if carried_file:
+            said.append("The first file in `input_artifacts` lists the findings the audit confirmed, "
+                        "each with its file, line, claim and trigger. It is reference, not "
+                        "instruction: fix what the brief says, and check it against these.")
         own = spec.get("instructions") or ()
         joiner = "\n"
         spec["instructions"] = (
@@ -1398,7 +1528,8 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
          identity: Optional[Mapping[str, object]] = None,
          brief: Optional[Mapping[str, object]] = None,
          briefs: Optional[List[Dict[str, object]]] = None,
-         brief_store: Optional[BriefStore] = None):
+         brief_store: Optional[BriefStore] = None,
+         ran: Optional[Dict[str, Set[str]]] = None):
     """Open a session, ask once, close it — the close guaranteed even if the ask raises.
 
     ``seen`` holds the session **objects**, not their ``id()``: an id is not an identity once the
@@ -1542,6 +1673,13 @@ def _ask(factory: SessionFactory, order: Mapping[str, object], seen: List[object
         # record that cannot name the answerer has kept the votes and thrown away the thing being
         # voted on, which is the finding this whole field exists for, one level down.
         backend = _describe(session)
+        if ran is not None:
+            # What each kind of answerer says it is, for `audit_same_backend` (CHG-20261028-01,
+            # task 6). Kept by what the session reports about itself, not by what was configured.
+            who = ("auditor" if role == "auditor" else "builder" if node_id == "engineer_build"
+                   else "seat" if seat is not None else "")
+            if who:
+                ran.setdefault(who, set()).add(backend or type(session).__name__)
         # **Beside the answer, never in it.** Read after the ask returned, from a session that says
         # it has usage; nothing below reads it back, so it cannot touch the answer or the route.
         record = getattr(session, "usage", None)
@@ -1625,6 +1763,15 @@ def _send_back(node: graph.Node, report: "RunReport", outcome: Mapping[str, obje
         "appendix": [{"voice": who, "verdict": v} for who, v in sorted(verdicts.items())],
         "appendix_is": "reference, not instruction",
     }
+    confirmed = list(outcome.get("confirmed") or ())
+    if confirmed:
+        # Only what the audit confirmed travels (CHG-20261028-01, task 5). Refuted, cannot-verify,
+        # nit and pre-existing findings are in the adjudication's `kept` and in `report.findings`,
+        # and are not rework: a reading of 5.5 that "kept" means "sent" would hand the builder
+        # claims the audit refuted.
+        entry["findings"] = [{key: found.get(key) for key in (
+            "id", "source", "file", "line", "claim", "trigger", "evidence")} for found in confirmed]
+        entry["brief"] += f" The audit confirmed {len(confirmed)} finding(s); they are listed in the file named in `input_artifacts`."
     # **Returned, not only recorded.** The `brief` above calls itself the instruction, and for as
     # long as this function existed it was appended to `report.send_backs`, serialised into the
     # snapshot, asserted by tests — and read by no work order. So the rework was never told what it
@@ -1886,6 +2033,10 @@ def _accept_for(node: graph.Node, cfg: "RunConfig", report: "RunReport"):
     """
     if node.id == "engineer_build":
         return _stop_on_failed_build
+    if node.audit == graph.AUDIT_READ:
+        return lambda result: _read_findings(result, AUDITOR)
+    if node.audit == graph.AUDIT_DISPOSE:
+        return _read_dispositions
     if node.id == "pm_plan" and any(value == FRONTIER for value in (cfg.decisions or {}).values()):
         return lambda result: _stop_on_empty_plan(result, report)
     return None
@@ -2573,6 +2724,21 @@ def _record_seat_model(report: "RunReport", node: graph.Node, seat: str,
     report.seat_models.setdefault(node.id, {}).setdefault(seat, []).append(label or DEFAULT_BACKEND)
 
 
+def _read_findings(result: object, source: str) -> List[Dict[str, object]]:
+    """The findings an answer carries, through `policy.read_findings` (CHG-20261028-01).
+
+    An answer that is not an object says nothing about findings here; the reader of its verdict
+    refuses it by name. A refusal from `policy.read_findings` is the run's: a finding with no
+    location, or one that names a severity nobody wrote down, is not carried and not dropped.
+    """
+    if not isinstance(result, Mapping):
+        return []
+    try:
+        return policy.read_findings(result.get("findings"), source=source)
+    except policy.PolicyError as exc:
+        raise EngineError(str(exc)) from exc
+
+
 def _seat_verdict(spoken: Sequence[str]) -> str:
     """One seat's word from its models' words: every one passes, or the seat does not.
 
@@ -2625,8 +2791,49 @@ def _note_panel_diversity(node: graph.Node, report: "RunReport", opened_for_pane
             f"{remedy}")
 
 
-def _adjudicate(node: graph.Node, report: "RunReport",
-                seats: int) -> Tuple[str, Optional[Dict[str, object]]]:
+def audit_counts(findings: Sequence[Mapping[str, object]],
+                 dispositions: Sequence[Mapping[str, object]]) -> Dict[str, object]:
+    """What the audit did, in numbers, from the record alone (CHG-20261028-01, task 7).
+
+    ``findings_by_source`` counts every finding raised, by seat (or `auditor`); ``by_disposition``
+    counts the auditor's rows by `confirm` / `refute` / `cannot-verify`; ``refute_rate`` is refuted
+    over disposed, `None` when nothing was disposed -- a rate of nothing is not zero. A `refute` that
+    showed no work was read as `cannot-verify` and counts as that, because the record says so.
+    """
+    by_source: Dict[str, int] = {}
+    for found in findings:
+        source = str(found.get("source") or "")
+        by_source[source] = by_source.get(source, 0) + 1
+    by_disposition = {name: 0 for name in policy.DISPOSITIONS}
+    for row in dispositions:
+        name = str(row.get("disposition") or "")
+        by_disposition[name] = by_disposition.get(name, 0) + 1
+    disposed = sum(by_disposition.values())
+    return {"findings_by_source": by_source, "by_disposition": by_disposition,
+            "disposed": disposed,
+            "refute_rate": (by_disposition.get("refute", 0) / disposed) if disposed else None}
+
+
+def _note_audit_backend(report: "RunReport", ran: Mapping[str, Set[str]]) -> None:
+    """Record when the auditor was answered by the same backend as the builder or a seat.
+
+    Stated, not refused: the floor already took the routing's word (`RunConfig.auditor_independent`)
+    and this is what the sessions then said they were. A disagreement between the two is the point
+    of recording it. Written once per review lap, replacing the last lap's line.
+    """
+    auditor = ran.get("auditor") or set()
+    report.audit_same_backend = []
+    for other, name in (("builder", "the builder"), ("seat", "a review seat")):
+        shared = sorted(auditor & (ran.get(other) or set()))
+        if shared:
+            report.audit_same_backend.append(
+                f"the auditor ran on the same backend as {name} ({shared[0]}). It read the change "
+                f"in its own session, but through the same model, so it shares what that model "
+                f"cannot see. Use --audit-model COMMAND to audit on a different one.")
+
+
+def _adjudicate(node: graph.Node, report: "RunReport", seats: int,
+                carry: bool = True) -> Tuple[str, Optional[Dict[str, object]]]:
     """The branch the seats' verdicts reach, and the rework to carry, through `policy.adjudicate`.
 
     This is the requirement's own sentence made operational — *多數決才允許放行* — and it is what both
@@ -2636,6 +2843,10 @@ def _adjudicate(node: graph.Node, report: "RunReport",
     the result away, while `walk`'s model-panel branch kept it — so a seat panel's objections were
     recorded and never delivered, and `graph.review_failed`'s note that *"the panel's reasons travel
     with the run"* was false for every seat panel in the flow.
+
+    **``carry=False`` is the panel's view and nothing else** (CHG-20261028-01): `lead_review` still
+    adjudicates its seats and records the result, but no longer routes on it, so it sends nothing
+    back. `review_decide` does that, from the whole review.
     """
     rework: Optional[Dict[str, object]] = None
     verdicts = {}
@@ -2684,7 +2895,7 @@ def _adjudicate(node: graph.Node, report: "RunReport",
     if still_silent:
         entry["unreached"] = still_silent    # only seats that also said `fail` get this far
     report.adjudications.append(entry)
-    if outcome["outcome"] != policy.PASS:
+    if carry and outcome["outcome"] != policy.PASS:
         # The seats send work back too, and their objections are the ones most worth keeping whole:
         # each seat answered a different question, so flattening four of them into one sentence
         # loses which question failed.
@@ -2919,6 +3130,186 @@ def walk(cfg: RunConfig, dispatch: Dispatcher, enabled: bool = False) -> RunRepo
         raise
 
 
+@dataclass
+class _ReviewLap:
+    """What one pass through the whole-change review has gathered so far (CHG-20261028-01).
+
+    Local to a walk and rebuilt by it: a resumed run re-walks the review and every answer comes
+    back from the journal, so nothing here needs to outlive the walk. Reset each time `lead_review`
+    is entered, because a change sent back and reviewed again is judged on this lap's findings and
+    not on every lap's — the rule `_adjudicate` already applies to the seats' verdicts.
+    """
+
+    n: int = 0
+    findings: List[Dict[str, object]] = field(default_factory=list)
+    #: The auditor's own findings from `audit_read`, and its rows from `audit_dispose`.
+    auditor_findings: List[Dict[str, object]] = field(default_factory=list)
+    dispositions: List[Dict[str, object]] = field(default_factory=list)
+    #: The seats' `adjudicate` result for this lap -- the panel's view, one input to the decision.
+    panel: Dict[str, object] = field(default_factory=dict)
+
+    def all_findings(self) -> List[Dict[str, object]]:
+        """Every finding of the lap, the seats' first and the auditor's after, in the order raised."""
+        return list(self.findings) + list(self.auditor_findings)
+
+
+#: The `source` of a finding the auditor raised itself.
+AUDITOR = "auditor"
+
+
+def _read_dispositions(result: object) -> List[Dict[str, object]]:
+    """The rows an `audit_dispose` answer carries, through `policy.read_dispositions`."""
+    if not isinstance(result, Mapping):
+        return []
+    try:
+        return policy.read_dispositions(result.get("dispositions"))
+    except policy.PolicyError as exc:
+        raise EngineError(str(exc)) from exc
+
+
+class _AuditSpace:
+    """Where one walk keeps the audit's files (CHG-20261028-01, step 4).
+
+    Under the run's own directory -- the ask journal's, or the brief store's where there is no
+    journal -- so the findings file lives and dies with the run it belongs to and a resume finds the
+    same one. A run that keeps neither gets a scratch directory that goes with the walk: the file is
+    only ever read by the next ask of the same walk.
+    """
+
+    def __init__(self, cfg: "RunConfig"):
+        keeper = cfg.journal if cfg.journal is not None else cfg.brief_store
+        self._root = Path(keeper.dir) / "audit" if keeper is not None else None
+        self._scratch: Optional[tempfile.TemporaryDirectory] = None
+
+    def dir(self) -> Path:
+        if self._root is not None:
+            paths.makedirs(self._root)
+            return self._root
+        if self._scratch is None:
+            self._scratch = tempfile.TemporaryDirectory(prefix="runner-audit-")
+        return Path(self._scratch.name)
+
+    def lap(self, n: int) -> Path:
+        """One directory per review lap: a change sent back and reviewed again keeps both."""
+        directory = self.dir() / f"lap-{n:03d}"
+        paths.makedirs(directory)
+        return directory
+
+
+def _workdir_of(cfg: "RunConfig", node: graph.Node) -> str:
+    return str((cfg.node_specs.get(node.id) or {}).get("workdir") or ".")
+
+
+def _audit_base(space: _AuditSpace, workdir: str) -> Optional[str]:
+    """The commit the change is measured from: remembered across a resume, else `HEAD` now.
+
+    Taken at the first build, so the diff the auditor reads is what this run changed and a resume
+    does not move the line.
+    """
+    found, sha = auditscope.load_base(space.dir())
+    if found:
+        return sha
+    sha = auditscope.capture_base(workdir)
+    auditscope.save_base(space.dir(), sha)
+    return sha
+
+
+def _audit_read_brief(cfg: "RunConfig", report: "RunReport", space: _AuditSpace,
+                      node: graph.Node, base: Optional[str],
+                      review: _ReviewLap) -> Tuple[List[str], List[str]]:
+    """What `audit_read` is given: the scope file first, then the files the cap let in.
+
+    The scope is assembled by the runner (`auditscope.assemble`), written under the audit directory,
+    recorded in the report and, when the cap cut something, printed by the CLI beside the review's
+    outcome. The seats' findings are **not** here: a reader handed a list reads the list.
+    """
+    scope = auditscope.assemble(_workdir_of(cfg, node), base)
+    lap_dir = space.lap(review.n)
+    saved = lap_dir / auditscope.save(lap_dir, scope)
+    report.audit_scope = scope
+    root = Path(str(scope.get("root") or "."))
+    readable = [str(root / rel) for rel in auditscope.reading_list(scope)]
+    cut = list(scope.get("cut") or [])
+    lines = ["You are the auditor, reading this change yourself and blind: you are not given anyone "
+             "else's findings. The first file in `input_artifacts` is the scope the runner "
+             "assembled -- every file in it, each marked `read` or `cut` -- and the files after it "
+             "are the ones you are given. The repository is your working directory; follow anything "
+             "further yourself. Answer with findings of your own."]
+    if cut:
+        lines.append(f"{len(cut)} file(s) in scope were cut by the size cap and are not listed "
+                     f"below; anything you say about them you must read yourself: "
+                     + ", ".join(cut))
+    return [str(saved)] + readable, lines
+
+
+def _write_findings(space: _AuditSpace, review: _ReviewLap) -> str:
+    """Every finding of this lap, each with its id, in one file; returns its path.
+
+    The seats' findings from step 1 and the auditor's own from step 3 sit side by side and are
+    labelled only by `source`, so the disposing session sees one list and no one's say-so.
+    """
+    rows = [{key: found[key] for key in ("id", "source", "file", "line", "claim", "trigger",
+                                         "severity", "origin")}
+            for found in review.all_findings()]
+    target = space.lap(review.n) / "findings.json"
+    paths.write_text(target, json.dumps({"lap": review.n, "findings": rows}, indent=2))
+    return str(target)
+
+
+def _write_confirmed(space: _AuditSpace, review: _ReviewLap, rework: Mapping[str, object]) -> str:
+    """The findings the audit confirmed, in one file beside the lap's own; returns its path."""
+    target = space.lap(review.n) / "confirmed.json"
+    paths.write_text(target, json.dumps({"lap": review.n, "findings": rework["findings"]}, indent=2))
+    return str(target)
+
+
+def _audit_dispose_brief(space: _AuditSpace, review: _ReviewLap) -> Tuple[List[str], List[str]]:
+    """What `audit_dispose` is given: the one findings file, by path (KN-5)."""
+    return ([_write_findings(space, review)],
+            ["You are the auditor, in a new session. The first file in `input_artifacts` is "
+             "`findings.json`, written by the runner: every finding raised on this change, each "
+             "with an `id`. Go to the code at each finding's `file` and `line`. Answer with exactly "
+             "one row for every id, saying `confirm`, `refute` or `cannot-verify`, with the file and "
+             "line of your evidence. A `refute` must carry the concrete input and the right result "
+             "it produces; one that only says the finding is wrong is read as `cannot-verify`. Do "
+             "not give a verdict on the change."])
+
+
+def _decide_review(node: graph.Node, report: "RunReport",
+                   review: _ReviewLap) -> Tuple[str, Optional[Dict[str, object]]]:
+    """The branch `review_decide` takes, and the rework to carry.
+
+    **The runner adjudicates and no model does** (CHG-20261028-01, step 5). The sum is
+    `policy.dispose`: the seats' view, every finding of the lap and the auditor's rows. A refusal
+    from it -- a finding with no disposition, a duplicate, an id nobody raised -- is the run's, as a
+    seat that names no verdict is (`_adjudicate`): an unreached answer stops the run and names the
+    ids, and is never read as `pass`.
+    """
+    if not review.panel:
+        raise EngineError(f"{node.id!r} was reached with no panel view: the seats were not asked "
+                          f"in this review")
+    panel = review.panel
+    try:
+        decided = policy.dispose(review.all_findings(), review.dispositions, panel)
+    except policy.PolicyError as exc:
+        raise EngineError(f"{node.id!r}: {exc}") from exc
+    outcome = str(decided["outcome"])
+    if outcome not in policy.OUTCOMES:
+        raise EngineError(
+            f"{node.id!r} decided {outcome!r}, which is not an outcome this engine knows how to "
+            f"route. An unrecognised outcome is not a failure and must not be treated as one.")
+    entry = {key: value for key, value in panel.items() if key not in ("outcome", "reason")}
+    entry.update({"node_id": node.id, "outcome": outcome, "reason": decided["reason"],
+                  "panel_view": decided["panel_view"], "audit_result": decided["audit_result"],
+                  "confirmed": list(decided["confirmed"]), "kept": list(decided["kept"]),
+                  "lap": review.n})
+    report.adjudications.append(entry)
+    rework = None
+    if outcome == policy.FAIL:
+        rework = _send_back(node, report, entry, dict(panel.get("verdicts") or {}))
+    return outcome, rework
+
+
 def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunReport:
     """The walk itself. `walk` is the wrapper that closes the record when this does not."""
     if cfg.conversation is not None:
@@ -2934,6 +3325,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
     policy.check_dispatch_depth(graph.dispatch_edges(), graph.roles_asked_directly())
     factory = _as_factory(dispatch)
     opened: List[object] = []
+    ran_on: Dict[str, Set[str]] = {}
     taken: Dict[str, int] = {}
     report = RunReport() if cfg.usage is None else RunReport(usage=cfg.usage)
     # The class in force, settled once and recorded (CHG-20260827-20 tasks 3 and 4). Once per run
@@ -2950,13 +3342,26 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
 
     if cfg.review_dimensions is not None:
         # The user named the seats, so the count is theirs and `review_seats` is not read at all.
-        seat_list = policy.resolve_dimensions(cfg.review_dimensions, cfg.high_risk_mode)
+        seat_list = policy.resolve_dimensions(cfg.review_dimensions, cfg.high_risk_mode,
+                                              cfg.auditor_independent)
         seats = len(seat_list)
-        below_floor = seats < policy.SEAT_FLOOR
+        below_floor = not policy.floor_met(seats, cfg.auditor_independent)
     else:
-        seats = policy.resolve_seats(cfg.review_seats, cfg.high_risk_mode)
+        if cfg.review_seats is None and cfg.auditor_independent is False:
+            # The caller has said the auditor does not count, so the default panel is below the
+            # floor. Refused unless high-risk mode is on, as the same two seats asked for by count
+            # would be (CHG-20261028-01). The CLI sizes the panel up before it gets here.
+            policy.resolve_seats(policy.SEAT_DEFAULT, cfg.high_risk_mode, False)
+        seats = policy.resolve_seats(cfg.review_seats, cfg.high_risk_mode, cfg.auditor_independent)
         seat_list = policy.seat_names(seats)
-        below_floor = cfg.review_seats is not None and cfg.review_seats < policy.SEAT_FLOOR
+        # An implicit count is the default panel and was nobody's request (CHG-20261028-01): it is
+        # below the floor only when the caller has said the auditor does not count, and then the
+        # run says so under high-risk mode rather than refusing a panel nobody configured.
+        counted = cfg.review_seats
+        if counted is None and cfg.auditor_independent is False:
+            counted = policy.SEAT_DEFAULT
+        below_floor = (counted is not None
+                       and not policy.floor_met(counted, cfg.auditor_independent))
     if below_floor:
         # **What the pair does, not what the seat count does** (CHG-20260904-18, risk seat).
         # `resolve_seats`' docstring records that `undecided` becomes unreachable at one seat.
@@ -2969,9 +3374,13 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
         # The seats not opened are not seats that abstained; they are seats that never voted, and
         # the panel reads their absence as agreement.
         which = ", ".join(seat_list)
+        # Counted against what the floor asks of the seats once the auditor is credited where it is
+        # independent (CHG-20261028-01), so the sentence is not "1 not opened" about a panel the
+        # auditor has already made up.
+        short = policy.SEAT_FLOOR - seats - (1 if cfg.auditor_independent else 0)
         note = (f"high-risk mode: review opened with {seats} seat(s) ({which}), below the floor "
                 f"of {policy.SEAT_FLOOR}. A panel of {seats} reads a verdict from the seats it "
-                f"opened, so the {policy.SEAT_FLOOR - seats} not opened cannot dissent")
+                f"opened, so the {short} not opened cannot dissent")
         report.relaxations.append(note)
         if cfg.seats_from:
             report.relaxation_authorisers[note] = cfg.seats_from
@@ -3134,6 +3543,10 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
             ("a refusal", unspent_rejections)) if entries}
 
     node_id: Optional[str] = "intake"
+    review = _ReviewLap()
+    audit_space = _AuditSpace(cfg)
+    #: The commit the change is measured from, once the first build is reached (empty until then).
+    audit_base: List[Optional[str]] = []
     #: How many modules have started building (CHG-20260827-21). Counted on `engineer_build`
     #: because that is where a module's work begins; `fix_pass` re-asks the engineer about the
     #: **same** module and must land in the same tree, so it must not increment.
@@ -3148,6 +3561,8 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
         report.visited.append(node.id)
         if node.id == "engineer_build":
             build_cycles += 1
+            if not audit_base:
+                audit_base.append(_audit_base(audit_space, _workdir_of(cfg, node)))
 
         tripped = _permanent_halt(node, cfg, report)
         if tripped is not None:
@@ -3374,7 +3789,11 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
         if node.role:
             configured = list(cfg.node_models.get(node.id) or ())
 
-            if node.mode == graph.MODEL_PANEL and len(configured) > 1:
+            if node.audit == graph.AUDIT_DISPOSE and not review.all_findings():
+                # Nothing was raised, so there is nothing to dispose of and no session is spent on
+                # it (CHG-20261028-01): a count of zero rows is exactly what the file holds.
+                pass
+            elif node.mode == graph.MODEL_PANEL and len(configured) > 1:
                 carried: List[Dict[str, str]] = []
                 # Task 4. N voices on ONE question, each its own session, blind to each other --
                 # the same independence rule the seats have, for the same reason.
@@ -3388,7 +3807,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                                   opened, journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                                   answered=already, model=model, asked_before=asked_before,
                                   conversation=cfg.conversation, role=node.role, resumed=report.resumed,
-                                  usage=report.usage,
+                                  usage=report.usage, ran=ran_on,
                                   workspace=_workspace(node, build_cycles),
                                   heard=lambda a, _n=node: _heard(_n, MODELS, a))
                     report.asks.append(Ask(node.id, node.role, None, result, model=model))
@@ -3470,7 +3889,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                                       node_id=node.id, answered=already, model=model,
                                       asked_before=asked_before,
                                       conversation=cfg.conversation, role=node.role, resumed=report.resumed,
-                                      usage=report.usage,
+                                      usage=report.usage, ran=ran_on,
                                   workspace=_workspace(node, build_cycles),
                                   heard=lambda a, _n=node: _heard(_n, MODELS, a))
                         report.asks.append(Ask(node.id, node.role, None, result, model=model))
@@ -3546,7 +3965,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                             journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                             answered=already, asked_before=asked_before,
                             conversation=cfg.conversation, role=node.role, resumed=report.resumed,
-                            usage=report.usage,
+                            usage=report.usage, ran=ran_on,
                                       workspace=_workspace(node, build_cycles),
                                       heard=lambda a, _n=node: _heard(_n, SURVEY, a),
                                       position=position, voice=label,
@@ -3613,7 +4032,7 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                             opened, journal=cfg.journal, ask_id=ask_id, node_id=node.id,
                             answered=already, asked_before=asked_before,
                             conversation=cfg.conversation, role=node.role, resumed=report.resumed,
-                            usage=report.usage,
+                            usage=report.usage, ran=ran_on,
                                   workspace=_workspace(node, build_cycles),
                             accept=lambda a, _for=aspect: intake_mod.read_options(a, _for))
                         report.asks.append(Ask(node.id, node.role, None, answer))
@@ -3655,11 +4074,15 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
             elif node.mode == graph.SEAT_PANEL:
                 panel_sessions: List[object] = []
                 before = len(opened)
+                review = _ReviewLap(n=review.n + 1)
                 for seat in seat_list:
                     # One session per (seat, model), each its own ask and journal entry (KN-7).
                     voices = _seat_voices(factory, seat)
                     for position, label in voices:
                         brief = seatspec.brief_for(specs_loaded, seat, label)
+                        # Who raised a finding: the seat, and the model where a seat has several,
+                        # so two sessions of one seat do not share an id (CHG-20261028-01).
+                        source = _survey_key(seat, voices, position, label)
                         result = _ask(
                             factory, _order_for(node, cfg, verdict, seat, sent_back=came_back,
                                                 voices=SEATS, brief=brief),
@@ -3667,8 +4090,9 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                             journal=cfg.journal, node_id=node.id, answered=already,
                             ask_id=_seat_ask_id(report, node, seat, position, len(voices)),
                             asked_before=asked_before,
+                            accept=lambda a, _source=source: _read_findings(a, _source),
                             conversation=cfg.conversation, role=node.role, resumed=report.resumed,
-                            usage=report.usage,
+                            usage=report.usage, ran=ran_on,
                                       workspace=_workspace(node, build_cycles),
                                       heard=lambda a, _n=node: _heard(_n, SEATS, a),
                                       position=position, voice=label,
@@ -3679,8 +4103,17 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                                                model=label, position=position))
                         _record_seat_model(report, node, seat, label)
                         answers.append(result)
+                        for found in _read_findings(result, source):
+                            found["lap"] = review.n
+                            review.findings.append(found)
+                            report.findings.append(found)
                 panel_sessions = opened[before:]
                 _note_panel_diversity(node, report, panel_sessions)
+                # The seats' view, recorded and not routed on (CHG-20261028-01): `review_decide`
+                # weighs it with the findings. The adjudication is still made here so a seat that
+                # named no verdict stops the run at the review it belongs to, as it always did.
+                _adjudicate(node, report, seats, carry=False)
+                review.panel = dict(report.adjudications[-1])
             else:
                 # Task 5. A pool picks one; a follows reuses whoever answered the node it names;
                 # everything else asks whatever it is configured with. All three are ONE ask -- the
@@ -3701,13 +4134,22 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                     model = configured[0]
 
                 ask_id = f"{len(report.asks):03d}-{node.id}"
+                audit_inputs: List[str] = []
+                audit_lines: List[str] = []
+                if node.audit == graph.AUDIT_READ:
+                    audit_inputs, audit_lines = _audit_read_brief(
+                        cfg, report, audit_space, node, audit_base[0] if audit_base else None,
+                        review)
+                elif node.audit == graph.AUDIT_DISPOSE:
+                    audit_inputs, audit_lines = _audit_dispose_brief(audit_space, review)
                 result = _ask(
-                    factory, _order_for(node, cfg, verdict, sent_back=came_back, voices=ONE), opened,
+                    factory, _order_for(node, cfg, verdict, sent_back=came_back, voices=ONE,
+                                        inputs=audit_inputs, lines=audit_lines), opened,
                     journal=cfg.journal,
                     ask_id=ask_id, node_id=node.id, answered=already, model=model,
                     asked_before=asked_before,
                     conversation=cfg.conversation, role=node.role, resumed=report.resumed,
-                    usage=report.usage,
+                    usage=report.usage, ran=ran_on,
                                   workspace=_workspace(node, build_cycles),
                                   heard=lambda a, _n=node: _heard(_n, ONE, a),
                                   accept=_accept_for(node, cfg, report),
@@ -3715,6 +4157,16 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                                   effort_not_applied=report.effort_not_applied)
                 report.asks.append(Ask(node.id, node.role, None, result, model=model))
                 answers.append(result)
+                if node.audit == graph.AUDIT_READ:
+                    for found in _read_findings(result, AUDITOR):
+                        found["lap"] = review.n
+                        review.auditor_findings.append(found)
+                        report.findings.append(found)
+                elif node.audit == graph.AUDIT_DISPOSE:
+                    for row in _read_dispositions(result):
+                        row["lap"] = review.n
+                        review.dispositions.append(row)
+                        report.dispositions.append(row)
 
         # **A gate consulted after the work resolves at what the work revealed.**
         #
@@ -3793,6 +4245,11 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                 # about where a check runs is worse than none, because it is the thing a reader
                 # consults instead of looking.
                 choice = node.panel_branches.get(panel_outcome, panel_outcome)
+            elif node.audit == graph.AUDIT_DECIDE:
+                _note_audit_backend(report, ran_on)
+                choice, rework = _decide_review(node, report, review)
+                if rework is not None and rework.get("findings"):
+                    rework["findings_file"] = _write_confirmed(audit_space, review, rework)
             elif node.mode == graph.SEAT_PANEL:
                 choice, rework = _adjudicate(node, report, seats)
             elif node.answer_decides:
@@ -3890,6 +4347,8 @@ def _walk(cfg: RunConfig, dispatch: Dispatcher, where: Dict[str, str]) -> RunRep
                 sent_back[node_id] = {
                     "from": node.id, "kind": "verdict",
                     "reason": str(rework.get("brief") or "")}
+                if rework.get("findings_file"):
+                    sent_back[node_id]["findings_file"] = str(rework["findings_file"])
         else:
             node_id = node.next
 

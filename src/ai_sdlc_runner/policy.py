@@ -108,6 +108,11 @@ ROLES: Tuple[Role, ...] = (
     Role("seat", "審議席 / review seat", can_spawn=False, can_write=False, can_execute=True,
          note="one review seat; several of them cross-check each other, which is the whole reason "
               "they exist"),
+    Role("auditor", "審計員 / auditor", can_spawn=False, can_write=False, can_execute=True,
+         note="reads the whole change blind, then disposes of every finding in a new session "
+              "(CHG-20261028-01). The seat's flags, deliberately: it reads and runs, it cannot "
+              "write, so it cannot fix what it audits. It disposes per finding and never gives a "
+              "verdict on the change -- the tally is the runner's"),
 )
 
 #: A role that plans one workstream (CHG-20260827-22). `can_spawn=False` is the bound: the PM
@@ -1088,9 +1093,39 @@ PREFIX_SEATS: Tuple[Seat, ...] = tuple(s for s in SEATS if not s.opt_in)
 #: The largest `review_seats` there is.
 MAX_SEAT_COUNT = len(PREFIX_SEATS)
 
-#: The floor: how many seats open by default. Fewer than this needs the user's explicit high-risk
-#: mode, because a single reviewer is exactly the single point of view the panel exists to avoid.
+#: The floor: how many independent views a review needs. Fewer than this needs the user's explicit
+#: high-risk mode, because a single reviewer is exactly the single point of view the panel exists to
+#: avoid.
+#:
+#: **What it counts changed in CHG-20261028-01.** It was "seats opened by default"; it is now the
+#: seats **plus the auditor**, and the auditor counts only when its backend differs from the
+#: builder's and from every open seat's (`floor_met`). The number is the same on purpose: lowering it
+#: to 2 would discard the reason it exists, and an auditor on a different backend *is* a third point
+#: of view, which is all the floor ever asked for.
 SEAT_FLOOR = 3
+
+#: How many seats open when the user has not said (CHG-20261028-01, Q1): the seats without which the
+#: review cannot work — `conformance`, which holds the veto, and `defect`, whose question (a concrete
+#: input and the wrong result) is the standard every finding is now held to. They are the first two
+#: of the opening order, so `seat_names(SEAT_DEFAULT)` is them. Everything else, `risk` included,
+#: opens only when the user asks for it through `review_seats` or `review_dimensions`.
+SEAT_DEFAULT = 2
+
+#: The fewest seats that can meet the floor at all: with an independent auditor beside them, one
+#: fewer than the floor. The settings file cannot see how the auditor is routed, so this is the
+#: floor it can judge on its own — one seat is below it whatever the auditor is.
+SEAT_LEAST = SEAT_FLOOR - 1
+
+
+def floor_met(seats: int, auditor_independent: Optional[bool]) -> bool:
+    """Do these seats, plus the auditor where it is independent, make the floor?
+
+    ``auditor_independent`` is ``True`` only when the auditor's backend differs from the builder's
+    and from every open seat's. ``None`` — the caller has not said — counts as ``False``: an auditor
+    nobody has shown to be a different backend is the same model reading again, which is not a
+    third view (CHG-20261028-01, step 2: *the floor is unmet, not silently met*).
+    """
+    return seats + (1 if auditor_independent else 0) >= SEAT_FLOOR
 
 
 def role(name: str) -> Role:
@@ -1218,11 +1253,13 @@ def seat_names(count: int) -> List[str]:
     return [s.name for s in PREFIX_SEATS[:count]]
 
 
-def resolve_dimensions(names: Sequence[str], high_risk_mode: bool) -> List[str]:
+def resolve_dimensions(names: Sequence[str], high_risk_mode: bool,
+                       auditor_independent: Optional[bool] = None) -> List[str]:
     """The seats a user *named*, in the order they named them, under the same floor as a count.
 
     `review_dimensions` replaces the `review_seats` prefix, so it is held to the rule the prefix is:
-    fewer than `SEAT_FLOOR` needs high-risk mode, with `resolve_seats`' message. Unknown names and
+    a list that does not meet `SEAT_FLOOR` (`floor_met`: the names, plus the auditor where it is
+    independent) needs high-risk mode, with `resolve_seats`' message. Unknown names and
     duplicates are refused rather than dropped — a seat that silently did not open is a panel that
     reads smaller than it was configured to be.
 
@@ -1241,11 +1278,8 @@ def resolve_dimensions(names: Sequence[str], high_risk_mode: bool) -> List[str]:
         raise PolicyError(f"seat(s) {repeated} named more than once; a seat opens once")
     if not chosen:
         raise PolicyError("a review needs at least one seat")
-    if len(chosen) < SEAT_FLOOR and not high_risk_mode:
-        raise PolicyError(
-            f"{len(chosen)} seat(s) is below the floor of {SEAT_FLOOR}. Enable high-risk mode to go "
-            f"below it — one reviewer is the single point of view the panel exists to avoid, so "
-            f"this runner does not lower the floor by itself.")
+    if not floor_met(len(chosen), auditor_independent) and not high_risk_mode:
+        raise PolicyError(_below_floor_message(len(chosen), auditor_independent))
     missing = vetoes_missing(chosen)
     if missing and not high_risk_mode:
         raise PolicyError(
@@ -1261,7 +1295,35 @@ def vetoes_missing(chosen: Sequence[str]) -> List[str]:
     return [s.name for s in SEATS if s.veto and s.name not in chosen]
 
 
-def resolve_seats(requested: Optional[int], high_risk_mode: bool) -> int:
+def default_seats(auditor_independent: Optional[bool], high_risk_mode: bool) -> int:
+    """How many seats a run opens when nobody asked for a count, so that the floor holds.
+
+    `SEAT_DEFAULT` when the auditor makes it a floor-sized panel, or when high-risk mode is on (the
+    run then records that it is below the floor). Otherwise `SEAT_FLOOR`: an auditor that is not on
+    a different backend is the same model reading again, which is not a third view, and the third
+    view has to be a seat (CHG-20261028-01, step 2). Chosen over refusing a run nobody configured —
+    the user is told which it is (`cli`), and can route the auditor instead.
+    """
+    if floor_met(SEAT_DEFAULT, auditor_independent) or high_risk_mode:
+        return SEAT_DEFAULT
+    return SEAT_FLOOR
+
+
+def _below_floor_message(seats: int, auditor_independent: Optional[bool]) -> str:
+    """The refusal for a panel under the floor. One sentence in two places, so they cannot drift."""
+    if auditor_independent:
+        counted = f"{seats} seat(s) and an independent auditor make {seats + 1}"
+    else:
+        counted = (f"{seats} seat(s), and an auditor that is not on a different backend from the "
+                   f"builder and every seat does not count as a view")
+    return (f"{seats} seat(s) is below the floor of {SEAT_FLOOR} ({counted}). Enable high-risk "
+            f"mode to go below it, open another seat, or route the auditor to a different backend "
+            f"— one reviewer is the single point of view the panel exists to avoid, so this "
+            f"runner does not lower the floor by itself.")
+
+
+def resolve_seats(requested: Optional[int], high_risk_mode: bool,
+                  auditor_independent: Optional[bool] = None) -> int:
     """How many seats a run opens, refusing to go below the floor on its own authority.
 
     **At one seat the panel can no longer return `undecided`, and nothing said so**
@@ -1284,12 +1346,12 @@ def resolve_seats(requested: Optional[int], high_risk_mode: bool) -> int:
     and the thing that lifts it are two lines of one file edited by one hand.
     """
     if requested is None:
-        return SEAT_FLOOR
-    if requested < SEAT_FLOOR and not high_risk_mode:
-        raise PolicyError(
-            f"{requested} seat(s) is below the floor of {SEAT_FLOOR}. Enable high-risk mode to go "
-            f"below it — one reviewer is the single point of view the panel exists to avoid, so "
-            f"this runner does not lower the floor by itself.")
+        # `SEAT_DEFAULT`, and not a floor check: nobody asked for this count, so there is no request
+        # to refuse. Whether the auditor makes the default panel a floor-sized one is the caller's
+        # to see — `cli.cmd_run` sizes the panel up when it is not (CHG-20261028-01).
+        return SEAT_DEFAULT
+    if not floor_met(requested, auditor_independent) and not high_risk_mode:
+        raise PolicyError(_below_floor_message(requested, auditor_independent))
     seat_names(requested)        # raises if the count is not one this runner can actually open
     return requested
 
@@ -1530,3 +1592,316 @@ def adjudicate(verdicts: Mapping[str, str], *, voices: str = "seats") -> Dict[st
     return {"outcome": FAIL,
             "reason": f"only {passes}/{len(verdicts)} seats passed",
             "vetoed": []}
+
+
+# --------------------------------------------------------------------------------------------
+# Findings (CHG-20261028-01)
+#
+# A seat reports what it found as well as its verdict, and the auditor reports what it found on
+# its own reading. `adjudicate` above still counts the seats' verdicts; findings are the other half
+# of what a seat says, and they are not votes. These are the words they are written in and the one
+# function that reads them.
+# --------------------------------------------------------------------------------------------
+
+#: How much a finding matters. `important` is the only value that can fail a change; a `nit` is kept
+#: and never sent to the rework (CHG-20261028-01, 5.5).
+SEVERITIES = ("important", "nit")
+
+#: Whose doing it is: `introduced` by this change, or `pre-existing` and merely noticed.
+ORIGINS = ("introduced", "pre-existing")
+
+#: The keys of one finding as a model writes it. `file` and `line` are required and non-blank
+#: (Q2): a finding with no location cannot be passed on and cannot be disposed. `trigger` is the
+#: concrete input and the wrong result it produces; it is a key every finding carries, and it may be
+#: empty — but then the finding cannot be `important`.
+FINDING_FIELDS = ("id", "file", "line", "claim", "trigger", "severity", "origin")
+
+
+def _text(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _line_number(value: object) -> Optional[int]:
+    """A line as a positive integer, from an int or from digits. A bool is not a number here."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 1 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        number = int(value.strip())
+        return number if number >= 1 else None
+    return None
+
+
+def read_findings(raw: object, *, source: str) -> List[Dict[str, object]]:
+    """The findings one answer carries, validated and attributed to ``source``.
+
+    ``raw`` is the answer's ``findings`` value. **Absent is no findings** (`None`); anything else
+    that is not a list is refused, and so is any entry that is not a closed object with every key in
+    `FINDING_FIELDS`, a non-blank ``file``, ``claim`` and local ``id``, a ``line`` that is a
+    positive integer, and a ``severity`` and ``origin`` from their vocabularies. A finding with no
+    location is refused at parse time rather than carried (CHG-20261028-01 Q2).
+
+    **A finding with no ``trigger`` can never be `important`.** It is kept and reported — the spec
+    says it "may still be reported" — as a `nit`, with what the seat said recorded in
+    ``severity_said`` so the demotion is visible rather than silent. Chosen over refusing the
+    answer: refusing would stop the run over a seat's wording and would lose the finding, and the
+    spec's sentence is about what the finding can *be*, not about whether it can be said.
+
+    Ids are the seat's own, unique within one answer; the id the rest of the run uses is
+    ``"<source>:<id>"``, so two seats that both number their findings from `F1` do not collide.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, (list, tuple)):
+        raise PolicyError(
+            f"{source}: `findings` is {type(raw).__name__}, not a list of findings. Say [] when "
+            f"there is nothing to report")
+    found: List[Dict[str, object]] = []
+    seen: List[str] = []
+    for position, item in enumerate(raw, start=1):
+        where = f"{source}: finding {position}"
+        if not isinstance(item, Mapping):
+            raise PolicyError(f"{where} is {type(item).__name__}, not an object with "
+                              f"{list(FINDING_FIELDS)}")
+        missing = [k for k in FINDING_FIELDS if k not in item]
+        extra = sorted(k for k in item if k not in FINDING_FIELDS)
+        if missing or extra:
+            raise PolicyError(
+                f"{where} must carry exactly {list(FINDING_FIELDS)}"
+                + (f"; missing {missing}" if missing else "")
+                + (f"; not part of a finding: {extra}" if extra else ""))
+        local = _text(item["id"])
+        if not local:
+            raise PolicyError(f"{where} has a blank `id`")
+        where = f"{source}: finding {local!r}"
+        if local in seen:
+            raise PolicyError(f"{where} appears twice in one answer; a finding's id is its own")
+        seen.append(local)
+        for key in ("file", "claim"):
+            if not _text(item[key]):
+                raise PolicyError(f"{where} has a blank `{key}`"
+                                  + (" — a finding with no location cannot be passed on or "
+                                     "disposed" if key == "file" else ""))
+        number = _line_number(item["line"])
+        if number is None:
+            raise PolicyError(f"{where} has `line` {item['line']!r}, which is not a line number "
+                              f"(a positive integer). A finding with no location is refused")
+        severity, origin = item["severity"], item["origin"]
+        if severity not in SEVERITIES:
+            raise PolicyError(f"{where} has `severity` {severity!r}; it is one of "
+                              f"{list(SEVERITIES)}")
+        if origin not in ORIGINS:
+            raise PolicyError(f"{where} has `origin` {origin!r}; it is one of {list(ORIGINS)}")
+        finding: Dict[str, object] = {
+            "id": f"{source}:{local}", "local_id": local, "source": source,
+            "file": _text(item["file"]), "line": number, "claim": _text(item["claim"]),
+            "trigger": _text(item["trigger"]), "severity": severity, "origin": origin}
+        if severity == "important" and not finding["trigger"]:
+            # Never important without a trigger (CHG-20261028-01, 1). The seat's word is kept.
+            finding["severity"] = "nit"
+            finding["severity_said"] = "important"
+        found.append(finding)
+    return found
+
+
+#: What the auditor may say about one finding (CHG-20261028-01, step 4). Never an overall verdict on
+#: the change: the tally is `dispose`'s, in code.
+DISPOSITIONS = ("confirm", "refute", "cannot-verify")
+
+#: The keys of one disposition row as the auditor writes it. `file` and `line` are the evidence's
+#: location and are required on every row ("every disposition carries a location too"). `input` and
+#: `result` are the concrete input and the right result it produces: they may be empty, but a
+#: `refute` without both is read as `cannot-verify`.
+DISPOSITION_FIELDS = ("id", "disposition", "file", "line", "evidence", "input", "result")
+
+
+def read_dispositions(raw: object) -> List[Dict[str, object]]:
+    """The rows an `audit_dispose` answer carries, validated shape by shape.
+
+    Only the shape is checked here: a closed object per row with every key in `DISPOSITION_FIELDS`,
+    a non-blank ``id`` and ``file``, a ``line`` that is a positive integer, and a ``disposition``
+    from `DISPOSITIONS`. Whether each finding has exactly one row is not this function's question --
+    it cannot know the findings -- and is rule 5.1 of `dispose`.
+
+    **A refute that does not show its work is not a refute.** A `refute` whose ``input`` or
+    ``result`` is blank is read as `cannot-verify`, with the word the auditor used kept in
+    ``disposition_said`` so the downgrade is visible. Chosen over refusing the answer for the reason
+    `read_findings` demotes a trigger-less `important`: the spec's sentence is about how the row
+    reads, and refusing would stop the run over wording and lose the row.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, (list, tuple)):
+        raise PolicyError(f"`dispositions` is {type(raw).__name__}, not a list of rows. Say [] when "
+                          f"there were no findings to dispose of")
+    rows: List[Dict[str, object]] = []
+    for position, item in enumerate(raw, start=1):
+        where = f"disposition {position}"
+        if not isinstance(item, Mapping):
+            raise PolicyError(f"{where} is {type(item).__name__}, not an object with "
+                              f"{list(DISPOSITION_FIELDS)}")
+        missing = [k for k in DISPOSITION_FIELDS if k not in item]
+        extra = sorted(k for k in item if k not in DISPOSITION_FIELDS)
+        if missing or extra:
+            raise PolicyError(
+                f"{where} must carry exactly {list(DISPOSITION_FIELDS)}"
+                + (f"; missing {missing}" if missing else "")
+                + (f"; not part of a disposition: {extra}" if extra else ""))
+        finding_id = _text(item["id"])
+        if not finding_id:
+            raise PolicyError(f"{where} has a blank `id`")
+        where = f"disposition of {finding_id!r}"
+        said = item["disposition"]
+        if said not in DISPOSITIONS:
+            raise PolicyError(f"{where} says {said!r}; it is one of {list(DISPOSITIONS)}")
+        if not _text(item["file"]):
+            raise PolicyError(f"{where} has a blank `file` -- every disposition carries the "
+                              f"location of its evidence")
+        number = _line_number(item["line"])
+        if number is None:
+            raise PolicyError(f"{where} has `line` {item['line']!r}, which is not a line number "
+                              f"(a positive integer)")
+        row: Dict[str, object] = {
+            "id": finding_id, "disposition": said, "file": _text(item["file"]), "line": number,
+            "evidence": _text(item["evidence"]), "input": _text(item["input"]),
+            "result": _text(item["result"])}
+        if said == "refute" and not (row["input"] and row["result"]):
+            row["disposition"] = "cannot-verify"
+            row["disposition_said"] = "refute"
+        rows.append(row)
+    return rows
+
+
+#: The `source` of a finding the auditor raised itself (`audit_read`); a seat's is its name.
+AUDITOR_SOURCE = "auditor"
+
+
+def _seat_of(source: str) -> str:
+    """The seat a finding's source names: `defect[opus]` is the `defect` seat."""
+    return source.split("[", 1)[0]
+
+
+def dispose(findings: Sequence[Mapping[str, object]], dispositions: Sequence[Mapping[str, object]],
+            panel: Mapping[str, object]) -> Dict[str, object]:
+    """The review's decision: the seats' view, every finding and the auditor's rows, tallied in code.
+
+    **Pure, and the one place the audit is decided** (CHG-20261028-01, step 5). No model gives an
+    overall verdict: the auditor disposes per finding and this function does the sum.
+
+    ``findings`` are the normalised findings of both the seats and the auditor (`read_findings`),
+    ``dispositions`` the auditor's rows (`read_dispositions`), and ``panel`` the seats' own
+    `adjudicate` result (its ``outcome`` and ``verdicts``) -- the *panel's view*, which no longer
+    routes by itself. The rules, in order:
+
+    **5.1 Every finding has exactly one disposition.** A missing row, a duplicate row or a row for an
+    id nobody raised means the answer is unreached, and this raises `PolicyError` naming the ids
+    (the engine stops the run with it, as it does a seat that names no verdict). A dropped finding is
+    not a refuted one.
+
+    **5.2 The veto cannot be refuted away.** A veto seat that did not pass, whose every finding the
+    auditor refuted, is a disagreement: the outcome is `undecided` and reaches a person. It never
+    becomes `pass`, and it is decided here, before anything else is counted, so confirmed findings
+    from other seats do not turn a refuted veto into a `fail` the veto never asked for.
+
+    **5.3 Confirmed `important` + `introduced` findings fail the review.** A seat's finding counts
+    when its row is `confirm`; its text goes to the rework.
+
+    **5.4 The auditor's own findings count directly.** An `important` + `introduced` finding the
+    auditor raised itself counts as confirmed by its author, whatever its row says, because no other
+    voice checked it (Q4: no second disposition session). A finding without a `trigger` is never
+    `important` (`read_findings`), so it does not count.
+
+    **5.5 What does not fail the change is still kept.** Refuted, `cannot-verify`, `nit` and
+    `pre-existing` findings are returned under ``kept`` with why they were; none is a reason to
+    send the change back.
+
+    **5.6 The panel's view and the audit disagree: `undecided`.** The audit result of 5.1-5.5 is
+    `fail` if anything counts and `pass` otherwise. If the seats' outcome differs from it, nothing
+    is waived: the result is `undecided`, and a person sees both. Read literally: any difference,
+    including seats that pass beside a confirmed finding, and seats that fail with no finding behind
+    them.
+    """
+    view = str(panel.get("outcome"))
+    if view not in OUTCOMES:
+        raise PolicyError(f"the panel's view is {view!r}, which is not one of {list(OUTCOMES)}")
+    # 5.1
+    raised = [str(f["id"]) for f in findings]
+    twice = sorted({i for i in raised if raised.count(i) > 1})
+    if twice:
+        raise PolicyError(f"finding id(s) {twice} appear more than once in the findings file; "
+                          f"an id names one finding")
+    said: Dict[str, List[Mapping[str, object]]] = {}
+    for row in dispositions:
+        said.setdefault(str(row.get("id")), []).append(row)
+    missing = sorted(i for i in raised if i not in said)
+    repeated = sorted(i for i, rows in said.items() if len(rows) > 1 and i in raised)
+    stray = sorted(i for i in said if i not in raised)
+    if missing or repeated or stray:
+        parts = []
+        if missing:
+            parts.append(f"no disposition for {missing}")
+        if repeated:
+            parts.append(f"more than one disposition for {repeated}")
+        if stray:
+            parts.append(f"a disposition for {stray}, which nobody raised")
+        raise PolicyError(
+            "the audit is unreached: " + "; ".join(parts) + ". Every finding has exactly one "
+            "disposition -- a dropped finding is not a refuted one")
+    row_of = {i: rows[0] for i, rows in said.items()}
+    verdicts = {str(k): str(v) for k, v in (panel.get("verdicts") or {}).items()}
+
+    def _entry(finding, why=None):
+        row = row_of[str(finding["id"])]
+        out = {"id": finding["id"], "source": finding["source"], "file": finding["file"],
+               "line": finding["line"], "claim": finding["claim"], "trigger": finding["trigger"],
+               "severity": finding["severity"], "origin": finding["origin"],
+               "disposition": row["disposition"], "evidence": row.get("evidence", ""),
+               "evidence_file": row.get("file"), "evidence_line": row.get("line")}
+        if why:
+            out["why"] = why
+        return out
+
+    # 5.3, 5.4, 5.5: classified first, so every outcome below can say what it kept.
+    confirmed: List[Dict[str, object]] = []
+    kept: List[Dict[str, object]] = []
+    for f in findings:
+        row = row_of[str(f["id"])]
+        counts = f["severity"] == "important" and f["origin"] == "introduced"
+        if counts and f["source"] == AUDITOR_SOURCE:
+            confirmed.append(_entry(f, "raised by the auditor itself"))
+        elif counts and row["disposition"] == "confirm":
+            confirmed.append(_entry(f, "confirmed by the auditor"))
+        elif row["disposition"] != "confirm":
+            kept.append(_entry(f, "refuted" if row["disposition"] == "refute" else "cannot-verify"))
+        elif f["severity"] != "important":
+            kept.append(_entry(f, "nit"))
+        else:
+            kept.append(_entry(f, "pre-existing"))
+    # 5.2: before the sum, so confirmed findings from other seats cannot turn a refuted veto into a
+    # `fail` the veto never asked for.
+    for seat in (s.name for s in SEATS if s.veto):
+        if verdicts.get(seat, PASS) == PASS:
+            continue
+        behind = [f for f in findings if _seat_of(str(f["source"])) == seat]
+        if behind and all(row_of[str(f["id"])]["disposition"] == "refute" for f in behind):
+            return {
+                "outcome": UNDECIDED, "panel_view": view, "audit_result": None,
+                "reason": (f"{seat} did not pass and the auditor refuted every finding behind it "
+                           f"({', '.join(str(f['id']) for f in behind)}): a veto is not audited "
+                           f"away, so the disagreement goes to a person"),
+                "confirmed": confirmed, "kept": kept, "verdicts": verdicts}
+    audit = FAIL if confirmed else PASS
+    # 5.6
+    if view != audit:
+        return {
+            "outcome": UNDECIDED, "panel_view": view, "audit_result": audit,
+            "reason": (f"the seats' view is {view} and the audit result is {audit} "
+                       f"({len(confirmed)} confirmed finding(s)): nothing is waived, a person "
+                       f"sees both"),
+            "confirmed": confirmed, "kept": kept, "verdicts": verdicts}
+    return {
+        "outcome": audit, "panel_view": view, "audit_result": audit,
+        "reason": (f"the seats {view} it and the audit agrees "
+                   f"({len(confirmed)} confirmed finding(s), {len(kept)} kept)"),
+        "confirmed": confirmed, "kept": kept, "verdicts": verdicts}

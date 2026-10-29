@@ -170,6 +170,28 @@
       "idempotence_probes": [],
       "workdir": "."
     },
+    "audit_read": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "audit_dispose": {
+      "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
+      "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console.",
+      "done_criteria": "the page opens in a browser, shows seven days, and the middle band shows the current temperature and humidity",
+      "acceptance_predicate": "all four files exist and parse, and the page makes no network call",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/weather.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
     "review_failed": {
       "scope": "four modules in site/ \u2014 index.html, styles.css, weather.js, app.js. No build step, no dependencies, and no network request of any kind.",
       "objective": "A one-week local weather page for Taipei, with the current conditions \u2014 temperature and humidity \u2014 shown in a band in the middle of the week.",
@@ -400,6 +422,24 @@
     "lead_review": [
       {
         "description": "lead_review: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "audit_read": [
+      {
+        "description": "audit_read: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "audit_dispose": [
+      {
+        "description": "audit_dispose: read and answer",
         "kind": "ordinary",
         "targets": [
           "site/"

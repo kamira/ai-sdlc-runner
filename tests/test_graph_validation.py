@@ -239,9 +239,9 @@ def test_the_populations_the_panel_comments_count_are_the_ones_they_say():
     assert len(named & model) == 3, (
         f"the comments say three of those five name the panel's own words; found {named & model}")
     assert seat == {"lead_review"}, f"the comments say one seat panel; found {seat}"
-    assert seat <= named, (
-        "the comments say the seat panel names `pass`/`fail` — which is why the rule refusing "
-        "anything else has never fired on the shipped graph")
+    # `lead_review` stopped routing in CHG-20261028-01: the fourth node that names `pass`/`fail`
+    # is `review_decide`, the runner's decision, which the comments' count still holds.
+    assert "review_decide" in named and "lead_review" not in named
     assert len(named) == 4, f"the comments say four nodes name them in all; found {named}"
 
 
@@ -264,10 +264,12 @@ def test_a_seat_panel_whose_branches_the_panel_cannot_name_is_refused():
     passed `validate` and would have died at `engine`'s branch lookup with `has no branch 'pass'`,
     which is what CHG-20260901-11 was opened for.
     """
-    seat = graph.BY_ID["lead_review"]
-    renamed = {"approve": seat.branches[policy.PASS], "reject": seat.branches[policy.FAIL]}
+    # No shipped seat panel routes any more (`review_decide` took the branches, CHG-20261028-01), so
+    # the rule is driven by giving `lead_review` the branches it used to have, renamed.
+    decide = graph.BY_ID["review_decide"]
+    renamed = {"approve": decide.branches[policy.PASS], "reject": decide.branches[policy.FAIL]}
     with pytest.raises(graph.GraphError, match="routed by the review seats"):
-        validate_with(_mutate("lead_review", branches=renamed))
+        validate_with(_mutate("lead_review", kind=graph.DECISION, next=None, branches=renamed))
 
 
 def test_a_seat_panel_declaring_panel_branches_is_refused():
@@ -376,7 +378,7 @@ def test_which_gate_is_consulted_when_is_pinned():
         "lead_assess": "after",
         "pm_signoff": "after",
         "lead_task_review": "after",
-        "lead_review": "after",
+        "review_decide": "after",       # moved from lead_review (CHG-20261028-01)
         "qa_verify": "after",
         "qa_accept": "after",
         # before — the work itself is the risk
@@ -473,7 +475,7 @@ def test_where_each_refusal_goes_is_pinned():
         "pm_signoff": "pm_plan",
         "engineer_selfverify": "engineer_build",
         "lead_task_review": "fix_pass",
-        "lead_review": "review_failed",
+        "review_decide": "review_failed",     # moved from lead_review (CHG-20261028-01)
         # Deliberately outside the whole-change bound (CHG-20260828-22): a QA refusal goes round
         # the module loop rather than to `change_retry`.
         "qa_verify": "next_module",

@@ -11,7 +11,7 @@ The flow and the governance are this repository's own, in two files anyone can r
 | File | What it holds |
 | --- | --- |
 | [`policy.py`](src/ai_sdlc_runner/policy.py) | the governance: roles and their capabilities, ten gates × three risk grades, the never-automated actions, the review seats and how their verdicts are adjudicated |
-| [`graph.py`](src/ai_sdlc_runner/graph.py) | the flow: 31 nodes, one kind of work each, with the module loop, the bounded retry, and the feedback edge back to PM |
+| [`graph.py`](src/ai_sdlc_runner/graph.py) | the flow: 34 nodes, one kind of work each, with the module loop, the bounded retry, and the feedback edge back to PM |
 
 Everything else serves those two: [`engine.py`](src/ai_sdlc_runner/engine.py) walks the flow and
 enforces the policy, [`workorder.py`](src/ai_sdlc_runner/workorder.py) renders the closed-schema
@@ -59,7 +59,7 @@ written in the file always wins over the default.
 
 ## The flow
 
-31 nodes. Each does **one kind of work**, which is what decides where the boundaries fall: building,
+34 nodes. Each does **one kind of work**, which is what decides where the boundaries fall: building,
 verifying your own work, and having it reviewed are three kinds of work, so they are three nodes.
 
 ```
@@ -94,9 +94,11 @@ next_module ─┬─ module → engineer_build            one engineer, one sma
              │                                                  └─ fail → halt_second_fail  ■
              │                                       (bounded: exactly one fix pass)
              │
-             └─ none → lead_review ◆lead_review     the seats cross-check the whole change
-                          ├─ fail → review_failed ─────→ change_retry
-                          └─ pass → qa_verify ◆qa_verify        run it for real
+             └─ none → lead_review                  the seats cross-check the whole change
+                          └─→ audit_read → audit_dispose     the auditor reads blind, then disposes
+                                  └─→ review_decide ◆lead_review   the runner adjudicates; nobody is asked
+                                        ├─ fail → review_failed ─────→ change_retry
+                                        └─ pass → qa_verify ◆qa_verify        run it for real
                                       └─→ qa_accept ◆acceptance
                                              ├─ fail → acceptance_failed → change_retry
                                              └─ pass → pr ◆pr
@@ -123,7 +125,7 @@ Three shapes carry most of the meaning and are explicit rather than flattened:
 - **the feedback loop** — user feedback returns to PM, so the flow closes rather than ends.
 
 ```bash
-runner flow      # print all 31 nodes, their roles, gates and branches
+runner flow      # print all 34 nodes, their roles, gates and branches
 ```
 
 ---
@@ -167,9 +169,11 @@ vouched for as ordinary, because the name says nothing about what it will do.
 
 ### Review seats
 
-Fifteen seats, each answering a **different question**; **three open by default** (`conformance`,
-`defect`, `risk`) and an install that sets nothing opens exactly those. The floor is three; going
-below it needs an explicit high-risk-mode bypass, which is recorded. `review_seats` opens the first
+Fifteen seats, each answering a **different question**; **two open by default** (`conformance`,
+`defect`) and an install that sets nothing opens exactly those; `review_seats 3` adds `risk`. The
+floor is three and counts the seats plus the auditor, which counts only when its backend differs from
+the builder's and from every open seat's (CHG-20261028-01); going below it needs an explicit
+high-risk-mode bypass, which is recorded. `review_seats` opens the first
 N of the twelve seats that are not opt-in (at most 12). `review_dimensions` in
 `config/settings.json` (or `runner settings`) names the seats you want, in order, and replaces the
 `review_seats` count while it is set; it must include `conformance`, the veto seat, unless high-risk
@@ -607,7 +611,7 @@ that file is in**, not against your shell — so an example works the same wheth
 the repository root, from inside the example, or from somewhere else entirely. See
 [Where the agent runs](#where-the-agent-runs) if you keep your own `runner.yaml`.
 
-That **visits 21 of the 31 nodes** — eight are failure paths a green run never takes, and two
+That **visits 24 of the 34 nodes** — eight are failure paths a green run never takes, and two
 (`sub_plan`, `reconcile`) are the second planning tier, which a single-workstream plan skips —
 asks 17 questions, writes a real `examples/minimal/greet.py` beside the agent that wrote it, and
 finishes. It is three
@@ -708,7 +712,7 @@ one-instruction, one-server demo had the same bug and looked fine.
 
 ```
 src/ai_sdlc_runner/
-  graph.py        the flow: 31 nodes, their modes, gates and branches
+  graph.py        the flow: 34 nodes, their modes, gates and branches
   policy.py       the governance: roles, gates × risk, permanent halts, seats, adjudication
   engine.py       walks the flow, enforces the policy, opens one session per ask
   workorder.py    the closed-schema order every ask receives
@@ -718,6 +722,7 @@ src/ai_sdlc_runner/
   store.py        the SQLite store: the registry, and which node or seat gets which model
   conversations.py  every turn of every conversation, append-only, categorised by project
   attachments.py  content-addressed storage; the filename never becomes a path
+  auditscope.py   what the auditor reads: the diff and its neighbours, `read` or `cut` by a cap
   server.py       the local-only back end
   effects.py      ordered effects, each admitted only if probeable
   probes.py       postconditions read from the world: git, the forge, the ledger
@@ -913,7 +918,7 @@ them out.
 ## Testing
 
 ```bash
-pytest -q          # 3230 tests
+pytest -q          # 3381 tests
 ```
 
 CI runs the suite on Ubuntu and Windows, Python 3.9 and 3.13, plus the ledger check. The matrix is

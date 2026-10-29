@@ -171,6 +171,16 @@ SCHEMA_KEYS = ("type", "properties", "required", "additionalProperties")
 PROPERTY_KEYS = ("type", "enum", "items", "minItems", "uniqueItems", "description")
 ITEM_KEYS = ("type", "enum")
 
+#: An array may hold **objects** as well as strings (CHG-20261028-01): the findings a seat reports
+#: and the dispositions the auditor answers are lists of closed records, and a record squeezed into
+#: one string per item would have to be re-parsed by the reader, which is the guess this notation
+#: exists to end. The object is as closed as the schema around it — exactly these keys, no key it
+#: does not name — and its fields are strings (`FIELD_KEYS`), optionally from an `enum`. A field has
+#: **no `description`**: `engine._comparable` drops property-level descriptions only, so wording
+#: inside an item would count as a changed question and re-ask a journaled answer.
+OBJECT_ITEM_KEYS = ("type", "properties", "required", "additionalProperties")
+FIELD_KEYS = ("type", "enum")
+
 
 class WorkOrderError(Exception):
     """Raised when an order cannot be rendered truthfully — never softened into a partial one."""
@@ -194,6 +204,29 @@ def _words(value: object) -> bool:
     ) and len(set(value)) == len(value)
 
 
+def _object_item_problem(key: str, items: Mapping[str, object]) -> Optional[str]:
+    """What is wrong with an array's object `items`, or None (CHG-20261028-01)."""
+    if tuple(sorted(items)) != tuple(sorted(OBJECT_ITEM_KEYS)):
+        return (f"property {key!r}: object `items` has keys {sorted(items)}; it must have exactly "
+                f"{sorted(OBJECT_ITEM_KEYS)}")
+    if items["additionalProperties"] is not False:
+        return f"property {key!r}: object `items` must allow no key it does not name"
+    fields, required = items["properties"], items["required"]
+    if not isinstance(fields, Mapping) or not fields:
+        return f"property {key!r}: object `items` must describe its fields in `properties`"
+    for name, field in fields.items():
+        if not isinstance(field, Mapping) or [k for k in field if k not in FIELD_KEYS] \
+                or field.get("type") != "string" \
+                or not ("enum" not in field or _words(field["enum"])):
+            return (f"property {key!r}: field {name!r} of an object item must be "
+                    f"{{\"type\": \"string\"}}, with an optional `enum` and nothing else")
+    if not isinstance(required, (list, tuple)) or not all(isinstance(k, str) for k in required) \
+            or len(set(required)) != len(required) or [k for k in required if k not in fields]:
+        return (f"property {key!r}: object `items` requires {required}, which `properties` does "
+                f"not all describe, once each")
+    return None
+
+
 def _property_problem(key: str, prop: object) -> Optional[str]:
     """What is wrong with one property of a `reply.schema`, or None."""
     if not isinstance(prop, Mapping):
@@ -212,6 +245,11 @@ def _property_problem(key: str, prop: object) -> Optional[str]:
         return None
     if kind == "array":
         items = prop.get("items")
+        if isinstance(items, Mapping) and items.get("type") == "object":
+            problem = _object_item_problem(key, items)
+            if problem:
+                return problem
+            items = {"type": "string"}      # the rest of the array rules are the same
         if not isinstance(items, Mapping) or [k for k in items if k not in ITEM_KEYS] \
                 or items.get("type") != "string" or not ("enum" not in items or _words(items["enum"])):
             return f"property {key!r}: `items` must be {{\"type\": \"string\"}}, with an optional `enum`"

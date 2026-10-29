@@ -170,6 +170,28 @@
       "idempotence_probes": [],
       "workdir": "."
     },
+    "audit_read": {
+      "scope": "the whole built page: ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Judge the built page as a whole against the acceptance predicate. Do not create or change any file.",
+      "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
+      "acceptance_predicate": "all ten files exist and parse, no file holds an API key, the page requests nothing but the two named API hosts, and a failed request shows an error state naming the source with no made-up numbers",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/sources.js, site/openmeteo.js, site/cwa.js, site/normalize.js, site/now.js, site/week.js, site/chart.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "audit_dispose": {
+      "scope": "the whole built page: ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
+      "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
+      "instructions": "Build exactly what the operator asked for and nothing else. Read the instructions field: it carries what was typed into the console, including the ten modules and the rule that no key is ever written into a file. Keep the brief's rules at every step: no API key in any file, and no made-up or fallback numbers. Judge the built page as a whole against the acceptance predicate. Do not create or change any file.",
+      "done_criteria": "the page opens in a browser, shows the source and the time it was fetched, shows seven days with the current temperature and humidity in the middle and today's curve, and a failed request shows an error state naming the source with no made-up numbers",
+      "acceptance_predicate": "all ten files exist and parse, no file holds an API key, the page requests nothing but the two named API hosts, and a failed request shows an error state naming the source with no made-up numbers",
+      "input_artifacts": [],
+      "expected_outputs": "site/index.html, site/styles.css, site/sources.js, site/openmeteo.js, site/cwa.js, site/normalize.js, site/now.js, site/week.js, site/chart.js, site/app.js",
+      "idempotence_probes": [],
+      "workdir": "."
+    },
     "review_failed": {
       "scope": "the whole built page: ten modules in site/ \u2014 index.html, styles.css, sources.js, openmeteo.js, cwa.js, normalize.js, now.js, week.js, chart.js, app.js, one file each. No build step and no external libraries. The page's only network requests are to api.open-meteo.com and, when the person types a key, opendata.cwa.gov.tw.",
       "objective": "A one-week weather page for Taipei with real data fetched by the page in the browser: the current temperature and humidity in the middle, seven days of high, low and rain chance, and today's hourly temperature curve.",
@@ -400,6 +422,24 @@
     "lead_review": [
       {
         "description": "lead_review: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "audit_read": [
+      {
+        "description": "audit_read: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "site/"
+        ]
+      }
+    ],
+    "audit_dispose": [
+      {
+        "description": "audit_dispose: read and answer",
         "kind": "ordinary",
         "targets": [
           "site/"

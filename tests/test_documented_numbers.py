@@ -553,7 +553,7 @@ def test_the_role_and_seat_counts_match():
 
     for name, body in _text().items():
         for claimed in re.findall(r"(\w+)\s+roles\b", body):
-            words = {"five": 5, "four": 4, "six": 6, "three": 3}
+            words = {"five": 5, "four": 4, "six": 6, "seven": 7, "three": 3}
             if claimed.lower() in words:
                 assert words[claimed.lower()] == len(policy.ROLES), \
                     f"{name} says {claimed} roles; there are {len(policy.ROLES)}"

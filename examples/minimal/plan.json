@@ -172,6 +172,36 @@
       "idempotence_probes": [],
       "workdir": "."
     },
+    "audit_read": {
+      "scope": "audit_read",
+      "objective": "audit_read: see examples/agent.py",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": [
+        "the expected outputs exist"
+      ],
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
+    "audit_dispose": {
+      "scope": "audit_dispose",
+      "objective": "audit_dispose: see examples/agent.py",
+      "instructions": "do exactly this and nothing else",
+      "done_criteria": [
+        "the expected outputs exist"
+      ],
+      "acceptance_predicate": "the files are there and parse",
+      "input_artifacts": [
+        "README.md"
+      ],
+      "expected_outputs": [],
+      "idempotence_probes": [],
+      "workdir": "."
+    },
     "qa_verify": {
       "scope": "qa_verify",
       "objective": "qa_verify: see examples/agent.py",
@@ -327,6 +357,24 @@
     "lead_review": [
       {
         "description": "lead_review: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "audit_read": [
+      {
+        "description": "audit_read: read and answer",
+        "kind": "ordinary",
+        "targets": [
+          "greet.py"
+        ]
+      }
+    ],
+    "audit_dispose": [
+      {
+        "description": "audit_dispose: read and answer",
         "kind": "ordinary",
         "targets": [
           "greet.py"

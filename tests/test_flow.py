@@ -59,8 +59,30 @@ def _cfg(**kw):
     return engine.RunConfig(**base)
 
 
+def _seat_reply(seat, verdict):
+    """A seat's answer. A failing seat points at something (CHG-20261028-01): `dispose` has no way
+    to act on a fail that names no file and line, so the stand-in gives each failing seat one."""
+    reply = {"verdict": verdict}
+    if verdict != SEAT_PASS:
+        reply["findings"] = [{"id": "F1", "file": "pkg/a.py", "line": "7", "claim": f"{seat} objects",
+                              "trigger": "a=1 gives 2, should be 3", "severity": "important",
+                              "origin": "introduced"}]
+    return reply
+
+
+def _confirm_all(order):
+    """The auditor's answer to `audit_dispose`: every finding in the file it was handed, confirmed."""
+    import json
+    found = json.loads(open(order["input_artifacts"][0], encoding="utf-8").read())["findings"]
+    return {"dispositions": [{"id": f["id"], "disposition": "confirm", "file": f["file"],
+                              "line": f["line"], "evidence": "read it", "input": "", "result": ""}
+                             for f in found]}
+
+
 def _answer(order, answers=None):
     """The answer a model would give to this order — a branch where the node needs one."""
+    if order["node_id"] == "audit_dispose":
+        return _confirm_all(order)
     if order.get("seat"):
         if order["node_id"] == "intake_review":
             # A survey, not a panel — the same distinction `Recorder._answer` makes forty lines
@@ -119,7 +141,7 @@ class Recorder:
                 if seat == policy.seat_names(policy.SEAT_FLOOR)[0]:
                     self._panels += 1
                 if self._panels <= 1:
-                    return {"verdict": self.seat_verdicts.get(seat, SEAT_PASS)}
+                    return _seat_reply(seat, self.seat_verdicts.get(seat, SEAT_PASS))
             return {"verdict": SEAT_PASS}
 
         node_id = order["node_id"]
@@ -187,13 +209,17 @@ def test_the_lead_reviews_work_it_did_not_write():
 
 
 def test_qa_comes_after_the_review_not_instead_of_it():
-    assert graph.BY_ID["lead_review"].branches["pass"] == "qa_verify"
+    # The branch moved with the gate to `review_decide` (CHG-20261028-01); `lead_review` no longer
+    # routes, it leads into the audit.
+    assert graph.BY_ID["review_decide"].branches["pass"] == "qa_verify"
+    assert graph.BY_ID["lead_review"].branches == {}
     assert graph.BY_ID["qa_verify"].role == "qa"
 
 
 def test_a_review_gate_is_consulted_after_the_review_not_before_it():
     """A gate that halts *before* the work it grades is a review a high-risk change never gets."""
-    for node_id in ("lead_review", "qa_verify", "qa_accept", "lead_task_review"):
+    # `lead_review`'s gate stands at `review_decide` since CHG-20261028-01.
+    for node_id in ("review_decide", "qa_verify", "qa_accept", "lead_task_review"):
         assert graph.BY_ID[node_id].gate_when == "after", node_id
 
 
@@ -502,7 +528,7 @@ def test_the_panel_passing_routes_to_qa():
 
 def test_a_majority_against_does_not_pass():
     seats = {"conformance": "pass", "defect": "fail", "risk": "fail"}
-    report = engine.walk(_cfg(decisions=dict(TWO_PASSES), confirmed=THROUGH),
+    report = engine.walk(_cfg(decisions=dict(TWO_PASSES), confirmed=THROUGH, review_seats=3),
                          Recorder(seat_verdicts=seats), enabled=True)
     assert report.adjudications[0]["outcome"] != "pass"
     assert "review_failed" in report.visited
@@ -511,7 +537,7 @@ def test_a_majority_against_does_not_pass():
 def test_a_veto_seat_alone_is_enough_to_stop_it():
     """The veto seat's subject is a matter of fact, not of opinion, so a majority cannot outvote."""
     seats = {"conformance": "fail", "defect": "pass", "risk": "pass"}
-    report = engine.walk(_cfg(decisions=dict(TWO_PASSES), confirmed=THROUGH),
+    report = engine.walk(_cfg(decisions=dict(TWO_PASSES), confirmed=THROUGH, review_seats=3),
                          Recorder(seat_verdicts=seats), enabled=True)
     assert report.adjudications[0]["outcome"] != "pass"
     assert "review_failed" in report.visited
@@ -519,7 +545,7 @@ def test_a_veto_seat_alone_is_enough_to_stop_it():
 
 def test_the_adjudication_records_every_seats_verdict():
     seats = {"conformance": "pass", "defect": "fail", "risk": "pass"}
-    report = engine.walk(_cfg(decisions=dict(TWO_PASSES), confirmed=THROUGH),
+    report = engine.walk(_cfg(decisions=dict(TWO_PASSES), confirmed=THROUGH, review_seats=3),
                          Recorder(seat_verdicts=seats), enabled=True)
     assert report.adjudications[0]["verdicts"] == seats
 
@@ -527,7 +553,7 @@ def test_the_adjudication_records_every_seats_verdict():
 def test_the_panel_routes_through_the_policy_not_the_engines_own_arithmetic():
     """Whatever `policy.adjudicate` says is what happens — the rule lives in one place."""
     seats = {"conformance": "pass", "defect": "fail", "risk": "pass"}
-    report = engine.walk(_cfg(decisions=dict(TWO_PASSES), confirmed=THROUGH),
+    report = engine.walk(_cfg(decisions=dict(TWO_PASSES), confirmed=THROUGH, review_seats=3),
                          Recorder(seat_verdicts=seats), enabled=True)
     expected = policy.adjudicate(seats)
     assert report.adjudications[0]["outcome"] == expected["outcome"]
@@ -694,7 +720,7 @@ def test_each_review_seat_is_its_own_ask():
     # `intake_review` is role="seat" too, and it is a survey rather than the review
     # panel. Filtering on the role alone would count two different things as one.
     seats = [a for a in report.asks if a.seat and a.node_id == "lead_review"]
-    assert len(seats) == policy.SEAT_FLOOR
+    assert len(seats) == policy.SEAT_DEFAULT
     assert len({a.seat for a in seats}) == len(seats)
 
 

@@ -79,7 +79,7 @@ def test_the_flow_as_written_builds_the_product_and_stops_at_merge(tmp_path):
     assert code == 0
     assert built == ["app.js", "index.html", "styles.css", "tides.js"]
     assert "--confirm merge" in output, "merge is never automated; the run must hand over"
-    assert asks == 25
+    assert asks == 26  # 25 before CHG-20261028-01: `audit_read` is one more ask (`audit_dispose` has no findings to dispose of)
 
 
 def test_the_run_says_when_three_seats_are_one_model(tmp_path):

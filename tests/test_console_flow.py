@@ -157,7 +157,8 @@ def test_choosing_dimensions_is_saved_in_order_and_read_back(console):
 @pytest.mark.parametrize("bad, said", [
     (["conformance", "nobody", "risk"], "no seat"),
     (["defect", "defect", "risk"], "named more than once"),
-    (["defect", "risk"], "below the floor of 3"),
+    # One name: two meet the floor beside an independent auditor (CHG-20261028-01, task 1a).
+    (["conformance"], "below the floor of 3"),
     ([], "at least one seat"),
     # CHG-20261005-02 round 1: a named list that leaves out the veto seat is refused, floor met.
     (["defect", "risk", "security"], "leaves out conformance, the veto seat"),
@@ -274,6 +275,19 @@ def test_serve_hands_the_settings_path_over_and_each_walk_rereads_it():
     given = {k.arg: k.value for k in config_call.keywords}
     for field in ("review_dimensions", "review_seats", "high_risk_mode"):
         value = given[field]
+        if isinstance(value, ast.Name):
+            # A value worked out from the fresh settings -- `review_seats` is sized for the
+            # auditor (CHG-20261028-01) -- is read from them if an assignment to it mentions them.
+            value = next((a.value for a in ast.walk(make_config) if isinstance(a, ast.Assign)
+                          and any(isinstance(t, ast.Name) and t.id == value.id
+                                  for t in a.targets)
+                          and any(isinstance(n, ast.Name) and n.id in fresh
+                                  for n in ast.walk(a.value))), value)
+            if not isinstance(value, ast.Name):
+                value = next(n for n in ast.walk(value) if isinstance(n, ast.Name)
+                             and n.id in fresh)
+                assert value.id in fresh
+                continue
         assert isinstance(value, ast.Attribute) and value.value.id in fresh, (
             f"RunConfig.{field} is not read from the settings `make_config` just loaded")
 

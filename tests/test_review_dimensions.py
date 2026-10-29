@@ -53,8 +53,11 @@ def test_the_four_existing_seats_are_unchanged_and_only_conformance_vetoes():
 
 def test_three_seats_are_opt_in_and_the_default_is_three_seats_deep():
     assert [s.name for s in policy.SEATS if s.opt_in] == OPT_IN
-    # An install that sets nothing opens the floor, which is the first three seats.
-    assert settings_mod.Settings().seats() == policy.SEAT_FLOOR == 3
+    # An install that sets nothing opens the necessary seats (CHG-20261028-01, task 1a); the floor
+    # is still three, counting the auditor, and `review_seats 3` opens the third as before.
+    assert settings_mod.Settings().seats() == policy.SEAT_DEFAULT == 2
+    assert policy.SEAT_FLOOR == 3
+    assert policy.seat_names(policy.SEAT_DEFAULT) == FIFTEEN[:2]
     assert policy.seat_names(policy.SEAT_FLOOR) == FIFTEEN[:3]
 
 
@@ -122,7 +125,7 @@ def test_a_list_loads_in_the_order_given_and_round_trips(tmp_path):
 @pytest.mark.parametrize("bad,match", [
     (["conformance", "defect", "nobody"], "no seat"),
     (["conformance", "defect", "defect"], "more than once"),
-    (["conformance", "defect"], "below the floor of 3"),
+    (["conformance"], "below the floor of 3"),
     (["defect", "risk", "idiom"], "the veto seat"),
     ([], "at least one"),
     ("conformance", "list of seat names"),
@@ -134,18 +137,20 @@ def test_a_bad_list_is_refused_at_load(tmp_path, bad, match):
 
 
 def test_below_the_floor_needs_high_risk_mode_and_the_message_is_the_counts(tmp_path):
-    two = ["security", "docs"]
+    two = ["security"]  # one name: two would meet the floor beside an independent auditor
     with pytest.raises(settings_mod.SettingsError) as refused:
         settings_mod.load(_write(tmp_path, review_dimensions=two))
     with pytest.raises(policy.PolicyError) as counted:
-        policy.resolve_seats(2, False)
-    assert str(counted.value).split(" — ", 1)[0].replace("2 seat(s)", "") in str(refused.value)
+        policy.resolve_seats(1, False, True)
+    # The same words, counted the same way: the settings file is just `resolve_*` with the auditor
+    # assumed independent.
+    assert str(counted.value).split(" — ", 1)[0] in str(refused.value)
     allowed = settings_mod.load(_write(tmp_path, review_dimensions=two, high_risk_mode=True))
     assert allowed.review_dimensions == tuple(two) and allowed.below_floor()
 
 
 def test_save_refuses_what_load_would(tmp_path):
-    bad = settings_mod.Settings(review_dimensions=("security", "docs"))
+    bad = settings_mod.Settings(review_dimensions=("security",))
     with pytest.raises(settings_mod.SettingsError, match="below the floor"):
         settings_mod.save(bad, str(tmp_path / "s.json"))
     assert not (tmp_path / "s.json").exists()
@@ -206,20 +211,20 @@ def test_the_screen_has_a_row_and_the_multi_select_keeps_the_order_ticked():
 def test_the_editor_below_the_floor_asks_and_declining_changes_nothing():
     start = settings_mod.Settings()
     # One scripted stream: the ticks, Done, then the confirmation's answer ("Keep the floor" = 1).
-    script = list(_pick(["conformance", "ci"])) + ["1"]
+    script = list(_pick(["conformance"])) + ["1"]
     it = iter(script)
     out = settings_mod._edit_dimensions(start, input_fn=lambda _p: next(it),
                                         stream_out=io.StringIO())
     assert out == start, "declining the high-risk confirmation must leave the settings alone"
-    script = list(_pick(["conformance", "ci"])) + ["2"]
+    script = list(_pick(["conformance"])) + ["2"]
     it = iter(script)
     out = settings_mod._edit_dimensions(start, input_fn=lambda _p: next(it),
                                         stream_out=io.StringIO())
-    assert out.review_dimensions == ("conformance", "ci") and out.high_risk_mode is True
+    assert out.review_dimensions == ("conformance",) and out.high_risk_mode is True
 
 
 def test_turning_high_risk_off_is_kept_while_dimensions_are_below_the_floor():
-    s = settings_mod.Settings(review_dimensions=("conformance", "ci"), high_risk_mode=True)
+    s = settings_mod.Settings(review_dimensions=("conformance",), high_risk_mode=True)
     out = settings_mod._toggle_high_risk(s, input_fn=input, stream_out=io.StringIO())
     assert out == s
 
@@ -289,9 +294,12 @@ def test_default_asks_exactly_todays_seats_one_session_each():
     panel = Panel()
     report = engine.walk(_cfg(), panel, enabled=True)
     assert report.halted_at == "done"
-    assert [s for s, _ in _seats_at(report, "lead_review")] == FIFTEEN[:3]
+    # CHG-20261028-01 task 1a: the default is two seats, `review_seats=3` is the old default.
+    assert [s for s, _ in _seats_at(report, "lead_review")] == FIFTEEN[:2]
     assert all(m is None for _, m in _seats_at(report, "lead_review"))
-    assert report.seat_models["lead_review"] == {s: ["(default backend)"] for s in FIFTEEN[:3]}
+    assert report.seat_models["lead_review"] == {s: ["(default backend)"] for s in FIFTEEN[:2]}
+    three = engine.walk(_cfg(review_seats=3), Panel(), enabled=True)
+    assert [s for s, _ in _seats_at(three, "lead_review")] == FIFTEEN[:3]
 
 
 def test_review_dimensions_decide_which_seats_lead_review_and_the_survey_open():
@@ -340,7 +348,7 @@ def test_one_session_per_seat_and_model_each_its_own_journalled_ask(tmp_path):
     moving `journal.record` after `_open`, because each session sees the journal first."""
     journal = engine.AskJournal(tmp_path / "journal")
     panel = Panel(seat_models=TWO, journal_dir=tmp_path / "journal")
-    report = engine.walk(_cfg(journal=journal), panel, enabled=True)
+    report = engine.walk(_cfg(journal=journal, review_seats=3), panel, enabled=True)
     assert report.halted_at == "done"
     review = _seats_at(report, "lead_review")
     assert review == [("conformance", None), ("defect", "opus"), ("defect", "codex"),
@@ -379,7 +387,7 @@ def test_a_seat_passes_only_when_every_model_passes(opus, codex, expect):
 def test_the_seat_words_still_go_through_adjudicate_unchanged():
     """Two of three seats pass -> pass; the failing seat's models are conjoined first."""
     panel = Panel(seat_models=TWO, verdicts={("defect", "codex"): "fail"})
-    report = engine.walk(_cfg(), panel, enabled=True)
+    report = engine.walk(_cfg(review_seats=3), panel, enabled=True)
     first = [a for a in report.adjudications if a["node_id"] == "lead_review"][0]
     assert first["outcome"] == "pass" and first["reason"] == "2/3 seats passed"
     # A veto is not extended to a model: conformance with two models and one fail is the veto.
@@ -405,14 +413,14 @@ def test_an_unreadable_word_is_still_refused_by_name():
 
 def test_a_seat_with_no_models_is_one_ask_on_the_default_backend():
     panel = Panel(seat_models={"defect": ["opus", "codex"], "risk": []})
-    report = engine.walk(_cfg(), panel, enabled=True)
+    report = engine.walk(_cfg(review_seats=3), panel, enabled=True)
     assert _seats_at(report, "lead_review")[-1] == ("risk", None)
     assert report.seat_models["lead_review"]["risk"] == ["(default backend)"]
 
 
 def test_the_report_says_which_models_answered_which_seat():
     """Cut the wire (`_record_seat_model`) and the mapping is empty."""
-    report = engine.walk(_cfg(), Panel(seat_models=TWO), enabled=True)
+    report = engine.walk(_cfg(review_seats=3), Panel(seat_models=TWO), enabled=True)
     assert report.seat_models["lead_review"] == {
         "conformance": ["(default backend)"], "defect": ["opus", "codex"],
         "risk": ["(default backend)"]}

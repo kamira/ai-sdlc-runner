@@ -33,7 +33,7 @@ miscounts its own subject is the thing it warns about, so the count is now check
 
 ## 1 · Node — the flow
 
-31 of these, one kind of work each. `validate()` enforces cross-rules over them — the count is not
+34 of these, one kind of work each. `validate()` enforces cross-rules over them — the count is not
 stated here because no partition of that function yields the number revision 1 claimed, which a seat
 checked and could not reproduce. A decorative number is a small lie about a real mechanism.
 
@@ -55,6 +55,7 @@ mode: str                   # one of MODES — DECLARED, never inferred from the
 main: Optional[str]         # a ROLE, for pool dispatch
 follows: Optional[str]      # a NODE ID, for FOLLOWS mode
 rejects_to: Optional[str]   # where a refusal sends the run
+audit: Optional[str]        # "read" | "dispose" | "decide": which step of the whole-change audit this is
 note: str
 ```
 
@@ -62,7 +63,10 @@ note: str
 `survey` is the only mode that reaches **no verdict**: it is a union of answers, not an adjudication.
 
 Two biconditionals `validate()` checks rather than infers:
-`role is None ⟺ mode == RUNNER`, and `role == "seat" ⟺ mode in (SEAT_PANEL, SURVEY)`.
+`role is None ⟺ mode == RUNNER`, and `role == "seat" ⟺ mode in (SEAT_PANEL, SURVEY)`. A node with an
+`audit` step is one auditor session (`audit` is `read` or `dispose`: role `auditor`, mode `SINGLE`) or the
+runner's decision (`decide`: mode `RUNNER`, a `DECISION` with `pass` and `fail` branches), and the
+`auditor` role appears at no other node.
 
 ## 2 · Plan file — **closed**
 
@@ -159,7 +163,9 @@ and `unattended` are two fixed sentences (`workorder.REPLY_FORMAT`, `workorder.R
 `schema` is the answer's **JSON Schema, in a closed subset**: exactly `type: "object"`,
 `properties`, `required` and `additionalProperties: false`; each property is `type: "string"`
 (with an optional `enum`) or `type: "array"` of strings (with optional `enum` items, `minItems`
-and `uniqueItems: true`), and always has a `description`. Every schema offers `why` (text), which
+and `uniqueItems: true`) **or of closed objects** (CHG-20261028-01: `type: "object"` with exactly
+`properties`, `required` and `additionalProperties: false`, each field a string with an optional
+`enum` and no `description`), and always has a `description`. Every schema offers `why` (text), which
 no router reads. `workorder.reply` refuses anything outside the subset. `required: []` says
 nothing in the answer is acted on.
 
@@ -181,12 +187,39 @@ always offered):
 | a decision node, one voice | `verdict` ∈ the node's branches — read by `_answered_branch` |
 | a decision node, a panel of models | `verdict` ∈ `pass`/`fail`/`undecided` — `policy.adjudicate` |
 | a `grades_risk` node, a panel of models | `risk` ∈ `low`/`medium`/`high` — `policy.adjudicate_grade` |
-| a seat on the review panel | `verdict` ∈ `pass`/`fail`/`undecided` — `policy.adjudicate` |
+| a seat on the review panel | `verdict` ∈ `pass`/`fail`/`undecided` — `policy.adjudicate`; and `findings`, a list of findings — `policy.read_findings` (below) |
+| `audit_read`, the auditor reading blind | `findings`, in a finding's shape (below) — `policy.read_findings`; no verdict |
+| `audit_dispose`, the auditor in a new session | `dispositions`, one row per finding id — `policy.read_dispositions` (below); no verdict on the change |
 | a seat at intake | `missing` (aspect ids), `problems`, `unsafe` — the order requires all three; `intake.collect` still accepts **at least one**, for backends written before it |
 | the intake option ask | `options`, at least 3 distinct — `intake.read_options` |
 | `engineer_build` | `module`, and `error` for a build that failed — `_stop_on_failed_build`, `_module_built`, `_frontier` |
 | `pm_plan`, with a `"frontier"` decision | `modules` — `_frontier` |
 | every other ask | `required: []` — nothing acted on; `why` still offered |
+
+**A finding** (CHG-20261028-01) is what a review seat saw, as an object of exactly
+`{id, file, line, claim, trigger, severity, origin}`, all required, read by `policy.read_findings`:
+
+| Key | Meaning |
+|---|---|
+| `id` | the seat's own label, unique within one answer; the run's id for it is `<seat>:<id>` |
+| `file`, `line` | where the problem is. **Required and non-blank**; `line` is a positive integer written as digits (a reply schema has no number type). A finding without a location is refused and stops the run, because it can be neither passed on nor disposed |
+| `claim` | what is wrong |
+| `trigger` | the concrete input and the wrong result it produces. May be empty — but **a finding with no `trigger` can never be `important`**: it is recorded as a `nit` and `severity_said` keeps the word the seat used |
+| `severity` | `important` or `nit` (`policy.SEVERITIES`) |
+| `origin` | `introduced` (this change caused it) or `pre-existing` (`policy.ORIGINS`) |
+
+**A disposition** (CHG-20261028-01) is the auditor's answer about one finding, read by
+`policy.read_dispositions`: `{id, disposition, file, line, evidence, input, result}`, all required.
+`id` is the finding's id exactly as the findings file gives it; `disposition` is `confirm`, `refute`
+or `cannot-verify`; `file` and `line` are where the evidence is, on every row. For a `refute`, `input`
+and `result` are the concrete input and the right result it produces — a `refute` without both is read
+as `cannot-verify`, and `disposition_said` keeps the word the auditor used. The findings file the
+auditor reads is `<run directory>/audit/lap-NNN/findings.json`, written by the runner and named in
+the order's `input_artifacts` by path; its scope is `scope.json` beside it.
+
+The seat keeps its verdict: `policy.adjudicate` counts it exactly as before. Findings are not votes.
+An answer that omits `findings` is read as none found, for backends written before it; the order
+asks for the key, and `[]` is how a seat says it found nothing.
 
 **The intake row is enforced, and the row above it is why it had to be.** A seat at intake and a
 seat on a panel are one line apart in this table and answer with different shapes, and an agent
@@ -381,7 +414,7 @@ to guess. `save()` strips them, and `models.py` says why on `models.COMPUTED`'s 
 closed all along and revision 1 of this page did not say so.
 
 ```jsonc
-{ "review_seats": null,          // null = the floor (3)
+{ "review_seats": null,          // null = 2 (conformance, defect); the floor is 3 counting an independent auditor
   "high_risk_mode": false,       // may the floor be crossed at all
   "ordinary_commands": [],       // tools the operator vouches for — the TOOL, never a command line
   "coder_model": "",             // registry id for engineer_build when nothing is assigned; "" = the only mid model (unless agent_command is set); "none" = no default
@@ -399,10 +432,10 @@ Role at most 500 characters, spec at most 8000 (a file at most 32768 bytes). The
 (`seatspec.parse`) reads the file, the settings screen, the store and `POST /config/seat_specs`.
 
 `review_dimensions` (CHG-20261005-02) is a list of names from `policy.SEATS` — fifteen, of which the
-first three (`conformance`, `defect`, `risk`) open by default, `review_seats` takes a prefix of the
+first two (`conformance`, `defect`) open by default, `review_seats` takes a prefix of the
 twelve that are not opt-in, and `observability`, `supply_chain` and `i18n` open only when named. When
 it is set it **replaces** the `review_seats` prefix and `review_seats` is ignored (`runner settings
---show` says so). An unknown name, a repeat, fewer names than the floor (3), or a list that leaves out
+--show` says so). An unknown name, a repeat, fewer names than the floor (3, counting an independent auditor, so at least 2 here), or a list that leaves out
 `conformance` (the veto seat) is refused at load and at save; high-risk mode allows the last two, as
 it does for a count, and a run without `conformance` records that in `relaxations`.
 `intake_review` asks the same seats.
@@ -436,7 +469,45 @@ confirmations · adjudications · single_model_panels · seat_models · seat_bri
 · intake_asked_somebody · dispatches · effort_not_applied · usage · usage_summary · survey · options
 · panel_rounds · send_backs · rejections · rulings · store_errors · change_class ·
 relaxations_by_class · risk_proposed · risk_settled · risk_agreed · halts · class_authorised_by ·
-relaxation_authorisers`
+relaxation_authorisers · findings · audit_scope · dispositions · audit_same_backend · audit_counts`
+
+`findings` (CHG-20261028-01) is one entry per finding the whole-change review raised, per lap: the
+finding as `policy.read_findings` reads it (`id`, `source` — the seat or `auditor` — `file`, `line`,
+`claim`, `trigger`, `severity`, `origin`, and `severity_said` where a missing trigger demoted it)
+and the `lap` it belongs to.
+
+`audit_same_backend` (CHG-20261028-01) is a list of sentences, one for each of the builder and the seats
+that the auditor's session reported itself as sharing a backend with (`describe()`, as
+`single_model_panels` is judged). `[]` when it was independent or did not run. The CLI prints each on an
+`audit backend:` line. `--audit-model COMMAND`, or `audit_model` in the plan, routes the auditor.
+
+`audit_counts` (CHG-20261028-01) is `engine.audit_counts` over `findings` and `dispositions`:
+`{findings_by_source: {source: n}, by_disposition: {confirm, refute, cannot-verify: n}, disposed,
+refute_rate}`. `refute_rate` is refuted over disposed and `null` when nothing was disposed. It is
+derived, so it can always be reproduced from the two lists beside it.
+
+`audit_scope` (CHG-20261028-01) is what the auditor was given to read: `auditscope.assemble`'s record,
+`{base, cap, total_chars, read_chars, files: [{path, why, chars, state}], cut, notes}`. `why` is
+`diff`, `callee` or `caller`; `state` is `read` (inside `AUDIT_SCOPE_MAX_CHARS`) or `cut` (left out
+because the cap was reached). `{}` until `audit_read` runs. A scope with `cut` files is printed beside
+the review's outcome. Callers and callees are resolved for Python only; `notes` says where they were not.
+
+`dispositions` (CHG-20261028-01) is what the auditor said about each finding, one entry per finding
+per lap: `{id, disposition, file, line, evidence, input, result, lap}` and, where a `refute` showed no
+input and result, `disposition_said: "refute"` beside `disposition: "cannot-verify"`. `disposition` is
+`confirm`, `refute` or `cannot-verify` (`policy.DISPOSITIONS`); `file` and `line` are where the
+evidence is. `[]` when no finding was raised: the auditor is not asked to dispose of nothing.
+
+A `send_backs` entry from `review_decide` (CHG-20261028-01) adds `findings` (only the confirmed
+findings: `id`, `source`, `file`, `line`, `claim`, `trigger`, `evidence`) and `findings_file`, the path
+of `confirmed.json` beside the lap's `findings.json`, which the rework's order lists in
+`input_artifacts`. Refuted, cannot-verify, nit and pre-existing findings are in `findings` of the
+report and in the adjudication's `kept`, and do not travel. The appendix stays *reference, not
+instruction*.
+
+The adjudication entry for `review_decide` (`policy.dispose`) adds `panel_view` (the seats' result),
+`audit_result` (`pass`, `fail` or `null` when a veto was refuted), `confirmed` and `kept` (each a
+finding with its source and, for `kept`, a `why`: `refuted`, `cannot-verify`, `nit` or `pre-existing`).
 
 `usage` (CHG-20261006-01) is one entry per ask whose session reported usage — `{ask_id, node_id, seat,
 model, kind, cost_usd, tokens, remaining, note}`, `kind` being `claude`, `codex` or `unreported`;

@@ -59,7 +59,7 @@ TERMINAL = "terminal"
 #: `LOOP` nodes relabelled `DECISION` is accepted, and 5 of the 10 `DECISION` nodes accept being
 #: relabelled `LOOP` (the other 5 are caught by the model-panel rule, which is not about loops).
 #: No structural rule can tell them apart, for the same reason CHG-20260907-08 could not derive
-#: where a refusal may go: 25 of 31 nodes are on a cycle, so "loops" is not a connectivity
+#: where a refusal may go: 28 of 34 nodes are on a cycle (25 of 31 before CHG-20261028-01), so "loops" is not a connectivity
 #: property here. Which kind a node is, is a declaration — `test_which_nodes_are_loops_is_pinned`
 #: is what protects it.
 KINDS = (STEP, DECISION, LOOP, TERMINAL)
@@ -173,7 +173,7 @@ class Node:
     #: so that an omission is a `GraphError` naming the node, instead of a `TypeError` raised
     #: from a constructor where nothing can say which node or what was missing.
     #:
-    #: It used to default to ``SINGLE``, which is **4 of the 31 nodes**; ``RUNNER`` is 15. So
+    #: It used to default to ``SINGLE``, which was **4 of the thirty-one nodes** then; ``RUNNER`` was 15. So
     #: the default was the minority value, and a node whose author never thought about its mode
     #: was read as one model in one session. Measured: `lead_task_review` rebuilt from its own
     #: fields minus `mode` came back ``single`` against a real ``model_panel``, and `validate`
@@ -225,7 +225,18 @@ class Node:
     #: node for that, and inventing one would be pretending a refusal is a step. Those gates carry
     #: ``None``, and a console must not offer a control the graph cannot honour.
     rejects_to: Optional[str] = None
+    #: Which step of the whole-change audit this node is (CHG-20261028-01): `read` (the auditor
+    #: reads blind), `dispose` (the auditor answers per finding, in a new session) or `decide` (the
+    #: runner adjudicates; nobody is asked). Declared, never matched on an id, for the reason this
+    #: file exists: the engine does different work at these three and must be able to say which
+    #: without a node id in a condition. `None` on every other node.
+    audit: Optional[str] = None
     note: str = ""
+
+
+#: The three steps `Node.audit` may name.
+AUDIT_READ, AUDIT_DISPOSE, AUDIT_DECIDE = "read", "dispose", "decide"
+AUDIT_STEPS = (AUDIT_READ, AUDIT_DISPOSE, AUDIT_DECIDE)
 
 
 NODES: Tuple[Node, ...] = (
@@ -330,11 +341,28 @@ NODES: Tuple[Node, ...] = (
          note="bounded: exactly one fix pass, never repeat-until-green"),
     Node("halt_second_fail", TERMINAL, "a second failure halts", mode=RUNNER, permanent=True,
          note="two failures on one module is not something retrying fixes"),
-    Node("lead_review", DECISION, "review seats cross-check the whole change", role="seat",
-         gate="lead_review", gate_when="after", mode=SEAT_PANEL, rejects_to="review_failed",
+    Node("lead_review", STEP, "review seats cross-check the whole change", role="seat",
+         mode=SEAT_PANEL, next="audit_read",
+         note="one or many seats, each in its own session, each answering a verdict and its "
+              "findings. `policy.adjudicate` counts the verdicts -- veto, then majority, and a tie "
+              "does not pass -- and that is recorded as the panel's view. It no longer routes: the "
+              "gate and the branch moved to `review_decide` (CHG-20261028-01)"),
+    Node("audit_read", STEP, "the auditor reads the change blind", role="auditor",
+         mode=SINGLE, next="audit_dispose", audit=AUDIT_READ,
+         note="its own session, given the change and its scope (the diff, the modules it touches, "
+              "their callers and callees) and not the seats' findings: a reader handed a list reads "
+              "the list. It answers with findings of its own"),
+    Node("audit_dispose", STEP, "the auditor disposes of every finding", role="auditor",
+         mode=SINGLE, next="review_decide", audit=AUDIT_DISPOSE,
+         note="a new session, given one file by path that the runner wrote: every finding from the "
+              "seats and from `audit_read`. One row per id -- confirm, refute or cannot-verify -- "
+              "each with its evidence. It never gives an overall verdict"),
+    Node("review_decide", DECISION, "the runner adjudicates the review", mode=RUNNER,
+         gate="lead_review", gate_when="after", rejects_to="review_failed", audit=AUDIT_DECIDE,
          branches={"pass": "qa_verify", "fail": "review_failed"},
-         note="one or many seats, each in its own session. The branch comes from adjudicating their "
-              "verdicts — veto, then majority, and a tie does not pass"),
+         note="nobody is asked: the seats' verdicts, the findings and the auditor's dispositions "
+              "meet in `policy.dispose` and the runner routes on the result. The `lead_review` "
+              "gate stands here, after the work, unchanged"),
     Node("review_failed", STEP, "the panel did not pass it", next="change_retry", mode=RUNNER,
          note="back into the module loop; the panel's reasons travel with the run. Through "
               "`change_retry` since CHG-20260828-22, which is what counts the trip"),
@@ -522,7 +550,7 @@ def validate() -> None:
         # one **or** the other, `branches` first. So a node carrying both is a node where the two
         # disagree about what the graph is. Measured on the shipped flow: moving `reconcile`'s
         # `unresolved` branch onto its `next` leaves `halt_unreconciled` reachable according to
-        # `validate` and reachable by no run at all — 30 of 31 nodes, and the guard said 31.
+        # `validate` and reachable by no run at all — 30 of the thirty-one nodes it had then, and the guard said 31.
         #
         # The other direction is not silent but is still a build-time fact failing at run time: a
         # `STEP` given branches dies with `branches on [...] but the run supplied no choice for it`
@@ -707,6 +735,31 @@ def validate() -> None:
             raise GraphError(
                 f"node {node.id!r} is mode {node.mode!r} with role {node.role!r} — only the review "
                 f"seats are a {SEAT_PANEL!r} or a {SURVEY!r}, and they are always one of the two")
+        if node.audit is not None:
+            if node.audit not in AUDIT_STEPS:
+                raise GraphError(
+                    f"node {node.id!r} is audit step {node.audit!r}, which is not one of "
+                    f"{AUDIT_STEPS}")
+            if (node.audit == AUDIT_DECIDE) != (node.mode == RUNNER):
+                raise GraphError(
+                    f"node {node.id!r} is audit step {node.audit!r} and mode {node.mode!r}: the "
+                    f"decision is the runner's and no model's, and only the decision is")
+            if node.audit == AUDIT_DECIDE:
+                if node.kind != DECISION or not all(o in node.branches for o in
+                                                    (policy.PASS, policy.FAIL)):
+                    raise GraphError(
+                        f"node {node.id!r} decides the audit, so it must be a decision with "
+                        f"{policy.PASS!r} and {policy.FAIL!r} branches: the engine routes the "
+                        f"result of `policy.dispose` by those two words")
+            elif node.role != "auditor" or node.mode != SINGLE:
+                raise GraphError(
+                    f"node {node.id!r} is audit step {node.audit!r} and must be one auditor "
+                    f"session (role 'auditor', mode {SINGLE!r}), not role {node.role!r} mode "
+                    f"{node.mode!r}")
+        elif node.role == "auditor":
+            raise GraphError(
+                f"node {node.id!r} asks the auditor but names no audit step: the engine prepares "
+                f"what the auditor is given by step, and a node with none would be asked blind")
         if node.mode == MODEL_PANEL and node.kind != DECISION and not node.grades_risk:
             raise GraphError(
                 f"node {node.id!r} is a {MODEL_PANEL!r} but a {node.kind!r} that grades nothing — "
